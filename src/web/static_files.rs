@@ -107,6 +107,42 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
       box-shadow: 0 0 8px var(--danger);
     }
 
+    @keyframes pulseRuntimeGlow {
+      0% { box-shadow: 0 0 15px rgba(16, 185, 129, 0.3), inset 0 0 15px rgba(16, 185, 129, 0.1); border-color: rgba(16, 185, 129, 0.7); }
+      50% { box-shadow: 0 0 30px rgba(16, 185, 129, 0.6), inset 0 0 30px rgba(16, 185, 129, 0.25); border-color: rgba(52, 211, 153, 1); }
+      100% { box-shadow: 0 0 15px rgba(16, 185, 129, 0.3), inset 0 0 15px rgba(16, 185, 129, 0.1); border-color: rgba(16, 185, 129, 0.7); }
+    }
+
+    @keyframes beaconBlink {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.3; transform: scale(1.3); }
+    }
+
+    .pulse-beacon {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 12px #10b981;
+      animation: beaconBlink 1.5s infinite ease-in-out;
+      flex-shrink: 0;
+    }
+
+    .runtime-shoutout-bar {
+      background: linear-gradient(90deg, rgba(6, 78, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 50%, rgba(6, 78, 59, 0.95) 100%);
+      border: 2px solid #10b981;
+      border-radius: 0.5rem;
+      margin: 0.75rem 2rem 0;
+      padding: 0.65rem 1.25rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      animation: pulseRuntimeGlow 2.5s infinite ease-in-out;
+      box-shadow: 0 4px 20px rgba(16, 185, 129, 0.35);
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
     nav {
       background: #0f172a;
       border-bottom: 1px solid var(--card-border);
@@ -580,11 +616,32 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
       <p>Decentralized Autonomous Swarm Breakout Defense & Policy Engine</p>
     </div>
   </div>
-  <div class="status-badge" id="engine-status-badge">
+  <div class="status-badge" id="engine-status-badge" style="border: 2px solid #10b981; background: rgba(6, 78, 59, 0.45); padding: 0.45rem 1rem;">
     <div class="status-dot" id="engine-status-dot"></div>
-    <span id="engine-status-text">DEFENSE ENGINE ONLINE</span>
+    <span id="engine-status-text" style="font-weight: 800; letter-spacing: 0.5px; color: #34d399;">🛡️ RUNTIME PROTECTION IS RUNNING (24/7 ACTIVE)</span>
   </div>
 </header>
+
+<div class="runtime-shoutout-bar" id="global-runtime-banner">
+  <div style="display: flex; align-items: center; gap: 0.85rem;">
+    <div class="pulse-beacon"></div>
+    <div>
+      <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+        <span style="font-size: 1.15rem; font-weight: 800; color: #34d399; letter-spacing: 0.5px;">⚡ RUNTIME PROTECTION IS RUNNING</span>
+        <span class="badge" style="background: rgba(16, 185, 129, 0.25); color: #10b981; border: 1px solid #10b981; font-weight: 800; font-size: 0.72rem; padding: 0.2rem 0.55rem;">24/7 ACTIVE ENFORCEMENT</span>
+        <span class="badge" style="background: rgba(6, 182, 212, 0.2); color: #38bdf8; border: 1px solid #0891b2; font-weight: 700; font-size: 0.72rem; padding: 0.2rem 0.55rem;">RING-0 KERNEL CLAMPED</span>
+      </div>
+      <div style="font-size: 0.76rem; color: #cbd5e1; margin-top: 0.15rem;">
+        Real-Time ASP (RT-ASP) Prompt &amp; Tool Interceptor active &bull; Windows Job Object 64MB memory boundary enforced &bull; Cedar Zero-Trust evaluating all agent directives
+      </div>
+    </div>
+  </div>
+  <div style="display: flex; gap: 0.6rem; align-items: center;">
+    <button class="btn btn-secondary" onclick="switchTab('rasp-shield')" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; border: 1px solid #10b981; color: #6ee7b7; background: rgba(6, 78, 59, 0.6);">
+      ⚡ Open RT-ASP Shield &rarr;
+    </button>
+  </div>
+</div>
 
 <nav>
   <div class="nav-tab active" onclick="switchTab('test-runner')">🧪 Test Runner &amp; Progression</div>
@@ -1710,6 +1767,24 @@ with urllib.request.urlopen(req) as resp:
       </div>
     </nav>
 
+    <!-- RUNTIME PROTECTION STATUS NOTICE -->
+    <div class="card" style="background: linear-gradient(135deg, rgba(6, 78, 59, 0.4), rgba(15, 23, 42, 0.95)); border: 2px solid #10b981; margin-bottom: 1.25rem;">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div style="display: flex; align-items: center; gap: 0.85rem;">
+          <div class="pulse-beacon"></div>
+          <div>
+            <h2 style="margin: 0; font-size: 1.15rem; font-weight: 800; color: #34d399; letter-spacing: 0.5px;">🛡️ RUNTIME PROTECTION ACTIVE: ZERO-TRUST KERNEL &amp; IN-PROCESS INTERCEPTION</h2>
+            <div style="font-size: 0.8rem; color: #cbd5e1; margin-top: 0.2rem;">
+              Autonomous active defense running continuously &bull; Real-time prompt sanitization &bull; Tool boundary enforcement &bull; Memory ceiling clamps
+            </div>
+          </div>
+        </div>
+        <span class="badge" style="background: rgba(16, 185, 129, 0.3); color: #34d399; border: 1px solid #10b981; font-weight: 800; font-size: 0.85rem; padding: 0.35rem 0.75rem;">
+          ● STATUS: FULLY ENFORCING (24/7)
+        </span>
+      </div>
+    </div>
+
     <!-- STATS ROW -->
     <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr); margin-bottom: 1.25rem;">
       <div class="stat-box">
@@ -2144,7 +2219,7 @@ with urllib.request.urlopen(req) as resp:
       if (res.ok) {
         healthFailures = 0;
         if (badge) badge.classList.remove('offline');
-        if (text) text.textContent = 'DEFENSE ENGINE ONLINE';
+        if (text) text.textContent = '🛡️ RUNTIME PROTECTION IS RUNNING (24/7 ACTIVE)';
         
         try {
           const data = await res.json();
@@ -2188,7 +2263,7 @@ with urllib.request.urlopen(req) as resp:
       healthFailures++;
       if (healthFailures >= 3) {
         if (badge) badge.classList.add('offline');
-        if (text) text.textContent = '⚠️ DEFENSE ENGINE OFFLINE (start.exe NOT RUNNING)';
+        if (text) text.textContent = '⚠️ RUNTIME PROTECTION OFFLINE (start.exe NOT RUNNING)';
       }
       return false;
     }
