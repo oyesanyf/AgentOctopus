@@ -2242,10 +2242,14 @@ with urllib.request.urlopen(req) as resp:
       const pBar = document.getElementById('progress-bar');
       pBar.style.background = '';
       pBar.style.width = '0%';
-      const suiteLabel = suiteName === 'all' ? "Unified Policy 'ALL' (Complete 19-Framework & 13-Perimeter Test Matrix)" : suiteName;
-      document.getElementById('progress-status').textContent = `Running: ${suiteLabel}...`;
+      const suiteLabel = suiteName === 'all' ? "ALL TESTS (Complete 19-Framework & 13-Perimeter Test Matrix)" : suiteName;
+      const pStatus = document.getElementById('progress-status');
+      if (pStatus) {
+        pStatus.innerHTML = `🔄 <span style="color: #38bdf8; font-weight: 700;">Checking for updated test suites, PyRIT AI engine &amp; tools...</span>`;
+      }
 
       document.getElementById('test-table-body').innerHTML = '';
+      appendTerminal(`[UPDATE-CHECK] Probing for updated test suites, PyRIT AI engine, and threat vectors...`, 'info');
       appendTerminal(`[START] Launching test execution for: ${suiteLabel}`, 'info');
 
       startTime = Date.now();
@@ -2327,6 +2331,17 @@ with urllib.request.urlopen(req) as resp:
         return;
       } else if (data.type === 'output') {
         const line = data.line || '';
+        if (line.includes('[SUITE-SYNC]')) {
+          const pStatus = document.getElementById('progress-status');
+          if (pStatus) {
+            pStatus.innerHTML = `🔄 <span style="color: #38bdf8; font-weight: 600;">${escapeHtml(line)}</span>`;
+          }
+        } else if (line.includes('[SPAWN]')) {
+          const pStatus = document.getElementById('progress-status');
+          if (pStatus) {
+            pStatus.innerHTML = `🚀 <span style="color: #34d399; font-weight: 700;">${escapeHtml(line)}</span>`;
+          }
+        }
         let lineType = 'info';
         if (line.includes('... ok') || line.includes('[PASS]')) lineType = 'ok';
         else if (line.includes('... FAILED') || line.includes('[FAIL]')) lineType = 'fail';
@@ -2353,6 +2368,11 @@ with urllib.request.urlopen(req) as resp:
         if (pBar) pBar.style.width = `${pct}%`;
         const pPct = document.getElementById('progress-percent');
         if (pPct) pPct.textContent = `${pct}%`;
+
+        const pStatus = document.getElementById('progress-status');
+        if (pStatus) {
+          pStatus.innerHTML = `⚡ <strong>Executing ${escapeHtml(currentRunningSuite === 'all' ? 'ALL TESTS' : (currentRunningSuite || 'Tests'))}:</strong> <span style="color: var(--success); font-weight: 700;">${passedCount} passed</span>, <span style="color: ${failedCount > 0 ? 'var(--danger)' : 'var(--text-muted)'}; font-weight: 700;">${failedCount} failed</span>`;
+        }
 
         addTableRow(data.name, data.suite, data.status);
       } else if (data.type === 'complete') {
@@ -3315,6 +3335,8 @@ with urllib.request.urlopen(req) as resp:
     } catch (e) {
       console.warn('Governor reset error:', e);
     }
+  }
+
   // ============================================================================
   // Real-Time Agentic Self-Protection (RT-ASP) Dashboard Functions
   // ============================================================================
