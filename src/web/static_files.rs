@@ -703,17 +703,20 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             <option value="breakout_defense_tests">Breakout Defense &amp; 50,000-Scenario Prompt Injection (20 tests)</option>
             <option value="breakout_scripts">Breakout Scripts, Role Tampering &amp; Fuel Depletion (6 tests)</option>
             <option value="caido">Caido Rust Auditing Proxy Replay &amp; Fuzzing (20 tests)</option>
-            <option value="cedar_policy_tests">Cedar Policy Arm &amp; Red-Team Boundaries (20 tests)</option>
+            <option value="cedar_policy_tests">Cedar Policy Arm &amp; Red-Team Boundaries (21 tests)</option>
             <option value="containment_tests">Containment &amp; Windows Job Objects / AppContainer Isolation (10 tests)</option>
             <option value="continuous_rl">Continuous RL Active Defense Evaluation (28 Probes across 13 Perimeters)</option>
             <option value="deepeval">DeepEval Multi-Turn &amp; Policy Non-Compliance Benchmark (25 tests)</option>
             <option value="garak">Garak LLM Vulnerability Scanner (Prompt Injection, Canary, Jailbreaks - 35 tests)</option>
             <option value="google_anomaly_detection_tests">Google 3-Layer Anomaly Detection (4 tests)</option>
+            <option value="governor_tests">Governor &amp; Out-of-Band Circuit Breaker (8 tests)</option>
             <option value="guard_arms_network_tests">Guard Arms Mutual Supervision Network (7 tests)</option>
             <option value="inspect_ai">Inspect AI Agentic Tool &amp; Sandbox Benchmark (UK AISI - 20 tests)</option>
+            <option value="kernel_sentinel_tests">Kernel Sentinel &amp; Ring-0 Driver Bridge (5 tests)</option>
             <option value="ledger_transparency_tests">Ledger Transparency Log &amp; FIPS Post-Quantum (7 tests)</option>
+            <option value="math_validator_tests">Math Validator &amp; Sisyphean Proof (6 tests)</option>
             <option value="research_and_atlas_tests">MITRE ATLAS Arm &amp; Attack Chain Synthesis (9 tests)</option>
-            <option value="strix_llm_adversarial">Multi-Framework Comprehensive Suite (2,250+ tests)</option>
+            <option value="strix_llm_adversarial">Multi-Framework Comprehensive Suite (1,436+ tests)</option>
             <option value="multilingual">Multilingual Determinism Across 74 World Languages (148 tests)</option>
             <option value="multimodal">Multimodal Vision Ingest &amp; OCR Steganography (PyRIT &amp; PromptBench - 20 tests)</option>
             <option value="neural_mesh_integration_tests">Neural Mesh Routing &amp; Tri-Path Flow (3 tests)</option>
@@ -721,6 +724,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             <option value="promptfoo">Promptfoo Security &amp; Guardrail Matrix (SSRF, PII, Jailbreaks - 25 tests)</option>
             <option value="pyrit">PyRIT AI Red-Teaming &amp; Risk Suite (Microsoft - 600 tests)</option>
             <option value="quantum_adversarial_tests">Quantum Walk &amp; QUBO Optimization (7 tests)</option>
+            <option value="rasp_tests">Real-Time ASP (RT-ASP) Prompt &amp; Tool Interceptor (8 tests)</option>
             <option value="redamon">RedAmon Attack Surface Graph &amp; Sandbox Probes (20 tests)</option>
             <option value="restler">RESTler Stateful REST API Fuzzer (Microsoft Research - 20 tests)</option>
           </select>
@@ -1289,20 +1293,29 @@ with urllib.request.urlopen(req) as resp:
     <div class="card" style="background: linear-gradient(135deg, #111827 0%, #1e1b4b 100%); border: 1px solid var(--accent-cyan); margin-bottom: 1.5rem;">
       <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
         <div>
-          <h2 style="color: var(--accent-cyan); font-size: 1.3rem; margin-bottom: 0.35rem;">
-            🧠 Beyond One and Done: Continuous Security &amp; Reinforcement Learning Active Defense
-          </h2>
-          <p style="color: var(--text-muted); font-size: 0.85rem; max-width: 900px; line-height: 1.5;">
+          <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+            <h2 style="color: var(--accent-cyan); font-size: 1.3rem; margin: 0;">
+              🧠 Beyond One and Done: Continuous Security &amp; Reinforcement Learning Active Defense
+            </h2>
+            <span class="badge" id="rl-continuous-live-badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid #10b981; font-weight: 700; font-size: 0.75rem;">
+              ● ALWAYS RUNNING (Autonomous 24/7 Continuous Loop Active)
+            </span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.85rem; max-width: 900px; line-height: 1.5; margin: 0;">
             Implementation of the continuous security operations architecture (Femi Oyesanya, October 2026).
             Features an autonomous <strong>Reinforcement Learning Active Defense Engine</strong> (Double Q-Learning, 5-tier action space, prioritized experience replay),
             the <strong>Four-Category Breakout Taxonomy</strong> (Technical, Operational, Behavioral, Data), and <strong>OpenTelemetry (OTel)</strong> session telemetry with real-time MTTD, MTTR, and the <strong>Vassilev Sisyphean Bound</strong> (<span style="font-family: monospace;">P<sub>secure</sub>(N) &le; (1 - &epsilon;<sub>min</sub>)<sup>N</sup></span>).
           </p>
         </div>
-        <div style="display: flex; gap: 0.75rem;">
+        <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+          <div style="display: flex; align-items: center; gap: 0.45rem; background: rgba(15, 23, 42, 0.7); border: 1px solid #334155; padding: 0.4rem 0.7rem; border-radius: 6px;">
+            <span style="font-size: 0.75rem; color: #94a3b8; font-weight: 600;">24/7 AUTO-PILOT</span>
+            <input type="checkbox" id="rl-autopilot-toggle" checked onchange="toggleContinuousAutoPilot(this.checked)" style="cursor: pointer;" title="Toggle 24/7 continuous autonomous execution stream">
+          </div>
           <button class="btn btn-primary" onclick="runRlContinuousCycle()" id="btn-run-continuous-cycle" style="display: flex; align-items: center; gap: 0.5rem; background: #06b6d4; color: #000; font-weight: 600;">
-            <span>▶</span> Run Continuous Evaluation Cycle
+            <span>▶</span> Run Instant Cycle
           </button>
-          <button class="btn btn-outline" onclick="fetchRlDefenseStatus(true); fetchOtelSpans(true);" style="display: flex; align-items: center; gap: 0.5rem;">
+          <button class="btn btn-outline" onclick="fetchLatestContinuousReport(true);" style="display: flex; align-items: center; gap: 0.5rem;">
             <span>🔄</span> Refresh Telemetry
           </button>
         </div>
@@ -1426,7 +1439,7 @@ with urllib.request.urlopen(req) as resp:
               <th style="padding: 0.6rem;">Principal &amp; Action</th>
               <th style="padding: 0.6rem;">Target Resource</th>
               <th style="padding: 0.6rem;">RL Action Tier</th>
-              <th style="padding: 0.6rem;">Breakout Verdict</th>
+              <th style="padding: 0.6rem;">Defense &amp; Breakout Verdict</th>
               <th style="padding: 0.6rem;">Reward</th>
               <th style="padding: 0.6rem;">MTTD / MTTR</th>
             </tr>
@@ -3033,10 +3046,93 @@ with urllib.request.urlopen(req) as resp:
     }
   }
 
+  let rlAutoPilotEnabled = true;
+
+  function renderContinuousReport(report) {
+    if (!report) return;
+    const status = document.getElementById('continuous-cycle-status');
+    const tbody = document.getElementById('continuous-probes-tbody');
+
+    if (status) {
+      status.innerHTML = `<span style="color: #10b981; font-weight: 600;">✅ Cycle #${report.cycle_id} Active: ${report.passed_invariants}/${report.total_probes} Passed (Avg Reward: ${report.average_reward.toFixed(1)}, Latency: ${report.average_latency_ms.toFixed(1)}ms) • 24/7 Loop</span>`;
+    }
+
+    if (tbody && report.results_summary) {
+      tbody.innerHTML = report.results_summary.map(p => {
+        const isClean = p.was_intercepted;
+        const badgeColor = isClean ? '#10b981' : '#ef4444';
+        const tierColor = p.defense_action_selected.includes('Mitigation') ? '#ef4444' : (p.defense_action_selected.includes('Containment') ? '#f97316' : '#38bdf8');
+        const mttdFmt = p.mttd_ms > 0 ? (p.mttd_ms < 0.1 ? `${(p.mttd_ms * 1000).toFixed(0)} µs` : `${p.mttd_ms.toFixed(2)} ms`) : '0.0 ms';
+        const mttrFmt = p.mttr_ms > 0 ? (p.mttr_ms < 0.1 ? `${(p.mttr_ms * 1000).toFixed(0)} µs` : `${p.mttr_ms.toFixed(2)} ms`) : '0.0 ms';
+        return `<tr style="border-bottom: 1px solid #1f293d;">
+          <td style="padding: 0.6rem; font-family: monospace; color: #9ca3af;">${escapeHtml(p.probe_id)}</td>
+          <td style="padding: 0.6rem; font-weight: 500;">${escapeHtml(p.perimeter_name)}</td>
+          <td style="padding: 0.6rem; color: #cbd5e1;">${escapeHtml(p.principal)} &rarr; ${escapeHtml(p.action)}</td>
+          <td style="padding: 0.6rem; font-family: monospace; color: #64748b;">${escapeHtml(p.resource)}</td>
+          <td style="padding: 0.6rem; color: ${tierColor}; font-weight: 600;">${escapeHtml(p.defense_action_selected)}</td>
+          <td style="padding: 0.6rem; color: ${badgeColor}; font-weight: 600;">${escapeHtml(p.breakout_verdict)}</td>
+          <td style="padding: 0.6rem; color: ${p.reward >= 0 ? '#10b981' : '#ef4444'}; font-family: monospace; font-weight: 600;">${p.reward >= 0 ? '+' : ''}${p.reward.toFixed(1)}</td>
+          <td style="padding: 0.6rem; font-size: 0.75rem; color: #38bdf8; font-family: monospace;">${mttdFmt} / ${mttrFmt}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    const mttdEl = document.getElementById('rl-stat-mttd');
+    if (mttdEl && report.mttd_ms !== undefined) mttdEl.textContent = `${report.mttd_ms.toFixed(1)} ms`;
+    const mttrEl = document.getElementById('rl-stat-mttr');
+    if (mttrEl && report.mttr_ms !== undefined) mttrEl.textContent = `${report.mttr_ms.toFixed(1)} ms`;
+    const survEl = document.getElementById('rl-stat-survival');
+    if (survEl && report.cumulative_survival_prob !== undefined) survEl.textContent = `${(report.cumulative_survival_prob * 100).toFixed(2)}%`;
+
+    const mainMttd = document.getElementById('main-rl-mttd');
+    if (mainMttd && report.mttd_ms !== undefined) mainMttd.textContent = `${report.mttd_ms.toFixed(1)} ms`;
+    const mainMttr = document.getElementById('main-rl-mttr');
+    if (mainMttr && report.mttr_ms !== undefined) mainMttr.textContent = `${report.mttr_ms.toFixed(1)} ms`;
+    const mainSurv = document.getElementById('main-rl-survival');
+    if (mainSurv && report.cumulative_survival_prob !== undefined) mainSurv.textContent = `${(report.cumulative_survival_prob * 100).toFixed(2)}%`;
+  }
+
+  async function fetchLatestContinuousReport(showToast = false) {
+    try {
+      const res = await fetchWithTimeout('/api/rl-defense/latest-cycle', {}, 2000);
+      if (res.ok) {
+        const report = await res.json();
+        renderContinuousReport(report);
+      }
+      fetchRlDefenseStatus(showToast);
+      fetchOtelSpans(showToast);
+    } catch (e) {
+      if (showToast) console.warn('Latest continuous report fetch error:', e);
+    }
+  }
+
+  function toggleContinuousAutoPilot(enabled) {
+    rlAutoPilotEnabled = enabled;
+    const badge = document.getElementById('rl-continuous-live-badge');
+    if (badge) {
+      if (enabled) {
+        badge.style.display = 'inline-block';
+        badge.textContent = '● ALWAYS RUNNING (Autonomous 24/7 Continuous Loop Active)';
+        badge.style.background = 'rgba(16, 185, 129, 0.2)';
+        badge.style.color = '#10b981';
+      } else {
+        badge.textContent = '⏸️ AUTO-PILOT PAUSED';
+        badge.style.background = 'rgba(239, 68, 68, 0.2)';
+        badge.style.color = '#ef4444';
+      }
+    }
+  }
+
+  // Autonomous 24/7 background telemetry poll every 3.5 seconds
+  setInterval(() => {
+    if (rlAutoPilotEnabled) {
+      fetchLatestContinuousReport(false);
+    }
+  }, 3500);
+
   async function runRlContinuousCycle() {
     const btn = document.getElementById('btn-run-continuous-cycle');
     const status = document.getElementById('continuous-cycle-status');
-    const tbody = document.getElementById('continuous-probes-tbody');
     if (btn) btn.disabled = true;
     if (status) status.innerHTML = '<span style="color: #06b6d4;">⏳ Executing 28 Continuous Probes &amp; Q-Learning Optimization...</span>';
 
@@ -3044,28 +3140,7 @@ with urllib.request.urlopen(req) as resp:
       const res = await fetch('/api/rl-defense/train-cycle', { method: 'POST' });
       if (res.ok) {
         const report = await res.json();
-        if (status) {
-          status.innerHTML = `<span style="color: #10b981;">✅ Cycle #${report.cycle_id} Completed: ${report.passed_invariants}/${report.total_probes} Passed (Avg Reward: ${report.average_reward.toFixed(1)}, Latency: ${report.average_latency_ms.toFixed(1)}ms)</span>`;
-        }
-
-        if (tbody && report.results_summary) {
-          tbody.innerHTML = report.results_summary.map(p => {
-            const isClean = p.was_intercepted;
-            const badgeColor = isClean ? '#10b981' : '#ef4444';
-            const tierColor = p.defense_action_selected.includes('Mitigation') ? '#ef4444' : (p.defense_action_selected.includes('Containment') ? '#f97316' : '#38bdf8');
-            return `<tr style="border-bottom: 1px solid #1f293d;">
-              <td style="padding: 0.6rem; font-family: monospace; color: #9ca3af;">${escapeHtml(p.probe_id)}</td>
-              <td style="padding: 0.6rem; font-weight: 500;">${escapeHtml(p.perimeter_name)}</td>
-              <td style="padding: 0.6rem; color: #cbd5e1;">${escapeHtml(p.principal)} &rarr; ${escapeHtml(p.action)}</td>
-              <td style="padding: 0.6rem; font-family: monospace; color: #64748b;">${escapeHtml(p.resource)}</td>
-              <td style="padding: 0.6rem; color: ${tierColor}; font-weight: 600;">${escapeHtml(p.defense_action_selected)}</td>
-              <td style="padding: 0.6rem; color: ${badgeColor}; font-weight: 600;">${escapeHtml(p.breakout_verdict)}</td>
-              <td style="padding: 0.6rem; color: ${p.reward >= 0 ? '#10b981' : '#ef4444'}; font-family: monospace;">${p.reward.toFixed(1)}</td>
-              <td style="padding: 0.6rem; font-size: 0.75rem; color: #9ca3af;">${p.mttd_ms.toFixed(1)}ms / ${p.mttr_ms.toFixed(1)}ms</td>
-            </tr>`;
-          }).join('');
-        }
-
+        renderContinuousReport(report);
         fetchRlDefenseStatus();
         fetchOtelSpans();
         appendTerminal(`[RL CONTINUOUS DEFENSE] Cycle #${report.cycle_id} executed: ${report.passed_invariants}/${report.total_probes} probes passed. Posture: ${report.epsilon_after_cycle < 0.1 ? 'CONVERGED' : 'CALIBRATING'}`, 'ok');

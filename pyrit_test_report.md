@@ -1,13 +1,13 @@
 # Agent Octopus Exhaustive Multi-Framework Defensive Report
 
-**Generated on:** 2026-10-10 18:40:16 UTC  
-**Total Variations Evaluated:** 1436 | **Passed:** 1433 | **Failed:** 3 | **Success Rate:** 99.8%
+**Generated on:** 2026-10-10 21:01:35 UTC  
+**Total Variations Evaluated:** 1436 | **Passed:** 1436 | **Failed:** 0 | **Success Rate:** 100.0%
 
 ## Sub-Perimeter Breakdown
 
 | Perimeter | Passed | Total | Rate |
 | :--- | :---: | :---: | :---: |
-| Perimeter 1: Cedar PARC | 65 | 66 | 98.5% |
+| Perimeter 1: Cedar PARC | 66 | 66 | 100.0% |
 | Perimeter 2: Network Egress | 61 | 61 | 100.0% |
 | Perimeter 3: Ingest Sanitizer | 400 | 400 | 100.0% |
 | Perimeter 4: Audit Cryptography | 200 | 200 | 100.0% |
@@ -19,7 +19,7 @@
 | Perimeter 10: Multimodal Vision | 10 | 10 | 100.0% |
 | Perimeter 11: Multilingual Determinism | 148 | 148 | 100.0% |
 | Perimeter 12: Agent Collusion & Breakout | 30 | 30 | 100.0% |
-| Perimeter 13: Kernel Sentinel | 18 | 20 | 90.0% |
+| Perimeter 13: Kernel Sentinel | 20 | 20 | 100.0% |
 | External: Multi-Framework Matrix | 17 | 17 | 100.0% |
 
 ## Framework Matrix Attribution

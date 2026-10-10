@@ -746,6 +746,15 @@ pub async fn handle_rl_defense_train_cycle(state: &WebState) -> String {
     serde_json::to_string(&report).unwrap_or_default()
 }
 
+pub async fn handle_rl_defense_latest_cycle(state: &WebState) -> String {
+    if let Some(report) = state.continuous_eval.get_latest_report() {
+        serde_json::to_string(&report).unwrap_or_default()
+    } else {
+        let report = state.continuous_eval.run_continuous_training_cycle().await;
+        serde_json::to_string(&report).unwrap_or_default()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RlEvaluateActionRequest {
     pub principal: String,

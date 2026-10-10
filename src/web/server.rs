@@ -5,7 +5,7 @@ use super::api::{
     handle_otel_spans, handle_rasp_create_canary, handle_rasp_intercept_memory,
     handle_rasp_intercept_prompt, handle_rasp_intercept_tool, handle_rasp_set_mitigation_tier,
     handle_rasp_status, handle_rasp_telemetry, handle_resilience_metrics, handle_rl_defense_status,
-    handle_rl_defense_train_cycle, handle_rl_evaluate_action, handle_status,
+    handle_rl_defense_train_cycle, handle_rl_defense_latest_cycle, handle_rl_evaluate_action, handle_status,
     handle_update_egress_domains, handle_validate_sisyphean, handle_vassilev_proof, WebState,
 };
 use super::static_files::INDEX_HTML;
@@ -54,21 +54,21 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
         });
     }
 
-    // Spawn autonomous background continuous training, dynamic tuning, OTel telemetry, and self-correction loop
+    // Spawn autonomous 24/7 background continuous evaluation, dynamic RL tuning, and telemetry loop
     let state_auto = Arc::clone(&state);
     tokio::spawn(async move {
         // Initial delay before background loop begins to allow server initialization
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(20));
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(8));
         loop {
             interval.tick().await;
             let report = state_auto.continuous_eval.run_continuous_training_cycle().await;
-            if report.defensive_breaches > 0 {
-                eprintln!(
-                    "[AUTONOMOUS-RL] Cycle #{}: Breaches intercepted/remediated: {} | Survival Bound P(N): {:.2}% | Epsilon: {:.4}",
-                    report.cycle_id, report.defensive_breaches, report.cumulative_survival_prob * 100.0, report.epsilon_after_cycle
-                );
-            }
+            eprintln!(
+                "[AUTONOMOUS-24/7] Cycle #{}: Passed: {}/{} | Breaches: {} | RL Posture: {} | MTTD: {:.2}ms | MTTR: {:.2}ms | Survival: {:.2}%",
+                report.cycle_id, report.passed_invariants, report.total_probes, report.defensive_breaches,
+                if report.epsilon_after_cycle < 0.1 { "CONVERGED" } else { "TUNING" },
+                report.mttd_ms, report.mttr_ms, report.cumulative_survival_prob * 100.0
+            );
         }
     });
 
@@ -474,6 +474,24 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
+        ("GET", "/api/rl-defense/latest-cycle") => {
+            let state_latest = Arc::clone(&state);
+            let latest_task = tokio::spawn(async move {
+                handle_rl_defense_latest_cycle(&state_latest).await
+            });
+            let (status_code, response_body) = match latest_task.await {
+                Ok(resp) => ("200 OK", resp),
+                Err(_) => ("500 Internal Server Error", api_error_payload("CYCLE_FETCH_FAULT", "Failed to retrieve latest continuous evaluation report")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                response_body.len(),
+                response_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
         ("POST", "/api/rl-defense/evaluate-action") => {
             let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_rl_evaluate_action(&state, body))) {
                 Ok(Ok(resp)) => ("200 OK", resp),
@@ -788,151 +806,22 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
-/// Streams live test output and test progression to the browser using Server-Sent Events (SSE).
-async fn handle_sse_test_stream(
+/// Executes a child process and streams its live stdout/stderr lines and test verdicts via SSE.
+async fn stream_command_output(
     stream: &mut TcpStream,
-    suite_name: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let sse_header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache, no-transform\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\nX-Accel-Buffering: no\r\n\r\n";
-    stream.write_all(sse_header.as_bytes()).await?;
-    stream.flush().await?;
-
-    let python_suites = [
-        "all", "strix_llm_adversarial", "adversarial", "multi_framework", "pyrit",
-        "garak", "deepeval", "inspect_ai", "promptfoo", "pentestgpt", "redamon",
-        "caido", "astra", "restler", "multimodal", "multilingual", "collusion"
-    ];
-    let is_python = python_suites.contains(&suite_name);
-    let is_all = suite_name == "all";
-    let is_strix = suite_name == "strix_llm_adversarial" || suite_name == "adversarial" || suite_name == "multi_framework";
-    let is_pyrit = suite_name == "pyrit";
-
-    let estimated_total = match suite_name {
-        "all" => 2450,
-        "strix_llm_adversarial" | "adversarial" | "multi_framework" => 2390,
-        "pyrit" => 600,
-        "garak" => 35,
-        "deepeval" => 25,
-        "inspect_ai" => 20,
-        "promptfoo" => 25,
-        "pentestgpt" => 20,
-        "redamon" => 20,
-        "caido" => 20,
-        "astra" => 20,
-        "restler" => 20,
-        "multimodal" => 20,
-        "multilingual" => 148,
-        "collusion" => 30,
-        "cedar_policy_tests" => 20,
-        "breakout_defense_tests" => 20,
-        "breakout_scripts" => 6,
-        "containment_tests" => 10,
-        "google_anomaly_detection_tests" => 4,
-        "guard_arms_network_tests" => 7,
-        "ledger_transparency_tests" => 7,
-        "neural_mesh_integration_tests" => 3,
-        "quantum_adversarial_tests" => 7,
-        "research_and_atlas_tests" => 9,
-        _ => 92,
-    };
-
-    // Send initial suite update and tool synchronization check event
-    let sync_event = format!(
-        "data: {}\n\n",
-        serde_json::json!({
-            "type": "output",
-            "line": "[SUITE-SYNC] Checking for updated test suites, PyRIT AI engine, and security tools at run initiation..."
-        })
-    );
-    stream.write_all(sync_event.as_bytes()).await?;
-
-    let sync_ok_event = format!(
-        "data: {}\n\n",
-        serde_json::json!({
-            "type": "output",
-            "line": "[SUITE-SYNC] ✓ PyRIT v1.1.0 verified, 19 Red-Teaming Frameworks & 13 Perimeters synchronized with active Cedar engine."
-        })
-    );
-    stream.write_all(sync_ok_event.as_bytes()).await?;
-    stream.flush().await?;
-
-    // Send initial status event with robust serde JSON
-    let spawn_msg = if is_all {
-        format!("[SPAWN] Starting Unified Policy 'ALL' - Executing Complete Test Matrix Across All 19 Frameworks & 13 Perimeters (2,450+ variations)...")
-    } else if is_pyrit {
-        format!("[SPAWN] Starting Microsoft PyRIT AI Red-Teaming & Risk Suite (600 variations)...")
-    } else if is_strix {
-        format!("[SPAWN] Starting Multi-Framework Comprehensive Suite (2,250+ variations)...")
-    } else if is_python {
-        format!("[SPAWN] Starting {} Suite (Estimated variations: {})...", suite_name.to_uppercase(), estimated_total)
-    } else {
-        format!("[SPAWN] Starting cargo test for suite '{}' (Estimated tests: {})...", suite_name, estimated_total)
-    };
-    let init_event = format!(
-        "data: {}\n\n",
-        serde_json::json!({
-            "type": "output",
-            "line": spawn_msg
-        })
-    );
-    stream.write_all(init_event.as_bytes()).await?;
-    stream.flush().await?;
-
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let root = if exe_dir.ends_with("target/release") || exe_dir.ends_with("target\\release")
-        || exe_dir.ends_with("target/debug") || exe_dir.ends_with("target\\debug") {
-        exe_dir.parent().and_then(|p| p.parent()).unwrap_or(&exe_dir).to_path_buf()
-    } else {
-        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-    };
-
-    let mut cmd = if is_python {
-        let mut c = Command::new("python");
-        c.arg("-u");
-        c.env("PYTHONUNBUFFERED", "1");
-        c.current_dir(&root);
-
-        let local_script = root.join("tests").join("strix_llm_adversarial_tester.py");
-        let script_path = if local_script.exists() {
-            local_script.to_string_lossy().to_string()
-        } else {
-            "d:\\tools\\strix_llm_adversarial_tester.py".to_string()
-        };
-        c.arg(script_path);
-        c.arg("--skip-strix");
-        if is_all {
-            c.arg("--suite");
-            c.arg("all");
-        } else if is_pyrit {
-            c.arg("--pyrit");
-        } else if suite_name != "strix_llm_adversarial" {
-            c.arg("--suite");
-            c.arg(suite_name);
-        }
-        c
-    } else {
-        let mut c = Command::new("cargo");
-        c.current_dir(&root);
-        if suite_name == "all" {
-            c.args(["test", "--tests", "--", "--nocapture"]);
-        } else {
-            c.args(["test", "--test", suite_name, "--", "--nocapture"]);
-        }
-        c
-    };
+    mut cmd: Command,
+    is_python: bool,
+    suite_label: &str,
+    estimated_total: usize,
+    passed: &mut usize,
+    failed: &mut usize,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
-    let spawn_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        cmd.spawn()
-    }));
-
-    let mut child = match spawn_res {
-        Ok(Ok(c)) => c,
-        Ok(Err(e)) => {
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
             let err_event = format!(
                 "data: {}\n\n",
                 serde_json::json!({
@@ -946,51 +835,17 @@ async fn handle_sse_test_stream(
             );
             stream.write_all(err_event.as_bytes()).await?;
             stream.flush().await?;
-            return Ok(());
-        }
-        Err(_) => {
-            let err_event = format!(
-                "data: {}\n\n",
-                serde_json::json!({
-                    "type": "error",
-                    "error": true,
-                    "code": "SPAWN_PANIC",
-                    "line": "[ERROR] Panic during process execution spawn.",
-                    "message": "Panic during process execution spawn",
-                    "timestamp": format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
-                })
-            );
-            stream.write_all(err_event.as_bytes()).await?;
-            stream.flush().await?;
-            return Ok(());
+            return Ok(false);
         }
     };
 
     let (stdout, stderr) = match (child.stdout.take(), child.stderr.take()) {
         (Some(o), Some(e)) => (o, e),
-        _ => {
-            let err_event = format!(
-                "data: {}\n\n",
-                serde_json::json!({
-                    "type": "error",
-                    "error": true,
-                    "code": "PIPE_ERROR",
-                    "line": "[ERROR] Failed to capture child process stdio pipes.",
-                    "message": "Failed to capture child process stdio pipes",
-                    "timestamp": format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
-                })
-            );
-            let _ = stream.write_all(err_event.as_bytes()).await;
-            let _ = stream.flush().await;
-            return Ok(());
-        }
+        _ => return Ok(false),
     };
 
     let mut stdout_reader = BufReader::new(stdout).lines();
     let mut stderr_reader = BufReader::new(stderr).lines();
-
-    let mut passed = 0;
-    let mut failed = 0;
 
     loop {
         tokio::select! {
@@ -1013,16 +868,11 @@ async fn handle_sse_test_stream(
                                     .nth(2)
                                     .and_then(|s| s.split(']').next())
                                     .unwrap_or("adversarial_test");
-                                let suite_label = if is_pyrit {
-                                    "PyRIT Risk Suite"
-                                } else {
-                                    "Multi-Framework Suite"
-                                };
                                 let status = if is_pass { "ok" } else { "failed" };
                                 if is_pass {
-                                    passed += 1;
+                                    *passed += 1;
                                 } else {
-                                    failed += 1;
+                                    *failed += 1;
                                 }
 
                                 let res_event = format!(
@@ -1050,9 +900,9 @@ async fn handle_sse_test_stream(
                                     let test_name = parts[1];
                                     let status = if is_ok { "ok" } else { "failed" };
                                     if is_ok {
-                                        passed += 1;
+                                        *passed += 1;
                                     } else {
-                                        failed += 1;
+                                        *failed += 1;
                                     }
 
                                     let res_event = format!(
@@ -1061,7 +911,7 @@ async fn handle_sse_test_stream(
                                             "type": "test_result",
                                             "name": test_name,
                                             "status": status,
-                                            "suite": suite_name,
+                                            "suite": suite_label,
                                             "suite_total": estimated_total
                                         })
                                     );
@@ -1119,8 +969,226 @@ async fn handle_sse_test_stream(
         Ok(s) => s.success(),
         Err(_) => false,
     };
+    Ok(is_success)
+}
 
-    if !is_success && passed == 0 && failed == 0 {
+/// Streams live test output and test progression to the browser using Server-Sent Events (SSE).
+async fn handle_sse_test_stream(
+    stream: &mut TcpStream,
+    suite_name: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let sse_header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache, no-transform\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\nX-Accel-Buffering: no\r\n\r\n";
+    stream.write_all(sse_header.as_bytes()).await?;
+    stream.flush().await?;
+
+    let python_suites = [
+        "strix_llm_adversarial", "adversarial", "multi_framework", "pyrit",
+        "garak", "deepeval", "inspect_ai", "promptfoo", "pentestgpt", "redamon",
+        "caido", "astra", "restler", "multimodal", "multilingual", "collusion"
+    ];
+    let is_all = suite_name == "all";
+    let is_python = is_all || python_suites.contains(&suite_name);
+    let is_strix = suite_name == "strix_llm_adversarial" || suite_name == "adversarial" || suite_name == "multi_framework";
+    let is_pyrit = suite_name == "pyrit";
+
+    let estimated_total = match suite_name {
+        "all" => 1530,
+        "strix_llm_adversarial" | "adversarial" | "multi_framework" => 1436,
+        "pyrit" => 600,
+        "garak" => 35,
+        "deepeval" => 25,
+        "inspect_ai" => 20,
+        "promptfoo" => 25,
+        "pentestgpt" => 20,
+        "redamon" => 20,
+        "caido" => 20,
+        "astra" => 20,
+        "restler" => 20,
+        "multimodal" => 20,
+        "multilingual" => 148,
+        "collusion" => 30,
+        "cedar_policy_tests" => 21,
+        "breakout_defense_tests" => 20,
+        "breakout_scripts" => 6,
+        "containment_tests" => 10,
+        "continuous_rl" | "continuous_security_rl_tests" => 7,
+        "google_anomaly_detection_tests" => 4,
+        "governor_tests" => 8,
+        "guard_arms_network_tests" => 7,
+        "kernel_sentinel_tests" => 5,
+        "ledger_transparency_tests" => 7,
+        "math_validator_tests" => 6,
+        "neural_mesh_integration_tests" => 3,
+        "quantum_adversarial_tests" => 7,
+        "rasp_tests" => 8,
+        "research_and_atlas_tests" => 9,
+        _ => 92,
+    };
+
+    // Send initial suite update and tool synchronization check event
+    let sync_event = format!(
+        "data: {}\n\n",
+        serde_json::json!({
+            "type": "output",
+            "line": "[SUITE-SYNC] Checking for updated test suites, PyRIT AI engine, and security tools at run initiation..."
+        })
+    );
+    stream.write_all(sync_event.as_bytes()).await?;
+
+    let sync_ok_event = format!(
+        "data: {}\n\n",
+        serde_json::json!({
+            "type": "output",
+            "line": "[SUITE-SYNC] ✓ PyRIT v1.1.0 verified, 19 Red-Teaming Frameworks & 13 Perimeters synchronized with active Cedar engine."
+        })
+    );
+    stream.write_all(sync_ok_event.as_bytes()).await?;
+    stream.flush().await?;
+
+    // Send initial status event with robust serde JSON
+    let spawn_msg = if is_all {
+        format!("[SPAWN] Starting Unified Policy 'ALL' - Executing Complete Test Matrix Across All 19 Frameworks & 13 Perimeters (Phase 1) followed by Native Rust Integration Test Matrix (Phase 2)...")
+    } else if is_pyrit {
+        format!("[SPAWN] Starting Microsoft PyRIT AI Red-Teaming & Risk Suite (600 variations)...")
+    } else if is_strix {
+        format!("[SPAWN] Starting Multi-Framework Comprehensive Suite (1,436+ variations)...")
+    } else if is_python {
+        format!("[SPAWN] Starting {} Suite (Estimated variations: {})...", suite_name.to_uppercase(), estimated_total)
+    } else {
+        format!("[SPAWN] Starting cargo test for suite '{}' (Estimated tests: {})...", suite_name, estimated_total)
+    };
+    let init_event = format!(
+        "data: {}\n\n",
+        serde_json::json!({
+            "type": "output",
+            "line": spawn_msg
+        })
+    );
+    stream.write_all(init_event.as_bytes()).await?;
+    stream.flush().await?;
+
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let root = if exe_dir.ends_with("target/release") || exe_dir.ends_with("target\\release")
+        || exe_dir.ends_with("target/debug") || exe_dir.ends_with("target\\debug") {
+        exe_dir.parent().and_then(|p| p.parent()).unwrap_or(&exe_dir).to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    };
+
+    let mut passed = 0;
+    let mut failed = 0;
+
+    if is_all {
+        // =====================================================================
+        // PHASE 1: Multi-Framework Adversarial Red-Teaming Matrix (Python)
+        // =====================================================================
+        let mut py_cmd = Command::new("python");
+        py_cmd.arg("-u");
+        py_cmd.env("PYTHONUNBUFFERED", "1");
+        py_cmd.current_dir(&root);
+
+        let local_script = root.join("tests").join("strix_llm_adversarial_tester.py");
+        let script_path = if local_script.exists() {
+            local_script.to_string_lossy().to_string()
+        } else {
+            "d:\\tools\\strix_llm_adversarial_tester.py".to_string()
+        };
+        py_cmd.arg(script_path);
+        py_cmd.arg("--skip-strix");
+        py_cmd.arg("--suite");
+        py_cmd.arg("all");
+
+        let _ = stream_command_output(
+            stream,
+            py_cmd,
+            true,
+            "Multi-Framework Matrix",
+            estimated_total,
+            &mut passed,
+            &mut failed,
+        ).await;
+
+        // Transition announcement between Phase 1 and Phase 2
+        let phase2_banner = format!(
+            "data: {}\n\n",
+            serde_json::json!({
+                "type": "output",
+                "line": "\n=====================================================================================\n  [PHASE 2] STARTING NATIVE RUST INTEGRATION TEST MATRIX (ALL 15 SUITES)\n====================================================================================="
+            })
+        );
+        let _ = stream.write_all(phase2_banner.as_bytes()).await;
+        let _ = stream.flush().await;
+
+        // =====================================================================
+        // PHASE 2: Native Rust Integration Test Suites (Cargo)
+        // =====================================================================
+        let mut cargo_cmd = Command::new("cargo");
+        cargo_cmd.current_dir(&root);
+        cargo_cmd.args(["test", "--tests", "--", "--nocapture"]);
+
+        let _ = stream_command_output(
+            stream,
+            cargo_cmd,
+            false,
+            "Rust Integration Tests",
+            estimated_total,
+            &mut passed,
+            &mut failed,
+        ).await;
+    } else if is_python {
+        let mut py_cmd = Command::new("python");
+        py_cmd.arg("-u");
+        py_cmd.env("PYTHONUNBUFFERED", "1");
+        py_cmd.current_dir(&root);
+
+        let local_script = root.join("tests").join("strix_llm_adversarial_tester.py");
+        let script_path = if local_script.exists() {
+            local_script.to_string_lossy().to_string()
+        } else {
+            "d:\\tools\\strix_llm_adversarial_tester.py".to_string()
+        };
+        py_cmd.arg(script_path);
+        py_cmd.arg("--skip-strix");
+        if is_pyrit {
+            py_cmd.arg("--pyrit");
+        } else if suite_name != "strix_llm_adversarial" {
+            py_cmd.arg("--suite");
+            py_cmd.arg(suite_name);
+        }
+
+        let _ = stream_command_output(
+            stream,
+            py_cmd,
+            true,
+            suite_name,
+            estimated_total,
+            &mut passed,
+            &mut failed,
+        ).await;
+    } else {
+        let cargo_target = match suite_name {
+            "continuous_rl" => "continuous_security_rl_tests",
+            other => other,
+        };
+        let mut cargo_cmd = Command::new("cargo");
+        cargo_cmd.current_dir(&root);
+        cargo_cmd.args(["test", "--test", cargo_target, "--", "--nocapture"]);
+
+        let _ = stream_command_output(
+            stream,
+            cargo_cmd,
+            false,
+            suite_name,
+            estimated_total,
+            &mut passed,
+            &mut failed,
+        ).await;
+    }
+
+    if passed == 0 && failed == 0 {
         let err_event = format!(
             "data: {}\n\n",
             serde_json::json!({
@@ -1132,7 +1200,7 @@ async fn handle_sse_test_stream(
         let _ = stream.flush().await;
     }
 
-    // Send completion event
+    // Send final composite completion event
     let complete_event = format!(
         "data: {}\n\n",
         serde_json::json!({
