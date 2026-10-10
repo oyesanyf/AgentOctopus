@@ -878,12 +878,28 @@ async fn handle_sse_test_stream(
     stream.write_all(init_event.as_bytes()).await?;
     stream.flush().await?;
 
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let root = if exe_dir.ends_with("target/release") || exe_dir.ends_with("target\\release")
+        || exe_dir.ends_with("target/debug") || exe_dir.ends_with("target\\debug") {
+        exe_dir.parent().and_then(|p| p.parent()).unwrap_or(&exe_dir).to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    };
+
     let mut cmd = if is_python {
         let mut c = Command::new("python");
-        let script_path = if std::path::Path::new("tests/strix_llm_adversarial_tester.py").exists() {
-            "tests/strix_llm_adversarial_tester.py"
+        c.arg("-u");
+        c.env("PYTHONUNBUFFERED", "1");
+        c.current_dir(&root);
+
+        let local_script = root.join("tests").join("strix_llm_adversarial_tester.py");
+        let script_path = if local_script.exists() {
+            local_script.to_string_lossy().to_string()
         } else {
-            "d:\\tools\\strix_llm_adversarial_tester.py"
+            "d:\\tools\\strix_llm_adversarial_tester.py".to_string()
         };
         c.arg(script_path);
         c.arg("--skip-strix");
@@ -899,8 +915,7 @@ async fn handle_sse_test_stream(
         c
     } else {
         let mut c = Command::new("cargo");
-        let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        c.current_dir(current_dir);
+        c.current_dir(&root);
         if suite_name == "all" {
             c.args(["test", "--tests", "--", "--nocapture"]);
         } else {

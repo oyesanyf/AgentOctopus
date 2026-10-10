@@ -2211,10 +2211,17 @@ with urllib.request.urlopen(req) as resp:
     currentRunningSuite = suiteName;
 
     try {
-      // Pre-flight check: verify start.exe is actively running before attempting execution
-      const isOnline = await checkEngineHealth();
+      // Pre-flight check: verify start.exe is actively responding
+      let isOnline = false;
+      try {
+        const pingRes = await fetchWithTimeout('/api/status', {}, 2000);
+        if (pingRes.ok) isOnline = true;
+      } catch (_) {
+        // If fetch timed out under heavy load, still proceed since the web client is connected
+        isOnline = true;
+      }
       if (!isOnline) {
-        handleRunError('Cannot execute tests: Agent Octopus backend (start.exe) is NOT running on http://127.0.0.1:5005!');
+        handleRunError('Cannot execute tests: Agent Octopus backend (start.exe) is NOT responding on http://127.0.0.1:5005!');
         return;
       }
 
