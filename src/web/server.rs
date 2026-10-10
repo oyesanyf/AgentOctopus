@@ -6,7 +6,11 @@ use super::api::{
     handle_rasp_intercept_prompt, handle_rasp_intercept_tool, handle_rasp_set_mitigation_tier,
     handle_rasp_status, handle_rasp_telemetry, handle_resilience_metrics, handle_rl_defense_status,
     handle_rl_defense_train_cycle, handle_rl_defense_latest_cycle, handle_rl_evaluate_action, handle_status,
-    handle_update_egress_domains, handle_validate_sisyphean, handle_vassilev_proof, WebState,
+    handle_update_egress_domains, handle_validate_sisyphean, handle_vassilev_proof,
+    handle_atlas_status, handle_atlas_sync, handle_atlas_dynamic_tests,
+    handle_oss_fuzz_status, handle_oss_fuzz_burst, handle_oss_fuzz_sarif,
+    handle_osv_scanner_status, handle_osv_scanner_scan_now, handle_osv_scanner_sarif,
+    WebState,
 };
 use super::static_files::INDEX_HTML;
 use std::sync::Arc;
@@ -69,6 +73,15 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
                 if report.epsilon_after_cycle < 0.1 { "CONVERGED" } else { "TUNING" },
                 report.mttd_ms, report.mttr_ms, report.cumulative_survival_prob * 100.0
             );
+
+            // Continuous Google OSS-Fuzz dynamic runtime fuzzing pass
+            let fuzz_rep = state_auto.oss_fuzz_arm.run_continuous_fuzz_cycle(10);
+            if fuzz_rep.crashes_prevented > 0 || fuzz_rep.hangs_intercepted > 0 || fuzz_rep.cycle_id % 10 == 0 {
+                eprintln!(
+                    "[OSS-FUZZ] Executed: {} total | Exec/s: {:.1} | Crashes Contained: {} | Hangs Intercepted: {}",
+                    fuzz_rep.total_executions, fuzz_rep.execs_per_sec, fuzz_rep.crashes_prevented, fuzz_rep.hangs_intercepted
+                );
+            }
         }
     });
 
@@ -259,6 +272,16 @@ async fn handle_connection(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 INDEX_HTML.len(),
                 INDEX_HTML
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/favicon.ico") | ("GET", "/favicon.svg") => {
+            let svg_icon = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="#0f172a" stroke="#06b6d4" stroke-width="4"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="central" font-size="38">🐙</text></svg>"##;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/svg+xml\r\nCache-Control: public, max-age=86400\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                svg_icon.len(),
+                svg_icon
             );
             stream.write_all(response.as_bytes()).await?;
         }
@@ -503,6 +526,134 @@ async fn handle_connection(
                 status_code,
                 response_body.len(),
                 response_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/atlas/status") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_atlas_status(&state))) {
+                Ok(body) => ("200 OK", body),
+                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/atlas/status")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/atlas/sync") => {
+            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_atlas_sync(&state))) {
+                Ok(Ok(resp)) => ("200 OK", resp),
+                Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/atlas/sync")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                response_body.len(),
+                response_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/atlas/dynamic-tests") => {
+            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_atlas_dynamic_tests(&state))) {
+                Ok(Ok(resp)) => ("200 OK", resp),
+                Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/atlas/dynamic-tests")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                response_body.len(),
+                response_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/oss-fuzz/status") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_oss_fuzz_status(&state))) {
+                Ok(body) => ("200 OK", body),
+                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/oss-fuzz/status")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/oss-fuzz/run-burst") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_oss_fuzz_burst(&state))) {
+                Ok(body) => ("200 OK", body),
+                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/oss-fuzz/run-burst")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/oss-fuzz/sarif") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_oss_fuzz_sarif(&state))) {
+                Ok(body) => ("200 OK", body),
+                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/oss-fuzz/sarif")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/osv-scanner/status") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_osv_scanner_status(&state))) {
+                Ok(body) => ("200 OK", body),
+                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/osv-scanner/status")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/osv-scanner/scan-now") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_osv_scanner_scan_now(&state))) {
+                Ok(body) => ("200 OK", body),
+                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/osv-scanner/scan-now")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/osv-scanner/sarif") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_osv_scanner_sarif(&state))) {
+                Ok(body) => ("200 OK", body),
+                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/osv-scanner/sarif")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
             );
             stream.write_all(response.as_bytes()).await?;
         }

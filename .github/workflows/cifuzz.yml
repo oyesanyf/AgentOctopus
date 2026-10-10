@@ -1,0 +1,44 @@
+name: CIFuzz Continuous Runtime Fuzzing
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 */6 * * *' # Continuous execution every 6 hours
+
+permissions:
+  contents: read
+
+jobs:
+  ContinuousFuzzing:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Codebase
+      uses: actions/checkout@v4
+
+    - name: Set up Rust Toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Build Fuzz Targets
+      uses: google/oss-fuzz/actions/build-fuzzers@v1
+      with:
+        oss-fuzz-project-name: 'agent-octopus'
+        language: rust
+        fuzz-seconds: 600
+        dry-run: false
+
+    - name: Run CIFuzz Continuous Runtime Engine
+      uses: google/oss-fuzz/actions/run-fuzzers@v1
+      with:
+        oss-fuzz-project-name: 'agent-octopus'
+        fuzz-seconds: 600
+        mode: 'code-change'
+        sanitizer: 'address'
+
+    - name: Upload CIFuzz Crash Artifacts
+      uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: cifuzz-crashes
+        path: ./build/out/artifacts

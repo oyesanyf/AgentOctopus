@@ -12,10 +12,15 @@ pub mod identity;
 pub mod isolation;
 pub mod math_validator;
 pub mod openshell;
+pub mod oss_fuzz_arm;
+pub mod osv_scanner_arm;
 pub mod rasp;
 pub mod research_arms;
 pub mod rl_defense;
 pub mod windows_sandbox;
+
+pub use oss_fuzz_arm::{ContinuousOssFuzzArm, OssFuzzCycleReport, TargetTelemetry};
+pub use osv_scanner_arm::{ContinuousOsvScannerArm, OsvScanReport};
 
 pub use audit::{AuditRecord, SecurityAuditLog};
 pub use breakouts::{

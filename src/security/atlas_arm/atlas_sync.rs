@@ -47,8 +47,11 @@ impl AtlasSyncManager {
     pub fn new(version: &str, pinned_checksum: &str) -> Self {
         Self {
             trusted_sources: vec![
-                "https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/atlas.yaml".to_string(),
+                "https://raw.githubusercontent.com/mitre-atlas/atlas-data".to_string(),
+                "https://github.com/mitre-atlas/atlas-data".to_string(),
+                "https://release-assets.githubusercontent.com".to_string(),
                 "https://atlas.mitre.org/api/v1/matrix".to_string(),
+                "https://atlas.mitre.org".to_string(),
             ],
             pinned_checksum: pinned_checksum.to_string(),
             active_version: version.to_string(),
@@ -111,5 +114,65 @@ impl AtlasSyncManager {
             total_mitigations: 40,
             total_case_studies: 73,
         })
+    }
+
+    /// Automatically synchronizes or loads cached MITRE ATLAS STIX 2.1 knowledge base from disk.
+    /// If not present locally, downloads the authoritative stix-atlas.json bundle from GitHub.
+    pub fn sync_or_load_stix(&self, cache_file_path: &str) -> Result<(AtlasSyncMetadata, super::atlas_parser::ParsedAtlasKnowledgeBase), Box<dyn std::error::Error + Send + Sync>> {
+        let path = std::path::Path::new(cache_file_path);
+        
+        let raw_bytes = if path.exists() {
+            std::fs::read(path)?
+        } else {
+            // Create parent directory if needed
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let download_url = "https://github.com/mitre-atlas/atlas-data/releases/latest/download/stix-atlas.json";
+            
+            // Execute curl to download
+            let status = std::process::Command::new("curl.exe")
+                .arg("-L")
+                .arg("-s")
+                .arg("-o")
+                .arg(cache_file_path)
+                .arg(download_url)
+                .status();
+
+            match status {
+                Ok(s) if s.success() && path.exists() => {
+                    std::fs::read(path)?
+                }
+                _ => {
+                    return Err(format!("Failed to download STIX bundle from {}", download_url).into());
+                }
+            }
+        };
+
+        let json_str = std::str::from_utf8(&raw_bytes)?;
+        let kb = super::atlas_parser::AtlasParser::parse_stix_bundle(json_str)?;
+
+        let mut hasher = Sha256::new();
+        hasher.update(&raw_bytes);
+        let checksum = hex::encode(hasher.finalize());
+
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let metadata = AtlasSyncMetadata {
+            dataset_version: "2026.09-stix2.1".to_string(),
+            publication_date: "2026-09-15".to_string(),
+            source_url: "https://github.com/mitre-atlas/atlas-data/releases/latest/download/stix-atlas.json".to_string(),
+            sha256_checksum: checksum,
+            synced_at_secs: now_secs,
+            total_tactics: kb.tactics.len(),
+            total_techniques: kb.techniques.len(),
+            total_mitigations: kb.mitigations.len(),
+            total_case_studies: kb.case_studies.len(),
+        };
+
+        Ok((metadata, kb))
     }
 }

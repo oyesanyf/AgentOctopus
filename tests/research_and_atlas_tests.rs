@@ -241,3 +241,66 @@ fn test_atlas_test_generator_with_test_controller() {
         assert!(!tc.target_component.is_empty());
     }
 }
+
+#[test]
+fn test_dynamic_atlas_stix_ingestion_and_test_synthesis() {
+    let sync_mgr = AtlasSyncManager::default();
+    let cache_path = "data/atlas_stix/stix-atlas.json";
+    let (meta, kb) = sync_mgr.sync_or_load_stix(cache_path).expect("Failed to sync or load STIX bundle");
+
+    assert_eq!(meta.total_tactics, 16);
+    assert_eq!(meta.total_techniques, 208);
+    assert_eq!(meta.total_mitigations, 40);
+    assert_eq!(meta.total_case_studies, 73);
+
+    // Generate dynamic tests for all 208 techniques
+    let dynamic_suite = AtlasTestGenerator::generate_dynamic_test_suite(&kb);
+    assert_eq!(dynamic_suite.len(), 208);
+
+    // Verify key techniques are mapped correctly
+    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0000" && t.target_component == "cedar_arm::CedarAuthorizationGateway"));
+    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0051" && t.target_component == "doc_extractor"));
+    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0054" && t.target_component == "doc_extractor"));
+    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0016" && t.target_component == "guard_arms::capability_guard"));
+    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0025" && t.target_component == "guard_arms::network_guard"));
+    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0031" && t.target_component == "governor::OutOfBandCircuitBreaker"));
+}
+
+#[test]
+fn test_continuous_oss_fuzz_arm() {
+    use agent_octopus::security::oss_fuzz_arm::ContinuousOssFuzzArm;
+
+    let arm = ContinuousOssFuzzArm::new();
+
+    // Run 50 continuous fuzzing mutations across all 5 targets
+    let report = arm.run_continuous_fuzz_cycle(50);
+    assert_eq!(report.targets.len(), 5);
+    assert!(report.total_executions >= 50);
+    assert_eq!(report.crashes_prevented, 0);
+
+    // Verify CIFuzz SARIF export
+    let sarif = arm.generate_cifuzz_sarif_report();
+    let parsed: serde_json::Value = serde_json::from_str(&sarif).expect("SARIF must be valid JSON");
+    assert_eq!(parsed["version"], "2.1.0");
+    assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "Google OSS-Fuzz Continuous Runtime Arm (Agent Octopus)");
+}
+
+#[test]
+fn test_continuous_osv_scanner_arm() {
+    use agent_octopus::security::osv_scanner_arm::ContinuousOsvScannerArm;
+
+    let arm = ContinuousOsvScannerArm::default();
+    let report = arm.run_continuous_scan();
+
+    // Verify real Cargo.lock dependencies were parsed and scanned against Google OSV
+    assert!(report.total_dependencies_scanned >= 300);
+    assert!(report.health_score_pct >= 80.0);
+    assert!(!report.supply_chain_security_posture.is_empty());
+
+    // Verify OSV SARIF export
+    let sarif = arm.generate_osv_sarif_report();
+    let parsed: serde_json::Value = serde_json::from_str(&sarif).expect("OSV SARIF must be valid JSON");
+    assert_eq!(parsed["version"], "2.1.0");
+    assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "Google OSV-Scanner Continuous Arm (Agent Octopus)");
+}
+
