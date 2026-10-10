@@ -1,0 +1,62 @@
+[package]
+name = "agent_octopus"
+version = "0.1.0"
+edition = "2021"
+authors = ["Femo <oyesanyf@gmail.com>"]
+description = "Biologically-inspired decentralized agent swarm breakout defense & Real-Time Agentic Self-Protection (RT-ASP) architecture"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+homepage = "https://github.com/agent-octopus/agent-octopus"
+repository = "https://github.com/agent-octopus/agent-octopus"
+documentation = "https://docs.rs/agent_octopus"
+keywords = ["security", "ai-agents", "rasp", "cedar-policy", "sandbox"]
+categories = ["cryptography", "development-tools", "command-line-utilities"]
+exclude = [
+    "start.exe",
+    "logs/**",
+    "strix_runs/**",
+    "**/__pycache__/**",
+    "*.log",
+    "paper_text.txt",
+    "extract_paper.py",
+]
+
+[[bin]]
+name = "agent_octopus"
+path = "src/main.rs"
+test = false
+
+[[bin]]
+name = "start"
+path = "src/bin/start.rs"
+test = false
+
+[dependencies]
+tokio = { version = "1.38", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+regex = "1.10"
+sha2 = "0.10"
+hex = "0.4"
+wasmtime = "21.0"
+url = "2.5"
+rand = "0.8"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+cedar-policy = "4.13"
+tracing = "0.1"
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_System_SystemServices",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+] }
+
+[dev-dependencies]
+tokio-test = "0.4"

@@ -1,0 +1,4 @@
+Focus on Agent Octopus Web Application (http://127.0.0.1:5000):
+1. Verify POST /api/evaluate-cedar enforces zero-trust boundaries.
+2. Ensure SSRF attempts against metadata addresses are blocked.
+3. Confirm cryptographic audit log maintains tamper resistance.

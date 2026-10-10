@@ -1,0 +1,32 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Local binaries
+start.exe
+*.exe
+
+# Ephemeral runtime logs & reports
+logs/
+strix_runs/
+*.log
+
+# Python cache & temporary data
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+paper_text.txt
+extract_paper.py
+
+# Local environment & secrets
+.env
+.env.*
+!.env.example
+
+# IDE & OS files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
