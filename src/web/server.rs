@@ -1143,9 +1143,9 @@ async fn handle_sse_test_stream(
     let is_pyrit = suite_name == "pyrit";
 
     let estimated_total = match suite_name {
-        "all" => 1530,
-        "strix_llm_adversarial" | "adversarial" | "multi_framework" => 1436,
-        "pyrit" => 600,
+        "all" => 140,
+        "strix_llm_adversarial" | "adversarial" | "multi_framework" => 140,
+        "pyrit" => 30,
         "garak" => 35,
         "deepeval" => 25,
         "inspect_ai" => 20,
