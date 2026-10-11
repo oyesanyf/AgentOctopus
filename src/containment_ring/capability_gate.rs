@@ -1,5 +1,7 @@
+use super::cedar_gate::NegativeControlToken;
 use crate::core::types::{ArmRole, OctopusSecurityError};
 use crate::security::{CapabilityToken, ExternalAuthorizationEngine};
+use rand::RngCore;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -13,14 +15,33 @@ pub struct CapabilityGate {
     auth_engine: Arc<ExternalAuthorizationEngine>,
     revoked_token_ids: Arc<RwLock<HashSet<String>>>,
     enforcement_enabled: Arc<AtomicBool>,
+    audit_control_token: Arc<String>,
 }
 
 impl CapabilityGate {
     pub fn new(secret_seed: &[u8], token_ttl_secs: u64) -> Self {
+        let mut token_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut token_bytes);
+        let control_token = Arc::new(hex::encode(token_bytes));
+        Self::with_audit_token(secret_seed, token_ttl_secs, control_token)
+    }
+
+    /// Creates a CapabilityGate alongside an authoritative NegativeControlToken for audit and verification harnesses.
+    pub fn new_for_audit(secret_seed: &[u8], token_ttl_secs: u64) -> (Self, NegativeControlToken) {
+        let mut token_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut token_bytes);
+        let control_token = Arc::new(hex::encode(token_bytes));
+        let gate = Self::with_audit_token(secret_seed, token_ttl_secs, control_token.clone());
+        let token = NegativeControlToken::new(control_token);
+        (gate, token)
+    }
+
+    pub(crate) fn with_audit_token(secret_seed: &[u8], token_ttl_secs: u64, audit_token: Arc<String>) -> Self {
         Self {
             auth_engine: Arc::new(ExternalAuthorizationEngine::new(secret_seed, token_ttl_secs, "ring_policy_v1")),
             revoked_token_ids: Arc::new(RwLock::new(HashSet::new())),
             enforcement_enabled: Arc::new(AtomicBool::new(true)),
+            audit_control_token: audit_token,
         }
     }
 
@@ -30,8 +51,15 @@ impl CapabilityGate {
     }
 
     /// Enables or deliberately disables capability token enforcement for negative-control sensitivity tests.
-    pub fn set_enforcement_enabled(&self, enabled: bool) {
+    /// FAIL-CLOSED: Requires presenting the cryptographically unforgeable `NegativeControlToken`.
+    pub fn set_enforcement_enabled(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
+        if token.as_str() != self.audit_control_token.as_str() {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "UNAUTHORIZED_CALL_PATH: Modification of capability gate enforcement state requires authoritative NegativeControlToken".to_string(),
+            ));
+        }
         self.enforcement_enabled.store(enabled, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Issues a strictly scoped, short-lived capability token.

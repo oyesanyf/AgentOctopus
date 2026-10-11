@@ -8,6 +8,7 @@ pub struct BehavioralSentinelArm {
     pub arm_id: String,
     agent_histories: HashMap<String, AgentTelemetryHistory>,
     anomaly_threshold: f64,
+    pub arm_ring: std::sync::Arc<crate::containment_ring::ArmContainmentRing>,
 }
 
 #[derive(Debug, Clone)]
@@ -27,11 +28,24 @@ pub struct BehavioralAnomalyReport {
 
 impl BehavioralSentinelArm {
     pub fn new(arm_id: &str, anomaly_threshold: f64) -> Self {
+        let master_seed = crate::containment_ring::ArmRingRegistry::generate_master_seed();
+        let arm_ring = std::sync::Arc::new(crate::containment_ring::ArmContainmentRing::new(
+            102,
+            crate::core::types::ArmRole::AnomalyDetection,
+            1,
+            &master_seed,
+        ));
         Self {
             arm_id: arm_id.to_string(),
             agent_histories: HashMap::new(),
             anomaly_threshold,
+            arm_ring,
         }
+    }
+
+    pub fn with_containment_ring(mut self, ring: std::sync::Arc<crate::containment_ring::ArmContainmentRing>) -> Self {
+        self.arm_ring = ring;
+        self
     }
 
     /// Ingests a new execution telemetry event for an agent.
@@ -41,6 +55,14 @@ impl BehavioralSentinelArm {
         tokens_consumed: usize,
         payload_entropy: f64,
     ) -> BehavioralAnomalyReport {
+        if self.arm_ring.is_severed() {
+            return BehavioralAnomalyReport {
+                agent_id: agent_id.to_string(),
+                is_anomalous: true,
+                anomaly_score: 10.0,
+                reasons: vec!["Execution halted: Behavioral sentinel arm containment ring severed by supervisor".to_string()],
+            };
+        }
         let now = Instant::now();
         let history = self
             .agent_histories

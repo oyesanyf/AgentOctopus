@@ -208,7 +208,7 @@ async fn test_inter_arm_lateral_movement_block_between_untrusted_and_ledger() {
 
 #[tokio::test]
 async fn test_negative_control_level_1_epoch_enforcement() {
-    let ring = ArmContainmentRing::new(
+    let (ring, token) = ArmContainmentRing::new_for_audit(
         33,
         ArmRole::AccountingLedgerWrite,
         8,
@@ -223,14 +223,14 @@ async fn test_negative_control_level_1_epoch_enforcement() {
     // Phase 1: POSITIVE CONTROL (Epoch Enforcement ENABLED)
     // Stale Gen 8 token must be denied
     // -------------------------------------------------------------------------
-    ring.set_epoch_enforcement(true);
+    let _ = ring.set_epoch_enforcement(true, &token);
     let pos_res = ring.validate_epoch(8).await;
     assert!(pos_res.is_err(), "Positive control: stale epoch 8 must be rejected");
 
     // -------------------------------------------------------------------------
     // Phase 2: NEGATIVE CONTROL (Epoch Enforcement DELIBERATELY DISABLED)
     // -------------------------------------------------------------------------
-    ring.set_epoch_enforcement(false);
+    let _ = ring.set_epoch_enforcement(false, &token);
     let neg_res = ring.validate_epoch(8).await;
     assert!(neg_res.is_ok(), "Negative control: when epoch defense is disabled, stale epoch succeeds");
     println!("[NEGATIVE CONTROL: ARM RING EPOCH DISABLED] -> BREACH DETECTED: Stale Gen 8 accepted!");
@@ -238,7 +238,7 @@ async fn test_negative_control_level_1_epoch_enforcement() {
     // -------------------------------------------------------------------------
     // Phase 3: RESTORATION (Epoch Enforcement RE-ENABLED)
     // -------------------------------------------------------------------------
-    ring.set_epoch_enforcement(true);
+    let _ = ring.set_epoch_enforcement(true, &token);
     let restored_res = ring.validate_epoch(8).await;
     assert!(restored_res.is_err(), "Restoration: stale epoch must be blocked again");
     println!("[ARM RING LEVEL 1 RESTORED] Epoch enforcement re-enabled -> 100% Containment active.");

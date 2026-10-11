@@ -136,13 +136,13 @@ fn is_valid_domain(d: &str) -> bool {
 
 impl Default for WebState {
     fn default() -> Self {
-        let secret_seed = b"agent_octopus_web_dashboard_secret_seed_32_bytes";
+        let secret_seed = crate::security::cedar_arm::authorization::load_or_generate_cedar_secret();
         let policy_fingerprint = "cedar_v4_13_octopus_v1";
         let logs_dir = std::path::PathBuf::from("logs");
         let _ = std::fs::create_dir_all(&logs_dir);
         let audit_log = Arc::new(SecurityAuditLog::with_disk_persistence(logs_dir.join("audit.log")));
         let gateway = Arc::new(
-            CedarAuthorizationGateway::new(secret_seed, policy_fingerprint)
+            CedarAuthorizationGateway::new(&secret_seed, policy_fingerprint)
                 .with_audit_log((*audit_log).clone()),
         );
         let live_events = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -175,8 +175,8 @@ impl Default for WebState {
         let atlas_sync = Arc::new(crate::security::atlas_arm::AtlasSyncManager::default());
         let oss_fuzz_arm = Arc::new(crate::security::oss_fuzz_arm::ContinuousOssFuzzArm::default());
         let osv_scanner_arm = Arc::new(crate::security::osv_scanner_arm::ContinuousOsvScannerArm::default());
-        let arm_rings = Arc::new(crate::containment_ring::ArmRingRegistry::new(50, secret_seed));
-        let sentinel = Arc::new(crate::sentinel_ring::SentinelSupervisor::new(secret_seed, 50));
+        let arm_rings = Arc::new(crate::containment_ring::ArmRingRegistry::new(50, &secret_seed));
+        let sentinel = Arc::new(crate::sentinel_ring::SentinelSupervisor::new(&secret_seed, 50));
 
         Self {
             gateway,
@@ -1748,12 +1748,19 @@ pub async fn handle_sentinel_simulate_breach(
     body: &str,
 ) -> Result<String, String> {
     let token = extract_admin_bearer_token(headers);
-    let admin_key = std::env::var("SENTINEL_ADMIN_KEY")
-        .unwrap_or_else(|_| "AGY_AUTHORITATIVE_SENTINEL_ADMIN_KEY_2026".to_string());
-    if token != Some(admin_key.as_str()) && token != Some("ADMIN_RESTRICTED_TOKEN") && token != Some("AGY_AUTHORITATIVE_SENTINEL_ADMIN_KEY_2026") {
+    let admin_key = match std::env::var("SENTINEL_ADMIN_KEY") {
+        Ok(k) if !k.trim().is_empty() => k,
+        _ => {
+            return Err(json_error_payload(
+                "ADMIN_AUTH_REQUIRED",
+                "Access Denied: SENTINEL_ADMIN_KEY environment variable is not configured",
+            ));
+        }
+    };
+    if token != Some(admin_key.as_str()) {
         return Err(json_error_payload(
             "ADMIN_AUTH_REQUIRED",
-            "Access Denied: Ring 4 administrative breach simulation requires explicit bearer authorization (Authorization: Bearer <TOKEN>)",
+            "Access Denied: Ring 4 administrative breach simulation requires valid bearer authorization (Authorization: Bearer <TOKEN>)",
         ));
     }
 
@@ -1831,12 +1838,19 @@ pub async fn handle_sentinel_reset_lockdown(
     body: &str,
 ) -> Result<String, String> {
     let token = extract_admin_bearer_token(headers);
-    let admin_key = std::env::var("SENTINEL_ADMIN_KEY")
-        .unwrap_or_else(|_| "AGY_AUTHORITATIVE_SENTINEL_ADMIN_KEY_2026".to_string());
-    if token != Some(admin_key.as_str()) && token != Some("ADMIN_RESTRICTED_TOKEN") && token != Some("AGY_AUTHORITATIVE_SENTINEL_ADMIN_KEY_2026") {
+    let admin_key = match std::env::var("SENTINEL_ADMIN_KEY") {
+        Ok(k) if !k.trim().is_empty() => k,
+        _ => {
+            return Err(json_error_payload(
+                "ADMIN_AUTH_REQUIRED",
+                "Access Denied: SENTINEL_ADMIN_KEY environment variable is not configured",
+            ));
+        }
+    };
+    if token != Some(admin_key.as_str()) {
         return Err(json_error_payload(
             "ADMIN_AUTH_REQUIRED",
-            "Access Denied: Ring 4 emergency lockdown release requires explicit bearer authorization (Authorization: Bearer <TOKEN>)",
+            "Access Denied: Ring 4 emergency lockdown release requires valid bearer authorization (Authorization: Bearer <TOKEN>)",
         ));
     }
 

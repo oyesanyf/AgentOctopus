@@ -1623,7 +1623,7 @@ forbid (
       </div>
       <div style="font-size: 0.9rem; line-height: 1.7; color: var(--text-main);">
         <p style="margin-bottom: 1rem;">
-          <strong>Agent Octopus</strong> is an autonomous swarm breakout defense platform and deterministic zero-trust policy engine. It isolates generative AI models, microservices, and tool actuators using <strong>9 Specialized Arms</strong> governed by formal <strong>AWS Cedar v4.13</strong> policies, Windows Job Objects memory clamps (64MB), AppContainer sandboxes, and cryptographic append-only SHA-256 audit trails.
+          <strong>Agent Octopus</strong> is an autonomous swarm breakout defense platform and deterministic zero-trust policy engine. It isolates generative AI models, microservices, and tool actuators using <strong>8 Specialized Defense Arms</strong> (plus Central Brain &amp; Sentinel Ring) governed by formal <strong>AWS Cedar v4.13</strong> policies, Windows Job Objects memory clamps (64MB), AppContainer sandboxes, and cryptographic append-only SHA-256 audit trails.
         </p>
 
         <div style="background: #0f172a; border-left: 4px solid var(--accent-cyan); padding: 1rem; border-radius: 0.375rem; margin-bottom: 1.5rem;">
@@ -1634,7 +1634,7 @@ forbid (
           <ul style="font-size: 0.85rem; color: var(--text-muted); padding-left: 1.25rem; line-height: 1.6;">
             <li><strong>Inline Zero-Trust Security Gateway (<code>CedarAuthorizationGateway</code>):</strong> Acts directly as an Authorization &amp; Policy Enforcement Gateway (<code>/api/evaluate-cedar</code>). Every tool call, actuator directive, and agent transaction must pass through this gateway to receive a cryptographically signed capability token and supervisor attestation before execution can proceed. Requests are evaluated against formal AWS Cedar PARC policies; unauthorized actions are immediately blocked.</li>
             <li><strong>Decoy Tarpit Gateway (<code>TarpitArm</code>):</strong> When hostile scans, prompt injections, or unauthorized callers hit the gateway, the Tarpit Arm acts as a deception/sinkhole proxy. It introduces deterministic backoff latency, exhausts attacker context windows with synthetic canary honey-tokens, and isolates repeat offenders in quarantine.</li>
-            <li><strong>Multi-Limb Agent Enclave (<code>ArmRuntime</code>):</strong> Behind the gateway, Agent Octopus is a distributed cephalopod architecture with 9 specialized, sandboxed arms (<code>DocumentArm</code>, <code>LedgerArm</code>, <code>NetworkArm</code>, <code>TarpitDecoyArm</code>, etc.) running inside Windows Job Objects (64MB clamps), AppContainer sandboxes, and Wasmtime fuel meters with internal autotomy circuit breakers.</li>
+            <li><strong>Multi-Limb Agent Enclave (<code>ArmRuntime</code>):</strong> Behind the gateway, Agent Octopus is a distributed cephalopod architecture with 8 specialized, sandboxed arms (<code>DocumentArm</code>, <code>LedgerArm</code>, <code>NetworkArm</code>, <code>TarpitArm</code>, <code>MerkleArm</code>, <code>KernelSentinelArm</code>, <code>OssFuzzArm</code>, <code>OsvScannerArm</code>) running inside Windows Job Objects (64MB clamps), AppContainer sandboxes, and Wasmtime fuel meters with internal autotomy circuit breakers.</li>
           </ul>
         </div>
 

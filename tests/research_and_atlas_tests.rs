@@ -100,13 +100,14 @@ fn test_trusted_test_controller_enforces_sandbox() {
 fn test_atlas_sync_manager_and_parser() {
     let sync_mgr = AtlasSyncManager::default();
 
-    // 1. Ingest valid payload from trusted source
+    // 1. Ingest valid payload from trusted source with explicit expected checksum
     let sample_payload = b"version: 2026.02\ntactics: 16\ntechniques: 208\nmitigations: 40\ncase_studies: 73\n";
+    let sample_sha256 = "0e2d4053ba142d1f2ad1c833b5a54aa36a7e827cf7d6f1fdc87a4696c307be1e";
     let meta = sync_mgr.verify_and_ingest(
         "https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/atlas.yaml",
         "2026.02",
         sample_payload,
-        None,
+        Some(sample_sha256),
     ).unwrap();
 
     assert_eq!(meta.dataset_version, "2026.02");
@@ -115,16 +116,43 @@ fn test_atlas_sync_manager_and_parser() {
     assert_eq!(meta.total_mitigations, 40);
     assert_eq!(meta.total_case_studies, 73);
 
-    // 2. Untrusted publication source rejected
-    let untrusted_res = sync_mgr.verify_and_ingest(
-        "https://attacker.evil.com/fake_atlas.yaml",
+    // 2. Ingest with None MUST mandate PINNED_ATLAS_GOLDEN_SHA256: non-matching sample payload fails
+    let unpinned_res = sync_mgr.verify_and_ingest(
+        "https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/atlas.yaml",
         "2026.02",
         sample_payload,
         None,
     );
-    assert!(untrusted_res.is_err());
+    assert!(unpinned_res.is_err(), "Must fail closed if payload does not match pinned golden digest when expected is None");
 
-    // 3. Parse authoritative bundle into knowledge base
+    // 3. Ingest with None MUST succeed on the genuine golden STIX payload
+    let golden_meta = sync_mgr.verify_and_ingest(
+        "https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/atlas.yaml",
+        "2026.09",
+        agent_octopus::security::atlas_arm::EMBEDDED_GOLDEN_STIX.as_bytes(),
+        None,
+    ).expect("Golden STIX payload must succeed with default pinned digest");
+    assert_eq!(golden_meta.sha256_checksum, agent_octopus::security::atlas_arm::PINNED_ATLAS_GOLDEN_SHA256);
+
+    // 4. Reject empty content SHA-256
+    let empty_hash_res = sync_mgr.verify_and_ingest(
+        "https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/atlas.yaml",
+        "2026.02",
+        b"",
+        Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+    );
+    assert!(empty_hash_res.is_err(), "Empty content SHA-256 must be explicitly rejected");
+
+    // 5. Untrusted publication source rejected
+    let untrusted_res = sync_mgr.verify_and_ingest(
+        "https://attacker.evil.com/fake_atlas.yaml",
+        "2026.02",
+        sample_payload,
+        Some(sample_sha256),
+    );
+    assert!(untrusted_res.is_err(), "Untrusted URL must be rejected");
+
+    // 6. Parse authoritative bundle into knowledge base
     let matrix = MitreAtlasMatrix::new();
     let parsed_kb = AtlasParser::parse_authoritative_bundle(&matrix);
     assert_eq!(parsed_kb.tactics.len(), 16);

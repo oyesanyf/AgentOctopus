@@ -26,7 +26,10 @@ use tokio::process::Command;
 pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state = Arc::new(WebState::default());
 
-    let port = addr.split(':').nth(1).unwrap_or("5005");
+    let port = match addr.rsplit(':').next() {
+        Some(p) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => p,
+        _ => "5005",
+    };
 
     let mut candidate_addrs = vec![
         addr.to_string(),

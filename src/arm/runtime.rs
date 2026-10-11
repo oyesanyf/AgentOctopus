@@ -66,6 +66,14 @@ impl ArmRuntime {
             _ => None,
         };
 
+        let master_seed = crate::containment_ring::ArmRingRegistry::generate_master_seed();
+        let arm_ring = Some(Arc::new(crate::containment_ring::ArmContainmentRing::new(
+            0,
+            role.clone(),
+            1,
+            &master_seed,
+        )));
+
         Self {
             arm_id: None,
             custom_agent_id: None,
@@ -79,22 +87,25 @@ impl ArmRuntime {
             containment_ring,
             trusted_handle: None,
             capability_token,
-            arm_ring: None,
+            arm_ring,
             generation: 1,
         }
     }
 
     pub fn with_arm_id(mut self, arm_id: usize) -> Self {
         self.arm_id = Some(arm_id);
-        if self.arm_ring.is_none() {
-            let ring = Arc::new(crate::containment_ring::ArmContainmentRing::new(
-                arm_id,
-                self.role.clone(),
-                self.generation,
-                b"OCTOPUS_CONTAINMENT_RING_SECRET_SEED_2026",
-            ));
-            self.arm_ring = Some(ring);
-        }
+        let master_seed = self
+            .arm_ring
+            .as_ref()
+            .map(|r| *r.master_seed())
+            .unwrap_or_else(crate::containment_ring::ArmRingRegistry::generate_master_seed);
+        let ring = Arc::new(crate::containment_ring::ArmContainmentRing::new(
+            arm_id,
+            self.role.clone(),
+            self.generation,
+            &master_seed,
+        ));
+        self.arm_ring = Some(ring);
         let name = self.arm_name();
         match self.role {
             ArmRole::AccountingLedgerWrite => {
@@ -208,6 +219,12 @@ impl ArmRuntime {
         self
     }
 
+    #[doc(hidden)]
+    pub fn without_arm_ring_for_test(mut self) -> Self {
+        self.arm_ring = None;
+        self
+    }
+
     pub fn arm_name(&self) -> String {
         if let Some(ref id) = self.custom_agent_id {
             return id.clone();
@@ -255,10 +272,22 @@ impl ArmRuntime {
             .await;
 
         while let Some((directive, response_tx)) = self.directive_rx.recv().await {
+            // Level 1: Mandatory Arm Containment Ring check (fail closed if missing or severed)
+            let ring = match self.arm_ring.clone() {
+                Some(r) => r,
+                None => {
+                    self.kill_switch.trip();
+                    let _ = response_tx.send(Err(OctopusSecurityError::IsolationViolation(
+                        "Execution halted: Missing mandatory Level 1 ArmContainmentRing".to_string(),
+                    )));
+                    break;
+                }
+            };
+
             // Check hardware/atomic circuit breaker, cancellation, isolation manager status, and Level 1 ring severance
             if self.is_cancelled_or_killed()
                 || !self.containment_ring.isolation_manager.is_arm_active(&agent_name).await
-                || self.arm_ring.as_ref().map_or(false, |r| r.is_severed())
+                || ring.is_severed()
             {
                 self.kill_switch.trip();
                 let _ = response_tx.send(Err(OctopusSecurityError::LimbKilled));
@@ -283,9 +312,7 @@ impl ArmRuntime {
                         // Instantly trip the atomic kill switch, quarantine state, sever Level 1 ring, and halt execution!
                         self.kill_switch.trip();
                         self.deterministic_layer.quarantine();
-                        if let Some(ref ring) = self.arm_ring {
-                            ring.sever("Breach detected during directive execution").await;
-                        }
+                        ring.sever("Breach detected during directive execution").await;
                         let _ = self
                             .containment_ring
                             .isolation_manager
@@ -298,7 +325,7 @@ impl ArmRuntime {
             let _ = response_tx.send(result);
             if self.kill_switch.is_tripped()
                 || !self.containment_ring.isolation_manager.is_arm_active(&agent_name).await
-                || self.arm_ring.as_ref().map_or(false, |r| r.is_severed())
+                || ring.is_severed()
             {
                 break; // Stop arm execution loop immediately
             }
@@ -309,10 +336,19 @@ impl ArmRuntime {
         &mut self,
         directive: StrategicDirective,
     ) -> Result<ArmExecutionReport, OctopusSecurityError> {
-        // Level 1: Arm Containment Ring epoch check
-        if let Some(ref ring) = self.arm_ring {
-            ring.validate_epoch(self.generation).await?;
+        // Level 1: Mandatory Arm Containment Ring epoch check (fail closed if missing or severed)
+        let ring = match self.arm_ring.as_ref() {
+            Some(r) => r,
+            None => {
+                return Err(OctopusSecurityError::IsolationViolation(
+                    "Execution halted: Missing mandatory Level 1 ArmContainmentRing".to_string(),
+                ));
+            }
+        };
+        if ring.is_severed() {
+            return Err(OctopusSecurityError::LimbKilled);
         }
+        ring.validate_epoch(self.generation).await?;
 
         self.deterministic_layer = DeterministicLayer::new();
 
@@ -409,6 +445,12 @@ impl ArmRuntime {
             ArmRole::OutboundNotification => ("notifier", Operation::MeshMessage),
             ArmRole::TarpitDecoyDefense => ("quarantine", Operation::MeshMessage),
             ArmRole::KernelLevelSentinel => ("kernel_sentinel", Operation::MeshMessage),
+            ArmRole::CedarPolicyEvaluation => ("cedar_evaluator", Operation::MeshMessage),
+            ArmRole::AtlasThreatIntelligence => ("atlas_sync", Operation::MeshMessage),
+            ArmRole::AnomalyDetection => ("behavioral_sentinel", Operation::MeshMessage),
+            ArmRole::VulnerabilityResearch => ("vulnerability_scanner", Operation::MeshMessage),
+            ArmRole::ContinuousOssFuzz => ("fuzz_mutator", Operation::MeshMessage),
+            ArmRole::ContinuousOsvScanner => ("osv_client", Operation::MeshMessage),
         };
 
         let amount_cents = self.extract_amount_cents(raw_payload);

@@ -31,7 +31,16 @@ impl ContainmentAuditor {
     /// - With Cedar enabled: UntrustedDocIngest arm is denied ledger writes.
     /// - With Cedar disabled: The exact same ledger write succeeds (Breach Detected).
     /// - Re-enabling Cedar restores 100% containment.
-    pub async fn audit_cedar_authorization(ring: &ContainmentRing) -> DefenseAuditReport {
+    /// Audits Perimeter 1: AWS Cedar PARC Authorization.
+    ///
+    /// Invariant:
+    /// - With Cedar enabled: UntrustedDocIngest arm is denied ledger writes.
+    /// - With Cedar disabled: The exact same ledger write succeeds (Breach Detected).
+    /// - Re-enabling Cedar restores 100% containment.
+    pub async fn audit_cedar_authorization(
+        ring: &ContainmentRing,
+        cedar_token: &super::cedar_gate::NegativeControlToken,
+    ) -> DefenseAuditReport {
         let defense_name = "Perimeter 1: AWS Cedar PARC Authorization".to_string();
 
         // Arm is untrusted doc ingest attempting a privileged financial ledger write
@@ -60,21 +69,19 @@ impl ContainmentAuditor {
             generation: None,
         };
 
-        let audit_token = ring.cedar_gate.audit_control_token();
-
         // 1. Positive Control: Defense is ENABLED
-        let _ = ring.cedar_gate.set_enabled(true, &audit_token);
+        let _ = ring.cedar_gate.set_enabled(true, cedar_token);
         let (pos_decision, pos_reason) = ring.evaluate_operation(&attack_req).await;
         let positive_control_passed = pos_decision == RingDecision::Deny
             && (pos_reason.contains("Cedar") || pos_reason.contains("forbidden"));
 
         // 2. Negative Control: Defense is DELIBERATELY DISABLED
-        let _ = ring.cedar_gate.set_enabled(false, &audit_token);
+        let _ = ring.cedar_gate.set_enabled(false, cedar_token);
         let (neg_decision, _) = ring.evaluate_operation(&attack_req).await;
         let negative_control_breach_detected = neg_decision == RingDecision::Allow;
 
         // 3. Restoration: Defense is RE-ENABLED
-        let _ = ring.cedar_gate.set_enabled(true, &audit_token);
+        let _ = ring.cedar_gate.set_enabled(true, cedar_token);
         let (restored_decision, _) = ring.evaluate_operation(&attack_req).await;
         let restored_control_passed = restored_decision == RingDecision::Deny;
 
@@ -101,7 +108,10 @@ impl ContainmentAuditor {
     /// - With Capability Gate enabled: Privileged ledger operation without token is denied.
     /// - With Capability Gate disabled: The operation without token penetrates (Breach Detected).
     /// - Re-enabling Capability Gate restores 100% containment.
-    pub async fn audit_capability_gate(ring: &ContainmentRing) -> DefenseAuditReport {
+    pub async fn audit_capability_gate(
+        ring: &ContainmentRing,
+        cap_token: &super::cedar_gate::NegativeControlToken,
+    ) -> DefenseAuditReport {
         let defense_name = "Perimeter 2: Zero Ambient Authority Capability Gate".to_string();
 
         let ledger_arm_id = "arm-ledger-audit";
@@ -121,18 +131,18 @@ impl ContainmentAuditor {
         };
 
         // 1. Positive Control: Enforcement ENABLED
-        ring.capability_gate.set_enforcement_enabled(true);
+        let _ = ring.capability_gate.set_enforcement_enabled(true, cap_token);
         let (pos_decision, pos_reason) = ring.evaluate_operation(&ambient_req).await;
         let positive_control_passed = pos_decision == RingDecision::Deny
             && pos_reason.contains("Zero Ambient Authority Veto");
 
         // 2. Negative Control: Enforcement DELIBERATELY DISABLED
-        ring.capability_gate.set_enforcement_enabled(false);
+        let _ = ring.capability_gate.set_enforcement_enabled(false, cap_token);
         let (neg_decision, _) = ring.evaluate_operation(&ambient_req).await;
         let negative_control_breach_detected = neg_decision == RingDecision::Allow;
 
         // 3. Restoration: Enforcement RE-ENABLED
-        ring.capability_gate.set_enforcement_enabled(true);
+        let _ = ring.capability_gate.set_enforcement_enabled(true, cap_token);
         let (restored_decision, _) = ring.evaluate_operation(&ambient_req).await;
         let restored_control_passed = restored_decision == RingDecision::Deny;
 
@@ -159,7 +169,11 @@ impl ContainmentAuditor {
     /// - With Allowlist enabled: Outbound connection to unapproved destination is blocked.
     /// - With Allowlist disabled: Outbound connection penetrates (Breach Detected).
     /// - Re-enabling Allowlist restores 100% containment.
-    pub async fn audit_egress_allowlist(ring: &ContainmentRing) -> DefenseAuditReport {
+    pub async fn audit_egress_allowlist(
+        ring: &ContainmentRing,
+        cedar_token: &super::cedar_gate::NegativeControlToken,
+        egress_token: &super::cedar_gate::NegativeControlToken,
+    ) -> DefenseAuditReport {
         let defense_name = "Perimeter 3: Egress Proxy Domain Allowlist".to_string();
 
         let net_arm_id = "arm-net-audit";
@@ -187,28 +201,27 @@ impl ContainmentAuditor {
         };
 
         // Isolate the Outer Ring EgressProxy by temporarily disabling CedarGate
-        let audit_token = ring.cedar_gate.audit_control_token();
         let prior_cedar_state = ring.cedar_gate.is_enabled();
-        let _ = ring.cedar_gate.set_enabled(false, &audit_token);
+        let _ = ring.cedar_gate.set_enabled(false, cedar_token);
 
         // 1. Positive Control: Allowlist ENABLED
-        ring.egress_proxy.set_allowlist_enabled(true);
+        let _ = ring.egress_proxy.set_allowlist_enabled(true, egress_token);
         let (pos_decision, pos_reason) = ring.evaluate_operation(&egress_req).await;
         let positive_control_passed = pos_decision == RingDecision::Deny
             && pos_reason.contains("not in the approved Containment Ring allowlist");
 
         // 2. Negative Control: Allowlist DELIBERATELY DISABLED
-        ring.egress_proxy.set_allowlist_enabled(false);
+        let _ = ring.egress_proxy.set_allowlist_enabled(false, egress_token);
         let (neg_decision, _) = ring.evaluate_operation(&egress_req).await;
         let negative_control_breach_detected = neg_decision == RingDecision::Allow;
 
         // 3. Restoration: Allowlist RE-ENABLED
-        ring.egress_proxy.set_allowlist_enabled(true);
+        let _ = ring.egress_proxy.set_allowlist_enabled(true, egress_token);
         let (restored_decision, _) = ring.evaluate_operation(&egress_req).await;
         let restored_control_passed = restored_decision == RingDecision::Deny;
 
         // Restore prior CedarGate state
-        let _ = ring.cedar_gate.set_enabled(prior_cedar_state, &audit_token);
+        let _ = ring.cedar_gate.set_enabled(prior_cedar_state, cedar_token);
 
         let mathematical_proof_valid = positive_control_passed
             && negative_control_breach_detected
@@ -284,14 +297,25 @@ impl ContainmentAuditor {
         }
     }
 
-    /// Audits all perimeters with paired positive/negative controls.
-    /// Asserts that every single defense satisfies the sensitivity invariant.
-    pub async fn audit_all(ring: &ContainmentRing) -> Vec<DefenseAuditReport> {
+    /// Audits all perimeters with paired positive/negative controls using an explicit audit harness.
+    pub async fn audit_all_with_harness(
+        ring: &ContainmentRing,
+        harness: &super::ring_controller::ContainmentAuditHarness,
+    ) -> Vec<DefenseAuditReport> {
         vec![
-            Self::audit_cedar_authorization(ring).await,
-            Self::audit_capability_gate(ring).await,
-            Self::audit_egress_allowlist(ring).await,
+            Self::audit_cedar_authorization(ring, &harness.cedar_control_token).await,
+            Self::audit_capability_gate(ring, &harness.capability_control_token).await,
+            Self::audit_egress_allowlist(ring, &harness.cedar_control_token, &harness.egress_control_token).await,
             Self::audit_attestation_integrity(ring).await,
         ]
+    }
+
+    /// Audits all perimeters with paired positive/negative controls.
+    /// Asserts that every single defense satisfies the sensitivity invariant.
+    pub async fn audit_all(_ring: &ContainmentRing) -> Vec<DefenseAuditReport> {
+        // Since production rings deliberately drop control tokens to prevent authorization bypass,
+        // create a dedicated audit ring paired with an unforgeable NegativeControlToken harness.
+        let (audit_ring, harness) = ContainmentRing::new_for_audit_default();
+        Self::audit_all_with_harness(&audit_ring, &harness).await
     }
 }

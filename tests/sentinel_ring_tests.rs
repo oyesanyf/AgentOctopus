@@ -277,10 +277,18 @@ async fn test_9_complete_primary_supervisor_compromise_simulation() {
     assert!(stale_check.is_err(), "Stale Gen 8 credentials must be denied");
 
     // Release lockdown with authoritative administrative recovery token
+    std::env::set_var("SENTINEL_RECOVERY_TOKEN", "RECOVERY_AUTHORIZED_TEST_TOKEN_32_BYTES");
+    let bad_release = sentinel
+        .lockdown_controller
+        .release_lockdown("WRONG_RECOVERY_TOKEN")
+        .await;
+    assert!(bad_release.is_err(), "Unauthorized recovery token must be rejected");
+
     let release_res = sentinel
         .lockdown_controller
-        .release_lockdown("AUTHORITATIVE_SENTINEL_RECOVERY_TOKEN_2026")
+        .release_lockdown("RECOVERY_AUTHORIZED_TEST_TOKEN_32_BYTES")
         .await;
+    std::env::remove_var("SENTINEL_RECOVERY_TOKEN");
     assert!(release_res.is_ok());
     assert!(!sentinel.lockdown_controller.is_locked_down());
 }

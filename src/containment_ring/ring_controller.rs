@@ -8,6 +8,7 @@ use super::isolation_manager::IsolationManager;
 use super::mesh_guard::MeshGuard;
 use super::resource_guard::ResourceGuard;
 use super::RingDecision;
+use rand::RngCore;
 use crate::core::types::{ArmRole, OctopusSecurityError};
 use crate::security::CapabilityToken;
 use std::future::Future;
@@ -49,7 +50,25 @@ pub struct ContainmentRing {
 
 impl Default for ContainmentRing {
     fn default() -> Self {
-        Self::new(b"OCTOPUS_CONTAINMENT_RING_SECRET_SEED_2026")
+        let mut seed = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut seed);
+        Self::new(&seed)
+    }
+}
+
+/// Unforgeable audit control harness provided solely at test/audit construction time.
+/// Gives verification suites authorized control tokens to probe negative-control sensitivity.
+#[derive(Clone, Debug)]
+pub struct ContainmentAuditHarness {
+    pub cedar_control_token: super::cedar_gate::NegativeControlToken,
+    pub capability_control_token: super::cedar_gate::NegativeControlToken,
+    pub egress_control_token: super::cedar_gate::NegativeControlToken,
+}
+
+impl std::ops::Deref for ContainmentAuditHarness {
+    type Target = super::cedar_gate::NegativeControlToken;
+    fn deref(&self) -> &Self::Target {
+        &self.cedar_control_token
     }
 }
 
@@ -94,6 +113,68 @@ impl ContainmentRing {
             audit_ledger,
             trusted_controller,
         }
+    }
+
+    /// Creates a ContainmentRing alongside an authoritative ContainmentAuditHarness using CSPRNG entropy.
+    pub fn new_for_audit_default() -> (Self, ContainmentAuditHarness) {
+        let mut seed = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut seed);
+        Self::new_for_audit(&seed)
+    }
+
+    /// Creates a ContainmentRing alongside an authoritative ContainmentAuditHarness for audit and verification harnesses.
+    /// Under zero circumstances can these tokens be extracted from a runtime ContainmentRing reference.
+    pub fn new_for_audit(seed: &[u8]) -> (Self, ContainmentAuditHarness) {
+        let identity_gate = Arc::new(IdentityGate::new());
+        let (cedar_gate_val, cedar_token) = CedarGate::new_for_audit();
+        let (cap_gate_val, cap_token) = CapabilityGate::new_for_audit(seed, 300);
+        let (egress_proxy_val, egress_token) = EgressProxy::new_for_audit(super::egress_proxy::EgressSecurityLevel::StrictGoogleOnly);
+        let cedar_gate = Arc::new(cedar_gate_val);
+        let capability_gate = Arc::new(cap_gate_val);
+        let egress_proxy = Arc::new(egress_proxy_val);
+        let mesh_guard = Arc::new(MeshGuard::new());
+        let resource_guard = Arc::new(ResourceGuard::new());
+        let attestation = Arc::new(RingAttestation::new(seed));
+        let audit_ledger = Arc::new(RingAuditLedger::new());
+        let arm_registry = Arc::new(super::arm_ring::ArmRingRegistry::new(50, seed));
+
+        let authorizer = Arc::new(CedarAuthorizer::new(cedar_gate.clone()));
+        let executor = Arc::new(EnclaveToolExecutor::new(egress_proxy.clone()));
+        let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(256);
+        let trusted_controller = RingController::new(
+            RingConfig::default(),
+            authorizer,
+            executor,
+            audit_tx,
+        ).expect("Containment Ring trusted controller initialized");
+
+        let isolation_manager = Arc::new(IsolationManager::with_controllers(
+            super::SandboxConstraints::default(),
+            capability_gate.clone(),
+            trusted_controller.clone(),
+        ));
+
+        let ring = Self {
+            identity_gate,
+            cedar_gate,
+            capability_gate,
+            egress_proxy,
+            mesh_guard,
+            resource_guard,
+            isolation_manager,
+            arm_registry,
+            attestation,
+            audit_ledger,
+            trusted_controller,
+        };
+
+        let harness = ContainmentAuditHarness {
+            cedar_control_token: cedar_token,
+            capability_control_token: cap_token,
+            egress_control_token: egress_token,
+        };
+
+        (ring, harness)
     }
 
     /// Evaluates a requested operation across the Inner and Outer containment rings.

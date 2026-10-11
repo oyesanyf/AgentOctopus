@@ -60,6 +60,12 @@ pub enum ArmRole {
     NetworkEgress,
     TarpitDecoyDefense,
     KernelLevelSentinel,
+    CedarPolicyEvaluation,
+    AtlasThreatIntelligence,
+    AnomalyDetection,
+    VulnerabilityResearch,
+    ContinuousOssFuzz,
+    ContinuousOsvScanner,
 }
 
 /// High-level strategic intent sent downward from Central Brain to Arm.

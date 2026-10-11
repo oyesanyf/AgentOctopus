@@ -26,6 +26,7 @@ pub struct ContinuousOsvScannerArm {
     workspace_dir: PathBuf,
     total_scans_performed: Arc<AtomicU64>,
     latest_report: Arc<Mutex<Option<OsvScanReport>>>,
+    arm_ring: Arc<crate::containment_ring::ArmContainmentRing>,
 }
 
 impl Default for ContinuousOsvScannerArm {
@@ -36,11 +37,28 @@ impl Default for ContinuousOsvScannerArm {
 
 impl ContinuousOsvScannerArm {
     pub fn new(workspace_dir: impl AsRef<Path>) -> Self {
+        let master_seed = crate::containment_ring::ArmRingRegistry::generate_master_seed();
+        let arm_ring = Arc::new(crate::containment_ring::ArmContainmentRing::new(
+            105,
+            crate::core::types::ArmRole::ContinuousOsvScanner,
+            1,
+            &master_seed,
+        ));
         Self {
             workspace_dir: workspace_dir.as_ref().to_path_buf(),
             total_scans_performed: Arc::new(AtomicU64::new(0)),
             latest_report: Arc::new(Mutex::new(None)),
+            arm_ring,
         }
+    }
+
+    pub fn with_containment_ring(mut self, ring: Arc<crate::containment_ring::ArmContainmentRing>) -> Self {
+        self.arm_ring = ring;
+        self
+    }
+
+    pub fn containment_ring(&self) -> &Arc<crate::containment_ring::ArmContainmentRing> {
+        &self.arm_ring
     }
 
     /// Performs an active continuous scan of all workspace dependencies against Google OSV database.
@@ -50,6 +68,22 @@ impl ContinuousOsvScannerArm {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+
+        if self.arm_ring.is_severed() {
+            return OsvScanReport {
+                scan_id,
+                timestamp_secs: now_secs,
+                total_dependencies_scanned: 0,
+                vulnerabilities_detected: 0,
+                critical_count: 0,
+                high_count: 0,
+                medium_count: 0,
+                supply_chain_security_posture: "SEVERED_BY_SUPERVISOR".to_string(),
+                health_score_pct: 0.0,
+                advisories: Vec::new(),
+                dependencies: Vec::new(),
+            };
+        }
 
         // 1. Discover all workspace dependencies from Cargo.lock
         let deps = DependencyManifestParser::scan_workspace_dependencies(

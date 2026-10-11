@@ -17,17 +17,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("============================================================");
 
     let supervisor_pid = std::process::id();
-    let secret_seed = b"OCTOPUS_SENTINEL_INDEPENDENT_MASTER_SEED_2026";
+    let secret_seed = agent_octopus::security::cedar_arm::authorization::load_or_generate_cedar_secret();
     let policy_fp = "cedar_v4_13_octopus_v1";
 
     println!("[SUPERVISOR] Process PID: {}", supervisor_pid);
 
     // Initialize 50-Arm Containment Registry (Ring 1)
-    let arm_registry = ArmRingRegistry::new(50, secret_seed);
+    let arm_registry = ArmRingRegistry::new(50, &secret_seed);
     println!("[SUPERVISOR] Initialized 50 Arm Containment Rings (Level 1)");
 
     // Initialize Cedar Gateway (Ring 3)
-    let _gateway = CedarAuthorizationGateway::new(secret_seed, policy_fp);
+    let _gateway = CedarAuthorizationGateway::new(&secret_seed, policy_fp);
     println!("[SUPERVISOR] Initialized Global Cedar Zero-Trust Engine (Level 3)");
 
     let is_daemon = std::env::var("OCTOPUS_DAEMON").is_ok();
@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             sequence,
             active_arms,
             policy_fp,
-            secret_seed,
+            &secret_seed,
         );
 
         if sequence % 3 == 0 || !is_daemon {

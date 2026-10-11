@@ -18,8 +18,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("============================================================");
 
     let config = SentinelConfig::default();
-    let secret_seed = b"OCTOPUS_SENTINEL_INDEPENDENT_MASTER_SEED_2026";
-    let sentinel = OctopusSentinelRing::new(config, secret_seed);
+    let secret_seed = agent_octopus::security::cedar_arm::authorization::load_or_generate_cedar_secret();
+    let sentinel = OctopusSentinelRing::new(config, &secret_seed);
 
     let pid = std::process::id();
     println!("[SENTINEL] Running under OS PID: {}", pid);

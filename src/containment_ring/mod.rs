@@ -37,13 +37,13 @@ pub use attestation::{PolicyAttestationRecord, RingAttestation};
 pub use audit::{RingAuditEntry, RingAuditLedger};
 pub use auditor::{ContainmentAuditor, DefenseAuditReport};
 pub use capability_gate::CapabilityGate;
-pub use cedar_gate::CedarGate;
+pub use cedar_gate::{CedarAuditControlToken, CedarGate, NegativeControlToken};
 pub use egress_proxy::{EgressProxy, EgressRequest, EgressResponse, EgressSecurityLevel};
 pub use identity_gate::IdentityGate;
 pub use isolation_manager::{IsolationManager, SandboxConstraints};
 pub use mesh_guard::MeshGuard;
 pub use resource_guard::{BudgetQuota, ResourceGuard};
-pub use ring_controller::{ContainmentRing, RingOperationRequest};
+pub use ring_controller::{ContainmentAuditHarness, ContainmentRing, RingOperationRequest};
 pub use trusted_controller::{
     AuditEvent, Authorizer, BoxFuture, CedarAuthorizer, EnclaveToolExecutor, Operation,
     RingConfig, RingController, RingError, RingRequest, ToolExecutor, TrustedArmHandle,

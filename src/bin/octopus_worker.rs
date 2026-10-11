@@ -28,8 +28,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("   OS PID: {} | Role: {:?} | Memory Clamp: 64MB", pid, role);
     println!("============================================================");
 
-    let secret_seed = b"OCTOPUS_SENTINEL_INDEPENDENT_MASTER_SEED_2026";
-    let ring = ArmContainmentRing::new(arm_id, role.clone(), 1, secret_seed);
+    let secret_seed = agent_octopus::security::cedar_arm::authorization::load_or_generate_cedar_secret();
+    let ring = ArmContainmentRing::new(arm_id, role.clone(), 1, &secret_seed);
 
     println!("[WORKER {}] Initialized ACR Generation: {}", arm_id, ring.current_generation());
     println!("[WORKER {}] Validating capability bounds...", arm_id);

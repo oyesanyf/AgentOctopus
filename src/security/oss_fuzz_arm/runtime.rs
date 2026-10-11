@@ -45,6 +45,7 @@ pub struct ContinuousOssFuzzArm {
     hangs_intercepted: Arc<AtomicU64>,
     cycle_counter: Arc<AtomicU64>,
     recent_events: Arc<Mutex<Vec<FuzzExecutionResult>>>,
+    arm_ring: Arc<crate::containment_ring::ArmContainmentRing>,
 }
 
 impl Default for ContinuousOssFuzzArm {
@@ -72,6 +73,14 @@ impl ContinuousOssFuzzArm {
             corpus_map.insert(name, t.initial_corpus());
         }
 
+        let master_seed = crate::containment_ring::ArmRingRegistry::generate_master_seed();
+        let arm_ring = Arc::new(crate::containment_ring::ArmContainmentRing::new(
+            104,
+            crate::core::types::ArmRole::ContinuousOssFuzz,
+            1,
+            &master_seed,
+        ));
+
         Self {
             targets,
             mutators,
@@ -81,14 +90,38 @@ impl ContinuousOssFuzzArm {
             hangs_intercepted: Arc::new(AtomicU64::new(0)),
             cycle_counter: Arc::new(AtomicU64::new(0)),
             recent_events: Arc::new(Mutex::new(Vec::new())),
+            arm_ring,
         }
+    }
+
+    pub fn with_containment_ring(mut self, ring: Arc<crate::containment_ring::ArmContainmentRing>) -> Self {
+        self.arm_ring = ring;
+        self
+    }
+
+    pub fn containment_ring(&self) -> &Arc<crate::containment_ring::ArmContainmentRing> {
+        &self.arm_ring
     }
 
     /// Executes a continuous dynamic fuzzing cycle across all targets.
     /// Runs `iterations_per_target` mutations per target without blocking thread pool.
     pub fn run_continuous_fuzz_cycle(&self, iterations_per_target: usize) -> OssFuzzCycleReport {
-        let start = Instant::now();
         let cycle_id = self.cycle_counter.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.arm_ring.is_severed() {
+            return OssFuzzCycleReport {
+                cycle_id,
+                executed_mutations: 0,
+                total_executions: self.total_executions.load(Ordering::SeqCst),
+                execs_per_sec: 0.0,
+                total_corpus_entries: 0,
+                crashes_prevented: self.crashes_prevented.load(Ordering::SeqCst),
+                hangs_intercepted: self.hangs_intercepted.load(Ordering::SeqCst),
+                active_sanitizers: vec!["SEVERED_BY_SUPERVISOR".to_string()],
+                targets: Vec::new(),
+                recent_contained_crashes: Vec::new(),
+            };
+        }
+        let start = Instant::now();
         let mut target_summaries = Vec::new();
         let mut batch_results = Vec::new();
         let mut total_executed_in_cycle = 0;

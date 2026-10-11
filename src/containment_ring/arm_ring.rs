@@ -15,10 +15,12 @@
 //!    is revoked and all capabilities/messages bound to that epoch are invalidated.
 //!    Regenerated arm starts at Gen 9; stale messages or tokens from Gen 8 are rejected.
 
+use crate::containment_ring::cedar_gate::NegativeControlToken;
 use crate::containment_ring::isolation_manager::SandboxConstraints;
 use crate::core::types::{ArmRole, OctopusSecurityError};
 use crate::neural_mesh::MessageKind;
 use crate::security::CapabilityToken;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -130,6 +132,7 @@ pub struct ArmContainmentRing {
     epoch_enforcement_enabled: Arc<AtomicBool>,
     tool_enforcement_enabled: Arc<AtomicBool>,
     budget_enforcement_enabled: Arc<AtomicBool>,
+    audit_control_token: Arc<String>,
 }
 
 impl ArmContainmentRing {
@@ -139,6 +142,19 @@ impl ArmContainmentRing {
         role: ArmRole,
         initial_generation: u64,
         master_seed: &[u8],
+    ) -> Self {
+        let mut token_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut token_bytes);
+        let control_token = Arc::new(hex::encode(token_bytes));
+        Self::with_audit_token(arm_id, role, initial_generation, master_seed, control_token)
+    }
+
+    pub(crate) fn with_audit_token(
+        arm_id: usize,
+        role: ArmRole,
+        initial_generation: u64,
+        master_seed: &[u8],
+        audit_token: Arc<String>,
     ) -> Self {
         let mut seed = [0u8; 32];
         if master_seed.len() >= 32 {
@@ -184,6 +200,49 @@ impl ArmContainmentRing {
                 tools.insert("kernel_sentinel".to_string());
                 prefixes.push("kernel://".to_string());
             }
+            ArmRole::CedarPolicyEvaluation => {
+                tools.insert("cedar_evaluator".to_string());
+                tools.insert("policy_compiler".to_string());
+                prefixes.push("cedar://".to_string());
+                prefixes.push("policy://".to_string());
+            }
+            ArmRole::AtlasThreatIntelligence => {
+                tools.insert("atlas_sync".to_string());
+                tools.insert("stix_parser".to_string());
+                tools.insert("threat_matrix".to_string());
+                prefixes.push("https://raw.githubusercontent.com/mitre-atlas/".to_string());
+                prefixes.push("stix://".to_string());
+                prefixes.push("atlas://".to_string());
+            }
+            ArmRole::AnomalyDetection => {
+                tools.insert("behavioral_sentinel".to_string());
+                tools.insert("entropy_calc".to_string());
+                tools.insert("drift_auditor".to_string());
+                prefixes.push("telemetry://".to_string());
+                prefixes.push("behavior://".to_string());
+            }
+            ArmRole::VulnerabilityResearch => {
+                tools.insert("vulnerability_scanner".to_string());
+                tools.insert("attack_chain".to_string());
+                tools.insert("risk_scorer".to_string());
+                prefixes.push("vuln://".to_string());
+                prefixes.push("cve://".to_string());
+            }
+            ArmRole::ContinuousOssFuzz => {
+                tools.insert("fuzz_mutator".to_string());
+                tools.insert("corpus_manager".to_string());
+                tools.insert("crash_monitor".to_string());
+                prefixes.push("fuzz://".to_string());
+                prefixes.push("corpus://".to_string());
+            }
+            ArmRole::ContinuousOsvScanner => {
+                tools.insert("osv_client".to_string());
+                tools.insert("dep_advisor".to_string());
+                tools.insert("advisory_db".to_string());
+                prefixes.push("https://api.osv.dev/".to_string());
+                prefixes.push("osv://".to_string());
+                prefixes.push("advisories://".to_string());
+            }
         }
 
         Self {
@@ -201,7 +260,28 @@ impl ArmContainmentRing {
             epoch_enforcement_enabled: Arc::new(AtomicBool::new(true)),
             tool_enforcement_enabled: Arc::new(AtomicBool::new(true)),
             budget_enforcement_enabled: Arc::new(AtomicBool::new(true)),
+            audit_control_token: audit_token,
         }
+    }
+
+    /// Creates an arm containment ring alongside an authoritative NegativeControlToken for audit harnesses.
+    pub fn new_for_audit(
+        arm_id: usize,
+        role: ArmRole,
+        initial_generation: u64,
+        master_seed: &[u8],
+    ) -> (Self, NegativeControlToken) {
+        let mut token_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut token_bytes);
+        let control_token = Arc::new(hex::encode(token_bytes));
+        let ring = Self::with_audit_token(arm_id, role, initial_generation, master_seed, control_token.clone());
+        let token = NegativeControlToken::new(control_token);
+        (ring, token)
+    }
+
+    /// Returns the 32-byte master seed bound to this containment ring.
+    pub fn master_seed(&self) -> &[u8; 32] {
+        &self.master_seed
     }
 
     /// Derives an epoch-specific cryptographic secret key for this arm.
@@ -502,16 +582,34 @@ impl ArmContainmentRing {
     }
 
     // Negative-control test hook methods
-    pub fn set_epoch_enforcement(&self, enabled: bool) {
+    pub fn set_epoch_enforcement(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
+        if token.as_str() != self.audit_control_token.as_str() {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "UNAUTHORIZED_CALL_PATH: Modification of arm epoch enforcement state requires authoritative NegativeControlToken".to_string(),
+            ));
+        }
         self.epoch_enforcement_enabled.store(enabled, Ordering::SeqCst);
+        Ok(())
     }
 
-    pub fn set_tool_enforcement(&self, enabled: bool) {
+    pub fn set_tool_enforcement(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
+        if token.as_str() != self.audit_control_token.as_str() {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "UNAUTHORIZED_CALL_PATH: Modification of arm tool enforcement state requires authoritative NegativeControlToken".to_string(),
+            ));
+        }
         self.tool_enforcement_enabled.store(enabled, Ordering::SeqCst);
+        Ok(())
     }
 
-    pub fn set_budget_enforcement(&self, enabled: bool) {
+    pub fn set_budget_enforcement(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
+        if token.as_str() != self.audit_control_token.as_str() {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "UNAUTHORIZED_CALL_PATH: Modification of arm budget enforcement state requires authoritative NegativeControlToken".to_string(),
+            ));
+        }
         self.budget_enforcement_enabled.store(enabled, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Converts this arm containment ring's live configuration and telemetry to a DTO for monitoring.
@@ -565,10 +663,48 @@ impl ArmRingRegistry {
             map.insert(arm_id, ring);
         }
 
+        // Pre-allocate dedicated individual containment rings for specialized security arms (Arm IDs 100-105)
+        let security_arm_roles = [
+            (100, ArmRole::CedarPolicyEvaluation),
+            (101, ArmRole::AtlasThreatIntelligence),
+            (102, ArmRole::AnomalyDetection),
+            (103, ArmRole::VulnerabilityResearch),
+            (104, ArmRole::ContinuousOssFuzz),
+            (105, ArmRole::ContinuousOsvScanner),
+        ];
+        for (sec_id, sec_role) in security_arm_roles {
+            let sec_ring = Arc::new(ArmContainmentRing::new(sec_id, sec_role, 1, &seed));
+            map.insert(sec_id, sec_ring);
+        }
+
         Self {
             rings: Arc::new(RwLock::new(map)),
             master_seed: seed,
         }
+    }
+
+    /// Generates a cryptographically strong 32-byte master seed for ring derivations.
+    pub fn generate_master_seed() -> [u8; 32] {
+        let mut seed = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut seed);
+        seed
+    }
+
+    /// Retrieves a specialized security arm's individual containment ring by its role.
+    pub async fn get_security_ring(&self, role: ArmRole) -> Option<Arc<ArmContainmentRing>> {
+        let rings = self.rings.read().await;
+        rings.values().find(|r| r.role == role).cloned()
+    }
+
+    /// Retrieves an arm's containment ring, returning an explicit IsolationViolation error if missing.
+    pub async fn get_ring_or_fail(&self, arm_id: usize) -> Result<Arc<ArmContainmentRing>, OctopusSecurityError> {
+        let rings = self.rings.read().await;
+        rings.get(&arm_id).cloned().ok_or_else(|| {
+            OctopusSecurityError::IsolationViolation(format!(
+                "Execution halted: Missing mandatory Level 1 ArmContainmentRing for Arm {}",
+                arm_id
+            ))
+        })
     }
 
     /// Returns the supervisor master seed used to derive arm ring epoch keys.

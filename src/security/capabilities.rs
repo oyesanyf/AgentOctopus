@@ -30,6 +30,7 @@ impl CapabilityToken {
 
 /// Independent External Authorization Engine.
 /// Sits strictly outside the agent swarm to prevent agents from approving their own actions.
+#[derive(Clone)]
 pub struct ExternalAuthorizationEngine {
     master_key: [u8; 32],
     capability_ttl_secs: u64,
@@ -46,6 +47,25 @@ impl ExternalAuthorizationEngine {
             policy_fingerprint: policy_fingerprint.to_string(),
             revoked_tokens: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
         }
+    }
+
+    pub fn with_revoked_tokens(
+        secret_seed: &[u8],
+        capability_ttl_secs: u64,
+        policy_fingerprint: &str,
+        revoked_tokens: std::sync::Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
+    ) -> Self {
+        let master_key = hmac_sha256(secret_seed, b"OCTOPUS_MASTER_AUTHORIZATION_KEY_V1");
+        Self {
+            master_key,
+            capability_ttl_secs,
+            policy_fingerprint: policy_fingerprint.to_string(),
+            revoked_tokens,
+        }
+    }
+
+    pub fn revoked_tokens_arc(&self) -> std::sync::Arc<std::sync::RwLock<std::collections::HashSet<String>>> {
+        self.revoked_tokens.clone()
     }
 
     pub fn revoke_token(&self, token_id: &str) {

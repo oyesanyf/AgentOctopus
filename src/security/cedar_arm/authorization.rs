@@ -21,22 +21,88 @@ pub struct SupervisorApprovalReceipt {
     pub signature_hex: String,
 }
 
+/// An active or historic secret epoch in the key rotation ring.
+#[derive(Clone, Debug)]
+pub struct SecretEpoch {
+    pub generation: u64,
+    pub secret: Vec<u8>,
+    pub fingerprint: String,
+    pub activated_at_secs: u64,
+}
+
+/// Securely loads an authorization secret from OCTOPUS_CEDAR_SECRET or generates 32 bytes from CSPRNG.
+pub fn load_or_generate_cedar_secret() -> Vec<u8> {
+    if let Ok(env_val) = std::env::var("OCTOPUS_CEDAR_SECRET") {
+        let trimmed = env_val.trim();
+        if !trimmed.is_empty() {
+            if trimmed.len() >= 32 {
+                return trimmed.as_bytes().to_vec();
+            } else {
+                use sha2::Digest;
+                return sha2::Sha256::digest(trimmed.as_bytes()).to_vec();
+            }
+        }
+    }
+    let mut seed = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut seed);
+    seed.to_vec()
+}
+
 /// High-level authorization gateway interfacing Agent Octopus arms with Cedar.
 pub struct CedarAuthorizationGateway {
     engine: CedarPolicyEngine,
     auth_engine: ExternalAuthorizationEngine,
     audit_log: Option<SecurityAuditLog>,
     secret_seed: Vec<u8>,
+    active_epoch: SecretEpoch,
+    previous_epoch: Option<SecretEpoch>,
+    previous_auth_engine: Option<ExternalAuthorizationEngine>,
+    grace_period_secs: u64,
+    generation: u64,
+    arm_ring: std::sync::Arc<crate::containment_ring::ArmContainmentRing>,
 }
 
 impl CedarAuthorizationGateway {
     pub fn new(secret_seed: &[u8], policy_fingerprint: &str) -> Self {
+        use sha2::Digest;
+        let fp = hex::encode(sha2::Sha256::digest(secret_seed));
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let active_epoch = SecretEpoch {
+            generation: 1,
+            secret: secret_seed.to_vec(),
+            fingerprint: fp,
+            activated_at_secs: now,
+        };
+        let arm_ring = std::sync::Arc::new(crate::containment_ring::ArmContainmentRing::new(
+            100,
+            crate::core::types::ArmRole::CedarPolicyEvaluation,
+            1,
+            secret_seed,
+        ));
         Self {
             engine: CedarPolicyEngine::default(),
             auth_engine: ExternalAuthorizationEngine::new(secret_seed, 300, policy_fingerprint),
             audit_log: None,
             secret_seed: secret_seed.to_vec(),
+            active_epoch,
+            previous_epoch: None,
+            previous_auth_engine: None,
+            grace_period_secs: 300,
+            generation: 1,
+            arm_ring,
         }
+    }
+
+    pub fn with_containment_ring(mut self, ring: std::sync::Arc<crate::containment_ring::ArmContainmentRing>) -> Self {
+        self.arm_ring = ring;
+        self
+    }
+
+    pub fn containment_ring(&self) -> &std::sync::Arc<crate::containment_ring::ArmContainmentRing> {
+        &self.arm_ring
     }
 
     pub fn with_audit_log(mut self, log: SecurityAuditLog) -> Self {
@@ -56,17 +122,36 @@ impl CedarAuthorizationGateway {
         self.audit_log.as_ref()
     }
 
-    /// Rotates the cryptographic authorization secret with verification and audit logging.
-    /// Supports safe rotation: tokens signed with previous secret can optionally be verified
-    /// or revoked according to key lifecycle policy.
+    pub fn secret_seed(&self) -> &[u8] {
+        &self.secret_seed
+    }
+
+    pub fn active_epoch(&self) -> &SecretEpoch {
+        &self.active_epoch
+    }
+
+    pub fn previous_epoch(&self) -> Option<&SecretEpoch> {
+        self.previous_epoch.as_ref()
+    }
+
+    /// Rotates the cryptographic authorization secret with verification, rollback safety, and audit logging.
+    /// Preserves revoked tokens and enables dual verification during the 300s grace window.
     pub fn rotate_secret(
         &mut self,
         new_secret: &[u8],
         policy_fingerprint: &str,
     ) -> Result<String, OctopusSecurityError> {
+        if self.arm_ring.is_severed() {
+            return Err(OctopusSecurityError::LimbKilled);
+        }
         if new_secret.is_empty() {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "Cannot rotate to an empty secret key".to_string(),
+            ));
+        }
+        if new_secret.len() < 32 {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "Cryptographic secret requires minimum 256 bits (32 bytes) of entropy".to_string(),
             ));
         }
         if new_secret == self.secret_seed.as_slice() {
@@ -76,10 +161,34 @@ impl CedarAuthorizationGateway {
         }
 
         use sha2::Digest;
-        let old_fingerprint = hex::encode(sha2::Sha256::digest(&self.secret_seed));
+        let old_fingerprint = self.active_epoch.fingerprint.clone();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Preserve previous epoch for rollback and in-flight token grace period
+        self.previous_epoch = Some(self.active_epoch.clone());
+        self.previous_auth_engine = Some(self.auth_engine.clone());
+
+        self.generation += 1;
+        let new_fingerprint = hex::encode(sha2::Sha256::digest(new_secret));
         self.secret_seed = new_secret.to_vec();
-        self.auth_engine = ExternalAuthorizationEngine::new(new_secret, 300, policy_fingerprint);
-        let new_fingerprint = hex::encode(sha2::Sha256::digest(&self.secret_seed));
+        self.active_epoch = SecretEpoch {
+            generation: self.generation,
+            secret: new_secret.to_vec(),
+            fingerprint: new_fingerprint.clone(),
+            activated_at_secs: now,
+        };
+
+        // Preserve revoked tokens across rotation epochs
+        let revoked_tokens = self.auth_engine.revoked_tokens_arc();
+        self.auth_engine = ExternalAuthorizationEngine::with_revoked_tokens(
+            new_secret,
+            300,
+            policy_fingerprint,
+            revoked_tokens,
+        );
 
         if let Some(log) = &self.audit_log {
             log.record_event(
@@ -91,6 +200,51 @@ impl CedarAuthorizationGateway {
         }
 
         Ok(new_fingerprint)
+    }
+
+    /// Atomically rolls back the authorization secret to the previous epoch with audit logging.
+    pub fn rollback_secret(&mut self) -> Result<String, OctopusSecurityError> {
+        let prev = self.previous_epoch.take().ok_or_else(|| {
+            OctopusSecurityError::CapabilityDenied(
+                "Rollback failed: No previous secret epoch exists in rotation ring".to_string(),
+            )
+        })?;
+
+        let old_fingerprint = self.active_epoch.fingerprint.clone();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        self.generation += 1;
+        let restored_fingerprint = prev.fingerprint.clone();
+        self.secret_seed = prev.secret.clone();
+        self.active_epoch = SecretEpoch {
+            generation: self.generation,
+            secret: prev.secret.clone(),
+            fingerprint: restored_fingerprint.clone(),
+            activated_at_secs: now,
+        };
+
+        let revoked_tokens = self.auth_engine.revoked_tokens_arc();
+        self.auth_engine = ExternalAuthorizationEngine::with_revoked_tokens(
+            &prev.secret,
+            300,
+            "cedar_ring_v4.13",
+            revoked_tokens,
+        );
+        self.previous_auth_engine = None;
+
+        if let Some(log) = &self.audit_log {
+            log.record_event(
+                "SECRET_ROLLBACK",
+                "system::security_admin",
+                &format!("Rolled back Cedar authorization secret from sha256:{} to sha256:{}", &old_fingerprint[..8], &restored_fingerprint[..8]),
+                "COMPLETED",
+            );
+        }
+
+        Ok(restored_fingerprint)
     }
 
     /// Issues an authenticated supervisor approval receipt.
@@ -184,7 +338,7 @@ impl CedarAuthorizationGateway {
             )));
         }
 
-        // 6. Signature check
+        // 6. Signature check (with grace period dual verification for recent rotation)
         let content = format!(
             "{}:{}:{}:{}:{}",
             receipt.supervisor_id,
@@ -195,9 +349,23 @@ impl CedarAuthorizationGateway {
         );
         let expected_sig = hmac_sha256(&self.secret_seed, content.as_bytes());
         if hex::encode(expected_sig) != receipt.signature_hex {
-            return Err(OctopusSecurityError::CapabilityDenied(
-                "Forged or tampered supervisor approval receipt signature".to_string(),
-            ));
+            let in_grace_period = if let Some(prev) = &self.previous_epoch {
+                let elapsed = now.saturating_sub(self.active_epoch.activated_at_secs);
+                if elapsed <= self.grace_period_secs {
+                    let prev_sig = hmac_sha256(&prev.secret, content.as_bytes());
+                    hex::encode(prev_sig) == receipt.signature_hex
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !in_grace_period {
+                return Err(OctopusSecurityError::CapabilityDenied(
+                    "Forged or tampered supervisor approval receipt signature".to_string(),
+                ));
+            }
         }
 
         Ok(())
@@ -228,9 +396,34 @@ impl CedarAuthorizationGateway {
         untrusted_context: serde_json::Value,
         approval_receipt: Option<&SupervisorApprovalReceipt>,
     ) -> Result<CedarEvaluationVerdict, OctopusSecurityError> {
-        // 1. Verify capability token (unforgeable HMAC signature, TTL, bearer, tool, resource, revocation)
-        self.auth_engine
-            .verify_capability(token, requesting_agent, tool_name, target_resource)?;
+        // Level 1: Mandatory Arm Containment Ring check on the Cedar authorization engine
+        if self.arm_ring.is_severed() {
+            return Err(OctopusSecurityError::LimbKilled);
+        }
+
+        // 1. Verify capability token (with dual verification during 300s grace window)
+        let token_result = self.auth_engine
+            .verify_capability(token, requesting_agent, tool_name, target_resource);
+        if let Err(e) = token_result {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let in_grace = if let Some(prev_engine) = &self.previous_auth_engine {
+                let elapsed = now.saturating_sub(self.active_epoch.activated_at_secs);
+                if elapsed <= self.grace_period_secs {
+                    prev_engine.verify_capability(token, requesting_agent, tool_name, target_resource).is_ok()
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !in_grace {
+                return Err(e);
+            }
+        }
 
         // 2. Map tool name to Cedar Action and Resource Type
         let (action_name, resource_type) = match tool_name {

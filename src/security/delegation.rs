@@ -43,6 +43,30 @@ impl DelegationScopeGuard {
                 tools.insert("hardware_clamp");
                 tools.insert("autotomy_kill");
             }
+            ArmRole::CedarPolicyEvaluation => {
+                tools.insert("cedar_evaluator");
+                tools.insert("policy_compiler");
+            }
+            ArmRole::AtlasThreatIntelligence => {
+                tools.insert("atlas_sync");
+                tools.insert("stix_parser");
+            }
+            ArmRole::AnomalyDetection => {
+                tools.insert("behavioral_sentinel");
+                tools.insert("entropy_calc");
+            }
+            ArmRole::VulnerabilityResearch => {
+                tools.insert("vulnerability_scanner");
+                tools.insert("attack_chain");
+            }
+            ArmRole::ContinuousOssFuzz => {
+                tools.insert("fuzz_mutator");
+                tools.insert("corpus_manager");
+            }
+            ArmRole::ContinuousOsvScanner => {
+                tools.insert("osv_client");
+                tools.insert("dep_advisor");
+            }
         }
         tools
     }

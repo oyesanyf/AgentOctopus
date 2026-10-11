@@ -30,6 +30,13 @@ pub struct EmergencyLockdownController {
     is_active: Arc<AtomicBool>,
     current_report: Arc<RwLock<Option<LockdownReport>>>,
     state_file_path: PathBuf,
+    recovery_token: Arc<RwLock<Option<String>>>,
+}
+
+impl Default for EmergencyLockdownController {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EmergencyLockdownController {
@@ -39,7 +46,24 @@ impl EmergencyLockdownController {
             is_active: Arc::new(AtomicBool::new(false)),
             current_report: Arc::new(RwLock::new(None)),
             state_file_path: PathBuf::from("logs/sentinel_lockdown.state"),
+            recovery_token: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Creates a new lockdown controller with a dynamically configured recovery token.
+    pub fn with_recovery_token(token: impl Into<String>) -> Self {
+        Self {
+            is_active: Arc::new(AtomicBool::new(false)),
+            current_report: Arc::new(RwLock::new(None)),
+            state_file_path: PathBuf::from("logs/sentinel_lockdown.state"),
+            recovery_token: Arc::new(RwLock::new(Some(token.into()))),
+        }
+    }
+
+    /// Dynamically sets or rotates the recovery token required to lift emergency lockdown.
+    pub async fn set_recovery_token(&self, token: impl Into<String>) {
+        let mut guard = self.recovery_token.write().await;
+        *guard = Some(token.into());
     }
 
     /// Engages full emergency global lockdown across the entire Agent Octopus swarm.
@@ -106,8 +130,23 @@ impl EmergencyLockdownController {
         &self,
         recovery_token: &str,
     ) -> Result<LockdownReport, OctopusSecurityError> {
-        let valid_token = std::env::var("SENTINEL_RECOVERY_TOKEN")
-            .unwrap_or_else(|_| "AUTHORITATIVE_SENTINEL_RECOVERY_TOKEN_2026".to_string());
+        let dynamic_token = {
+            let guard = self.recovery_token.read().await;
+            guard.clone()
+        };
+        let valid_token = dynamic_token
+            .or_else(|| std::env::var("SENTINEL_RECOVERY_TOKEN").ok())
+            .filter(|t| !t.trim().is_empty());
+
+        let valid_token = match valid_token {
+            Some(t) => t,
+            None => {
+                return Err(OctopusSecurityError::CapabilityDenied(
+                    "Recovery token not configured: SENTINEL_RECOVERY_TOKEN environment variable or dynamic token must be set".to_string(),
+                ));
+            }
+        };
+
         if recovery_token.trim() != valid_token.trim() {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "Unauthorized recovery token: Sentinel lockdown cannot be lifted without authoritative credentials"

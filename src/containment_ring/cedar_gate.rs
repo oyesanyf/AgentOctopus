@@ -5,10 +5,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Opaque capability token required to modify CedarGate execution state during negative-control sensitivity tests.
-/// Cannot be forged or created by untrusted agent call paths.
+/// Unforgeable capability token required to modify gate execution state during negative-control sensitivity tests.
+/// Cannot be forged or created by untrusted agent call paths because its constructor and fields are private.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CedarAuditControlToken(Arc<String>);
+pub struct NegativeControlToken {
+    token: Arc<String>,
+    _private: (),
+}
+
+impl NegativeControlToken {
+    pub(crate) fn new(token: Arc<String>) -> Self {
+        Self { token, _private: () }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.token
+    }
+}
+
+pub type CedarAuditControlToken = NegativeControlToken;
 
 /// Robust hostname/domain/IPv6 extraction from a target URL or resource identifier.
 /// Conforms to RFC 3986 and prevents simplistic string-splitting vulnerabilities.
@@ -91,9 +106,32 @@ impl CedarGate {
         }
     }
 
-    /// Obtains an authoritative audit control token for negative-control and verification suites.
-    pub fn audit_control_token(&self) -> CedarAuditControlToken {
-        CedarAuditControlToken(self.audit_control_token.clone())
+    /// Creates a CedarGate alongside an authoritative NegativeControlToken for audit and verification harnesses.
+    pub fn new_for_audit() -> (Self, NegativeControlToken) {
+        let mut seed = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut seed);
+        Self::with_secret_for_audit(&seed)
+    }
+
+    /// Creates a CedarGate alongside an authoritative NegativeControlToken with a specified secret.
+    pub fn with_secret_for_audit(secret: &[u8]) -> (Self, NegativeControlToken) {
+        let mut token_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut token_bytes);
+        let control_token = Arc::new(hex::encode(token_bytes));
+        Self::with_secret_and_token(secret, control_token)
+    }
+
+    pub(crate) fn with_secret_and_token(secret: &[u8], control_token: Arc<String>) -> (Self, NegativeControlToken) {
+        let gate = Self {
+            gateway: Arc::new(RwLock::new(CedarAuthorizationGateway::new(
+                secret,
+                "cedar_ring_v4.13",
+            ))),
+            enabled: Arc::new(AtomicBool::new(true)),
+            audit_control_token: control_token.clone(),
+        };
+        let token = NegativeControlToken::new(control_token);
+        (gate, token)
     }
 
     /// Returns whether Cedar authorization enforcement is active.
@@ -102,12 +140,12 @@ impl CedarGate {
     }
 
     /// Enables or deliberately disables Cedar authorization for negative-control sensitivity tests.
-    /// FAIL-CLOSED: Requires presenting the cryptographically unforgeable `CedarAuditControlToken`.
+    /// FAIL-CLOSED: Requires presenting the cryptographically unforgeable `NegativeControlToken`.
     /// Untrusted agents or arbitrary external callers without this token are denied immediately.
-    pub fn set_enabled(&self, enabled: bool, token: &CedarAuditControlToken) -> Result<(), OctopusSecurityError> {
-        if *token.0 != *self.audit_control_token {
+    pub fn set_enabled(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
+        if token.as_str() != self.audit_control_token.as_str() {
             return Err(OctopusSecurityError::CapabilityDenied(
-                "UNAUTHORIZED_CALL_PATH: Modification of Cedar gate authorization state requires authoritative CedarAuditControlToken".to_string(),
+                "UNAUTHORIZED_CALL_PATH: Modification of Cedar gate authorization state requires authoritative NegativeControlToken".to_string(),
             ));
         }
         self.enabled.store(enabled, Ordering::SeqCst);
@@ -119,21 +157,37 @@ impl CedarGate {
     }
 
     /// Dynamically and atomically rotates the underlying Cedar cryptographic secret.
-    /// FAIL-CLOSED: Requires presenting the authoritative CedarAuditControlToken.
+    /// FAIL-CLOSED: Requires presenting the authoritative NegativeControlToken.
     pub async fn rotate_secret(
         &self,
         new_secret: &[u8],
         policy_fingerprint: &str,
-        token: &CedarAuditControlToken,
+        token: &NegativeControlToken,
     ) -> Result<String, OctopusSecurityError> {
-        if *token.0 != *self.audit_control_token {
+        if token.as_str() != self.audit_control_token.as_str() {
             return Err(OctopusSecurityError::CapabilityDenied(
-                "UNAUTHORIZED_CALL_PATH: Secret rotation requires authoritative CedarAuditControlToken".to_string(),
+                "UNAUTHORIZED_CALL_PATH: Secret rotation requires authoritative NegativeControlToken".to_string(),
             ));
         }
 
         let mut gw = self.gateway.write().await;
         gw.rotate_secret(new_secret, policy_fingerprint)
+    }
+
+    /// Atomically rolls back the underlying Cedar cryptographic secret to the previous epoch.
+    /// FAIL-CLOSED: Requires presenting the authoritative NegativeControlToken.
+    pub async fn rollback_secret(
+        &self,
+        token: &NegativeControlToken,
+    ) -> Result<String, OctopusSecurityError> {
+        if token.as_str() != self.audit_control_token.as_str() {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "UNAUTHORIZED_CALL_PATH: Secret rollback requires authoritative NegativeControlToken".to_string(),
+            ));
+        }
+
+        let mut gw = self.gateway.write().await;
+        gw.rollback_secret()
     }
 
     /// Dynamically updates the authorized network egress domains in Cedar Policy #3.
@@ -256,6 +310,12 @@ impl CedarGate {
                 ArmRole::TarpitDecoyDefense => "tarpit_arm",
                 ArmRole::KernelLevelSentinel => "kernel_sentinel_arm",
                 ArmRole::OutboundNotification => "notifier_arm",
+                ArmRole::CedarPolicyEvaluation => "cedar_arm",
+                ArmRole::AtlasThreatIntelligence => "atlas_arm",
+                ArmRole::AnomalyDetection => "anomaly_arm",
+                ArmRole::VulnerabilityResearch => "vulnerability_arm",
+                ArmRole::ContinuousOssFuzz => "oss_fuzz_arm",
+                ArmRole::ContinuousOsvScanner => "osv_scanner_arm",
             }
         };
 
