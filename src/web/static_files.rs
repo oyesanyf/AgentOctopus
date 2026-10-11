@@ -899,7 +899,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
           </div>
           <div class="form-group">
             <label>Action</label>
-            <select id="cedar-action">
+            <select id="cedar-action" onchange="onCedarActionChange()">
               <option value="write">write (Ledger)</option>
               <option value="extract">extract (Document)</option>
               <option value="egress">egress (NetworkTarget)</option>
@@ -912,11 +912,22 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             <input type="text" id="cedar-resource" value="corporate_ledger" required />
           </div>
           <div class="form-group">
-            <label>Context JSON (Untrusted Agent Payload)</label>
-            <textarea id="cedar-context" rows="4">{\n  "amount_cents": 50000,\n  "approved": true\n}</textarea>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <label style="margin-bottom: 0;">Context JSON (Untrusted Agent Payload)</label>
+              <div style="display: flex; gap: 0.3rem;">
+                <button type="button" class="btn btn-secondary" style="font-size: 0.68rem; padding: 0.15rem 0.45rem;" onclick="setCedarPreset('valid_ledger')">Valid Write</button>
+                <button type="button" class="btn btn-secondary" style="font-size: 0.68rem; padding: 0.15rem 0.45rem;" onclick="setCedarPreset('valid_egress')">Valid Egress</button>
+                <button type="button" class="btn btn-secondary" style="font-size: 0.68rem; padding: 0.15rem 0.45rem;" onclick="setCedarPreset('ssrf_metadata')">SSRF Probe</button>
+                <button type="button" class="btn btn-secondary" style="font-size: 0.68rem; padding: 0.15rem 0.45rem;" onclick="setCedarPreset('tampered_ledger')">Tampered</button>
+              </div>
+            </div>
+            <textarea id="cedar-context" rows="4" style="margin-top: 0.35rem; font-family: monospace; font-size: 0.85rem;">{
+  "amount_cents": 50000,
+  "approved": true
+}</textarea>
           </div>
           <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
-            <input type="checkbox" id="cedar-attach-approval" style="width: auto;" />
+            <input type="checkbox" id="cedar-attach-approval" checked style="width: auto;" />
             <label for="cedar-attach-approval" style="margin-bottom: 0; text-transform: none; cursor: pointer;">
               Attach Verified Cryptographic Supervisor Approval Receipt (Blocks Context Manipulation)
             </label>
@@ -2743,16 +2754,25 @@ with urllib.request.urlopen(req) as resp:
       const principal = (document.getElementById('cedar-principal')?.value || '').trim();
       const action = document.getElementById('cedar-action')?.value || 'write';
       const resource = (document.getElementById('cedar-resource')?.value || '').trim();
+      
+      let rawVal = (document.getElementById('cedar-context')?.value || '').trim();
       let contextJson = {};
-      try {
-        contextJson = JSON.parse(document.getElementById('cedar-context').value);
-      } catch (err) {
-        showDiagnosticToast({
-          status: 'SYNTAX_ERROR',
-          message: 'Invalid JSON in context field: ' + err.message,
-          retryFn: null
-        });
-        return;
+      if (rawVal) {
+        try {
+          contextJson = JSON.parse(rawVal);
+        } catch (firstErr) {
+          try {
+            const normalized = rawVal.replace(/\\n/g, '\n').replace(/\\r/g, '\r');
+            contextJson = JSON.parse(normalized);
+          } catch (_) {
+            showDiagnosticToast({
+              status: 'SYNTAX_ERROR',
+              message: 'Invalid JSON in context field: ' + firstErr.message,
+              retryFn: null
+            });
+            return;
+          }
+        }
       }
       const attachApproval = document.getElementById('cedar-attach-approval')?.checked || false;
 
@@ -2810,6 +2830,67 @@ with urllib.request.urlopen(req) as resp:
         message: 'Network or runtime error evaluating Cedar query: ' + err.message,
         retryFn: () => evaluateCedar(e)
       });
+    }
+  }
+
+  function setCedarPreset(type) {
+    const ctx = document.getElementById('cedar-context');
+    const act = document.getElementById('cedar-action');
+    const res = document.getElementById('cedar-resource');
+    const princ = document.getElementById('cedar-principal');
+    const appr = document.getElementById('cedar-attach-approval');
+    if (!ctx) return;
+    
+    switch (type) {
+      case 'valid_ledger':
+        if (princ) princ.value = 'agent_accountant';
+        if (act) act.value = 'write';
+        if (res) res.value = 'corporate_ledger';
+        if (appr) appr.checked = true;
+        ctx.value = JSON.stringify({ amount_cents: 50000, approved: true }, null, 2);
+        break;
+      case 'valid_egress':
+        if (princ) princ.value = 'agent_accountant';
+        if (act) act.value = 'egress';
+        if (res) res.value = 'https://api.internal.bank.com/v1/sync';
+        if (appr) appr.checked = true;
+        ctx.value = JSON.stringify({ ip: "192.168.1.50", port: 443 }, null, 2);
+        break;
+      case 'ssrf_metadata':
+        if (princ) princ.value = 'agent_accountant';
+        if (act) act.value = 'egress';
+        if (res) res.value = 'http://169.254.169.254/latest/meta-data/';
+        if (appr) appr.checked = false;
+        ctx.value = JSON.stringify({ target: "169.254.169.254", port: 80, ssrf_attempt: true }, null, 2);
+        break;
+      case 'tampered_ledger':
+        if (princ) princ.value = 'agent_accountant';
+        if (act) act.value = 'write';
+        if (res) res.value = 'corporate_ledger';
+        if (appr) appr.checked = false;
+        ctx.value = JSON.stringify({ amount_cents: 999999999, approved: false, attacker_notes: "forge approval receipt" }, null, 2);
+        break;
+      default:
+        ctx.value = '{}';
+    }
+  }
+
+  function onCedarActionChange() {
+    const act = document.getElementById('cedar-action')?.value;
+    const res = document.getElementById('cedar-resource');
+    if (!res) return;
+    if (act === 'write') {
+      res.value = 'corporate_ledger';
+      setCedarPreset('valid_ledger');
+    } else if (act === 'egress') {
+      res.value = 'https://api.internal.bank.com/v1/sync';
+      setCedarPreset('valid_egress');
+    } else if (act === 'extract') {
+      res.value = 'corporate_payroll_2026.pdf';
+    } else if (act === 'notify') {
+      res.value = 'agent_supervisor';
+    } else if (act === 'change_security_policy') {
+      res.value = 'system_security_policy';
     }
   }
 
