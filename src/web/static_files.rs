@@ -6,7 +6,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Agent Octopus | Swarm Breakout Defense & Policy Engine</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%230f172a' stroke='%2306b6d4' stroke-width='4'/%3E%3Ctext x='50%25' y='54%25' text-anchor='middle' dominant-baseline='central' font-size='38'%3E🐙%3C/text%3E%3C/svg%3E">
+  <link rel="icon" type="image/png" href="/logo.png">
   <link rel="shortcut icon" href="/favicon.ico">
   <style>
     :root {
@@ -612,10 +612,11 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
 
 <header>
   <div class="brand">
-    <div class="brand-icon">🐙</div>
+    <img src="/logo.png" alt="Agent Octopus" style="width: 44px; height: 44px; border-radius: 8px; border: 1.5px solid #38bdf8; box-shadow: 0 0 14px rgba(56, 189, 248, 0.45); object-fit: cover;" onerror="this.style.display='none'; document.getElementById('brand-icon-fallback').style.display='flex';" />
+    <div class="brand-icon" id="brand-icon-fallback" style="display: none;">🐙</div>
     <div class="brand-title">
       <h1>Agent Octopus</h1>
-      <p>Decentralized Autonomous Swarm Breakout Defense & Policy Engine</p>
+      <p>Decentralized Autonomous Swarm Breakout Defense &amp; Policy Engine</p>
     </div>
   </div>
   <div class="status-badge" id="engine-status-badge" style="border: 2px solid #10b981; background: rgba(6, 78, 59, 0.45); padding: 0.45rem 1rem;">

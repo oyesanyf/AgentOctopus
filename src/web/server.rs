@@ -277,7 +277,27 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
-        ("GET", "/favicon.ico") | ("GET", "/favicon.svg") => {
+        ("GET", "/logo.png") | ("GET", "/assets/logo.png") | ("GET", "/favicon.png") | ("GET", "/favicon.ico") => {
+            let logo_path = std::path::Path::new("assets/logo.png");
+            if let Ok(bytes) = tokio::fs::read(logo_path).await {
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nCache-Control: public, max-age=86400\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                stream.write_all(header.as_bytes()).await?;
+                stream.write_all(&bytes).await?;
+            } else {
+                let svg_icon = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="#0f172a" stroke="#06b6d4" stroke-width="4"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="central" font-size="38">🐙</text></svg>"##;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: image/svg+xml\r\nCache-Control: public, max-age=86400\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    svg_icon.len(),
+                    svg_icon
+                );
+                stream.write_all(response.as_bytes()).await?;
+            }
+        }
+
+        ("GET", "/favicon.svg") => {
             let svg_icon = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="#0f172a" stroke="#06b6d4" stroke-width="4"/><text x="50%" y="54%" text-anchor="middle" dominant-baseline="central" font-size="38">🐙</text></svg>"##;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: image/svg+xml\r\nCache-Control: public, max-age=86400\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
