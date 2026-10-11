@@ -1,3 +1,4 @@
+use crate::security::LogSanitizer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Mutex, RwLock};
@@ -189,19 +190,33 @@ impl OtelSessionTelemetry {
         let span_id = generate_span_id();
         let duration_ms = (end_nano.saturating_sub(start_nano)) as f64 / 1_000_000.0;
 
+        let sanitized_name = LogSanitizer::sanitize_text(name);
+        let sanitized_status_message = status_message.map(|msg| LogSanitizer::sanitize_text(&msg));
+        let mut sanitized_attributes = attributes;
+        LogSanitizer::sanitize_map(&mut sanitized_attributes);
+
+        let sanitized_events = events
+            .into_iter()
+            .map(|mut ev| {
+                ev.name = LogSanitizer::sanitize_text(&ev.name);
+                LogSanitizer::sanitize_map(&mut ev.attributes);
+                ev
+            })
+            .collect();
+
         let span = OtelSpan {
             trace_id: trace_id.to_string(),
             span_id,
             parent_span_id,
-            name: name.to_string(),
+            name: sanitized_name,
             kind,
             start_time_unix_nano: start_nano,
             end_time_unix_nano: end_nano,
             duration_ms,
             status,
-            status_message,
-            attributes,
-            events,
+            status_message: sanitized_status_message,
+            attributes: sanitized_attributes,
+            events: sanitized_events,
         };
 
         // Increment step count

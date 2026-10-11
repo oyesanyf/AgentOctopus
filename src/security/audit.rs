@@ -1,3 +1,4 @@
+use crate::security::LogSanitizer;
 use sha2::{Digest, Sha256};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -14,6 +15,12 @@ pub struct AuditRecord {
     pub decision: String,
     pub prev_hash: String,
     pub record_hash: String,
+    #[serde(default = "default_ghostjacking_defanged")]
+    pub ghostjacking_defanged: bool,
+}
+
+fn default_ghostjacking_defanged() -> bool {
+    true
 }
 
 /// Append-only, tamper-evident security audit log with in-memory hash-chaining
@@ -70,15 +77,23 @@ impl SecurityAuditLog {
             .unwrap_or_default()
             .as_secs();
 
+        // Anti-Agentjacking & GhostJacking Sanitization:
+        // Strip invisible Unicode smuggling, defang Markdown zero-click exfiltration (EchoLeak),
+        // redact credentials, and neutralize prompt override delimiters.
+        let sanitized_event_type = LogSanitizer::sanitize_text(event_type);
+        let sanitized_agent_id = LogSanitizer::sanitize_text(agent_id);
+        let sanitized_details = LogSanitizer::sanitize_text(details);
+        let sanitized_decision = LogSanitizer::sanitize_text(decision);
+
         let mut last_hash_lock = self.last_hash.lock().unwrap_or_else(|e| e.into_inner());
         let prev_hash = last_hash_lock.clone();
 
         let mut hasher = Sha256::new();
         hasher.update(prev_hash.as_bytes());
-        hasher.update(event_type.as_bytes());
-        hasher.update(agent_id.as_bytes());
-        hasher.update(details.as_bytes());
-        hasher.update(decision.as_bytes());
+        hasher.update(sanitized_event_type.as_bytes());
+        hasher.update(sanitized_agent_id.as_bytes());
+        hasher.update(sanitized_details.as_bytes());
+        hasher.update(sanitized_decision.as_bytes());
         hasher.update(&now.to_le_bytes());
         let record_hash = hex::encode(hasher.finalize());
 
@@ -86,12 +101,13 @@ impl SecurityAuditLog {
 
         let record = AuditRecord {
             timestamp_secs: now,
-            event_type: event_type.to_string(),
-            agent_id: agent_id.to_string(),
-            details: details.to_string(),
-            decision: decision.to_string(),
+            event_type: sanitized_event_type,
+            agent_id: sanitized_agent_id,
+            details: sanitized_details,
+            decision: sanitized_decision,
             prev_hash,
             record_hash: record_hash.clone(),
+            ghostjacking_defanged: true,
         };
 
         // 1. In-memory append

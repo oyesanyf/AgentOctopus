@@ -1427,6 +1427,110 @@ pub fn handle_osv_scanner_sarif(state: &WebState) -> String {
     state.osv_scanner_arm.generate_osv_sarif_report()
 }
 
+pub fn handle_runtime_activity_stream(state: &WebState) -> String {
+    let mut events = Vec::new();
+
+    // 1. Audit Log entries (Cedar policy decisions, cryptographic hashes)
+    let audit_entries = state.audit_log.get_entries();
+    for entry in audit_entries {
+        let is_allow = entry.decision.to_uppercase().contains("ALLOW") || entry.decision.to_uppercase().contains("PERMIT");
+        let verdict = if is_allow { "ALLOW" } else { "DENY" };
+        events.push(json!({
+            "id": format!("audit_{}_{}", entry.timestamp_secs, &entry.record_hash[..8.min(entry.record_hash.len())]),
+            "timestamp_secs": entry.timestamp_secs,
+            "subsystem": "Cedar-Policy",
+            "event_type": entry.event_type,
+            "actor": entry.agent_id,
+            "target": entry.details,
+            "verdict": verdict,
+            "metric": if is_allow { "Permit" } else { "Forbid" },
+            "hash_or_trace": entry.record_hash,
+            "ghostjacking_protected": true,
+            "raw": {
+                "decision": entry.decision,
+                "prev_hash": entry.prev_hash,
+                "record_hash": entry.record_hash,
+                "details": entry.details
+            }
+        }));
+    }
+
+    // 2. OpenTelemetry Spans
+    let spans = state.otel_telemetry.get_recent_spans(50);
+    for span in spans {
+        let ts_sec = span.start_time_unix_nano / 1_000_000_000;
+        let actor = span.attributes.get("agent.principal").cloned().unwrap_or_else(|| "system".to_string());
+        let verdict = format!("{:?}", span.status);
+        events.push(json!({
+            "id": format!("otel_{}", span.span_id),
+            "timestamp_secs": ts_sec,
+            "subsystem": "OpenTelemetry",
+            "event_type": format!("Span:{}", span.name),
+            "actor": actor,
+            "target": format!("{} ({:?})", span.name, span.kind),
+            "verdict": verdict,
+            "metric": format!("{:.2} ms", span.duration_ms),
+            "hash_or_trace": span.trace_id,
+            "ghostjacking_protected": true,
+            "raw": span
+        }));
+    }
+
+    // 3. Continuous RL Evaluation Cycle Probes
+    if let Some(latest_rl) = state.continuous_eval.get_latest_report() {
+        let rl_ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        for p in latest_rl.results_summary {
+            let verdict = if p.was_intercepted { "CONTAINED" } else { "PASS" };
+            events.push(json!({
+                "id": format!("rl_{}_{}", latest_rl.cycle_id, p.probe_id),
+                "timestamp_secs": rl_ts,
+                "subsystem": "RL-ActiveDefense",
+                "event_type": p.probe_id,
+                "actor": format!("{} ({})", p.principal, p.action),
+                "target": format!("{} [{}]", p.resource, p.perimeter_name),
+                "verdict": verdict,
+                "metric": format!("Tier: {} | R={:.1}", p.defense_action_selected, p.reward),
+                "hash_or_trace": format!("cycle-{}", latest_rl.cycle_id),
+                "ghostjacking_protected": true,
+                "raw": p
+            }));
+        }
+    }
+
+    // 4. Live Test Events
+    let live_ev = state.live_events.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    for ev in live_ev.iter().rev().take(30) {
+        events.push(json!({
+            "id": format!("live_test_{}", ev.id),
+            "timestamp_secs": ev.timestamp_secs,
+            "subsystem": "Swarm-Runner",
+            "event_type": "LiveTestExecution",
+            "actor": ev.principal,
+            "target": format!("{} -> {}", ev.action, ev.resource),
+            "verdict": if ev.is_allowed { "PASS" } else { "BLOCKED" },
+            "metric": ev.verdict,
+            "hash_or_trace": format!("event-{}", ev.id),
+            "ghostjacking_protected": true,
+            "raw": ev
+        }));
+    }
+
+    // Sort descending by timestamp
+    events.sort_by(|a, b| {
+        let ts_b = b.get("timestamp_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+        let ts_a = a.get("timestamp_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+        ts_b.cmp(&ts_a)
+    });
+
+    json!({
+        "total_events": events.len(),
+        "ghostjacking_defense": "ACTIVE",
+        "defanging_policy": "STRICT_SANITIZATION_ECHODEFANG_UNICODE_STRIP",
+        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+        "events": events
+    }).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

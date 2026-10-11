@@ -10,6 +10,7 @@ use super::api::{
     handle_atlas_status, handle_atlas_sync, handle_atlas_dynamic_tests,
     handle_oss_fuzz_status, handle_oss_fuzz_burst, handle_oss_fuzz_sarif,
     handle_osv_scanner_status, handle_osv_scanner_scan_now, handle_osv_scanner_sarif,
+    handle_runtime_activity_stream,
     WebState,
 };
 use super::static_files::INDEX_HTML;
@@ -338,7 +339,9 @@ async fn handle_connection(
 
         ("GET", "/api/download-run-log") => {
             let log_path = std::path::Path::new("logs/adversarial_execution.log");
-            let content = tokio::fs::read(log_path).await.unwrap_or_else(|_| b"(No adversarial run log found on disk yet. Run a test suite first.)".to_vec());
+            let raw_str = tokio::fs::read_to_string(log_path).await.unwrap_or_else(|_| "(No adversarial run log found on disk yet. Run a test suite first.)".to_string());
+            let sanitized = crate::security::LogSanitizer::sanitize_text(&raw_str);
+            let content = sanitized.into_bytes();
             let header = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"adversarial_execution.log\"\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 content.len()
@@ -349,7 +352,9 @@ async fn handle_connection(
 
         ("GET", "/api/download-test-json") => {
             let json_path = std::path::Path::new("logs/adversarial_audit.json");
-            let content = tokio::fs::read(json_path).await.unwrap_or_else(|_| b"{}".to_vec());
+            let raw_str = tokio::fs::read_to_string(json_path).await.unwrap_or_else(|_| "{}".to_string());
+            let sanitized = crate::security::LogSanitizer::sanitize_text(&raw_str);
+            let content = sanitized.into_bytes();
             let header = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Disposition: attachment; filename=\"adversarial_audit.json\"\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 content.len()
@@ -360,7 +365,9 @@ async fn handle_connection(
 
         ("GET", "/api/download-audit-log") => {
             let log_path = std::path::Path::new("logs/audit.log");
-            let content = tokio::fs::read(log_path).await.unwrap_or_else(|_| b"(No security audit log entries yet)".to_vec());
+            let raw_str = tokio::fs::read_to_string(log_path).await.unwrap_or_else(|_| "(No security audit log entries yet)".to_string());
+            let sanitized = crate::security::LogSanitizer::sanitize_text(&raw_str);
+            let content = sanitized.into_bytes();
             let header = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"security_audit.log\"\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 content.len()
@@ -676,6 +683,20 @@ async fn handle_connection(
             let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_otel_spans(&state, 50))) {
                 Ok(body) => ("200 OK", body),
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/otel/spans")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/runtime-activity/stream") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_runtime_activity_stream(&state))) {
+                Ok(body) => ("200 OK", body),
+                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/runtime-activity/stream")),
             };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

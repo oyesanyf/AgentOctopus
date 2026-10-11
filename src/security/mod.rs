@@ -1,3 +1,4 @@
+pub mod agentjacking_guard;
 pub mod anomaly_arms;
 pub mod atlas_arm;
 pub mod audit;
@@ -10,6 +11,7 @@ pub mod governor;
 pub mod guard_arms;
 pub mod identity;
 pub mod isolation;
+pub mod log_sanitizer;
 pub mod math_validator;
 pub mod openshell;
 pub mod oss_fuzz_arm;
@@ -19,6 +21,8 @@ pub mod research_arms;
 pub mod rl_defense;
 pub mod windows_sandbox;
 
+pub use agentjacking_guard::{AgentjackingGuard, AgentjackingPhase, AgentjackingVerdict, SessionTaintState};
+pub use log_sanitizer::LogSanitizer;
 pub use oss_fuzz_arm::{ContinuousOssFuzzArm, OssFuzzCycleReport, TargetTelemetry};
 pub use osv_scanner_arm::{ContinuousOsvScannerArm, OsvScanReport};
 

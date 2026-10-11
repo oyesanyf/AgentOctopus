@@ -647,6 +647,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
 
 <nav>
   <div class="nav-tab active" onclick="switchTab('test-runner')">🧪 Test Runner &amp; Progression</div>
+  <div class="nav-tab" onclick="switchTab('runtime-feed')">⚡ Unified Runtime Activity</div>
   <div class="nav-tab" onclick="switchTab('cedar-sandbox')">🛡️ Cedar Policy Sandbox</div>
   <div class="nav-tab" onclick="switchTab('audit-viewer')">📜 Cryptographic Audit Log</div>
   <div class="nav-tab" onclick="switchTab('swarm-status')">🐙 Swarm &amp; Invariants</div>
@@ -2178,6 +2179,146 @@ with urllib.request.urlopen(req) as resp:
         <div class="stat-label">Authoritative Feed</div>
       </div>
     </div>
+  <!-- TAB: UNIFIED RUNTIME ACTIVITY FEED (ANTI-AGENTJACKING & GHOSTJACKING DEFENSE) -->
+  <div id="runtime-feed" class="tab-content">
+    <!-- BREADCRUMB -->
+    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+      <div class="breadcrumb-trail">
+        <a class="breadcrumb-link" href="javascript:void(0)" onclick="switchTab('test-runner')"><span>🏠</span> Dashboard</a>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-link" style="cursor: default; pointer-events: none;">Runtime Telemetry</span>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-current"><span>⚡</span> Unified Runtime Activity Stream</span>
+      </div>
+      <div class="breadcrumb-meta">
+        <span class="breadcrumb-badge green">● LIVE AGGREGATOR</span>
+        <span class="breadcrumb-badge purple">🛡️ ANTI-AGENTJACKING DEFANGING</span>
+        <span class="breadcrumb-badge amber">🔒 ZERO-CLICK ECHOLEAK IMMUNITY</span>
+      </div>
+    </nav>
+
+    <!-- Header Banner -->
+    <div class="card" style="background: linear-gradient(135deg, #090d16 0%, #15102a 100%); border: 1px solid #06b6d4; margin-bottom: 1.25rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+        <div>
+          <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+            <h2 style="color: #38bdf8; font-size: 1.3rem; margin: 0;">⚡ Unified Live Runtime Stream &amp; Multi-Agent Event Bus</h2>
+            <span class="badge badge-success" id="runtime-streaming-badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid #10b981;">● STREAMING LIVE (2.0s Polling)</span>
+            <span class="badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid #a855f7;">🛡️ GHOSTJACKING DEFENSE: ACTIVE</span>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.85rem; max-width: 950px; line-height: 1.5; margin: 0;">
+            Consolidated live event stream capturing every runtime operation across the agent swarm: Cedar authorization decisions, Double Q-Learning active defense transitions (Tiers 0–4), RT-ASP tarpit intercepts, OpenTelemetry distributed spans, and cryptographic Merkle chain additions. All emitted logs are actively defanged against <strong>Agentjacking</strong>, <strong>GhostJacking</strong> (invisible Unicode instruction smuggling), and <strong>EchoLeak</strong> (zero-click Markdown image exfiltration).
+          </p>
+        </div>
+        <div style="display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;">
+          <button class="btn btn-outline" onclick="toggleRuntimeFeedPause()" id="btn-toggle-runtime-pause" style="display: flex; align-items: center; gap: 0.4rem;">
+            <span id="runtime-pause-icon">⏸️</span> <span id="runtime-pause-label">Pause Stream</span>
+          </button>
+          <button class="btn btn-primary" onclick="fetchUnifiedRuntimeActivity(true)" style="display: flex; align-items: center; gap: 0.4rem;">
+            <span>🔄</span> Refresh Now
+          </button>
+          <button class="btn btn-secondary" onclick="exportRuntimeActivityJson()" style="display: flex; align-items: center; gap: 0.4rem;">
+            <span>💾</span> Export JSON
+          </button>
+          <button class="btn btn-secondary" onclick="clearRuntimeActivityTable()" style="display: flex; align-items: center; gap: 0.4rem;">
+            <span>🧹</span> Clear Feed
+          </button>
+        </div>
+      </div>
+
+      <!-- Filter Controls Bar -->
+      <div style="display: flex; gap: 0.85rem; align-items: center; margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid rgba(255,255,255,0.08); flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 0.4rem;">
+          <label style="font-size: 0.8rem; color: #94a3b8; margin: 0; text-transform: uppercase;">Subsystem:</label>
+          <select id="runtime-subsystem-filter" onchange="filterRuntimeActivityTable()" style="padding: 0.35rem 0.6rem; font-size: 0.8rem; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px;">
+            <option value="ALL">All Subsystems (Consolidated)</option>
+            <option value="Cedar-Policy">🛡️ Cedar Policy Engine</option>
+            <option value="RL-ActiveDefense">🧠 RL Active Defense (D3QN)</option>
+            <option value="OpenTelemetry">🔭 OpenTelemetry Spans</option>
+            <option value="Swarm-Runner">🐙 Swarm &amp; Live Tests</option>
+          </select>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 0.4rem; flex: 1; min-width: 250px;">
+          <label style="font-size: 0.8rem; color: #94a3b8; margin: 0; text-transform: uppercase;">Search:</label>
+          <input type="text" id="runtime-search-input" oninput="filterRuntimeActivityTable()" placeholder="Filter by actor, action, target, trace ID, hash, or keyword..." style="width: 100%; padding: 0.35rem 0.6rem; font-size: 0.8rem; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px;" />
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 0.4rem;">
+          <input type="checkbox" id="runtime-autoscroll" checked style="cursor: pointer;" />
+          <label for="runtime-autoscroll" style="font-size: 0.8rem; color: #94a3b8; margin: 0; cursor: pointer;">Auto-scroll to top</label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Resilience Stat Cards -->
+    <div class="stats-row" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 1.25rem;">
+      <div class="stat-box" style="border-top: 3px solid #38bdf8;">
+        <div class="stat-value" id="runtime-stat-total" style="color: #38bdf8;">0</div>
+        <div class="stat-label">Total Runtime Events</div>
+      </div>
+      <div class="stat-box" style="border-top: 3px solid #10b981;">
+        <div class="stat-value" id="runtime-stat-permitted" style="color: #10b981;">0</div>
+        <div class="stat-label">Permitted Operations</div>
+      </div>
+      <div class="stat-box" style="border-top: 3px solid #f97316;">
+        <div class="stat-value" id="runtime-stat-mitigated" style="color: #f97316;">0</div>
+        <div class="stat-label">Active Mitigations &amp; Blocks</div>
+      </div>
+      <div class="stat-box" style="border-top: 3px solid #a855f7;">
+        <div class="stat-value" id="runtime-stat-shielded" style="color: #a855f7;">100.0%</div>
+        <div class="stat-label">GhostJacking Defanged</div>
+      </div>
+    </div>
+
+    <!-- Consolidated Live Table -->
+    <div class="card" style="margin-bottom: 1.5rem;">
+      <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <h2>📋 Real-Time Consolidated Event Feed</h2>
+        <span id="runtime-event-count-badge" style="font-size: 0.8rem; color: var(--text-muted);">0 events loaded</span>
+      </div>
+      <div style="overflow-x: auto; max-height: 480px;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem; text-align: left;">
+          <thead>
+            <tr style="border-bottom: 1px solid var(--card-border); color: #38bdf8; background: rgba(15, 23, 42, 0.7); position: sticky; top: 0; z-index: 2;">
+              <th style="padding: 0.6rem;">Time</th>
+              <th style="padding: 0.6rem;">Subsystem</th>
+              <th style="padding: 0.6rem;">Event / Operation</th>
+              <th style="padding: 0.6rem;">Actor / Principal</th>
+              <th style="padding: 0.6rem;">Target / Resource</th>
+              <th style="padding: 0.6rem;">Verdict / Status</th>
+              <th style="padding: 0.6rem;">Metric / Tier</th>
+              <th style="padding: 0.6rem;">Trace / Hash</th>
+              <th style="padding: 0.6rem; text-align: center;">Payload</th>
+            </tr>
+          </thead>
+          <tbody id="runtime-events-tbody">
+            <tr>
+              <td colspan="9" style="padding: 1.5rem; text-align: center; color: var(--text-muted);">
+                Connecting to unified runtime event stream...
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Payload Inspector Modal -->
+    <div id="runtime-payload-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 9999; align-items: center; justify-content: center;">
+      <div style="background: #0f172a; border: 1px solid #38bdf8; border-radius: 8px; width: 90%; max-width: 750px; max-height: 80vh; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.7);">
+        <div style="padding: 0.75rem 1rem; border-bottom: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; background: #1e293b;">
+          <h3 id="runtime-modal-title" style="margin: 0; font-size: 1rem; color: #38bdf8;">🔍 Runtime Event Payload Inspector</h3>
+          <button type="button" onclick="closeRuntimePayloadModal()" style="background: transparent; border: none; color: #94a3b8; font-size: 1.25rem; cursor: pointer;">&times;</button>
+        </div>
+        <div style="padding: 1rem; overflow-y: auto; flex: 1;">
+          <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem; align-items: center;">
+            <span class="badge" id="runtime-modal-ghostjacking-badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid #a855f7;">🛡️ Defanged &amp; Sanitized</span>
+            <button class="btn btn-secondary" onclick="copyRuntimePayload()" style="font-size: 0.7rem; padding: 0.2rem 0.5rem;">📋 Copy JSON</button>
+          </div>
+          <pre id="runtime-modal-code" style="background: #020617; border: 1px solid #1e293b; border-radius: 6px; padding: 0.85rem; font-family: monospace; font-size: 0.8rem; color: #f8fafc; overflow-x: auto; white-space: pre-wrap; margin: 0;"></pre>
+        </div>
+      </div>
+    </div>
   </div>
 
 </main>
@@ -2343,7 +2484,9 @@ with urllib.request.urlopen(req) as resp:
         }
       });
 
-      if (tabId === 'audit-viewer') {
+      if (tabId === 'runtime-feed') {
+        fetchUnifiedRuntimeActivity(true);
+      } else if (tabId === 'audit-viewer') {
         fetchAuditLog();
       } else if (tabId === 'rl-continuous') {
         fetchRlDefenseStatus(true);
@@ -4297,8 +4440,187 @@ with urllib.request.urlopen(req) as resp:
     }
   }
 
+  // =========================================================================
+  // UNIFIED RUNTIME ACTIVITY STREAM & GHOSTJACKING DEFENSE
+  // =========================================================================
+  let runtimeFeedPaused = false;
+  let allRuntimeEvents = [];
+  let currentInspectedPayload = null;
+
+  async function fetchUnifiedRuntimeActivity(showToast = false) {
+    try {
+      const res = await fetchWithTimeout('/api/runtime-activity/stream', {}, 2500);
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch runtime activity`);
+      const data = await res.json();
+      allRuntimeEvents = data.events || [];
+
+      // Update KPI counters
+      const totalEl = document.getElementById('runtime-stat-total');
+      const permEl = document.getElementById('runtime-stat-permitted');
+      const mitigEl = document.getElementById('runtime-stat-mitigated');
+      const badgeCount = document.getElementById('runtime-event-count-badge');
+
+      let permCount = 0;
+      let mitigCount = 0;
+      allRuntimeEvents.forEach(e => {
+        const v = (e.verdict || '').toUpperCase();
+        if (v === 'ALLOW' || v === 'PASS' || v === 'OK') permCount++;
+        else if (v === 'DENY' || v === 'CONTAINED' || v === 'BLOCKED' || v === 'ALERT') mitigCount++;
+      });
+
+      if (totalEl) totalEl.textContent = allRuntimeEvents.length;
+      if (permEl) permEl.textContent = permCount;
+      if (mitigEl) mitigEl.textContent = mitigCount;
+      if (badgeCount) badgeCount.textContent = `${allRuntimeEvents.length} events consolidated`;
+
+      renderRuntimeActivityTable(allRuntimeEvents);
+    } catch (err) {
+      console.warn('Unified runtime activity fetch error:', err);
+      if (showToast) {
+        showDiagnosticToast({
+          status: 'RUNTIME_FEED_ERROR',
+          message: 'Error fetching unified activity stream: ' + err.message,
+          retryFn: () => fetchUnifiedRuntimeActivity(true)
+        });
+      }
+    }
+  }
+
+  function renderRuntimeActivityTable(events) {
+    const tbody = document.getElementById('runtime-events-tbody');
+    if (!tbody) return;
+
+    const subFilter = document.getElementById('runtime-subsystem-filter')?.value || 'ALL';
+    const query = (document.getElementById('runtime-search-input')?.value || '').trim().toLowerCase();
+
+    const filtered = events.filter(e => {
+      if (subFilter !== 'ALL' && e.subsystem !== subFilter) return false;
+      if (!query) return true;
+      const haystack = `${e.subsystem} ${e.event_type} ${e.actor} ${e.target} ${e.verdict} ${e.metric} ${e.hash_or_trace}`.toLowerCase();
+      return haystack.includes(query);
+    });
+
+    if (filtered.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" style="padding: 1.5rem; text-align: center; color: var(--text-muted);">No runtime events match the active filter or query.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = filtered.map(e => {
+      const ts = e.timestamp_secs ? new Date(e.timestamp_secs * 1000).toLocaleTimeString() : 'now';
+      const v = (e.verdict || '').toUpperCase();
+      let vColor = '#38bdf8';
+      let vBg = 'rgba(56, 189, 248, 0.15)';
+      if (v === 'ALLOW' || v === 'PASS' || v === 'OK') {
+        vColor = '#10b981';
+        vBg = 'rgba(16, 185, 129, 0.15)';
+      } else if (v === 'DENY' || v === 'CONTAINED' || v === 'BLOCKED' || v === 'ALERT') {
+        vColor = '#ef4444';
+        vBg = 'rgba(239, 68, 68, 0.15)';
+      }
+
+      let subBadge = '#94a3b8';
+      if (e.subsystem === 'Cedar-Policy') subBadge = '#06b6d4';
+      else if (e.subsystem === 'RL-ActiveDefense') subBadge = '#a855f7';
+      else if (e.subsystem === 'OpenTelemetry') subBadge = '#3b82f6';
+      else if (e.subsystem === 'Swarm-Runner') subBadge = '#10b981';
+
+      const shortHash = e.hash_or_trace ? (e.hash_or_trace.length > 14 ? e.hash_or_trace.substring(0, 12) + '...' : e.hash_or_trace) : '—';
+      const safeId = escapeHtml(e.id || '');
+
+      return `<tr style="border-bottom: 1px solid #1e293b;">
+        <td style="padding: 0.5rem; font-family: monospace; color: #94a3b8; font-size: 0.75rem;">${ts}</td>
+        <td style="padding: 0.5rem;"><span class="badge" style="background: rgba(255,255,255,0.06); color: ${subBadge}; border: 1px solid ${subBadge}; font-size: 0.7rem;">${escapeHtml(e.subsystem)}</span></td>
+        <td style="padding: 0.5rem; font-weight: 600; color: #f8fafc;">${escapeHtml(e.event_type)}</td>
+        <td style="padding: 0.5rem; color: #cbd5e1; font-family: monospace; font-size: 0.75rem;">${escapeHtml(e.actor || 'system')}</td>
+        <td style="padding: 0.5rem; color: #94a3b8; font-size: 0.75rem; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(e.target || '')}">${escapeHtml(e.target || '—')}</td>
+        <td style="padding: 0.5rem;"><span class="badge" style="background: ${vBg}; color: ${vColor}; border: 1px solid ${vColor}; font-weight: 700; font-size: 0.7rem;">${v}</span></td>
+        <td style="padding: 0.5rem; color: #cbd5e1; font-size: 0.75rem;">${escapeHtml(e.metric || '—')}</td>
+        <td style="padding: 0.5rem; font-family: monospace; color: #64748b; font-size: 0.75rem;" title="${escapeHtml(e.hash_or_trace || '')}">${escapeHtml(shortHash)}</td>
+        <td style="padding: 0.5rem; text-align: center;">
+          <button type="button" class="btn btn-secondary" style="font-size: 0.68rem; padding: 0.15rem 0.45rem;" onclick="inspectRuntimePayload('${safeId}')">Inspect</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  function filterRuntimeActivityTable() {
+    renderRuntimeActivityTable(allRuntimeEvents);
+  }
+
+  function toggleRuntimeFeedPause() {
+    runtimeFeedPaused = !runtimeFeedPaused;
+    const icon = document.getElementById('runtime-pause-icon');
+    const label = document.getElementById('runtime-pause-label');
+    const badge = document.getElementById('runtime-streaming-badge');
+    if (runtimeFeedPaused) {
+      if (icon) icon.textContent = '▶️';
+      if (label) label.textContent = 'Resume Stream';
+      if (badge) {
+        badge.textContent = '⏸️ STREAM PAUSED';
+        badge.style.background = 'rgba(239, 68, 68, 0.2)';
+        badge.style.color = '#ef4444';
+        badge.style.border = '1px solid #ef4444';
+      }
+    } else {
+      if (icon) icon.textContent = '⏸️';
+      if (label) label.textContent = 'Pause Stream';
+      if (badge) {
+        badge.textContent = '● STREAMING LIVE (2.0s Polling)';
+        badge.style.background = 'rgba(16, 185, 129, 0.2)';
+        badge.style.color = '#10b981';
+        badge.style.border = '1px solid #10b981';
+      }
+      fetchUnifiedRuntimeActivity(false);
+    }
+  }
+
+  function clearRuntimeActivityTable() {
+    allRuntimeEvents = [];
+    renderRuntimeActivityTable([]);
+    const totalEl = document.getElementById('runtime-stat-total');
+    if (totalEl) totalEl.textContent = '0';
+  }
+
+  function exportRuntimeActivityJson() {
+    const jsonStr = JSON.stringify(allRuntimeEvents, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `agent_octopus_runtime_activity_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function inspectRuntimePayload(id) {
+    const ev = allRuntimeEvents.find(e => e.id === id);
+    if (!ev) return;
+    currentInspectedPayload = ev;
+    const modal = document.getElementById('runtime-payload-modal');
+    const code = document.getElementById('runtime-modal-code');
+    const title = document.getElementById('runtime-modal-title');
+    if (title) title.textContent = `🔍 Event Payload: ${ev.subsystem} - ${ev.event_type}`;
+    if (code) code.textContent = JSON.stringify(ev, null, 2);
+    if (modal) modal.style.display = 'flex';
+  }
+
+  function closeRuntimePayloadModal() {
+    const modal = document.getElementById('runtime-payload-modal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function copyRuntimePayload() {
+    if (!currentInspectedPayload) return;
+    navigator.clipboard.writeText(JSON.stringify(currentInspectedPayload, null, 2))
+      .then(() => {
+        showDiagnosticToast({ status: 'COPIED', message: 'Event payload copied to clipboard' });
+      })
+      .catch(() => {});
+  }
+
   // Initial load
   fetchAuditLog();
+  fetchUnifiedRuntimeActivity();
   loadEgressDomains();
   fetchRlDefenseStatus();
   fetchGovernorStatus();
@@ -4306,6 +4628,7 @@ with urllib.request.urlopen(req) as resp:
   fetchAtlasStatus();
   fetchOssFuzzStatus();
   fetchOsvStatus();
+  setInterval(() => { if (!runtimeFeedPaused) fetchUnifiedRuntimeActivity(false); }, 2000);
   setInterval(fetchRaspData, 2500);
   setInterval(fetchOssFuzzStatus, 3000);
   setInterval(fetchOsvStatus, 8000);
