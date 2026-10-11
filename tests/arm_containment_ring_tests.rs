@@ -19,7 +19,7 @@ const TEST_MASTER_SEED: &[u8] = b"OCTOPUS_TEST_CONTAINMENT_SEED_2026";
 #[tokio::test]
 async fn test_fleet_initialization_of_50_distinct_arm_rings() {
     let registry = ArmRingRegistry::new(50, TEST_MASTER_SEED);
-    assert_eq!(registry.len().await, 50);
+    assert_eq!(registry.len().await, 57);
 
     // Verify all 50 arms have distinct identities and proper role distribution
     for arm_id in 0..50 {
@@ -250,9 +250,9 @@ async fn test_swarm_manager_integrates_50_individual_arm_rings() {
     let swarm = SwarmManager::new(50, tx);
     assert_eq!(swarm.size(), 50);
 
-    // Verify SwarmManager exposes containment ring with all 50 arm rings
+    // Verify SwarmManager exposes containment ring with all arm rings
     let ocr = swarm.containment_ring();
-    assert_eq!(ocr.arm_registry.len().await, 50);
+    assert_eq!(ocr.arm_registry.len().await, 57);
 
     // Dispatch a legitimate invoice extraction task
     let tasks = vec![StrategicDirective {

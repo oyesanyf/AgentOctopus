@@ -316,6 +316,7 @@ impl CedarGate {
                 ArmRole::VulnerabilityResearch => "vulnerability_arm",
                 ArmRole::ContinuousOssFuzz => "oss_fuzz_arm",
                 ArmRole::ContinuousOsvScanner => "osv_scanner_arm",
+                ArmRole::DifferentialProtocolAnalyzer => "protocol_analyzer_arm",
             }
         };
 

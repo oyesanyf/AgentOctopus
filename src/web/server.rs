@@ -13,9 +13,11 @@ use super::api::{
     handle_runtime_activity_stream,
     handle_containment_rings, handle_containment_ring_sever, handle_containment_ring_regenerate,
     handle_containment_ring_stale_replay, handle_sentinel_simulate_breach, handle_sentinel_reset_lockdown,
+    handle_protocol_analyzer_status, handle_protocol_analyzer_events, handle_protocol_analyzer_analyze,
     WebState,
 };
 use super::static_files::INDEX_HTML;
+use super::strict_http::{validate_header, validate_complete_body};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -204,26 +206,71 @@ async fn handle_connection(
         }
     };
 
-    let headers_str = String::from_utf8_lossy(&total_buffer[..pos]).to_string();
-    let mut content_length = 0;
-    for line in headers_str.lines() {
-        if line.to_ascii_lowercase().starts_with("content-length:") {
-            if let Some(val) = line.split(':').nth(1) {
-                content_length = val.trim().parse::<usize>().unwrap_or(0);
-            }
+    let frame = match validate_header(&total_buffer[..pos]) {
+        Ok(frame) => frame,
+        Err(rejection) => {
+            eprintln!(
+                "[HTTP-SECURITY] blocked={} details={}",
+                rejection.signal.code(),
+                rejection.details
+            );
+            let resp = api_error_response(
+                "400 Bad Request",
+                "HTTP_PROTOCOL_REJECTED",
+                "Invalid or ambiguous HTTP framing",
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+            let _ = stream.shutdown().await;
+            return Ok(());
         }
+    };
+
+    for signal in &frame.signals {
+        eprintln!(
+            "[HTTP-SECURITY] anomaly={} action=observe",
+            signal.code()
+        );
     }
+
+    let diff_report = state.protocol_analyzer.evaluate_raw_stream(&total_buffer[..pos]).await;
+    if diff_report.action == crate::security::differential_protocol::DifferentialAction::QuarantineAndSever {
+        eprintln!(
+            "[DIFFERENTIAL-SECURITY] blocked={} verdict={} score={:.2} arm_quarantine={:?}",
+            diff_report.report_id,
+            diff_report.primary_verdict,
+            diff_report.divergence_vector.novelty_score,
+            diff_report.quarantined_in_arm
+        );
+        let resp = api_error_response(
+            "400 Bad Request",
+            "DIFFERENTIAL_ANOMALY_QUARANTINED",
+            "Novel HTTP framing / desync anomaly detected and quarantined in Ring 1 sandbox",
+        );
+        let _ = stream.write_all(resp.as_bytes()).await;
+        let _ = stream.shutdown().await;
+        return Ok(());
+    }
+
+    let content_length = frame.content_length;
     let body_start = pos + 4;
-    let max_content_length = 10 * 1024 * 1024; // 10MB limit
+    let max_content_length = 10 * 1024 * 1024;
     if content_length > max_content_length {
-        let resp = api_error_response("413 Payload Too Large", "PAYLOAD_TOO_LARGE", "Request payload exceeds 10MB limit");
+        let resp = api_error_response(
+            "413 Payload Too Large",
+            "PAYLOAD_TOO_LARGE",
+            "Request payload exceeds 10MB limit",
+        );
         let _ = stream.write_all(resp.as_bytes()).await;
         let _ = stream.flush().await;
-        // Drain incoming bytes into stack buffer so client's send pipeline does not abort prematurely
         let mut drain_buf = [0u8; 65536];
         let mut drained = total_buffer.len().saturating_sub(body_start);
         while drained < content_length {
-            match tokio::time::timeout(std::time::Duration::from_millis(150), stream.read(&mut drain_buf)).await {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(150),
+                stream.read(&mut drain_buf),
+            )
+            .await
+            {
                 Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
                 Ok(Ok(n)) => {
                     drained += n;
@@ -236,13 +283,20 @@ async fn handle_connection(
 
     let mut current_body_len = total_buffer.len().saturating_sub(body_start);
     while current_body_len < content_length {
-        let read_res = tokio::time::timeout(std::time::Duration::from_secs(10), stream.read(&mut chunk)).await;
+        let read_res = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            stream.read(&mut chunk),
+        )
+        .await;
         let n = match read_res {
             Ok(Ok(n)) => n,
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => {
-                // Body read timed out
-                let resp = api_error_response("408 Request Timeout", "REQUEST_TIMEOUT", "Timed out waiting for HTTP request body");
+                let resp = api_error_response(
+                    "408 Request Timeout",
+                    "REQUEST_TIMEOUT",
+                    "Timed out waiting for HTTP request body",
+                );
                 let _ = stream.write_all(resp.as_bytes()).await;
                 let _ = stream.flush().await;
                 return Ok(());
@@ -255,11 +309,31 @@ async fn handle_connection(
         current_body_len += n;
     }
 
+    if let Err(rejection) = validate_complete_body(
+        total_buffer.len().saturating_sub(body_start),
+        content_length,
+    ) {
+        eprintln!(
+            "[HTTP-SECURITY] blocked={} details={}",
+            rejection.signal.code(),
+            rejection.details
+        );
+        let resp = api_error_response(
+            "400 Bad Request",
+            "HTTP_BOUNDARY_REJECTED",
+            "HTTP request boundary mismatch",
+        );
+        let _ = stream.write_all(resp.as_bytes()).await;
+        let _ = stream.shutdown().await;
+        return Ok(());
+    }
+
     let request_str = String::from_utf8_lossy(&total_buffer);
     let (head, body) = match request_str.split_once("\r\n\r\n") {
         Some((h, b)) => (h, b),
         None => (request_str.as_ref(), ""),
     };
+    let headers_str = head;
 
     let mut lines = head.lines();
     let request_line = lines.next().unwrap_or("");
@@ -579,6 +653,48 @@ async fn handle_connection(
             let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_kernel_stats(&state))) {
                 Ok(body) => ("200 OK", body),
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/kernel-stats")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/protocol-analyzer/status") => {
+            let (status_code, json_body) = match handle_protocol_analyzer_status(&state).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/protocol-analyzer/events") => {
+            let (status_code, json_body) = match handle_protocol_analyzer_events(&state).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/protocol-analyzer/analyze") => {
+            let (status_code, json_body) = match handle_protocol_analyzer_analyze(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

@@ -793,3 +793,200 @@ fn test_cedar_engine_panic_boundary_and_malformed_context() {
 }
 
 
+
+
+#[test]
+fn test_secret_rotation_entropy_and_rollback() {
+    let initial_secret = b"INITIAL_SECRET_32_BYTES_FOR_AUTH";
+    let mut gateway = CedarAuthorizationGateway::new(initial_secret, "cedar_policy_v1");
+
+    assert_eq!(gateway.active_epoch().generation, 1);
+    assert!(gateway.previous_epoch().is_none());
+
+    // 1. Rejects empty secret
+    let err_empty = gateway.rotate_secret(b"", "cedar_policy_v1");
+    assert!(err_empty.is_err(), "Must reject empty secret key");
+
+    // 2. Rejects secret with insufficient entropy (< 32 bytes)
+    let err_short = gateway.rotate_secret(b"too_short_secret", "cedar_policy_v1");
+    assert!(err_short.is_err(), "Must reject secret under 32 bytes");
+
+    // 3. Rejects identical secret (idempotency violation)
+    let err_identical = gateway.rotate_secret(initial_secret, "cedar_policy_v1");
+    assert!(err_identical.is_err(), "Must reject identical secret");
+
+    // 4. Successful rotation
+    let new_secret = b"NEW_ROTATED_SECRET_32_BYTES_KEY1";
+    let rotate_res = gateway.rotate_secret(new_secret, "cedar_policy_v1");
+    assert!(rotate_res.is_ok());
+    assert_eq!(gateway.active_epoch().generation, 2);
+    assert!(gateway.previous_epoch().is_some());
+    assert_eq!(gateway.previous_epoch().unwrap().generation, 1);
+
+    // 5. Rollback to previous epoch
+    let rollback_res = gateway.rollback_secret();
+    assert!(rollback_res.is_ok());
+    assert_eq!(gateway.active_epoch().generation, 3);
+    assert_eq!(gateway.active_epoch().secret, initial_secret.to_vec());
+    assert!(gateway.previous_epoch().is_none());
+
+    // 6. Secondary rollback fails safely (fail closed: no previous epoch)
+    let second_rollback = gateway.rollback_secret();
+    assert!(second_rollback.is_err(), "Second rollback must fail closed");
+}
+
+#[test]
+fn test_secret_rotation_grace_period_dual_verification() {
+    let secret_a = b"SECRET_A_INITIAL_32_BYTES_KEY_01";
+    let secret_b = b"SECRET_B_ROTATED_32_BYTES_KEY_02";
+    let mut gateway = CedarAuthorizationGateway::new(secret_a, "cedar_policy_v1");
+
+    // Issue supervisor approval receipt with Secret A
+    let receipt = gateway.issue_supervisor_approval(
+        "security_supervisor",
+        "ledger_arm",
+        "corporate_ledger",
+        100000,
+        300,
+    ).unwrap();
+
+    // Issue capability token with Secret A
+    let token = gateway.auth_engine().issue_capability(
+        "security_supervisor",
+        "ledger_arm",
+        ArmRole::AccountingLedgerWrite,
+        "ledger_writer",
+        "corporate_ledger",
+    );
+
+    // Rotate to Secret B
+    gateway.rotate_secret(secret_b, "cedar_policy_v1").unwrap();
+
+    // Verify supervisor approval receipt still passes under grace period
+    let verify_receipt = gateway.verify_supervisor_approval(
+        &receipt,
+        "ledger_arm",
+        "corporate_ledger",
+        50000,
+    );
+    assert!(verify_receipt.is_ok(), "Supervisor approval must pass during 300s grace window");
+
+    // Verify capability invocation still passes under grace period
+    let verdict = gateway.authorize_tool_invocation_with_approval(
+        &token,
+        "ledger_arm",
+        "ledger_writer",
+        "corporate_ledger",
+        json!({
+            "amount_cents": 50000,
+            "approved": true
+        }),
+        Some(&receipt),
+    );
+    assert!(verdict.is_ok(), "Capability token must pass during 300s grace window: {:?}", verdict.err());
+
+    // Revoke token; verify revocation persists across subsequent rotation
+    gateway.auth_engine().revoke_token(&token.token_id);
+    let secret_c = b"SECRET_C_ROTATED_32_BYTES_KEY_03";
+    gateway.rotate_secret(secret_c, "cedar_policy_v1").unwrap();
+
+    let revoked_verdict = gateway.authorize_tool_invocation_with_approval(
+        &token,
+        "ledger_arm",
+        "ledger_writer",
+        "corporate_ledger",
+        json!({
+            "amount_cents": 50000,
+            "approved": true
+        }),
+        Some(&receipt),
+    );
+    assert!(revoked_verdict.is_err(), "Revoked token must remain revoked across rotations");
+}
+
+#[tokio::test]
+async fn test_rfc3986_atlas_version_and_egress_hardening() {
+    use agent_octopus::security::atlas_arm::atlas_sync::{validate_atlas_version, AtlasSyncManager};
+    use agent_octopus::containment_ring::egress_proxy::{EgressProxy, EgressRequest, EgressSecurityLevel};
+
+    // 1. Strict ISO Calendar Version Formatting
+    assert!(validate_atlas_version("2026.02"), "Valid YYYY.MM");
+    assert!(validate_atlas_version("2024.12-stix2.1"), "Valid YYYY.MM with tag");
+    assert!(!validate_atlas_version("2026.2"), "Single-digit month must be rejected");
+    assert!(!validate_atlas_version("26.02"), "2-digit year must be rejected");
+    assert!(!validate_atlas_version("+2026.02"), "Leading signs must be rejected");
+    assert!(!validate_atlas_version("2023.12"), "Year before 2024 must be rejected");
+    assert!(!validate_atlas_version("2031.01"), "Year after 2030 must be rejected");
+    assert!(!validate_atlas_version("2026.00"), "Month 00 must be rejected");
+    assert!(!validate_atlas_version("2026.13"), "Month 13 must be rejected");
+
+    // 2. MITRE ATLAS Provenance URL Anchoring and Port Validation
+    let sync_mgr = AtlasSyncManager::default();
+    let golden_payload = agent_octopus::security::atlas_arm::EMBEDDED_GOLDEN_STIX.as_bytes();
+
+    // Release assets with anchored prefix succeeds
+    let valid_asset = sync_mgr.verify_and_ingest(
+        "https://release-assets.githubusercontent.com/mitre-atlas/atlas-data/stix-atlas.json",
+        "2026.09",
+        golden_payload,
+        None,
+    );
+    assert!(valid_asset.is_ok(), "Anchored release asset URL must succeed");
+
+    // Release assets without anchored prefix (path traversal/subpath trick) fails
+    let unanchored_asset = sync_mgr.verify_and_ingest(
+        "https://release-assets.githubusercontent.com/attacker/repo/mitre-atlas/atlas-data/stix-atlas.json",
+        "2026.09",
+        golden_payload,
+        None,
+    );
+    assert!(unanchored_asset.is_err(), "Unanchored release asset URL must be rejected");
+
+    // Embedded userinfo credentials fails
+    let creds_asset = sync_mgr.verify_and_ingest(
+        "https://admin:secret@release-assets.githubusercontent.com/mitre-atlas/atlas-data/stix-atlas.json",
+        "2026.09",
+        golden_payload,
+        None,
+    );
+    assert!(creds_asset.is_err(), "Embedded credentials must be rejected");
+
+    // Non-443 port fails
+    let port_asset = sync_mgr.verify_and_ingest(
+        "https://release-assets.githubusercontent.com:8443/mitre-atlas/atlas-data/stix-atlas.json",
+        "2026.09",
+        golden_payload,
+        None,
+    );
+    assert!(port_asset.is_err(), "Non-standard port must be rejected");
+
+    // 3. Egress Proxy Anti-SSRF and IPv6 Loopback Protection
+    let (proxy, _token) = EgressProxy::new_for_audit(EgressSecurityLevel::StrictGoogleOnly);
+
+    // IPv6 Loopback literal
+    let req_v6 = EgressRequest {
+        agent_id: "agent_1".to_string(),
+        target_url: "https://[::1]/secret".to_string(),
+        method: "GET".to_string(),
+        payload: None,
+    };
+    assert!(proxy.dispatch_egress(&req_v6).await.is_err(), "IPv6 [::1] must be blocked");
+
+    // IPv4-mapped IPv6 loopback
+    let req_v4_mapped = EgressRequest {
+        agent_id: "agent_1".to_string(),
+        target_url: "https://[::ffff:127.0.0.1]/secret".to_string(),
+        method: "GET".to_string(),
+        payload: None,
+    };
+    assert!(proxy.dispatch_egress(&req_v4_mapped).await.is_err(), "IPv4-mapped [::ffff:127.0.0.1] must be blocked");
+
+    // Userinfo credentials in egress URL
+    let req_creds = EgressRequest {
+        agent_id: "agent_1".to_string(),
+        target_url: "https://user:pass@google.com/search".to_string(),
+        method: "GET".to_string(),
+        payload: None,
+    };
+    assert!(proxy.dispatch_egress(&req_creds).await.is_err(), "Userinfo credentials in egress must be blocked");
+}

@@ -7,6 +7,7 @@ pub mod capabilities;
 pub mod cedar_arm;
 pub mod continuous_eval;
 pub mod delegation;
+pub mod differential_protocol;
 pub mod governor;
 pub mod guard_arms;
 pub mod identity;
@@ -35,6 +36,10 @@ pub use capabilities::{CapabilityToken, ExternalAuthorizationEngine};
 pub use cedar_arm::{CedarAuthorizationGateway, CedarPolicyEngine, CedarSchema};
 pub use continuous_eval::{ContinuousCycleReport, ContinuousEvaluationEngine, ContinuousProbeResult};
 pub use delegation::DelegationScopeGuard;
+pub use differential_protocol::{
+    DifferentialAction, DifferentialAnalysisReport, DifferentialEngineStats,
+    DifferentialProtocolEngine, DivergenceVector,
+};
 pub use governor::{
     spawn_continuous_governor, ContinuousGovernorHandle, GovernorCommand, GovernorConfig,
     GovernorError, GovernorStage, IncidentRecord, KernelEventKind, OperationalMetricsSummary,

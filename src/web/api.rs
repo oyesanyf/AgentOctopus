@@ -71,6 +71,7 @@ pub struct WebState {
     pub osv_scanner_arm: Arc<crate::security::osv_scanner_arm::ContinuousOsvScannerArm>,
     pub arm_rings: Arc<crate::containment_ring::ArmRingRegistry>,
     pub sentinel: Arc<crate::sentinel_ring::SentinelSupervisor>,
+    pub protocol_analyzer: Arc<crate::security::differential_protocol::DifferentialProtocolEngine>,
 }
 
 fn load_or_init_egress_domains() -> Vec<String> {
@@ -196,6 +197,7 @@ impl Default for WebState {
             osv_scanner_arm,
             arm_rings,
             sentinel,
+            protocol_analyzer: Arc::new(crate::security::differential_protocol::DifferentialProtocolEngine::new()),
         }
     }
 }
@@ -1879,6 +1881,42 @@ pub async fn handle_sentinel_reset_lockdown(
         }
         Err(e) => Err(json_error_payload("RECOVERY_DENIED", &format!("{}", e))),
     }
+}
+
+pub async fn handle_protocol_analyzer_status(state: &WebState) -> Result<String, String> {
+    let stats = state.protocol_analyzer.get_stats();
+    Ok(serde_json::to_string_pretty(&stats).unwrap_or_else(|_| "{}".to_string()))
+}
+
+pub async fn handle_protocol_analyzer_events(state: &WebState) -> Result<String, String> {
+    let reports = state.protocol_analyzer.get_recent_reports().await;
+    let desync_events = state.protocol_analyzer.correlator().get_events().await;
+    Ok(json!({
+        "error": false,
+        "reports": reports,
+        "desync_events": desync_events,
+        "total_reports": reports.len(),
+        "total_desync_events": desync_events.len()
+    }).to_string())
+}
+
+#[derive(Deserialize)]
+struct AnalyzePayloadReq {
+    raw_http: String,
+}
+
+pub async fn handle_protocol_analyzer_analyze(
+    state: &WebState,
+    body: &str,
+) -> Result<String, String> {
+    let req: AnalyzePayloadReq = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_JSON", &format!("Invalid JSON request: {}", e))
+    })?;
+
+    let unescaped = req.raw_http.replace("\\r\\n", "\r\n").replace("\\n", "\n");
+    let report = state.protocol_analyzer.evaluate_raw_stream(unescaped.as_bytes()).await;
+
+    Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
 }
 
 #[cfg(test)]

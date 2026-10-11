@@ -243,6 +243,12 @@ impl ArmContainmentRing {
                 prefixes.push("osv://".to_string());
                 prefixes.push("advisories://".to_string());
             }
+            ArmRole::DifferentialProtocolAnalyzer => {
+                tools.insert("protocol_analyzer".to_string());
+                tools.insert("fuzz_divergence".to_string());
+                prefixes.push("protocol://".to_string());
+                prefixes.push("differential://".to_string());
+            }
         }
 
         Self {
@@ -671,6 +677,7 @@ impl ArmRingRegistry {
             (103, ArmRole::VulnerabilityResearch),
             (104, ArmRole::ContinuousOssFuzz),
             (105, ArmRole::ContinuousOsvScanner),
+            (106, ArmRole::DifferentialProtocolAnalyzer),
         ];
         for (sec_id, sec_role) in security_arm_roles {
             let sec_ring = Arc::new(ArmContainmentRing::new(sec_id, sec_role, 1, &seed));

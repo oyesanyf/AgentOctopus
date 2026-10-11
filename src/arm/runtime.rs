@@ -451,6 +451,7 @@ impl ArmRuntime {
             ArmRole::VulnerabilityResearch => ("vulnerability_scanner", Operation::MeshMessage),
             ArmRole::ContinuousOssFuzz => ("fuzz_mutator", Operation::MeshMessage),
             ArmRole::ContinuousOsvScanner => ("osv_client", Operation::MeshMessage),
+            ArmRole::DifferentialProtocolAnalyzer => ("protocol_analyzer", Operation::MeshMessage),
         };
 
         let amount_cents = self.extract_amount_cents(raw_payload);
