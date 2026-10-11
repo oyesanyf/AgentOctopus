@@ -47,3 +47,4 @@ pub use security::{
 };
 pub use swarm::{SwarmBatchSummary, SwarmManager};
 pub use telemetry::{AnomalyDetector, WatchdogSupervisor};
+pub use web::{start_web_server, static_files::INDEX_HTML};
