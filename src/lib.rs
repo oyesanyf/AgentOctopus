@@ -1,6 +1,7 @@
 pub mod adversary;
 pub mod arm;
 pub mod brain;
+pub mod containment_ring;
 pub mod core;
 pub mod deterministic;
 pub mod enclave;
@@ -10,6 +11,7 @@ pub mod quantum;
 pub mod security;
 pub mod swarm;
 pub mod telemetry;
+pub mod sentinel_ring;
 pub mod web;
 
 pub use adversary::{
@@ -17,6 +19,15 @@ pub use adversary::{
 };
 pub use arm::ArmRuntime;
 pub use brain::CentralBrain;
+pub use containment_ring::{
+    ArmContainmentRing, ArmRingConfig, ArmRingMeshMessage, ArmRingRegistry, AuditEvent, Authorizer,
+    BoxFuture, BudgetQuota, CapabilityGate, CedarAuthorizer, CedarGate, ContainmentRing,
+    EgressProxy, EgressRequest, EgressResponse, EgressSecurityLevel, EnclaveToolExecutor,
+    IdentityGate, IsolationManager, MeshGuard, Operation, PolicyAttestationRecord, ResourceGuard,
+    RingAttestation, RingAuditEntry, RingAuditLedger, RingConfig, RingController, RingDecision,
+    RingError, RingOperationRequest, RingRequest, SandboxConstraints, ToolExecutor,
+    TrustedArmHandle,
+};
 pub use core::circuit_breaker::KillSwitch;
 pub use core::merkle::{
     hash_leaf, hash_nodes, verify_execution_step, DatasetMerkleTree, Direction,

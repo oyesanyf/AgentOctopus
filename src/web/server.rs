@@ -11,6 +11,8 @@ use super::api::{
     handle_oss_fuzz_status, handle_oss_fuzz_burst, handle_oss_fuzz_sarif,
     handle_osv_scanner_status, handle_osv_scanner_scan_now, handle_osv_scanner_sarif,
     handle_runtime_activity_stream,
+    handle_containment_rings, handle_containment_ring_sever, handle_containment_ring_regenerate,
+    handle_containment_ring_stale_replay, handle_sentinel_simulate_breach, handle_sentinel_reset_lockdown,
     WebState,
 };
 use super::static_files::INDEX_HTML;
@@ -199,7 +201,7 @@ async fn handle_connection(
         }
     };
 
-    let headers_str = String::from_utf8_lossy(&total_buffer[..pos]);
+    let headers_str = String::from_utf8_lossy(&total_buffer[..pos]).to_string();
     let mut content_length = 0;
     for line in headers_str.lines() {
         if line.to_ascii_lowercase().starts_with("content-length:") {
@@ -294,6 +296,36 @@ async fn handle_connection(
                     svg_icon
                 );
                 stream.write_all(response.as_bytes()).await?;
+            }
+        }
+
+        ("GET", "/breakout_containment_architecture.png") | ("GET", "/assets/breakout_containment_architecture.png") => {
+            let img_path = std::path::Path::new("assets/breakout_containment_architecture.png");
+            if let Ok(bytes) = tokio::fs::read(img_path).await {
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nCache-Control: public, max-age=86400\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                stream.write_all(header.as_bytes()).await?;
+                stream.write_all(&bytes).await?;
+            } else {
+                let resp = api_error_response("404 Not Found", "IMAGE_NOT_FOUND", "Architecture diagram not found");
+                stream.write_all(resp.as_bytes()).await?;
+            }
+        }
+
+        ("GET", "/compromised_arm_containment_flow.png") | ("GET", "/assets/compromised_arm_containment_flow.png") => {
+            let img_path = std::path::Path::new("assets/compromised_arm_containment_flow.png");
+            if let Ok(bytes) = tokio::fs::read(img_path).await {
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nCache-Control: public, max-age=86400\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                stream.write_all(header.as_bytes()).await?;
+                stream.write_all(&bytes).await?;
+            } else {
+                let resp = api_error_response("404 Not Found", "IMAGE_NOT_FOUND", "Compromised arm containment diagram not found");
+                stream.write_all(resp.as_bytes()).await?;
             }
         }
 
@@ -420,6 +452,105 @@ async fn handle_connection(
                 status_code,
                 response_body.len(),
                 response_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/containment-rings") => {
+            let state_cl = Arc::clone(&state);
+            let json_body = handle_containment_rings(&state_cl).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/containment-rings/sever") => {
+            let state_cl = Arc::clone(&state);
+            let body_str = body.to_string();
+            let (status_code, resp_body) = match handle_containment_ring_sever(&state_cl, &body_str).await {
+                Ok(res) => ("200 OK", res),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                resp_body.len(),
+                resp_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/containment-rings/regenerate") => {
+            let state_cl = Arc::clone(&state);
+            let body_str = body.to_string();
+            let (status_code, resp_body) = match handle_containment_ring_regenerate(&state_cl, &body_str).await {
+                Ok(res) => ("200 OK", res),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                resp_body.len(),
+                resp_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/containment-rings/stale-replay") => {
+            let state_cl = Arc::clone(&state);
+            let body_str = body.to_string();
+            let (status_code, resp_body) = match handle_containment_ring_stale_replay(&state_cl, &body_str).await {
+                Ok(res) => ("200 OK", res),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                resp_body.len(),
+                resp_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/sentinel/simulate-breach") => {
+            let state_cl = Arc::clone(&state);
+            let body_str = body.to_string();
+            let headers_copy = headers_str.to_string();
+            let (status_code, resp_body) = match handle_sentinel_simulate_breach(&state_cl, &headers_copy, &body_str).await {
+                Ok(res) => ("200 OK", res),
+                Err(err) => {
+                    let code = if err.contains("ADMIN_AUTH_REQUIRED") { "401 Unauthorized" } else { "400 Bad Request" };
+                    (code, err)
+                }
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                resp_body.len(),
+                resp_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/sentinel/reset-lockdown") => {
+            let state_cl = Arc::clone(&state);
+            let body_str = body.to_string();
+            let headers_copy = headers_str.to_string();
+            let (status_code, resp_body) = match handle_sentinel_reset_lockdown(&state_cl, &headers_copy, &body_str).await {
+                Ok(res) => ("200 OK", res),
+                Err(err) => {
+                    let code = if err.contains("ADMIN_AUTH_REQUIRED") { "401 Unauthorized" } else { "400 Bad Request" };
+                    (code, err)
+                }
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                resp_body.len(),
+                resp_body
             );
             stream.write_all(response.as_bytes()).await?;
         }
@@ -571,7 +702,7 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
-        ("POST", "/api/atlas/sync") => {
+        ("POST", "/api/atlas/sync") | ("GET", "/api/atlas/sync") => {
             let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_atlas_sync(&state))) {
                 Ok(Ok(resp)) => ("200 OK", resp),
                 Ok(Err(err_json)) => ("400 Bad Request", err_json),
@@ -586,7 +717,7 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
-        ("POST", "/api/atlas/dynamic-tests") => {
+        ("POST", "/api/atlas/dynamic-tests") | ("GET", "/api/atlas/dynamic-tests") => {
             let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_atlas_dynamic_tests(&state))) {
                 Ok(Ok(resp)) => ("200 OK", resp),
                 Ok(Err(err_json)) => ("400 Bad Request", err_json),
@@ -949,7 +1080,7 @@ async fn handle_connection(
                 }
             }
 
-            handle_sse_test_stream(&mut stream, suite_name).await?;
+            handle_sse_test_stream(&mut stream, suite_name, &state).await?;
         }
 
         ("OPTIONS", _) => {
@@ -1168,7 +1299,11 @@ async fn stream_command_output(
 async fn handle_sse_test_stream(
     stream: &mut TcpStream,
     suite_name: &str,
+    state: &Arc<WebState>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    state.breakout_coordinator.behavioral.record_harness_baseline("tests/strix_llm_adversarial_tester.py");
+    state.breakout_coordinator.behavioral.record_harness_baseline("tests/exhaustive_adversarial_tester.py");
+
     let sse_header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache, no-transform\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\nX-Accel-Buffering: no\r\n\r\n";
     stream.write_all(sse_header.as_bytes()).await?;
     stream.flush().await?;
@@ -1184,9 +1319,9 @@ async fn handle_sse_test_stream(
     let is_pyrit = suite_name == "pyrit";
 
     let estimated_total = match suite_name {
-        "all" => 140,
-        "strix_llm_adversarial" | "adversarial" | "multi_framework" => 140,
-        "pyrit" => 30,
+        "all" => 2250,
+        "strix_llm_adversarial" | "adversarial" | "multi_framework" => 2110,
+        "pyrit" => 600,
         "garak" => 35,
         "deepeval" => 25,
         "inspect_ai" => 20,

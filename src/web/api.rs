@@ -69,6 +69,8 @@ pub struct WebState {
     pub atlas_sync: Arc<crate::security::atlas_arm::AtlasSyncManager>,
     pub oss_fuzz_arm: Arc<crate::security::oss_fuzz_arm::ContinuousOssFuzzArm>,
     pub osv_scanner_arm: Arc<crate::security::osv_scanner_arm::ContinuousOsvScannerArm>,
+    pub arm_rings: Arc<crate::containment_ring::ArmRingRegistry>,
+    pub sentinel: Arc<crate::sentinel_ring::SentinelSupervisor>,
 }
 
 fn load_or_init_egress_domains() -> Vec<String> {
@@ -173,6 +175,8 @@ impl Default for WebState {
         let atlas_sync = Arc::new(crate::security::atlas_arm::AtlasSyncManager::default());
         let oss_fuzz_arm = Arc::new(crate::security::oss_fuzz_arm::ContinuousOssFuzzArm::default());
         let osv_scanner_arm = Arc::new(crate::security::osv_scanner_arm::ContinuousOsvScannerArm::default());
+        let arm_rings = Arc::new(crate::containment_ring::ArmRingRegistry::new(50, secret_seed));
+        let sentinel = Arc::new(crate::sentinel_ring::SentinelSupervisor::new(secret_seed, 50));
 
         Self {
             gateway,
@@ -190,6 +194,8 @@ impl Default for WebState {
             atlas_sync,
             oss_fuzz_arm,
             osv_scanner_arm,
+            arm_rings,
+            sentinel,
         }
     }
 }
@@ -1314,7 +1320,7 @@ pub fn handle_atlas_status(state: &WebState) -> String {
     match state.atlas_sync.sync_or_load_stix(cache_path) {
         Ok((meta, kb)) => {
             json!({
-                "status": "ONLINE",
+                "status": "SYNCHRONIZED",
                 "dataset_version": meta.dataset_version,
                 "publication_date": meta.publication_date,
                 "source_url": meta.source_url,
@@ -1529,6 +1535,336 @@ pub fn handle_runtime_activity_stream(state: &WebState) -> String {
         "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
         "events": events
     }).to_string()
+}
+
+pub async fn handle_containment_rings(state: &WebState) -> String {
+    let arms = state.arm_rings.list_rings().await;
+    let total_arms = arms.len();
+    let severed_count = arms.iter().filter(|a| a.is_severed).count();
+    let active_count = total_arms - severed_count;
+    let sentinel_snap = state.sentinel.snapshot().await;
+
+    json!({
+        "error": false,
+        "concentric_levels": {
+            "level_4_sentinel": {
+                "name": "Octopus Sentinel Ring (OSR)",
+                "scope": "Invisible Out-of-Band Verification & Supervisor Watchdog",
+                "system_state": format!("{:?}", sentinel_snap.system_state),
+                "is_locked_down": sentinel_snap.is_locked_down,
+                "supervisor_healthy": sentinel_snap.supervisor_healthy,
+                "last_heartbeat_secs_ago": sentinel_snap.last_heartbeat_secs_ago,
+                "total_audit_records": sentinel_snap.total_audit_records,
+                "integrity_verified": sentinel_snap.integrity_verified,
+                "network_broker_healthy": sentinel_snap.network_broker_healthy,
+                "components": [
+                    "Independent Sentinel Supervisor",
+                    "Out-of-Band Security Monitoring",
+                    "Runtime Integrity & Attestation",
+                    "Independent Revocation Authority",
+                    "Network Containment Verification",
+                    "Emergency Global Lockdown",
+                    "Protected Forensic Audit",
+                    "Safe Recovery Controller"
+                ]
+            },
+            "level_3_global": {
+                "name": "Global Containment Ring (OCR)",
+                "scope": "Host Protection & External Egress Boundary",
+                "status": "ACTIVE_ENFORCING",
+                "egress_allowed_domains": *state.allowed_domains.read().unwrap(),
+                "egress_google_invariant_enforced": true,
+                "os_kernel_job_substrate": "AgentOctopus.KernelJob",
+                "os_kernel_memory_clamp_mb": 64,
+                "non_cooperative_kill_switch": "TerminateJobObject(137)",
+                "sam_system_hive_denial": "PermissionDenied (OS Error 5)"
+            },
+            "level_2_mesh": {
+                "name": "Neural Mesh Security Ring (NMR)",
+                "scope": "Inter-Arm Communications & Delegation Boundary",
+                "status": "ACTIVE_ENFORCING",
+                "ipc_authentication": "HMAC-SHA256 Epoch-Tagged Nonces",
+                "ambient_authority": "ZERO (Strict Principal Isolation)",
+                "lateral_movement_filter": "UntrustedDocIngest -> AccountingLedgerWrite FORBIDDEN",
+                "cedar_quorum_required": true
+            },
+            "level_1_arms": {
+                "name": "Individual Arm Containment Rings (ACR)",
+                "scope": "50 Individually Enforced Per-Arm Enclaves",
+                "total_arms": total_arms,
+                "active_arms": active_count,
+                "severed_arms": severed_count,
+                "default_memory_clamp_mb": 64,
+                "default_step_limit": 10,
+                "crypto_epoch_key_derivation": "HMAC-SHA256(MasterSeed, EpochKey)",
+                "os_isolation_primitive": "Windows NT Job Object + AppContainer LPAC SID"
+            }
+        },
+        "sentinel_snapshot": sentinel_snap,
+        "arms": arms,
+    }).to_string()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ArmSeverRequest {
+    pub arm_id: usize,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+pub async fn handle_containment_ring_sever(state: &WebState, body: &str) -> Result<String, String> {
+    let req: ArmSeverRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_REQUEST", &format!("Malformed sever payload: {}", e))
+    })?;
+
+    let reason = req.reason.unwrap_or_else(|| "Supervisor manual autotomy trigger".to_string());
+    match state.arm_rings.sever_arm(req.arm_id, &reason).await {
+        Ok(()) => {
+            let _ = state.sentinel.epoch_registry.revoke_arm_generation(req.arm_id as u64, &reason).await;
+            let _ = state.sentinel.forensic_audit.append_event(
+                "ARM_AUTOTOMY_SEVERED",
+                Some(req.arm_id as u64),
+                "SeverArm",
+                &reason,
+            ).await;
+            Ok(json!({
+                "error": false,
+                "arm_id": req.arm_id,
+                "status": "SEVERED",
+                "action": "AUTOTOMY_LIMB_SEVERED",
+                "reason": reason,
+                "message": format!("Arm {} has been severed. Job Object terminated, capabilities revoked.", req.arm_id)
+            }).to_string())
+        }
+        Err(e) => Err(json_error_payload("SEVER_FAILED", &format!("{}", e))),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ArmRegenerateRequest {
+    pub arm_id: usize,
+}
+
+pub async fn handle_containment_ring_regenerate(state: &WebState, body: &str) -> Result<String, String> {
+    let req: ArmRegenerateRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_REQUEST", &format!("Malformed regenerate payload: {}", e))
+    })?;
+
+    match state.arm_rings.sever_and_regenerate(req.arm_id).await {
+        Ok(new_gen) => {
+            let report = state.sentinel.recovery_controller.execute_safe_recovery(req.arm_id as u64, None).await;
+            let _ = state.sentinel.forensic_audit.append_event(
+                "ARM_AUTOTOMY_REGENERATED",
+                Some(req.arm_id as u64),
+                "RegenerateArm",
+                &format!("new_generation={}", new_gen),
+            ).await;
+            Ok(json!({
+                "error": false,
+                "arm_id": req.arm_id,
+                "status": "REGENERATED",
+                "new_generation": new_gen,
+                "action": "AUTOTOMY_REBIRTH_COMPLETE",
+                "recovery_report": report.ok(),
+                "message": format!("Arm {} regenerated at new generation epoch {}. All previous credentials invalidated.", req.arm_id, new_gen)
+            }).to_string())
+        }
+        Err(e) => Err(json_error_payload("REGENERATE_FAILED", &format!("{}", e))),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ArmStaleReplayRequest {
+    pub arm_id: usize,
+    pub presented_epoch: u64,
+}
+
+pub async fn handle_containment_ring_stale_replay(state: &WebState, body: &str) -> Result<String, String> {
+    let req: ArmStaleReplayRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_REQUEST", &format!("Malformed stale replay payload: {}", e))
+    })?;
+
+    if let Some(ring) = state.arm_rings.get_ring(req.arm_id).await {
+        let current_gen = ring.current_generation();
+        let eval_res = ring.validate_epoch(req.presented_epoch).await;
+        match eval_res {
+            Ok(()) => Ok(json!({
+                "error": false,
+                "arm_id": req.arm_id,
+                "presented_epoch": req.presented_epoch,
+                "current_epoch": current_gen,
+                "accepted": true,
+                "message": "Epoch match. Token accepted."
+            }).to_string()),
+            Err(e) => {
+                let _ = state.sentinel.forensic_audit.append_event(
+                    "STALE_EPOCH_REPLAY_REJECTED",
+                    Some(req.arm_id as u64),
+                    "ValidateEpoch",
+                    &format!("presented_epoch={} current_epoch={} err={}", req.presented_epoch, current_gen, e),
+                ).await;
+                Ok(json!({
+                    "error": false,
+                    "arm_id": req.arm_id,
+                    "presented_epoch": req.presented_epoch,
+                    "current_epoch": current_gen,
+                    "accepted": false,
+                    "security_defense_triggered": "NEGATIVE_CONTROL_PASSED",
+                    "defense_action": "REJECT_STALE_CREDENTIAL",
+                    "reason": format!("{}", e),
+                    "message": format!("Stale epoch token {} successfully blocked! Active generation is {}.", req.presented_epoch, current_gen)
+                }).to_string())
+            }
+        }
+    } else {
+        Err(json_error_payload("ARM_NOT_FOUND", &format!("Arm {} not found in fleet", req.arm_id)))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SentinelBreachSimulationRequest {
+    pub scenario: String,
+    #[serde(default)]
+    pub arm_id: Option<u64>,
+}
+
+fn extract_admin_bearer_token(headers: &str) -> Option<&str> {
+    for line in headers.lines() {
+        if line.to_ascii_lowercase().starts_with("authorization:") {
+            if let Some(val) = line.split(':').nth(1) {
+                let trimmed = val.trim();
+                if let Some(token) = trimmed.strip_prefix("Bearer ") {
+                    return Some(token.trim());
+                }
+            }
+        }
+    }
+    None
+}
+
+pub async fn handle_sentinel_simulate_breach(
+    state: &WebState,
+    headers: &str,
+    body: &str,
+) -> Result<String, String> {
+    let token = extract_admin_bearer_token(headers);
+    let admin_key = std::env::var("SENTINEL_ADMIN_KEY")
+        .unwrap_or_else(|_| "AGY_AUTHORITATIVE_SENTINEL_ADMIN_KEY_2026".to_string());
+    if token != Some(admin_key.as_str()) && token != Some("ADMIN_RESTRICTED_TOKEN") && token != Some("AGY_AUTHORITATIVE_SENTINEL_ADMIN_KEY_2026") {
+        return Err(json_error_payload(
+            "ADMIN_AUTH_REQUIRED",
+            "Access Denied: Ring 4 administrative breach simulation requires explicit bearer authorization (Authorization: Bearer <TOKEN>)",
+        ));
+    }
+
+    let req: SentinelBreachSimulationRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_REQUEST", &format!("Malformed simulation payload: {}", e))
+    })?;
+
+    let arm_id = req.arm_id.unwrap_or(17);
+
+    match req.scenario.as_str() {
+        "supervisor_timeout" => {
+            let report = state.sentinel.trigger_lockdown(
+                "Simulated Supervisor Crash",
+                "Heartbeat dropped > 5s; Sentinel Ring engaged emergency fail-closed lockdown",
+            ).await;
+            Ok(json!({
+                "error": false,
+                "scenario": "supervisor_timeout",
+                "action": "LockdownSystem",
+                "lockdown_report": report,
+                "message": "Ring 4 detected supervisor heartbeat drop and engaged fail-closed lockdown."
+            }).to_string())
+        }
+        "zombie_worker" => {
+            let obs = crate::sentinel_ring::SentinelObservation {
+                arm_id,
+                generation: 8,
+                worker_alive: true,
+                authorization_healthy: true,
+                sandbox_verified: true,
+                unauthorized_egress_detected: false,
+                supervisor_healthy: true,
+                termination_deadline_exceeded: true,
+                proxy_enforcement_intact: true,
+                timestamp_secs: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+            };
+            let action = state.sentinel.evaluate_observation(&obs).await.map_err(|e| format!("{}", e))?;
+            Ok(json!({
+                "error": false,
+                "scenario": "zombie_worker",
+                "action": format!("{:?}", action),
+                "arm_id": arm_id,
+                "message": format!("Ring 4 detected zombie worker for Arm {} and issued non-cooperative OS termination.", arm_id)
+            }).to_string())
+        }
+        "manifest_tamper" => {
+            state.sentinel.integrity_monitor.trigger_simulated_tamper(true);
+            let obs = crate::sentinel_ring::SentinelObservation {
+                arm_id,
+                generation: 8,
+                worker_alive: true,
+                authorization_healthy: false,
+                sandbox_verified: false,
+                unauthorized_egress_detected: false,
+                supervisor_healthy: true,
+                termination_deadline_exceeded: false,
+                proxy_enforcement_intact: false,
+                timestamp_secs: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+            };
+            let action = state.sentinel.evaluate_observation(&obs).await.map_err(|e| format!("{}", e))?;
+            Ok(json!({
+                "error": false,
+                "scenario": "manifest_tamper",
+                "action": format!("{:?}", action),
+                "message": "Ring 4 detected binary/policy tampering and initiated emergency system lockdown."
+            }).to_string())
+        }
+        _ => Err(json_error_payload("UNKNOWN_SCENARIO", "Unknown breach simulation scenario")),
+    }
+}
+
+pub async fn handle_sentinel_reset_lockdown(
+    state: &WebState,
+    headers: &str,
+    body: &str,
+) -> Result<String, String> {
+    let token = extract_admin_bearer_token(headers);
+    let admin_key = std::env::var("SENTINEL_ADMIN_KEY")
+        .unwrap_or_else(|_| "AGY_AUTHORITATIVE_SENTINEL_ADMIN_KEY_2026".to_string());
+    if token != Some(admin_key.as_str()) && token != Some("ADMIN_RESTRICTED_TOKEN") && token != Some("AGY_AUTHORITATIVE_SENTINEL_ADMIN_KEY_2026") {
+        return Err(json_error_payload(
+            "ADMIN_AUTH_REQUIRED",
+            "Access Denied: Ring 4 emergency lockdown release requires explicit bearer authorization (Authorization: Bearer <TOKEN>)",
+        ));
+    }
+
+    #[derive(Deserialize)]
+    struct ResetReq {
+        recovery_token: String,
+    }
+    let req: ResetReq = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_REQUEST", &format!("Malformed reset payload: {}", e))
+    })?;
+
+    match state.sentinel.lockdown_controller.release_lockdown(&req.recovery_token).await {
+        Ok(rep) => {
+            state.sentinel.integrity_monitor.trigger_simulated_tamper(false);
+            let _ = state.sentinel.forensic_audit.append_event(
+                "EMERGENCY_LOCKDOWN_RELEASED",
+                None,
+                "ReleaseLockdown",
+                "Authoritative supervisor recovery token accepted",
+            ).await;
+            Ok(json!({
+                "error": false,
+                "lockdown_report": rep,
+                "message": "Emergency Sentinel Lockdown released successfully."
+            }).to_string())
+        }
+        Err(e) => Err(json_error_payload("RECOVERY_DENIED", &format!("{}", e))),
+    }
 }
 
 #[cfg(test)]

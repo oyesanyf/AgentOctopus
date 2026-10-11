@@ -30,3 +30,7 @@ extract_paper.py
 .idea/
 Thumbs.db
 Desktop.ini
+
+# Compressed archives & agent subagent workspaces
+*.zip
+.agents/

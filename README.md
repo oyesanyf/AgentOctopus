@@ -30,6 +30,17 @@ Agent Octopus actively neutralizes the **Agentjacking Kill Chain** (DEFCON / Ten
 
 ## 🏛️ System Architecture
 
+<p align="center">
+  <img src="assets/breakout_containment_architecture.png" width="620" alt="Agent Octopus Breakout Containment Architecture" style="border-radius: 14px; box-shadow: 0 0 35px rgba(16, 185, 129, 0.35); border: 1px solid rgba(16, 185, 129, 0.4);" />
+</p>
+
+### 🛡️ The Containment Ring & Autonomous Breakout Isolation Law
+Agent Octopus enforces a **Zero Ambient Authority** architecture where cognitive reasoning is strictly decoupled from operational execution:
+1. **OCTOPUS Central Brain**: Coordinates strategic intent and synthesizes verified telemetry without holding ambient write, network egress, or OS execution capabilities.
+2. **8 Compartmentalized Arms (ARM 1 - ARM 8)**: Each arm executes within an isolated, sandboxed boundary (Wasmtime WebAssembly sandboxes, OS AppContainer isolation, and Windows Job Object memory clamps). No arm can perform cross-boundary operations without presenting an unforgeable, cryptographically signed capability token.
+3. **The Containment Ring**: A deterministic perimeter comprising AWS Cedar v4.13 zero-trust policies, SSRF egress gating, taint tracking, and immutable Merkle trace verification. If an arm is compromised by adversarial injection, the containment ring halts unauthorized tool calls at the boundary.
+4. **Independent Supervisor**: Operates completely out-of-band on a physically independent telemetry bus. If anomaly detectors, entropy monitors, or cryptographic mismatch detect breakout attempts, the supervisor trips dedicated autotomy circuit breakers, severing the compromised limb without requiring the arm's cooperation.
+
 ```mermaid
 flowchart TD
     User(["👤 Enterprise User / Upstream Agent"]) --> InputGateway["🌐 Gateway & Entry Point (Phase 1 Inspection)"]
@@ -55,7 +66,116 @@ flowchart TD
     TelemetryBus --> WebDashboard["⚡ Real-Time Web Dashboard (Dual-Stack 127.0.0.1:5005)"]
 ```
 
+### 🔒 Invariant Containment: What Happens When an Arm is Fully Compromised?
+
+<p align="center">
+  <img src="assets/compromised_arm_containment_flow.png" width="500" alt="Compromised Arm Containment Flow" style="border-radius: 12px; box-shadow: 0 0 25px rgba(56, 189, 248, 0.35); border: 1px solid rgba(56, 189, 248, 0.4);" />
+</p>
+
+Suppose an adversary completely compromises an Agent Octopus arm (e.g., via indirect prompt injection, multi-turn jailbreak, or remote code execution):
+1. **Compromised Agent Process**: The attacker attempts to invoke unauthorized tools, exfiltrate data, or pivot laterally.
+2. **Level 1 (Arm Ring)**: Scoped strictly to assigned tools and resources. If memory exceeds 64MB or child processes are spawned, the Windows Job Object clamps down at the NT kernel level.
+3. **Level 2 (Neural Mesh Ring)**: Inter-arm messages carry cryptographic epoch numbers. Untrusted ingestion limbs cannot message financial ledger sinks directly (zero ambient authority).
+4. **Level 3 (Global Host Ring)**: AWS Cedar v4.13 PARC evaluates declarative policy; EgressProxy blocks raw link-local metadata (169.254.169.254) and unapproved outbound destinations.
+5. **Autotomy Rebirth**: The supervisor severs the arm via `TerminateJobObject`, burns the compromised generation (e.g. Gen 8), and regenerates the limb at Gen 9. Any replayed Gen 8 messages are rejected immediately.
+
 ---
+
+## ⭕ The 3-Level Concentric Containment Ring Architecture
+
+Agent Octopus establishes **three concentric, independently enforced security boundaries** wrapping the swarm, neural mesh, and operating system:
+
+```mermaid
+flowchart TB
+    subgraph LEVEL3["LEVEL 3: GLOBAL HOST CONTAINMENT RING (Perimeter Outer Boundary)"]
+        direction TB
+        EgressProxy["🌐 Outbound Egress Proxy (Anti-SSRF & 169.254.169.254 Cloud Metadata Blocking)"]
+        CedarPARC["📐 AWS Cedar v4.13 Authorization Gate (Default-Deny Spending Ceiling)"]
+        JobSupervisor["🛡️ Out-of-Band Supervisor (Kernel JobObject Terminate Authority)"]
+
+        subgraph LEVEL2["LEVEL 2: NEURAL MESH SECURITY RING (Inter-Arm Trust Boundary)"]
+            direction TB
+            MeshRouteMediation["🔀 Route Mediation & Privilege Isolation (Zero Authority Inheritance)"]
+            EpochSigning["⚡ HMAC-SHA256 Epoch Verification & Anti-Replay Membrane"]
+
+            subgraph LEVEL1["LEVEL 1: INDIVIDUAL ARM CONTAINMENT RINGS (All 50 Autonomous Limbs)"]
+                direction LR
+                subgraph Arm0["Arm 0: Ingest Ring"]
+                    A0_OS["NT Job Object (64MB Clamp)"]
+                    A0_SID["AppContainer LPAC (Zero Net SIDs)"]
+                    A0_Epoch["Generation N Epoch"]
+                end
+                subgraph Arm1["Arm 1: Ledger Ring"]
+                    A1_OS["NT Job Object (64MB Clamp)"]
+                    A1_Scope["Role: AccountingLedgerWrite"]
+                    A1_Epoch["Generation N Epoch"]
+                end
+                subgraph Arm2["Arm 2: Net Egress Ring"]
+                    A2_OS["NT Job Object (64MB Clamp)"]
+                    A2_Scope["Role: NetworkEgress"]
+                    A2_Net["AppContainer internetClient"]
+                end
+                subgraph ArmN["Arms 3 - 49 Rings"]
+                    AN_OS["Independently Monitored Job Objects"]
+                    AN_Epoch["Individual Gen Epochs"]
+                end
+            end
+        end
+    end
+
+    User(["👤 Enterprise Ingestion"]) --> LEVEL3
+    LEVEL3 --> LEVEL2
+    LEVEL2 --> LEVEL1
+```
+
+### 🔬 Anatomy of an Individual Arm Containment Ring (ACR)
+
+Each arm in the 50-arm swarm is encapsulated in its own **Arm Containment Ring (`ArmContainmentRing`)**:
+
+```mermaid
+flowchart LR
+    subgraph ACR["🛡️ Individual Arm Containment Ring (ACR)"]
+        direction TB
+        subgraph Layer1["1. Windows NT Kernel Confinement"]
+            JobObj["Windows Job Object\n(ProcessMemoryLimit = 64MB\nActiveProcessLimit = 1)"]
+            AppCont["AppContainer Profile\n(S-1-15-2-... Restricted SID\nZero Network by Default)"]
+        end
+
+        subgraph Layer2["2. Cryptographic Generation Epoch"]
+            GenEpoch["Execution Epoch (e.g., Gen 8)\nKey = HMAC(MasterSeed, ArmID, Gen)"]
+            Autotomy["Autotomy Rebirth:\nGen 8 Severed ➔ Gen 9 Spawned\n(Stale Gen 8 Tokens Burned)"]
+        end
+
+        subgraph Layer3["3. Zero Ambient Authority Scope"]
+            ToolScope["Tool Whitelist\n(Doc Ingest cannot call ledger_writer)"]
+            ResourceScope["URI Scope: s3://invoices/\n(Host directories blocked)"]
+        end
+
+        subgraph Layer4["4. Out-of-Band Supervisor IPC"]
+            Handle["TrustedArmHandle (mpsc client only)\nNo privileged OS/Cedar handles held"]
+            Term["TerminateJobObject(hJob, 137)\nNon-cooperative hard kill"]
+        end
+    end
+
+    Worker["🤖 Untrusted Limb Worker"] --> ACR
+    ACR --> TrustedHost["👑 Trusted Host Supervisor"]
+```
+
+---
+
+### ⚖️ System Rigor: The Three Distinct Security Guarantees
+
+Agent Octopus strictly distinguishes between **application-level policy**, **cryptographic protocol bounds**, and **operating system kernel isolation**:
+
+| Guarantee Dimension | Enforcement Mechanism | Threat Neutralized | Failure Mode if Compromised |
+| :--- | :--- | :--- | :--- |
+| **1. Application Policy** | AWS Cedar v4.13 PARC, Deterministic FSM, Merkle Leaf Verification | Prompt injection, goal hijacking, financial ceiling bypass, logic manipulation | Bypassed if in-process memory corruption alters Rust runtime function pointers. |
+| **2. Cryptographic Protocol** | HMAC-SHA256 Capability Tokens, Execution Epoch Numbers (`Gen N`), Merkle Roots | Token forgery, identity spoofing, lateral movement across mesh, replay of stale tasks | Bypassed if adversary can read supervisor's master key seed. |
+| **3. Operating System Kernel** | Windows Job Objects (`ProcessMemoryLimit`), AppContainer LPAC SIDs, `TerminateJobObject` | Direct Win32 socket connect, SAM hive read, child process spawning, host escape | **Cannot be bypassed** without a zero-day Windows NT kernel privilege escalation. |
+
+---
+
+
 
 ## 🛡️ The 3-Phase Agentjacking & GhostJacking Defense Arm
 

@@ -1,3 +1,6 @@
+use crate::containment_ring::{
+    ContainmentRing, Operation, RingError, RingOperationRequest, RingRequest, TrustedArmHandle,
+};
 use crate::core::circuit_breaker::KillSwitch;
 use crate::core::merkle::{MerkleLeaf, MerkleTree};
 use crate::core::types::{
@@ -8,21 +11,29 @@ use crate::enclave::doc_extractor::SafeDocumentExtractor;
 use crate::enclave::http_gate::HttpEgressGate;
 use crate::enclave::ledger_writer::SafeLedgerWriter;
 use crate::enclave::tool::SafeTool;
+use crate::security::CapabilityToken;
 use crate::telemetry::detector::AnomalyDetector;
-use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
 pub struct ArmRuntime {
+    arm_id: Option<usize>,
+    custom_agent_id: Option<String>,
     role: ArmRole,
-    tools: HashMap<String, Box<dyn SafeTool>>,
     directive_rx: mpsc::Receiver<(
         StrategicDirective,
         oneshot::Sender<Result<ArmExecutionReport, OctopusSecurityError>>,
     )>,
     telemetry_tx: mpsc::Sender<TelemetryPacket>,
     kill_switch: KillSwitch,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
     deterministic_layer: DeterministicLayer,
     step_limit: usize,
+    containment_ring: Arc<ContainmentRing>,
+    trusted_handle: Option<TrustedArmHandle>,
+    capability_token: Option<CapabilityToken>,
+    pub arm_ring: Option<Arc<crate::containment_ring::ArmContainmentRing>>,
+    pub generation: u64,
 }
 
 impl ArmRuntime {
@@ -35,38 +46,221 @@ impl ArmRuntime {
         telemetry_tx: mpsc::Sender<TelemetryPacket>,
         kill_switch: KillSwitch,
     ) -> Self {
-        let mut tools: HashMap<String, Box<dyn SafeTool>> = HashMap::new();
-        match role {
-            ArmRole::UntrustedDocIngest => {
-                tools.insert("doc_extractor".into(), Box::new(SafeDocumentExtractor::new()));
-            }
-            ArmRole::AccountingLedgerWrite => {
-                tools.insert("ledger_writer".into(), Box::new(SafeLedgerWriter::new()));
-            }
-            ArmRole::NetworkEgress => {
-                tools.insert("http_egress".into(), Box::new(HttpEgressGate::default()));
-            }
-            ArmRole::OutboundNotification => {}
-            ArmRole::TarpitDecoyDefense => {}
-            ArmRole::KernelLevelSentinel => {}
-        }
+        let containment_ring = Arc::new(ContainmentRing::default());
+        let default_name = format!("arm-{:?}-0", role);
+        let capability_token = match role {
+            ArmRole::AccountingLedgerWrite => Some(containment_ring.capability_gate.issue_capability(
+                "supervisor",
+                &default_name,
+                ArmRole::AccountingLedgerWrite,
+                "ledger_writer",
+                "s3://accounting/",
+            )),
+            ArmRole::NetworkEgress => Some(containment_ring.capability_gate.issue_capability(
+                "supervisor",
+                &default_name,
+                ArmRole::NetworkEgress,
+                "http_egress",
+                "https://www.google.com/",
+            )),
+            _ => None,
+        };
 
         Self {
+            arm_id: None,
+            custom_agent_id: None,
             role,
-            tools,
             directive_rx,
             telemetry_tx,
             kill_switch,
+            cancel_token: None,
             deterministic_layer: DeterministicLayer::new(),
             step_limit: 10,
+            containment_ring,
+            trusted_handle: None,
+            capability_token,
+            arm_ring: None,
+            generation: 1,
         }
+    }
+
+    pub fn with_arm_id(mut self, arm_id: usize) -> Self {
+        self.arm_id = Some(arm_id);
+        if self.arm_ring.is_none() {
+            let ring = Arc::new(crate::containment_ring::ArmContainmentRing::new(
+                arm_id,
+                self.role.clone(),
+                self.generation,
+                b"OCTOPUS_CONTAINMENT_RING_SECRET_SEED_2026",
+            ));
+            self.arm_ring = Some(ring);
+        }
+        let name = self.arm_name();
+        match self.role {
+            ArmRole::AccountingLedgerWrite => {
+                self.capability_token = Some(self.containment_ring.capability_gate.issue_capability(
+                    "supervisor",
+                    &name,
+                    ArmRole::AccountingLedgerWrite,
+                    "ledger_writer",
+                    "s3://accounting/",
+                ));
+            }
+            ArmRole::NetworkEgress => {
+                self.capability_token = Some(self.containment_ring.capability_gate.issue_capability(
+                    "supervisor",
+                    &name,
+                    ArmRole::NetworkEgress,
+                    "http_egress",
+                    "https://www.google.com/",
+                ));
+            }
+            _ => {}
+        }
+        self
+    }
+
+    pub fn with_arm_ring(mut self, arm_ring: Arc<crate::containment_ring::ArmContainmentRing>) -> Self {
+        self.generation = arm_ring.current_generation();
+        self.arm_ring = Some(arm_ring);
+        self
+    }
+
+    pub fn with_generation(mut self, gen: u64) -> Self {
+        self.generation = gen;
+        if let Some(ref ring) = self.arm_ring {
+            ring.generation.store(gen, std::sync::atomic::Ordering::SeqCst);
+        }
+        self
+    }
+
+    pub fn with_custom_agent_id(mut self, id: String) -> Self {
+        self.custom_agent_id = Some(id);
+        let name = self.arm_name();
+        match self.role {
+            ArmRole::AccountingLedgerWrite => {
+                self.capability_token = Some(self.containment_ring.capability_gate.issue_capability(
+                    "supervisor",
+                    &name,
+                    ArmRole::AccountingLedgerWrite,
+                    "ledger_writer",
+                    "s3://accounting/",
+                ));
+            }
+            ArmRole::NetworkEgress => {
+                self.capability_token = Some(self.containment_ring.capability_gate.issue_capability(
+                    "supervisor",
+                    &name,
+                    ArmRole::NetworkEgress,
+                    "http_egress",
+                    "https://www.google.com/",
+                ));
+            }
+            _ => {}
+        }
+        self
+    }
+
+    pub fn with_cancellation_token(mut self, token: tokio_util::sync::CancellationToken) -> Self {
+        self.cancel_token = Some(token);
+        self
+    }
+
+    pub fn with_containment_ring(mut self, ring: Arc<ContainmentRing>) -> Self {
+        self.containment_ring = ring;
+        let name = self.arm_name();
+        match self.role {
+            ArmRole::AccountingLedgerWrite => {
+                self.capability_token = Some(self.containment_ring.capability_gate.issue_capability(
+                    "supervisor",
+                    &name,
+                    ArmRole::AccountingLedgerWrite,
+                    "ledger_writer",
+                    "s3://accounting/",
+                ));
+            }
+            ArmRole::NetworkEgress => {
+                self.capability_token = Some(self.containment_ring.capability_gate.issue_capability(
+                    "supervisor",
+                    &name,
+                    ArmRole::NetworkEgress,
+                    "http_egress",
+                    "https://www.google.com/",
+                ));
+            }
+            _ => {}
+        }
+        self
+    }
+
+    pub fn with_trusted_handle(mut self, handle: TrustedArmHandle) -> Self {
+        self.trusted_handle = Some(handle);
+        self
+    }
+
+    pub fn with_capability_token(mut self, token: CapabilityToken) -> Self {
+        self.capability_token = Some(token);
+        self
+    }
+
+    pub fn without_capability_token(mut self) -> Self {
+        self.capability_token = None;
+        self
+    }
+
+    pub fn arm_name(&self) -> String {
+        if let Some(ref id) = self.custom_agent_id {
+            return id.clone();
+        }
+        match self.arm_id {
+            Some(id) => format!("arm-{:?}-{}", self.role, id),
+            None => format!("arm-{:?}-0", self.role),
+        }
+    }
+
+    fn extract_amount_cents(&self, payload: &str) -> Option<u64> {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(payload) {
+            if let Some(amt) = val.get("amount_cents").and_then(|v| v.as_u64()) {
+                return Some(amt);
+            }
+        }
+        if let Some(pos) = payload.find('$') {
+            let slice = &payload[pos + 1..];
+            let num_str: String = slice
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            if let Ok(dollars) = num_str.parse::<f64>() {
+                return Some((dollars * 100.0).round() as u64);
+            }
+        }
+        None
+    }
+
+    fn is_cancelled_or_killed(&self) -> bool {
+        self.kill_switch.is_tripped()
+            || self.cancel_token.as_ref().map_or(false, |t| t.is_cancelled())
     }
 
     /// Primary execution loop running inside an asynchronous task
     pub async fn run(mut self) {
+        let agent_name = self.arm_name();
+        self.containment_ring
+            .isolation_manager
+            .register_kill_switch(&agent_name, self.kill_switch.clone())
+            .await;
+        self.containment_ring
+            .identity_gate
+            .enroll(&agent_name, self.role.clone(), agent_name.as_bytes())
+            .await;
+
         while let Some((directive, response_tx)) = self.directive_rx.recv().await {
-            // Check hardware/atomic circuit breaker prior to processing
-            if self.kill_switch.is_tripped() {
+            // Check hardware/atomic circuit breaker, cancellation, isolation manager status, and Level 1 ring severance
+            if self.is_cancelled_or_killed()
+                || !self.containment_ring.isolation_manager.is_arm_active(&agent_name).await
+                || self.arm_ring.as_ref().map_or(false, |r| r.is_severed())
+            {
+                self.kill_switch.trip();
                 let _ = response_tx.send(Err(OctopusSecurityError::LimbKilled));
                 break;
             }
@@ -86,15 +280,26 @@ impl ArmRuntime {
                     | OctopusSecurityError::ResourceQuotaExceeded(_)
                     | OctopusSecurityError::EnclaveViolation(_) => {
                         // Tamper or security boundary breach detected:
-                        // Instantly trip the atomic kill switch, quarantine state, and halt execution!
+                        // Instantly trip the atomic kill switch, quarantine state, sever Level 1 ring, and halt execution!
                         self.kill_switch.trip();
                         self.deterministic_layer.quarantine();
+                        if let Some(ref ring) = self.arm_ring {
+                            ring.sever("Breach detected during directive execution").await;
+                        }
+                        let _ = self
+                            .containment_ring
+                            .isolation_manager
+                            .terminate_arm(&agent_name, "Breach detected during directive execution")
+                            .await;
                     }
                     _ => {}
                 }
             }
             let _ = response_tx.send(result);
-            if self.kill_switch.is_tripped() {
+            if self.kill_switch.is_tripped()
+                || !self.containment_ring.isolation_manager.is_arm_active(&agent_name).await
+                || self.arm_ring.as_ref().map_or(false, |r| r.is_severed())
+            {
                 break; // Stop arm execution loop immediately
             }
         }
@@ -104,6 +309,11 @@ impl ArmRuntime {
         &mut self,
         directive: StrategicDirective,
     ) -> Result<ArmExecutionReport, OctopusSecurityError> {
+        // Level 1: Arm Containment Ring epoch check
+        if let Some(ref ring) = self.arm_ring {
+            ring.validate_epoch(self.generation).await?;
+        }
+
         self.deterministic_layer = DeterministicLayer::new();
 
         // Physical & OS Sandbox Confinement Check (max_child_processes = 0, no path traversal)
@@ -144,8 +354,9 @@ impl ArmRuntime {
         )
         .await?;
 
-        // Check if supervisory loop tripped autotomy
-        if self.kill_switch.is_tripped() {
+        // Check if supervisory loop or cancellation tripped autotomy
+        if self.is_cancelled_or_killed() {
+            self.kill_switch.trip();
             self.deterministic_layer.quarantine();
             return Err(OctopusSecurityError::LimbKilled);
         }
@@ -178,7 +389,8 @@ impl ArmRuntime {
         )
         .await?;
 
-        if self.kill_switch.is_tripped() {
+        if self.is_cancelled_or_killed() {
+            self.kill_switch.trip();
             self.deterministic_layer.quarantine();
             return Err(OctopusSecurityError::LimbKilled);
         }
@@ -189,10 +401,121 @@ impl ArmRuntime {
         // Gate 3: Cryptographic Merkle Root Sealing
         self.deterministic_layer.seal_merkle_trace(&merkle_root)?;
 
+        let agent_name = self.arm_name();
+        let (operation_type, ring_op) = match self.role {
+            ArmRole::UntrustedDocIngest => ("doc_extractor", Operation::DocumentRead),
+            ArmRole::AccountingLedgerWrite => ("ledger_writer", Operation::LedgerWrite),
+            ArmRole::NetworkEgress => ("http_egress", Operation::HttpEgress),
+            ArmRole::OutboundNotification => ("notifier", Operation::MeshMessage),
+            ArmRole::TarpitDecoyDefense => ("quarantine", Operation::MeshMessage),
+            ArmRole::KernelLevelSentinel => ("kernel_sentinel", Operation::MeshMessage),
+        };
+
+        let amount_cents = self.extract_amount_cents(raw_payload);
+
+        let ring_req = RingOperationRequest {
+            agent_id: agent_name.clone(),
+            role: self.role.clone(),
+            operation_type: operation_type.to_string(),
+            target: directive.source_uri.clone(),
+            capability_token: self.capability_token.clone(),
+            step_count: current_step,
+            payload: Some(raw_payload.to_string()),
+            amount_cents,
+            generation: Some(self.generation),
+        };
+
+        // ALL tool execution MUST route through the Containment Ring!
+        let ring = self.containment_ring.clone();
+        let trusted_handle = self.trusted_handle.clone();
+        let target_resource = directive.source_uri.clone();
+        let raw_payload_bytes = raw_payload.as_bytes().to_vec();
+        let raw_payload_str = raw_payload.to_string();
+        let merkle_root_for_exec = merkle_root.clone();
+        let role_for_exec = self.role.clone();
+
+        let tool_result_bytes: Result<Vec<u8>, OctopusSecurityError> = ring
+            .execute_with_containment(&ring_req, || async move {
+                if let Some(ref handle) = trusted_handle {
+                    let tc_req = RingRequest {
+                        operation: ring_op,
+                        resource: target_resource,
+                        body: raw_payload_bytes,
+                    };
+                    handle.request(tc_req).await.map_err(|e| match e {
+                        RingError::Denied => OctopusSecurityError::CapabilityDenied(
+                            "Containment Ring denied tool invocation".to_string(),
+                        ),
+                        RingError::Revoked => OctopusSecurityError::DeterministicLayerViolation(
+                            "Arm authorization revoked by Containment Ring".to_string(),
+                        ),
+                        RingError::Oversize => OctopusSecurityError::IsolationViolation(
+                            "Request payload oversize".to_string(),
+                        ),
+                        RingError::Busy => OctopusSecurityError::ResourceQuotaExceeded(
+                            "Containment Ring busy".to_string(),
+                        ),
+                        RingError::Deadline => OctopusSecurityError::ExecutionTimeout,
+                        RingError::PolicyUnavailable => {
+                            OctopusSecurityError::DeterministicLayerViolation(
+                                "Policy engine unavailable".to_string(),
+                            )
+                        }
+                        RingError::UnknownArm => OctopusSecurityError::IdentitySpoofingDetected(
+                            "Unknown arm handle".to_string(),
+                        ),
+                        RingError::ToolFailed => OctopusSecurityError::EnclaveViolation(
+                            "Tool execution failure inside broker".to_string(),
+                        ),
+                    })
+                } else {
+                    // Execute safe tool inside the trusted broker closure
+                    match role_for_exec {
+                        ArmRole::UntrustedDocIngest => {
+                            let extractor = SafeDocumentExtractor::new();
+                            let artifact = extractor
+                                .extract_artifact(&raw_payload_str, merkle_root_for_exec, current_step)?;
+                            serde_json::to_vec(&artifact).map_err(|e| {
+                                OctopusSecurityError::DeterministicLayerViolation(format!(
+                                    "Serialization error: {}",
+                                    e
+                                ))
+                            })
+                        }
+                        ArmRole::AccountingLedgerWrite => {
+                            let writer = SafeLedgerWriter::new();
+                            let res = writer.execute(&raw_payload_str)?;
+                            Ok(res.into_bytes())
+                        }
+                        ArmRole::NetworkEgress => {
+                            let egress_gate = HttpEgressGate::default();
+                            let res = egress_gate.execute(&raw_payload_str)?;
+                            Ok(res.into_bytes())
+                        }
+                        _ => Ok(raw_payload_bytes),
+                    }
+                }
+            })
+            .await;
+
+        let output_bytes = match tool_result_bytes {
+            Ok(b) => b,
+            Err(e) => {
+                self.kill_switch.trip();
+                self.deterministic_layer.quarantine();
+                return Err(e);
+            }
+        };
+
         match self.role {
             ArmRole::UntrustedDocIngest => {
-                let extractor = SafeDocumentExtractor::new();
-                let artifact = extractor.extract_artifact(raw_payload, merkle_root.clone(), current_step)?;
+                let artifact: crate::core::types::VerifiedInvoiceArtifact =
+                    if let Ok(art) = serde_json::from_slice(&output_bytes) {
+                        art
+                    } else {
+                        let extractor = SafeDocumentExtractor::new();
+                        extractor.extract_artifact(raw_payload, merkle_root.clone(), current_step)?
+                    };
 
                 // Gate 4: Final Schema Assertion & Spending Cap & FSM Completion
                 self.deterministic_layer.finalize_artifact(&artifact)?;
@@ -207,40 +530,11 @@ impl ArmRuntime {
                     anomaly_flag: false,
                 })
             }
-            ArmRole::AccountingLedgerWrite => {
-                if let Some(tool) = self.tools.get("ledger_writer") {
-                    let _ = tool.execute(raw_payload)?;
-                }
-                let _ = self.deterministic_layer.fsm.transition_to(crate::deterministic::fsm::ArmState::Completed);
-
-                Ok(ArmExecutionReport {
-                    directive_id: directive.directive_id,
-                    arm_role: format!("{:?}", self.role),
-                    success: true,
-                    verified_data: None,
-                    merkle_root: Some(merkle_root),
-                    steps_taken: current_step,
-                    anomaly_flag: false,
-                })
-            }
-            ArmRole::NetworkEgress => {
-                if let Some(tool) = self.tools.get("http_egress") {
-                    let _ = tool.execute(raw_payload)?;
-                }
-                let _ = self.deterministic_layer.fsm.transition_to(crate::deterministic::fsm::ArmState::Completed);
-
-                Ok(ArmExecutionReport {
-                    directive_id: directive.directive_id,
-                    arm_role: format!("{:?}", self.role),
-                    success: true,
-                    verified_data: None,
-                    merkle_root: Some(merkle_root),
-                    steps_taken: current_step,
-                    anomaly_flag: false,
-                })
-            }
-            ArmRole::OutboundNotification | ArmRole::TarpitDecoyDefense | ArmRole::KernelLevelSentinel => {
-                let _ = self.deterministic_layer.fsm.transition_to(crate::deterministic::fsm::ArmState::Completed);
+            _ => {
+                let _ = self
+                    .deterministic_layer
+                    .fsm
+                    .transition_to(crate::deterministic::fsm::ArmState::Completed);
                 Ok(ArmExecutionReport {
                     directive_id: directive.directive_id,
                     arm_role: format!("{:?}", self.role),
@@ -266,6 +560,7 @@ impl ArmRuntime {
 
         self.telemetry_tx
             .send(TelemetryPacket {
+                arm_id: self.arm_id,
                 arm_role: self.role.clone(),
                 directive_id: directive_id.to_string(),
                 tool_invoked: tool.to_string(),

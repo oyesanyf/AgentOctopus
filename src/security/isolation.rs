@@ -63,7 +63,7 @@ impl SandboxConfinementPolicy {
         // 2. Sensitive OS paths and credentials
         let forbidden_paths = [
             "/etc/passwd", "/etc/shadow", "c:\\windows", "c:\\users",
-            "id_rsa", ".ssh", ".aws", ".env", "sam", "system32",
+            "id_rsa", ".ssh", ".aws", ".env", "config\\sam", "config/sam", "system32",
             "\\pipe\\", "\\\\.\\", "/dev/", "/proc/", "/sys/",
         ];
 

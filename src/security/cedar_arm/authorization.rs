@@ -56,6 +56,43 @@ impl CedarAuthorizationGateway {
         self.audit_log.as_ref()
     }
 
+    /// Rotates the cryptographic authorization secret with verification and audit logging.
+    /// Supports safe rotation: tokens signed with previous secret can optionally be verified
+    /// or revoked according to key lifecycle policy.
+    pub fn rotate_secret(
+        &mut self,
+        new_secret: &[u8],
+        policy_fingerprint: &str,
+    ) -> Result<String, OctopusSecurityError> {
+        if new_secret.is_empty() {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "Cannot rotate to an empty secret key".to_string(),
+            ));
+        }
+        if new_secret == self.secret_seed.as_slice() {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "New secret matches active secret: rotation requires a distinct cryptographic key".to_string(),
+            ));
+        }
+
+        use sha2::Digest;
+        let old_fingerprint = hex::encode(sha2::Sha256::digest(&self.secret_seed));
+        self.secret_seed = new_secret.to_vec();
+        self.auth_engine = ExternalAuthorizationEngine::new(new_secret, 300, policy_fingerprint);
+        let new_fingerprint = hex::encode(sha2::Sha256::digest(&self.secret_seed));
+
+        if let Some(log) = &self.audit_log {
+            log.record_event(
+                "SECRET_ROTATION",
+                "system::security_admin",
+                &format!("Rotated Cedar authorization secret from sha256:{} to sha256:{}", &old_fingerprint[..8], &new_fingerprint[..8]),
+                "COMPLETED",
+            );
+        }
+
+        Ok(new_fingerprint)
+    }
+
     /// Issues an authenticated supervisor approval receipt.
     /// Invariant: Segregation of duties - a supervisor CANNOT approve its own request.
     pub fn issue_supervisor_approval(

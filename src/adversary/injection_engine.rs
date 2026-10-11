@@ -315,6 +315,9 @@ impl PromptInjectionEngine {
             OctopusSecurityError::ResourceQuotaExceeded(_) => {
                 "Resource Quota Guard (Scheduler Exhaustion Blocked)"
             }
+            OctopusSecurityError::ZeroSwarmCapacity => {
+                "Swarm Concurrency Guard (Zero Capacity Blocked)"
+            }
             OctopusSecurityError::ChannelSevered => {
                 "Hardware/Process Communication Channel Severance"
             }

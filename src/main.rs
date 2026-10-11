@@ -232,12 +232,12 @@ async fn main() {
     println!("--------------------------------------------------------------------------------");
 
     let (swarm_telemetry_tx, swarm_telemetry_rx) = mpsc::channel::<TelemetryPacket>(200);
-    let swarm_kill_switches = HashMap::new();
-    let swarm_supervisor = WatchdogSupervisor::new(swarm_kill_switches);
+    let swarm = SwarmManager::new(50, swarm_telemetry_tx);
+    let swarm_supervisor = WatchdogSupervisor::new(HashMap::new())
+        .with_arm_switches(swarm.kill_switches());
     swarm_supervisor.spawn(swarm_telemetry_rx);
 
-    let swarm = SwarmManager::new(50, swarm_telemetry_tx);
-    println!("[SWARM ONLINE] Initialized 50 concurrent cephalopod arms bounded by Deterministic Layers.");
+    println!("[SWARM ONLINE] Initialized 50 concurrent cephalopod arms bounded by Deterministic Layers & Watchdog Kill Switches.");
 
     // Generate 50 directives: 45 benign tasks + 5 breakout attempts
     let mut swarm_tasks = Vec::with_capacity(50);

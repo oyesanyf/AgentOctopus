@@ -117,6 +117,22 @@ impl CedarPolicyEngine {
         })
     }
 
+
+    /// Creates a CedarPolicyEngine configured with custom policy rules (for testing / negative controls).
+    pub fn from_custom_policy_set(policies: &str) -> Result<Self, CedarEngineError> {
+        let policy_set = PolicySet::from_str(policies)
+            .map_err(|e| CedarEngineError::PolicyParseError(e.to_string()))?;
+        let entities = Entities::empty();
+        let schema = CedarSchema::default();
+
+        Ok(Self {
+            authorizer: Authorizer::new(),
+            policy_set: Arc::new(RwLock::new(policy_set)),
+            entities: Arc::new(RwLock::new(entities)),
+            schema,
+        })
+    }
+
     /// Evaluates a PARC (Principal, Action, Resource, Context) authorization query.
     pub fn evaluate(
         &self,

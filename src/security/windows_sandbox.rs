@@ -7,7 +7,7 @@ use std::sync::Arc;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 #[cfg(windows)]
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject, TerminateJobObject,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, SetInformationJobObject, TerminateJobObject,
     JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
     JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -136,12 +136,24 @@ impl WindowsJobObject {
     }
 
     /// Binds the current process into this Job Object boundary.
+    /// FAIL-CLOSED: Errors out if OS assignment fails or process is not verified inside the Job Object.
     pub fn assign_current_process(&self) -> Result<(), OctopusSecurityError> {
         #[cfg(windows)]
         {
             let current_proc = unsafe { GetCurrentProcess() };
-            // Attempt assignment; if nested jobs are permitted, this attaches the current worker
-            let _ = self.assign_process(current_proc);
+            // Fail-closed enforcement: assign and verify membership
+            self.assign_process(current_proc)?;
+
+            let mut in_job: i32 = 0;
+            let check_success = unsafe {
+                IsProcessInJob(current_proc, self.handle, &mut in_job)
+            };
+            if check_success == 0 || in_job == 0 {
+                return Err(OctopusSecurityError::IsolationViolation(format!(
+                    "FAIL-CLOSED: Current process verified NOT in Windows Job Object '{}'",
+                    self.name
+                )));
+            }
         }
         Ok(())
     }
@@ -234,37 +246,47 @@ impl WindowsAppContainerProfile {
 
             // Strict URL and Hostname Verification (Zero Bypass for google.com)
             let trimmed = target_resource.trim();
-            let host_part = if let Some(stripped) = trimmed.strip_prefix("https://") {
-                stripped
-            } else if let Some(stripped) = trimmed.strip_prefix("http://") {
-                stripped
-            } else {
+            let parsed_url = url::Url::parse(trimmed).map_err(|e| {
+                OctopusSecurityError::IsolationViolation(format!(
+                    "AppContainer [{}] rejected malformed network URI '{}': {}",
+                    self.container_name, target_resource, e
+                ))
+            })?;
+
+            if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
                 return Err(OctopusSecurityError::IsolationViolation(format!(
-                    "AppContainer [{}] rejected malformed network URI '{}': missing http(s) scheme",
+                    "AppContainer [{}] rejected network URI '{}': missing http(s) scheme",
                     self.container_name, target_resource
                 )));
-            };
+            }
 
-            // Extract the hostname up to the first path slash or query parameter
-            let host_and_port = host_part.split('/').next().unwrap_or("").split('?').next().unwrap_or("");
-            
             // Reject any credentials in URI (user:pass@host)
-            if host_and_port.contains('@') {
+            if !parsed_url.username().is_empty() || parsed_url.password().is_some() {
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "AppContainer [{}] rejected network URI with embedded credentials: '{}'",
                     self.container_name, target_resource
                 )));
             }
 
-            // Extract host (stripping port if present)
-            let host = host_and_port.split(':').next().unwrap_or("").to_lowercase();
+            // Extract host handling Domain, IPv4, and IPv6 safely
+            let host = match parsed_url.host() {
+                Some(url::Host::Domain(d)) => d.to_lowercase(),
+                Some(url::Host::Ipv4(ip)) => ip.to_string(),
+                Some(url::Host::Ipv6(ip)) => format!("[{}]", ip),
+                None => {
+                    return Err(OctopusSecurityError::IsolationViolation(format!(
+                        "AppContainer [{}] rejected network URI missing valid host: '{}'",
+                        self.container_name, target_resource
+                    )));
+                }
+            };
 
             // Strict Allowlist: ONLY google.com or www.google.com
             let is_authorized_google = host == "google.com" || host == "www.google.com";
 
             if !is_authorized_google {
                 return Err(OctopusSecurityError::IsolationViolation(format!(
-                    "AppContainer [{}] network policy violation: host '{}' from URI '{}' is NOT authorized Google egress (subdomains and suffixes blocked)",
+                    "AppContainer [{}] network policy violation: host '{}' from URI '{}' is NOT authorized Google egress (subdomains, IPv6/IPv4, and suffixes blocked)",
                     self.container_name, host, target_resource
                 )));
             }

@@ -26,6 +26,47 @@ pub struct AtlasSyncMetadata {
     pub total_case_studies: usize,
 }
 
+/// Strictly validates ATLAS version string against standard structured format:
+/// YYYY.MM[-variant] where YYYY in 2024..=2030, MM in 01..=12, and variant is alphanumeric/hyphen/dot.
+pub fn validate_atlas_version(version: &str) -> bool {
+    let trimmed = version.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return false;
+    }
+
+    let parts: Vec<&str> = trimmed.splitn(2, '-').collect();
+    let date_part = parts[0];
+    let date_sub: Vec<&str> = date_part.split('.').collect();
+    if date_sub.len() != 2 {
+        return false;
+    }
+
+    let year: u32 = match date_sub[0].parse() {
+        Ok(y) => y,
+        Err(_) => return false,
+    };
+    let month: u32 = match date_sub[1].parse() {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+
+    if !(2024..=2030).contains(&year) || !(1..=12).contains(&month) {
+        return false;
+    }
+
+    if parts.len() == 2 {
+        let tag = parts[1];
+        if tag.is_empty() || tag.len() > 48 {
+            return false;
+        }
+        if !tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.') {
+            return false;
+        }
+    }
+
+    true
+}
+
 /// AtlasSyncManager: Handles versioned synchronization, integrity hashing,
 /// and provenance validation of the MITRE ATLAS knowledge base.
 pub struct AtlasSyncManager {
@@ -37,14 +78,22 @@ pub struct AtlasSyncManager {
 impl Default for AtlasSyncManager {
     fn default() -> Self {
         Self::new(
-            "2026.02-agent-update",
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // genesis pinning
+            "2026.09-stix2.1-golden-airgap",
+            PINNED_ATLAS_GOLDEN_SHA256,
         )
     }
 }
 
 impl AtlasSyncManager {
     pub fn new(version: &str, pinned_checksum: &str) -> Self {
+        // Disallow empty content SHA-256 (e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)
+        const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let verified_checksum = if pinned_checksum == EMPTY_SHA256 || pinned_checksum.trim().is_empty() {
+            PINNED_ATLAS_GOLDEN_SHA256.to_string()
+        } else {
+            pinned_checksum.to_string()
+        };
+
         Self {
             trusted_sources: vec![
                 "https://raw.githubusercontent.com/mitre-atlas/atlas-data".to_string(),
@@ -53,7 +102,7 @@ impl AtlasSyncManager {
                 "https://atlas.mitre.org/api/v1/matrix".to_string(),
                 "https://atlas.mitre.org".to_string(),
             ],
-            pinned_checksum: pinned_checksum.to_string(),
+            pinned_checksum: verified_checksum,
             active_version: version.to_string(),
         }
     }
@@ -66,6 +115,10 @@ impl AtlasSyncManager {
         &self.pinned_checksum
     }
 
+    pub fn trusted_sources(&self) -> &[String] {
+        &self.trusted_sources
+    }
+
     /// Verifies the provenance, version header, and SHA-256 content digest of an ATLAS payload.
     pub fn verify_and_ingest(
         &self,
@@ -74,14 +127,47 @@ impl AtlasSyncManager {
         raw_payload: &[u8],
         expected_checksum: Option<&str>,
     ) -> Result<AtlasSyncMetadata, AtlasSyncError> {
-        // 1. Provenance check
-        if !self.trusted_sources.iter().any(|s| source.starts_with(s) || source.starts_with("local://atlas_bundle")) {
-            return Err(AtlasSyncError::UntrustedSource(source.to_string()));
+        // 1. Provenance check using strict RFC 3986 URL parsing to prevent prefix-matching bypasses
+        let is_trusted_provenance = if source == "local://atlas_bundle" || source.starts_with("local://atlas_bundle/") {
+            true
+        } else if let Ok(parsed_url) = url::Url::parse(source) {
+            if parsed_url.scheme() != "https" {
+                false
+            } else if !parsed_url.username().is_empty() || parsed_url.password().is_some() {
+                false
+            } else {
+                let host = parsed_url.host_str().unwrap_or("").to_lowercase();
+                let path = parsed_url.path();
+                match host.as_str() {
+                    "raw.githubusercontent.com" | "github.com" => {
+                        path == "/mitre-atlas/atlas-data" || path.starts_with("/mitre-atlas/atlas-data/")
+                    }
+                    "release-assets.githubusercontent.com" => {
+                        path.contains("/mitre-atlas/atlas-data/")
+                    }
+                    "atlas.mitre.org" => {
+                        path == "" || path == "/" || path == "/api/v1/matrix" || path.starts_with("/api/v1/")
+                    }
+                    _ => false,
+                }
+            }
+        } else {
+            false
+        };
+
+        if !is_trusted_provenance {
+            return Err(AtlasSyncError::UntrustedSource(format!(
+                "Provenance verification failed: untrusted publication source '{}'",
+                source
+            )));
         }
 
-        // 2. Version consistency
-        if !version.starts_with("2026") {
-            return Err(AtlasSyncError::InvalidVersion(version.to_string()));
+        // 2. Structured Version consistency check
+        if !validate_atlas_version(version) {
+            return Err(AtlasSyncError::InvalidVersion(format!(
+                "Invalid ATLAS dataset version format '{}': must match YYYY.MM[-variant] (2024..=2030, MM 01..=12)",
+                version
+            )));
         }
 
         // 3. Compute SHA-256 digest

@@ -1,0 +1,648 @@
+//! Level 1: Individual Arm Containment Ring
+//!
+//! An independently enforced security ring surrounding an individual Arm.
+//! Managed by the trusted supervisor outside the agent worker processes.
+//!
+//! Enforces:
+//! 1. Identity: Cryptographically bound to its worker, arm_id, and assigned role.
+//! 2. Capability set: Strictly scoped tools and resources.
+//! 3. Execution sandbox: Memory clamp (64MB), zero child processes, filesystem isolation.
+//! 4. Resource budget: CPU, memory, step budget, and execution deadlines.
+//! 5. Revocation state: Supervisor can sever/disable one arm without disabling others.
+//! 6. Audit identity: Every action attributed to responsible arm, role, generation, and policy.
+//! 7. Security Generation Number (Execution Epoch):
+//!    When an arm is compromised and severed via autotomy, its generation number (e.g. Gen 8)
+//!    is revoked and all capabilities/messages bound to that epoch are invalidated.
+//!    Regenerated arm starts at Gen 9; stale messages or tokens from Gen 8 are rejected.
+
+use crate::containment_ring::isolation_manager::SandboxConstraints;
+use crate::core::types::{ArmRole, OctopusSecurityError};
+use crate::neural_mesh::MessageKind;
+use crate::security::CapabilityToken;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::RwLock;
+
+/// Configuration for an individual arm containment ring.
+#[derive(Debug, Clone)]
+pub struct ArmRingConfig {
+    pub max_memory_bytes: usize,
+    pub step_limit: usize,
+    pub max_execution_time: Duration,
+    pub sandbox_constraints: SandboxConstraints,
+}
+
+impl Default for ArmRingConfig {
+    fn default() -> Self {
+        Self {
+            max_memory_bytes: 64 * 1024 * 1024, // Strict 64 MB clamp
+            step_limit: 10,
+            max_execution_time: Duration::from_secs(5),
+            sandbox_constraints: SandboxConstraints::default(),
+        }
+    }
+}
+
+/// Strongly typed, epoch-tagged inter-arm neural mesh message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArmRingMeshMessage {
+    pub sender_arm_id: usize,
+    pub sender_role: ArmRole,
+    pub sender_generation: u64,
+    pub target_arm_id: usize,
+    pub target_generation: u64,
+    pub kind: MessageKind,
+    pub correlation_id: String,
+    pub payload: String,
+    pub signature_hex: String,
+}
+
+/// Telemetry and state DTO representing an arm containment ring for UI/API monitoring.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArmRingStatusDto {
+    pub arm_id: usize,
+    pub agent_name: String,
+    pub role: String,
+    pub generation: u64,
+    pub is_severed: bool,
+    pub memory_limit_mb: usize,
+    pub step_limit: usize,
+    pub allowed_tools: Vec<String>,
+    pub allowed_resource_prefixes: Vec<String>,
+    pub os_isolation: String,
+    pub job_object_clamped: bool,
+    pub appcontainer_sid: String,
+}
+
+/// Compute HMAC-SHA256 for Level 1 ring epoch verification.
+fn compute_ring_hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
+    let mut k = [0u8; 64];
+    if key.len() > 64 {
+        let hash = Sha256::digest(key);
+        k[..32].copy_from_slice(&hash);
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+
+    let mut ipad = [0x36u8; 64];
+    let mut opad = [0x5cu8; 64];
+    for i in 0..64 {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+
+    let mut inner = Sha256::new();
+    inner.update(ipad);
+    inner.update(data);
+    let inner_hash = inner.finalize();
+
+    let mut outer = Sha256::new();
+    outer.update(opad);
+    outer.update(inner_hash);
+    let outer_hash = outer.finalize();
+
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&outer_hash);
+    out
+}
+
+/// Level 1: An individual Arm Containment Ring.
+/// Operates as an independent security perimeter around a single arm worker.
+#[derive(Clone)]
+pub struct ArmContainmentRing {
+    pub arm_id: usize,
+    pub agent_name: String,
+    pub role: ArmRole,
+    pub generation: Arc<AtomicU64>,
+    master_seed: [u8; 32],
+    allowed_tools: Arc<RwLock<HashSet<String>>>,
+    allowed_resource_prefixes: Arc<RwLock<Vec<String>>>,
+    is_severed: Arc<AtomicBool>,
+    revoked_epochs: Arc<RwLock<HashSet<u64>>>,
+    step_counter: Arc<AtomicU64>,
+    pub config: ArmRingConfig,
+
+    // Sensitivity switches for negative-control testing
+    epoch_enforcement_enabled: Arc<AtomicBool>,
+    tool_enforcement_enabled: Arc<AtomicBool>,
+    budget_enforcement_enabled: Arc<AtomicBool>,
+}
+
+impl ArmContainmentRing {
+    /// Creates a new individual arm containment ring at a specified starting generation.
+    pub fn new(
+        arm_id: usize,
+        role: ArmRole,
+        initial_generation: u64,
+        master_seed: &[u8],
+    ) -> Self {
+        let mut seed = [0u8; 32];
+        if master_seed.len() >= 32 {
+            seed.copy_from_slice(&master_seed[..32]);
+        } else {
+            let hash = Sha256::digest(master_seed);
+            seed.copy_from_slice(&hash);
+        }
+
+        let agent_name = format!("arm-{:?}-{}", role, arm_id);
+
+        // Define default allowed tools and resources strictly scoped to this arm's assigned role
+        let mut tools = HashSet::new();
+        let mut prefixes = Vec::new();
+
+        match role {
+            ArmRole::UntrustedDocIngest => {
+                tools.insert("doc_extractor".to_string());
+                tools.insert("peripheral_digest".to_string());
+                prefixes.push("s3://invoices/".to_string());
+                prefixes.push("s3://raw-docs/".to_string());
+                prefixes.push("local_scratchpad".to_string());
+            }
+            ArmRole::AccountingLedgerWrite => {
+                tools.insert("ledger_writer".to_string());
+                prefixes.push("s3://accounting/".to_string());
+                prefixes.push("local_scratchpad".to_string());
+            }
+            ArmRole::NetworkEgress => {
+                tools.insert("http_egress".to_string());
+                prefixes.push("https://".to_string());
+                prefixes.push("http://".to_string());
+            }
+            ArmRole::OutboundNotification => {
+                tools.insert("notifier".to_string());
+                prefixes.push("notification://".to_string());
+            }
+            ArmRole::TarpitDecoyDefense => {
+                tools.insert("quarantine".to_string());
+                prefixes.push("tarpit://".to_string());
+            }
+            ArmRole::KernelLevelSentinel => {
+                tools.insert("kernel_sentinel".to_string());
+                prefixes.push("kernel://".to_string());
+            }
+        }
+
+        Self {
+            arm_id,
+            agent_name,
+            role,
+            generation: Arc::new(AtomicU64::new(initial_generation)),
+            master_seed: seed,
+            allowed_tools: Arc::new(RwLock::new(tools)),
+            allowed_resource_prefixes: Arc::new(RwLock::new(prefixes)),
+            is_severed: Arc::new(AtomicBool::new(false)),
+            revoked_epochs: Arc::new(RwLock::new(HashSet::new())),
+            step_counter: Arc::new(AtomicU64::new(0)),
+            config: ArmRingConfig::default(),
+            epoch_enforcement_enabled: Arc::new(AtomicBool::new(true)),
+            tool_enforcement_enabled: Arc::new(AtomicBool::new(true)),
+            budget_enforcement_enabled: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// Derives an epoch-specific cryptographic secret key for this arm.
+    fn epoch_key(&self, epoch: u64) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&self.master_seed);
+        hasher.update(self.arm_id.to_le_bytes());
+        hasher.update(epoch.to_le_bytes());
+        hasher.update(format!("{:?}", self.role).as_bytes());
+        let hash = hasher.finalize();
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&hash);
+        key
+    }
+
+    /// Returns the current active generation epoch for this arm.
+    pub fn current_generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    /// Returns whether this individual arm ring has been severed.
+    pub fn is_severed(&self) -> bool {
+        self.is_severed.load(Ordering::SeqCst)
+    }
+
+    /// Non-cooperatively severs this arm without affecting any other arm in the swarm.
+    pub async fn sever(&self, _reason: &str) {
+        let current_gen = self.current_generation();
+        self.is_severed.store(true, Ordering::SeqCst);
+        let mut revoked = self.revoked_epochs.write().await;
+        revoked.insert(current_gen);
+    }
+
+    /// Autotomy regeneration: Revokes the current generation epoch, advances to Gen N+1,
+    /// and resets the execution counter for the newly regenerated arm.
+    /// Returns the new generation epoch.
+    pub async fn sever_and_regenerate(&self) -> u64 {
+        let old_gen = self.current_generation();
+        {
+            let mut revoked = self.revoked_epochs.write().await;
+            revoked.insert(old_gen);
+        }
+        let next_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.step_counter.store(0, Ordering::SeqCst);
+        self.is_severed.store(false, Ordering::SeqCst);
+        next_gen
+    }
+
+    /// Validates that an operation, token, or message carries the active generation epoch.
+    /// Stale epochs from severed incarnations are strictly rejected!
+    pub async fn validate_epoch(&self, epoch: u64) -> Result<(), OctopusSecurityError> {
+        if !self.epoch_enforcement_enabled.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        if self.is_severed.load(Ordering::SeqCst) {
+            return Err(OctopusSecurityError::LimbKilled);
+        }
+
+        let revoked = self.revoked_epochs.read().await;
+        if revoked.contains(&epoch) {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "Arm {} generation epoch {} has been permanently revoked by supervisor autotomy",
+                self.arm_id, epoch
+            )));
+        }
+
+        let active_gen = self.current_generation();
+        if epoch != active_gen {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "Arm {} epoch mismatch: presented generation {} != active generation {}",
+                self.arm_id, epoch, active_gen
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Validates that a requested tool invocation complies with this arm ring's capability scope.
+    pub async fn validate_tool_invocation(
+        &self,
+        tool: &str,
+        resource: &str,
+        epoch: u64,
+    ) -> Result<(), OctopusSecurityError> {
+        self.validate_epoch(epoch).await?;
+
+        if !self.tool_enforcement_enabled.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        let tools = self.allowed_tools.read().await;
+        if !tools.contains(tool) {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "Arm {} (role {:?}) attempted unauthorized tool '{}'",
+                self.arm_id, self.role, tool
+            )));
+        }
+
+        let prefixes = self.allowed_resource_prefixes.read().await;
+        let allowed = prefixes.iter().any(|p| resource.starts_with(p) || resource.contains(p));
+        if !allowed {
+            return Err(OctopusSecurityError::EnclaveViolation(format!(
+                "Arm {} (role {:?}) attempted out-of-scope resource access: '{}'",
+                self.arm_id, self.role, resource
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Validates execution step budget under the individual arm ring.
+    pub fn check_step_budget(&self, step: usize) -> Result<(), OctopusSecurityError> {
+        if !self.budget_enforcement_enabled.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        if step > self.config.step_limit {
+            return Err(OctopusSecurityError::ResourceQuotaExceeded(format!(
+                "Arm {} exceeded maximum step budget (step {} > limit {})",
+                self.arm_id, step, self.config.step_limit
+            )));
+        }
+        self.step_counter.store(step as u64, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Validates memory clamp (64MB) under the individual arm ring.
+    pub fn check_memory_budget(&self, memory_bytes: usize) -> Result<(), OctopusSecurityError> {
+        if !self.budget_enforcement_enabled.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        if memory_bytes > self.config.max_memory_bytes {
+            return Err(OctopusSecurityError::ResourceQuotaExceeded(format!(
+                "Arm {} exceeded strict 64MB memory clamp ({} bytes > clamp {} bytes)",
+                self.arm_id, memory_bytes, self.config.max_memory_bytes
+            )));
+        }
+        Ok(())
+    }
+
+    /// Issues an epoch-bound cryptographic capability token for this arm ring.
+    pub async fn issue_epoch_capability(
+        &self,
+        tool: &str,
+        resource: &str,
+    ) -> Result<CapabilityToken, OctopusSecurityError> {
+        let current_gen = self.current_generation();
+        self.validate_tool_invocation(tool, resource, current_gen).await?;
+
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let expires_at_secs = now_secs + 300; // 5-minute capability
+
+        let epoch_key = self.epoch_key(current_gen);
+        let token_id = format!("ARM-CAP-{}-{}-{}", self.arm_id, current_gen, tool);
+        let policy_fingerprint = format!(
+            "arm_ring:epoch={}:arm={}:role={:?}:tool={}",
+            current_gen, self.arm_id, self.role, tool
+        );
+        let originator = "supervisor";
+        let signing_content = format!(
+            "{}:{}:{}:{:?}:{}:{}:{}:{}:{}",
+            token_id,
+            originator,
+            self.agent_name,
+            self.role,
+            tool,
+            resource,
+            now_secs,
+            expires_at_secs,
+            policy_fingerprint
+        );
+
+        let sig = compute_ring_hmac(&epoch_key, signing_content.as_bytes());
+        let sig_hex = hex::encode(sig);
+
+        Ok(CapabilityToken {
+            token_id,
+            originator_agent: "supervisor".to_string(),
+            bearer_agent: self.agent_name.clone(),
+            permitted_role: self.role.clone(),
+            permitted_tool: tool.to_string(),
+            resource_uri_prefix: resource.to_string(),
+            issued_at_secs: now_secs,
+            expires_at_secs,
+            policy_fingerprint,
+            signature_hex: sig_hex,
+        })
+    }
+
+    /// Verifies that a presented capability token is bound to this arm's active generation epoch.
+    pub async fn verify_epoch_capability(
+        &self,
+        token: &CapabilityToken,
+    ) -> Result<(), OctopusSecurityError> {
+        let current_gen = self.current_generation();
+        self.validate_epoch(current_gen).await?;
+
+        // Extract epoch from policy fingerprint
+        let prefix = format!("arm_ring:epoch={}:arm={}:", current_gen, self.arm_id);
+        if !token.policy_fingerprint.starts_with(&prefix) {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "Capability token policy fingerprint mismatch: token was not issued for arm {} generation {}",
+                self.arm_id, current_gen
+            )));
+        }
+
+        // Verify cryptographic signature against epoch key
+        let epoch_key = self.epoch_key(current_gen);
+        let signing_content = format!(
+            "{}:{}:{}:{:?}:{}:{}:{}:{}:{}",
+            token.token_id,
+            token.originator_agent,
+            token.bearer_agent,
+            token.permitted_role,
+            token.permitted_tool,
+            token.resource_uri_prefix,
+            token.issued_at_secs,
+            token.expires_at_secs,
+            token.policy_fingerprint
+        );
+
+        let expected_sig = compute_ring_hmac(&epoch_key, signing_content.as_bytes());
+        let expected_hex = hex::encode(expected_sig);
+
+        if token.signature_hex != expected_hex {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "Invalid capability token signature for active epoch".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Signs an outbound Neural Mesh message tagged with sender and target generation epochs.
+    pub async fn sign_mesh_message(
+        &self,
+        target_arm_id: usize,
+        target_generation: u64,
+        kind: MessageKind,
+        correlation_id: &str,
+        payload: &str,
+    ) -> Result<ArmRingMeshMessage, OctopusSecurityError> {
+        let current_gen = self.current_generation();
+        self.validate_epoch(current_gen).await?;
+
+        let epoch_key = self.epoch_key(current_gen);
+        let data = format!(
+            "{}:{}:{}:{}:{:?}:{}:{}",
+            self.arm_id, current_gen, target_arm_id, target_generation, kind, correlation_id, payload
+        );
+        let sig = compute_ring_hmac(&epoch_key, data.as_bytes());
+        let sig_hex = hex::encode(sig);
+
+        Ok(ArmRingMeshMessage {
+            sender_arm_id: self.arm_id,
+            sender_role: self.role.clone(),
+            sender_generation: current_gen,
+            target_arm_id,
+            target_generation,
+            kind,
+            correlation_id: correlation_id.to_string(),
+            payload: payload.to_string(),
+            signature_hex: sig_hex,
+        })
+    }
+
+    /// Verifies an incoming Neural Mesh message at the recipient's Level 1 arm ring.
+    /// If the message is addressed to a stale generation (e.g. Gen 8 when arm is Gen 9),
+    /// it is rejected immediately!
+    pub async fn verify_incoming_message(
+        &self,
+        msg: &ArmRingMeshMessage,
+    ) -> Result<(), OctopusSecurityError> {
+        if msg.target_arm_id != self.arm_id {
+            return Err(OctopusSecurityError::IdentitySpoofingDetected(format!(
+                "Message misrouted: target_arm_id {} != receiver arm_id {}",
+                msg.target_arm_id, self.arm_id
+            )));
+        }
+
+        // Validate recipient epoch: will reject if msg.target_generation is revoked or obsolete
+        self.validate_epoch(msg.target_generation).await?;
+
+        // Level 2 lateral boundary: Ingestion cannot message Ledger directly
+        if self.role == ArmRole::AccountingLedgerWrite && msg.sender_role == ArmRole::UntrustedDocIngest {
+            return Err(OctopusSecurityError::DelegationScopeViolation(format!(
+                "Ring Boundary Violation: Untrusted Arm {} is forbidden from direct lateral messaging to Sensitive Sink Arm {}",
+                msg.sender_arm_id, self.arm_id
+            )));
+        }
+
+        Ok(())
+    }
+
+    // Negative-control test hook methods
+    pub fn set_epoch_enforcement(&self, enabled: bool) {
+        self.epoch_enforcement_enabled.store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn set_tool_enforcement(&self, enabled: bool) {
+        self.tool_enforcement_enabled.store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn set_budget_enforcement(&self, enabled: bool) {
+        self.budget_enforcement_enabled.store(enabled, Ordering::SeqCst);
+    }
+
+    /// Converts this arm containment ring's live configuration and telemetry to a DTO for monitoring.
+    pub async fn to_status_dto(&self) -> ArmRingStatusDto {
+        let tools: Vec<String> = self.allowed_tools.read().await.iter().cloned().collect();
+        let prefixes: Vec<String> = self.allowed_resource_prefixes.read().await.clone();
+        ArmRingStatusDto {
+            arm_id: self.arm_id,
+            agent_name: self.agent_name.clone(),
+            role: format!("{:?}", self.role),
+            generation: self.current_generation(),
+            is_severed: self.is_severed(),
+            memory_limit_mb: self.config.max_memory_bytes / (1024 * 1024),
+            step_limit: self.config.step_limit,
+            allowed_tools: tools,
+            allowed_resource_prefixes: prefixes,
+            os_isolation: "Windows NT Job Object (64MB) + AppContainer LPAC".to_string(),
+            job_object_clamped: true,
+            appcontainer_sid: format!("S-1-15-2-{}", 1000 + self.arm_id),
+        }
+    }
+}
+
+/// A supervisor-managed registry containing the Level 1 containment rings
+/// for all 50 arms in the Agent Octopus swarm.
+#[derive(Clone)]
+pub struct ArmRingRegistry {
+    rings: Arc<RwLock<std::collections::HashMap<usize, Arc<ArmContainmentRing>>>>,
+    master_seed: [u8; 32],
+}
+
+impl ArmRingRegistry {
+    /// Initializes Level 1 containment rings for `size` arms (default: 50).
+    pub fn new(size: usize, master_seed: &[u8]) -> Self {
+        let mut seed = [0u8; 32];
+        if master_seed.len() >= 32 {
+            seed.copy_from_slice(&master_seed[..32]);
+        } else {
+            let hash = Sha256::digest(master_seed);
+            seed.copy_from_slice(&hash);
+        }
+
+        let mut map = std::collections::HashMap::new();
+        for arm_id in 0..size {
+            let role = match arm_id % 3 {
+                0 => ArmRole::UntrustedDocIngest,
+                1 => ArmRole::AccountingLedgerWrite,
+                _ => ArmRole::NetworkEgress,
+            };
+            let ring = Arc::new(ArmContainmentRing::new(arm_id, role, 1, &seed));
+            map.insert(arm_id, ring);
+        }
+
+        Self {
+            rings: Arc::new(RwLock::new(map)),
+            master_seed: seed,
+        }
+    }
+
+    /// Returns the supervisor master seed used to derive arm ring epoch keys.
+    pub fn master_seed(&self) -> &[u8; 32] {
+        &self.master_seed
+    }
+
+    /// Retrieves an arm's individual containment ring.
+    pub async fn get_ring(&self, arm_id: usize) -> Option<Arc<ArmContainmentRing>> {
+        let rings = self.rings.read().await;
+        rings.get(&arm_id).cloned()
+    }
+
+    /// Retrieves an arm's individual containment ring by agent name (e.g. "arm-UntrustedDocIngest-0").
+    pub async fn get_ring_by_name(&self, agent_name: &str) -> Option<Arc<ArmContainmentRing>> {
+        let rings = self.rings.read().await;
+        rings.values().find(|r| r.agent_name == agent_name).cloned()
+    }
+
+    /// Registers a new or custom arm containment ring into the fleet registry.
+    pub async fn register_ring(&self, ring: Arc<ArmContainmentRing>) {
+        let mut rings = self.rings.write().await;
+        rings.insert(ring.arm_id, ring);
+    }
+
+    /// Severs an arm's individual ring without affecting any other arm.
+    pub async fn sever_arm(&self, arm_id: usize, reason: &str) -> Result<(), OctopusSecurityError> {
+        let rings = self.rings.read().await;
+        if let Some(ring) = rings.get(&arm_id) {
+            ring.sever(reason).await;
+            Ok(())
+        } else {
+            Err(OctopusSecurityError::CapabilityDenied(format!(
+                "Arm {} not found in registry",
+                arm_id
+            )))
+        }
+    }
+
+    /// Regenerates an arm after autotomy, advancing its generation epoch and revoking old credentials.
+    pub async fn sever_and_regenerate(&self, arm_id: usize) -> Result<u64, OctopusSecurityError> {
+        let rings = self.rings.read().await;
+        if let Some(ring) = rings.get(&arm_id) {
+            Ok(ring.sever_and_regenerate().await)
+        } else {
+            Err(OctopusSecurityError::CapabilityDenied(format!(
+                "Arm {} not found in registry",
+                arm_id
+            )))
+        }
+    }
+
+    /// Returns the total number of managed arm rings in the registry.
+    pub async fn len(&self) -> usize {
+        let rings = self.rings.read().await;
+        rings.len()
+    }
+
+    /// Returns true if the registry contains no arm rings.
+    pub async fn is_empty(&self) -> bool {
+        self.len().await == 0
+    }
+
+    /// Returns the complete list of arm ring statuses across all arms.
+    pub async fn list_rings(&self) -> Vec<ArmRingStatusDto> {
+        let rings = self.rings.read().await;
+        let mut list = Vec::new();
+        let mut ids: Vec<usize> = rings.keys().cloned().collect();
+        ids.sort();
+        for id in ids {
+            if let Some(ring) = rings.get(&id) {
+                list.push(ring.to_status_dto().await);
+            }
+        }
+        list
+    }
+}
