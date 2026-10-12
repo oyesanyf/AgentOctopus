@@ -1449,10 +1449,15 @@ pub fn handle_runtime_activity_stream(state: &WebState) -> String {
     for entry in audit_entries {
         let is_allow = entry.decision.to_uppercase().contains("ALLOW") || entry.decision.to_uppercase().contains("PERMIT");
         let verdict = if is_allow { "ALLOW" } else { "DENY" };
+        let subsystem = if entry.event_type.starts_with("HTTP_") || entry.event_type.starts_with("DIFFERENTIAL_") {
+            "Strict-HTTP"
+        } else {
+            "Cedar-Policy"
+        };
         events.push(json!({
             "id": format!("audit_{}_{}", entry.timestamp_secs, &entry.record_hash[..8.min(entry.record_hash.len())]),
             "timestamp_secs": entry.timestamp_secs,
-            "subsystem": "Cedar-Policy",
+            "subsystem": subsystem,
             "event_type": entry.event_type,
             "actor": entry.agent_id,
             "target": entry.details,

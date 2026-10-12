@@ -201,6 +201,12 @@ impl TarpitArm {
         }).to_string()
     }
 
+    /// Checks if a caller has reached quarantine status.
+    pub fn is_quarantined(&self, caller_id: &str) -> bool {
+        let map = self.adversaries.read().unwrap();
+        map.get(caller_id).map(|p| p.quarantined).unwrap_or(false)
+    }
+
     /// Returns aggregate metrics for the UI and status endpoints.
     pub fn stats(&self) -> TarpitStats {
         let map = self.adversaries.read().unwrap();

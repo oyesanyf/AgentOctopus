@@ -2731,6 +2731,7 @@ with urllib.request.urlopen(req) as resp:
           <label style="font-size: 0.8rem; color: #94a3b8; margin: 0; text-transform: uppercase;">Subsystem:</label>
           <select id="runtime-subsystem-filter" onchange="filterRuntimeActivityTable()" style="padding: 0.35rem 0.6rem; font-size: 0.8rem; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px;">
             <option value="ALL">All Subsystems (Consolidated)</option>
+            <option value="Strict-HTTP">🌐 Strict HTTP &amp; Protocol Terminator</option>
             <option value="Cedar-Policy">🛡️ Cedar Policy Engine</option>
             <option value="RL-ActiveDefense">🧠 RL Active Defense (D3QN)</option>
             <option value="OpenTelemetry">🔭 OpenTelemetry Spans</option>
@@ -3557,13 +3558,14 @@ with urllib.request.urlopen(req) as resp:
       data.records.slice().reverse().forEach(rec => {
         const row = document.createElement('tr');
         const isAllow = rec.decision === 'ALLOW' || rec.decision === 'PERMIT';
+        const evColor = (rec.event_type && (rec.event_type.startsWith('HTTP_') || rec.event_type.startsWith('DIFFERENTIAL_'))) ? '#f43f5e' : 'var(--accent-cyan)';
         row.innerHTML = `
           <td style="color: var(--text-muted); font-size: 0.75rem;">${new Date(rec.timestamp_secs * 1000).toLocaleTimeString()}</td>
-          <td><span style="font-weight: 600; color: var(--accent-cyan);">${rec.event_type}</span></td>
-          <td><code>${rec.agent_id}</code></td>
-          <td><span class="badge ${isAllow ? 'badge-success' : 'badge-danger'}">${rec.decision}</span></td>
-          <td style="font-size: 0.8rem;">${rec.details}</td>
-          <td style="font-family: monospace; font-size: 0.75rem; color: #94a3b8;">${rec.record_hash.substring(0, 16)}...</td>
+          <td><span style="font-weight: 600; color: ${evColor};">${escapeHtml(rec.event_type)}</span></td>
+          <td><code>${escapeHtml(rec.agent_id)}</code></td>
+          <td><span class="badge ${isAllow ? 'badge-success' : 'badge-danger'}">${escapeHtml(rec.decision)}</span></td>
+          <td style="font-size: 0.8rem;">${escapeHtml(rec.details)}</td>
+          <td style="font-family: monospace; font-size: 0.75rem; color: #94a3b8;">${escapeHtml(rec.record_hash.substring(0, 16))}...</td>
         `;
         tbody.appendChild(row);
       });
@@ -5218,6 +5220,7 @@ with urllib.request.urlopen(req) as resp:
 
       let subBadge = '#94a3b8';
       if (e.subsystem === 'Cedar-Policy') subBadge = '#06b6d4';
+      else if (e.subsystem === 'Strict-HTTP') subBadge = '#f43f5e';
       else if (e.subsystem === 'RL-ActiveDefense') subBadge = '#a855f7';
       else if (e.subsystem === 'OpenTelemetry') subBadge = '#3b82f6';
       else if (e.subsystem === 'Swarm-Runner') subBadge = '#10b981';

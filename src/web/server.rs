@@ -100,12 +100,12 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
 async fn run_listener(listener: TcpListener, state: Arc<WebState>) {
     loop {
         match listener.accept().await {
-            Ok((socket, _)) => {
+            Ok((socket, peer_addr)) => {
                 let _ = socket.set_nodelay(true);
                 let state_clone = Arc::clone(&state);
                 tokio::spawn(async move {
                     let task = tokio::spawn(async move {
-                        handle_connection(socket, state_clone).await
+                        handle_connection(socket, peer_addr, state_clone).await
                     });
                     match task.await {
                         Ok(Ok(())) => {}
@@ -151,8 +151,10 @@ pub fn api_error_response(status_code: &str, code: &str, message: &str) -> Strin
 
 async fn handle_connection(
     mut stream: TcpStream,
+    peer_addr: std::net::SocketAddr,
     state: Arc<WebState>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let client_ip = peer_addr.ip().to_string();
     let mut total_buffer = Vec::new();
     let mut chunk = [0u8; 8192];
     let mut header_pos = None;
@@ -166,6 +168,13 @@ async fn handle_connection(
             Err(_) => {
                 // Header read timed out (Slowloris / stalled client)
                 if !total_buffer.is_empty() {
+                    let _ = state.tarpit.engage_adversary(&client_ip, "slowloris_timeout", "").await;
+                    state.audit_log.record_event(
+                        "HTTP_SLOWLORIS_TIMEOUT",
+                        &format!("recon_{}", client_ip),
+                        &format!("Socket header read timed out for {} (Dangling-Byte/Slowloris clamp triggered)", client_ip),
+                        "REQUEST_TIMEOUT",
+                    );
                     let resp = api_error_response("408 Request Timeout", "REQUEST_TIMEOUT", "Timed out waiting for HTTP request headers");
                     let _ = stream.write_all(resp.as_bytes()).await;
                     let _ = stream.flush().await;
@@ -190,6 +199,13 @@ async fn handle_connection(
             if total_buffer.is_empty() {
                 return Ok(());
             }
+            let _ = state.tarpit.engage_adversary(&client_ip, "malformed_header_boundary", "").await;
+            state.audit_log.record_event(
+                "HTTP_MALFORMED_HEADER_BOUNDARY",
+                &format!("recon_{}", client_ip),
+                &format!("Malformed HTTP request header boundary without CRLF CRLF from {}", client_ip),
+                "REJECTED",
+            );
             let resp = api_error_response("400 Bad Request", "INVALID_REQUEST", "Malformed HTTP request header boundary");
             let _ = stream.write_all(resp.as_bytes()).await;
             let _ = stream.flush().await;
@@ -214,6 +230,14 @@ async fn handle_connection(
                 rejection.signal.code(),
                 rejection.details
             );
+            let _ = state.tarpit.engage_adversary(&client_ip, rejection.signal.code(), "").await;
+            state.audit_log.record_event(
+                "HTTP_FRAMING_REJECTED",
+                &format!("recon_{}", client_ip),
+                &format!("Signal: {} | Details: {} (Origin: {})", rejection.signal.code(), rejection.details, client_ip),
+                "REJECTED",
+            );
+            let _ = state.protocol_analyzer.evaluate_raw_stream(&total_buffer[..pos]).await;
             let resp = api_error_response(
                 "400 Bad Request",
                 "HTTP_PROTOCOL_REJECTED",
