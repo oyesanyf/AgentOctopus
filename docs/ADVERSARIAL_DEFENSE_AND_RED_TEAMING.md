@@ -40,6 +40,8 @@ So while it contains an entire isolated multi-agent execution environment, the f
 | `AttackChainArm` | Graph Synthesis Enclave | Multi-step lateral movement path analysis and containment |
 | `MitreAtlasArm` | ATLAS v4.1 Threat Matrix | Real-time mapping against 16 tactics and 208 AI attack techniques |
 | `BehavioralSentinelArm` | Sliding Window Watchdog | Fast-path entropy anomaly detection and statistical spike alerts |
+| `DifferentialProtocolAnalyzer` (Arm 106) | Differential Parser Matrix | Independent cross-validation of HTTP desync vectors across RFC 7230, Envoy, Go, Node, and ATS profiles |
+| `AutonomousProtocolResearch` (Arm 107) | Dedicated Ring #107 & Job Object (64MB) | Autonomous RFC intelligence & hypothesis generation bounded by Cedar Policy #8 allowlist, Dogwood temporal limits, and an isolated private SQLite database (`data/protocol_research.db`) |
 
 ---
 

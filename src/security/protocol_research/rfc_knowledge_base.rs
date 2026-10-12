@@ -1,0 +1,249 @@
+use super::types::{CandidateProbeDto, RfcChunkDto};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// RfcKnowledgeBase: Encapsulates Agent Octopus's dedicated, isolated Protocol Research database.
+/// Strictly decoupled from external engines, storing ingested RFC knowledge, probes, and evaluations.
+pub struct RfcKnowledgeBase {
+    db_path: PathBuf,
+}
+
+impl Default for RfcKnowledgeBase {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RfcKnowledgeBase {
+    /// Creates a new RfcKnowledgeBase pointing to Octopus's private data store.
+    pub fn new() -> Self {
+        let base_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let db_path = base_dir.join("data").join("protocol_research.db");
+        
+        let kb = Self { db_path };
+        kb.ensure_initialized();
+        kb
+    }
+
+    /// Initializes from an explicit file path (e.g. for testing isolated instances).
+    pub fn from_path(path: impl Into<PathBuf>) -> Self {
+        let kb = Self { db_path: path.into() };
+        kb.ensure_initialized();
+        kb
+    }
+
+    /// Path to Octopus's private protocol research database.
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
+    }
+
+    /// Verifies that the database directory and required schema exist.
+    pub fn ensure_initialized(&self) {
+        if let Some(parent) = self.db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let schema_sql = "
+            CREATE TABLE IF NOT EXISTS rfcs (
+                rfc_number INTEGER PRIMARY KEY,
+                title TEXT,
+                published_date TEXT,
+                status TEXT
+            );
+            CREATE TABLE IF NOT EXISTS fragments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rfc_number INTEGER,
+                title TEXT,
+                chunk_index INTEGER,
+                content TEXT,
+                is_normative INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS probes (
+                id TEXT PRIMARY KEY,
+                rfc_number INTEGER,
+                raw_request TEXT,
+                mutation_type TEXT,
+                hypothesis TEXT,
+                status TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS evaluations (
+                id TEXT PRIMARY KEY,
+                probe_id TEXT,
+                target_host TEXT,
+                target_port INTEGER,
+                is_anomalous INTEGER,
+                finding_status TEXT,
+                details TEXT,
+                baseline_subtracted INTEGER,
+                created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS arm106_validations (
+                id TEXT PRIMARY KEY,
+                evaluation_id TEXT,
+                divergence_tier TEXT,
+                parser_consensus TEXT,
+                requires_rule_promotion INTEGER,
+                verified_at TEXT
+            );
+        ";
+
+        let _ = Command::new("sqlite3")
+            .arg(&self.db_path)
+            .arg(schema_sql)
+            .output();
+    }
+
+    /// Returns aggregate telemetry: (rfc_count, fragment_count, probe_count, evaluations_count).
+    pub fn read_untrusted_data(&self) -> (usize, usize, usize) {
+        let (rfcs, frags, probes, _) = self.get_full_counts();
+        (rfcs, frags, probes)
+    }
+
+    /// Returns all counts including recorded evaluations.
+    pub fn get_full_counts(&self) -> (usize, usize, usize, usize) {
+        let query = "SELECT (SELECT COUNT(*) FROM rfcs), (SELECT COUNT(*) FROM fragments), (SELECT COUNT(*) FROM probes), (SELECT COUNT(*) FROM evaluations);";
+        let output = Command::new("sqlite3")
+            .arg(&self.db_path)
+            .arg(query)
+            .output();
+
+        if let Ok(out) = output {
+            let result_str = String::from_utf8_lossy(&out.stdout);
+            let parts: Vec<&str> = result_str.trim().split('|').collect();
+            if parts.len() >= 4 {
+                let rfcs: usize = parts[0].parse().unwrap_or(0);
+                let fragments: usize = parts[1].parse().unwrap_or(0);
+                let probes: usize = parts[2].parse().unwrap_or(0);
+                let evals: usize = parts[3].parse().unwrap_or(0);
+                return (rfcs, fragments, probes, evals);
+            }
+        }
+        (0, 0, 0, 0)
+    }
+
+    /// Queries RFC fragments matching a specific protocol token or header.
+    pub fn search_fragments(&self, keyword: &str, limit: usize) -> Vec<RfcChunkDto> {
+        let sanitized = keyword.replace('\'', "''");
+        let query = format!(
+            "SELECT id, rfc_number, title, chunk_index, content, is_normative FROM fragments WHERE content LIKE '%{}%' LIMIT {};",
+            sanitized, limit
+        );
+
+        let mut results = Vec::new();
+        let output = Command::new("sqlite3")
+            .arg(&self.db_path)
+            .arg("-separator")
+            .arg("<|OCT_SEP|>")
+            .arg(&query)
+            .output();
+
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                let fields: Vec<&str> = line.split("<|OCT_SEP|>").collect();
+                if fields.len() >= 6 {
+                    results.push(RfcChunkDto {
+                        id: fields[0].parse().unwrap_or(0),
+                        rfc_number: fields[1].parse().unwrap_or(0),
+                        title: fields[2].to_string(),
+                        chunk_index: fields[3].parse().unwrap_or(0),
+                        content: fields[4].to_string(),
+                        is_normative: fields[5] == "1",
+                    });
+                }
+            }
+        }
+        results
+    }
+
+    /// Fetches candidate probes from the research knowledge base.
+    pub fn get_candidate_probes(&self, limit: usize) -> Vec<CandidateProbeDto> {
+        let query = format!(
+            "SELECT id, rfc_number, raw_request, mutation_type, hypothesis, status FROM probes LIMIT {};",
+            limit
+        );
+
+        let mut probes = Vec::new();
+        let output = Command::new("sqlite3")
+            .arg(&self.db_path)
+            .arg("-separator")
+            .arg("<|OCT_SEP|>")
+            .arg(&query)
+            .output();
+
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                let fields: Vec<&str> = line.split("<|OCT_SEP|>").collect();
+                if fields.len() >= 6 {
+                    probes.push(CandidateProbeDto {
+                        id: fields[0].to_string(),
+                        rfc_number: fields[1].parse().unwrap_or(0),
+                        raw_request: fields[2].to_string(),
+                        mutation_type: fields[3].to_string(),
+                        hypothesis: fields[4].to_string(),
+                        status: fields[5].to_string(),
+                    });
+                }
+            }
+        }
+        probes
+    }
+
+    /// Records an evaluation finding into Octopus's private research store.
+    pub fn record_evaluation(
+        &self,
+        finding_id: &str,
+        probe_id: &str,
+        target_host: &str,
+        target_port: u16,
+        is_anomalous: bool,
+        finding_status: &str,
+        details: &str,
+        baseline_subtracted: bool,
+    ) {
+        let clean_details = details.replace('\'', "''");
+        let query = format!(
+            "INSERT OR REPLACE INTO evaluations (id, probe_id, target_host, target_port, is_anomalous, finding_status, details, baseline_subtracted, created_at) VALUES ('{}', '{}', '{}', {}, {}, '{}', '{}', {}, datetime('now'));",
+            finding_id,
+            probe_id,
+            target_host,
+            target_port,
+            if is_anomalous { 1 } else { 0 },
+            finding_status,
+            clean_details,
+            if baseline_subtracted { 1 } else { 0 }
+        );
+
+        let _ = Command::new("sqlite3")
+            .arg(&self.db_path)
+            .arg(&query)
+            .output();
+    }
+
+    /// Records an Arm 106 differential cross-validation outcome.
+    pub fn record_arm106_validation(
+        &self,
+        validation_id: &str,
+        evaluation_id: &str,
+        divergence_tier: &str,
+        parser_consensus: &str,
+        requires_rule_promotion: bool,
+    ) {
+        let clean_consensus = parser_consensus.replace('\'', "''");
+        let query = format!(
+            "INSERT OR REPLACE INTO arm106_validations (id, evaluation_id, divergence_tier, parser_consensus, requires_rule_promotion, verified_at) VALUES ('{}', '{}', '{}', '{}', {}, datetime('now'));",
+            validation_id,
+            evaluation_id,
+            divergence_tier,
+            clean_consensus,
+            if requires_rule_promotion { 1 } else { 0 }
+        );
+
+        let _ = Command::new("sqlite3")
+            .arg(&self.db_path)
+            .arg(&query)
+            .output();
+    }
+}

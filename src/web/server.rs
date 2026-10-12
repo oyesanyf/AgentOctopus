@@ -15,6 +15,9 @@ use super::api::{
     handle_containment_ring_stale_replay, handle_sentinel_simulate_breach, handle_sentinel_reset_lockdown,
     handle_protocol_analyzer_status, handle_protocol_analyzer_events, handle_protocol_analyzer_analyze,
     handle_dogwood_evaluate, handle_dogwood_trace, handle_dogwood_simulate_trace, handle_dogwood_presets,
+    handle_protocol_research_status, handle_protocol_research_knowledge_base,
+    handle_protocol_research_evaluate, handle_protocol_research_validate_arm106,
+    handle_protocol_research_hypotheses,
     WebState,
 };
 use super::static_files::INDEX_HTML;
@@ -751,6 +754,64 @@ async fn handle_connection(
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/protocol-research/status") => {
+            let json_body = handle_protocol_research_status(&state).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/protocol-research/knowledge-base") => {
+            let json_body = handle_protocol_research_knowledge_base(&state, &query);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/protocol-research/evaluate") => {
+            let (status_code, json_body) = match handle_protocol_research_evaluate(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/protocol-research/validate-arm106") => {
+            let (status_code, json_body) = match handle_protocol_research_validate_arm106(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/protocol-research/hypotheses") => {
+            let json_body = handle_protocol_research_hypotheses(&state);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );

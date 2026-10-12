@@ -67,6 +67,9 @@ impl DelegationScopeGuard {
                 tools.insert("osv_client");
                 tools.insert("dep_advisor");
             }
+            ArmRole::AutonomousProtocolResearch => {
+                // no delegation
+            }
             ArmRole::DifferentialProtocolAnalyzer => {
                 tools.insert("protocol_analyzer");
                 tools.insert("fuzz_divergence");

@@ -67,6 +67,7 @@ pub enum ArmRole {
     ContinuousOssFuzz,
     ContinuousOsvScanner,
     DifferentialProtocolAnalyzer,
+    AutonomousProtocolResearch,
 }
 
 /// High-level strategic intent sent downward from Central Brain to Arm.

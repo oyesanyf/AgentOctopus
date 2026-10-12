@@ -538,6 +538,68 @@ def run_all_tests():
         results.record_fail(tab, "POST /api/atlas/dynamic-tests", f"Status {status}")
 
     # =========================================================================
+    # TAB 11: PROTOCOL RESEARCH & KNOWLEDGE BASE (ARM 107)
+    # =========================================================================
+    tab = "Tab 11: Protocol Research (Arm 107)"
+    print(f"\n--- Checking {tab} ---")
+
+    # 11.1 Arm 107 Status & Telemetry
+    status, body, _ = http_get("/api/protocol-research/status")
+    if status == 200 and "AutonomousProtocolResearch" in body and "is_database_isolated" in body:
+        results.record_pass(tab, "GET /api/protocol-research/status (Subsystem Telemetry & Isolated DB)", "200 OK")
+    else:
+        results.record_fail(tab, "GET /api/protocol-research/status", f"Status {status}, Body: {body[:100]}")
+
+    # 11.2 RFC Knowledge Base & Probes Query
+    status, body, _ = http_get("/api/protocol-research/knowledge-base?keyword=chunked&limit=5")
+    if status == 200 and "matched_fragments" in body:
+        results.record_pass(tab, "GET /api/protocol-research/knowledge-base (RFC Intelligence & Fragments)", "200 OK")
+    else:
+        results.record_fail(tab, "GET /api/protocol-research/knowledge-base", f"Status {status}")
+
+    # 11.3 Discovery Cascade Hypotheses
+    status, body, _ = http_get("/api/protocol-research/hypotheses")
+    if status == 200 and "active_hypotheses" in body:
+        results.record_pass(tab, "GET /api/protocol-research/hypotheses (Synthesis & Evidence Pipeline)", "200 OK")
+    else:
+        results.record_fail(tab, "GET /api/protocol-research/hypotheses", f"Status {status}")
+
+    # 11.4 Joint Cedar + Dogwood Authorized Evaluation (Positive Control: Localhost)
+    eval_req = {
+        "raw_request": "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n0\r\n\r\n",
+        "target_host": "127.0.0.1",
+        "target_port": 5005,
+        "baseline_request": "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+    }
+    status, body, _ = http_post("/api/protocol-research/evaluate", eval_req)
+    if status == 200 and "finding_status" in body:
+        results.record_pass(tab, "POST /api/protocol-research/evaluate (Cedar Policy 8 Authorized Probe)", "200 OK")
+    else:
+        results.record_fail(tab, "POST /api/protocol-research/evaluate", f"Status {status}, Body: {body[:100]}")
+
+    # 11.5 Arm 107 Handoff to Arm 106 Differential Cross-Validation
+    handoff_req = {
+        "handoff_id": "handoff-integration-001",
+        "finding_id": "eval-integration-001",
+        "candidate_probe": {
+            "id": "probe-rfc7230-001",
+            "rfc_number": 7230,
+            "raw_request": "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: \\tchunked\r\n\r\n0\r\n\r\n",
+            "mutation_type": "tab_prefixed_chunked",
+            "hypothesis": "Proxy parses single header while backend parses second header",
+            "status": "CANDIDATE"
+        },
+        "preliminary_tier": "LABORATORY_RESEARCH_FINDING",
+        "requires_independent_reproduction": True,
+        "target_endpoints": ["http://127.0.0.1:5005"]
+    }
+    status, body, _ = http_post("/api/protocol-research/validate-arm106", handoff_req)
+    if status == 200 and "primary_verdict" in body:
+        results.record_pass(tab, "POST /api/protocol-research/validate-arm106 (Arm 106 Cross-Validation)", "200 OK")
+    else:
+        results.record_fail(tab, "POST /api/protocol-research/validate-arm106", f"Status {status}, Body: {body[:100]}")
+
+    # =========================================================================
     # SUMMARY REPORT
     # =========================================================================
     print("\n" + "=" * 80)

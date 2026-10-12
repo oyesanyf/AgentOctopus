@@ -78,6 +78,15 @@ forbid (
 ) when {
     principal == Octopus::Agent::"rogue_adversary"
 };
+
+// 8. Protocol Research Isolation Gate
+permit (
+    principal == Octopus::Agent::"protocol_research_arm",
+    action == Octopus::Action::"evaluate",
+    resource is Octopus::NetworkTarget
+) when {
+    context.destination_host == "127.0.0.1" || context.destination_host == "localhost" || context.destination_host == "::1" || context.destination_host == "[::1]"
+};
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,6 +298,15 @@ permit (
     action == Octopus::Action::"kernel_enforce",
     resource is Octopus::KernelSubstrate
 );
+
+// 8. Protocol Research Isolation Gate
+permit (
+    principal == Octopus::Agent::"protocol_research_arm",
+    action == Octopus::Action::"evaluate",
+    resource is Octopus::NetworkTarget
+) when {{
+    context.destination_host == "127.0.0.1" || context.destination_host == "localhost" || context.destination_host == "::1" || context.destination_host == "[::1]"
+}};
 "#,
             domain_expr
         );

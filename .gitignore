@@ -34,3 +34,8 @@ Desktop.ini
 # Compressed archives & agent subagent workspaces
 *.zip
 .agents/
+
+# SQLite databases
+data/*.db
+data/*.db-journal
+data/*.db-wal

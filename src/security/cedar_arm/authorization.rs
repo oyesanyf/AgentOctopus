@@ -92,6 +92,10 @@ impl CedarAuthorizationGateway {
         let mut default_temporal_policies = std::collections::HashMap::new();
         // Mandatory temporal prerequisite for ledger writes: must have performed a read/extract within 1 hour
         default_temporal_policies.insert(
+            "protocol_research_eval".to_string(),
+            r#"when temporal { formerly exactly < 30 within 5m (Octopus::Action::"evaluate"::response{ callerPrincipal: principal }) };"#.to_string(),
+        );
+        default_temporal_policies.insert(
             "ledger_writer".to_string(),
             r#"when temporal { formerly within 1h (Octopus::Action::"LedgerRead"::response{ callerPrincipal: principal } || Octopus::Action::"extract"::response{ callerPrincipal: principal } || Octopus::Action::"Read"::response{ callerPrincipal: principal }) };"#.to_string(),
         );

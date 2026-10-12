@@ -250,6 +250,17 @@ impl ArmContainmentRing {
                 prefixes.push("protocol://".to_string());
                 prefixes.push("differential://".to_string());
             }
+            ArmRole::AutonomousProtocolResearch => {
+                tools.insert("rfc_intelligence".to_string());
+                tools.insert("generate_probes".to_string());
+                tools.insert("isolated_evaluator".to_string());
+                tools.insert("discovery_cascade".to_string());
+                prefixes.push("protocol://".to_string());
+                prefixes.push("terminator://".to_string());
+                prefixes.push("http://127.0.0.1".to_string());
+                prefixes.push("http://localhost".to_string());
+                prefixes.push("http://[::1]".to_string());
+            }
         }
 
         Self {
@@ -826,6 +837,7 @@ impl ArmRingRegistry {
             (104, ArmRole::ContinuousOssFuzz),
             (105, ArmRole::ContinuousOsvScanner),
             (106, ArmRole::DifferentialProtocolAnalyzer),
+            (107, ArmRole::AutonomousProtocolResearch),
         ];
         for (sec_id, sec_role) in security_arm_roles {
             let sec_ring = Arc::new(ArmContainmentRing::new(sec_id, sec_role, 1, &seed));

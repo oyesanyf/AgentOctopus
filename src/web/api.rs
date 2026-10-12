@@ -75,6 +75,7 @@ pub struct WebState {
     pub production_temporal_engine: Arc<DogwoodTemporalEngine>,
     pub simulation_temporal_engine: Arc<DogwoodTemporalEngine>,
     pub dogwood_engine: Arc<DogwoodTemporalEngine>,
+    pub protocol_research: Arc<crate::security::protocol_research::ProtocolResearchSupervisor>,
 }
 
 fn load_or_init_egress_domains() -> Vec<String> {
@@ -234,6 +235,14 @@ impl Default for WebState {
 
         let dogwood_engine = Arc::clone(&production_temporal_engine);
 
+        let protocol_research = Arc::new(
+            crate::security::protocol_research::ProtocolResearchSupervisor::new(
+                Arc::clone(&arm_rings),
+                Arc::new(crate::security::cedar_arm::CedarPolicyEngine::default()),
+                Arc::clone(&protocol_analyzer),
+            ),
+        );
+
         Self {
             gateway,
             audit_log,
@@ -256,6 +265,7 @@ impl Default for WebState {
             production_temporal_engine,
             simulation_temporal_engine,
             dogwood_engine,
+            protocol_research,
         }
     }
 }
@@ -2162,6 +2172,85 @@ pub fn handle_dogwood_presets() -> String {
             "default_context": {}
         }
     ]).to_string()
+}
+
+pub async fn handle_protocol_research_status(state: &WebState) -> String {
+    let status = state.protocol_research.get_status().await;
+    serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub fn handle_protocol_research_knowledge_base(state: &WebState, query: &str) -> String {
+    let mut keyword = "".to_string();
+    let mut limit = 20;
+    for param in query.split('&') {
+        if let Some((k, v)) = param.split_once('=') {
+            if k == "keyword" {
+                keyword = v.replace('+', " ");
+            } else if k == "limit" {
+                limit = v.parse::<usize>().unwrap_or(20);
+            }
+        }
+    }
+    let fragments = if keyword.is_empty() {
+        state.protocol_research.knowledge_base().search_fragments("Transfer-Encoding", limit)
+    } else {
+        state.protocol_research.knowledge_base().search_fragments(&keyword, limit)
+    };
+    let probes = state.protocol_research.knowledge_base().get_candidate_probes(limit);
+    let (rfcs, frags_total, probes_total, evals_total) = state.protocol_research.knowledge_base().get_full_counts();
+
+    serde_json::json!({
+        "status": "OK",
+        "database_isolated": true,
+        "database_path": state.protocol_research.knowledge_base().db_path().to_string_lossy(),
+        "totals": {
+            "rfcs": rfcs,
+            "fragments": frags_total,
+            "probes": probes_total,
+            "evaluations": evals_total
+        },
+        "query_keyword": keyword,
+        "matched_fragments": fragments,
+        "candidate_probes": probes
+    }).to_string()
+}
+
+pub async fn handle_protocol_research_evaluate(state: &WebState, body: &str) -> Result<String, String> {
+    let req: crate::security::protocol_research::EvaluationRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid evaluation request: {}", e)))?;
+
+    match state.protocol_research.evaluate_probe(req).await {
+        Ok(finding) => Ok(serde_json::to_string_pretty(&finding).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => Err(json_error_payload("RESEARCH_EVALUATION_DENIED", &format!("{}", e))),
+    }
+}
+
+pub async fn handle_protocol_research_validate_arm106(state: &WebState, body: &str) -> Result<String, String> {
+    let handoff: crate::security::protocol_research::Arm106ValidationHandoff = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid Arm 106 handoff: {}", e)))?;
+
+    match state.protocol_research.handoff_to_arm106(handoff).await {
+        Ok(report) => Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => Err(json_error_payload("ARM106_VALIDATION_FAILED", &format!("{}", e))),
+    }
+}
+
+pub fn handle_protocol_research_hypotheses(state: &WebState) -> String {
+    let probes = state.protocol_research.knowledge_base().get_candidate_probes(10);
+    serde_json::json!({
+        "status": "OK",
+        "arm": "Arm 107 (AutonomousProtocolResearch)",
+        "evidence_pipeline": "Discovery -> Baseline Subtraction -> Cedar Authorize -> Arm 106 Validate -> Rule Proposal",
+        "active_hypotheses": probes.into_iter().map(|p| {
+            serde_json::json!({
+                "probe_id": p.id,
+                "rfc_number": p.rfc_number,
+                "mutation": p.mutation_type,
+                "hypothesis": p.hypothesis,
+                "target_gate": "Cedar Policy 8 (127.0.0.1, localhost, ::1)"
+            })
+        }).collect::<Vec<_>>()
+    }).to_string()
 }
 
 #[cfg(test)]

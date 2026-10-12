@@ -272,6 +272,93 @@ Agent Octopus includes the industry's first purpose-built, multi-stage runtime e
 | **6** | **Kernel Sentinel Arm** | Windows Job Object process clamps (64MB hard memory limits, zero child process spawning) and Ring-0 eBPF/driver telemetry hooks. |
 | **7** | **Continuous OSS-Fuzz Arm** | Autonomous fuzzing engine generating dynamic adversarial mutations and memory boundary probes across agent APIs. |
 | **8** | **Continuous OSV-Scanner Arm** | Automated Google OSV.dev dependency scanner auditing pinned crates and supply-chain dependencies against known CVEs. |
+| **106** | **Differential Protocol Analyzer** | Multi-parser differential analysis engine computing quantitative Divergence Vectors across disparate HTTP profiles (RFC 7230, Envoy, Go, Node, ATS) to catch zero-day request smuggling and desync. |
+| **107** | **Autonomous Protocol Research Arm** | Autonomous RFC intelligence and hypothesis generator sandboxed in dedicated Ring #107 with 64MB Job Object clamp, Cedar Policy #8 allowlisting, Dogwood temporal limits, and an isolated private SQLite database. |
+
+---
+
+## 🔬 Arm 107: Autonomous Protocol Research & Dogwood Temporal Policies
+
+Agent Octopus integrates **Arm 107 (`AutonomousProtocolResearch`)** as a specialized research limb designed to autonomously extract protocol requirements from RFCs, synthesize candidate attack hypotheses, and evaluate novel protocol divergences without risking production security.
+
+```mermaid
+flowchart TD
+    subgraph Agent_Octopus_Core ["Agent Octopus Security Controller (Rust Core)"]
+        CentralBrain["Central Brain / Ring Controller"]
+        CedarGate["AWS Cedar Authorization Gate (Policy #8: Target Allowlist)"]
+        DogwoodGate["Dogwood Temporal Engine (Velocity Limiter: max 30/300s)"]
+        AuditLog["SecurityAuditLog (SHA-256 Merkle Chain)"]
+    end
+
+    subgraph Arm_107 ["Arm 107: Autonomous Protocol Research (Dedicated Ring #107)"]
+        Ring107["Arm Containment Ring #107 (Zero Lateral Sink Access)"]
+        JobObject["Windows NT Job Object (64MB Hard Clamp, 0 Breakaway)"]
+        SupervisedWorker["Supervised Worker Process (Isolated Research Sandbox)"]
+        PrivateDB[("Octopus Isolated DB: data/protocol_research.db\n(442 RFCs, 30.9k Chunks, 1.2k Probes)")]
+    end
+
+    subgraph Arm_106 ["Arm 106: Differential Protocol Analyzer (Independent Ring #106)"]
+        DiffEngine["Differential Protocol Engine (Divergence Vector & Novelty Score)"]
+        ParserMatrix["Parser Differential Matrix (RFC 7230, Legacy, CDN, Async)"]
+        RuleGenerator["Detection Rule Synthesis (Validated & Deployed)"]
+    end
+
+    CentralBrain --> CedarGate
+    CedarGate --> DogwoodGate
+    DogwoodGate --> Ring107
+    Ring107 --> JobObject
+    JobObject --> SupervisedWorker
+    SupervisedWorker <--> PrivateDB
+    SupervisedWorker -- "Candidate Divergence (Unverified Hypothesis)" --> DiffEngine
+    DiffEngine --> ParserMatrix
+    ParserMatrix -- "Independent Verification" --> RuleGenerator
+    RuleGenerator --> AuditLog
+```
+
+### 🗄️ Strict Dedicated Database Isolation Invariant
+Agent Octopus strictly maintains and queries its **own private, dedicated SQLite database** located at `data/protocol_research.db`:
+- **Zero Cross-Engine Database Sharing**: Agent Octopus NEVER opens, locks, or shares external databases (such as `rfchunt/terminator.db`). 
+- **Isolated Ingestion & Audit**: All 442 RFCs, 30,968 normative fragments, 1,206 synthesized candidate probes, probe execution evaluations, and Arm 106 cross-validation receipts are stored directly and exclusively in `data/protocol_research.db`.
+- **Concurrency & Integrity**: Prevents database locking conflicts and eliminates any attack vector where an untrusted research process could manipulate Octopus's internal state.
+
+### 🛡️ AWS Cedar Policy #8 Target Allowlist Guard
+Autonomous probe evaluations are strictly bounded by **AWS Cedar Policy #8 (`Protocol Research Isolation Gate`)**:
+```cedar
+// 8. Protocol Research Isolation Gate
+permit (
+    principal == Octopus::Agent::"protocol_research_arm",
+    action == Octopus::Action::"evaluate",
+    resource is Octopus::NetworkTarget
+) when {
+    context.destination_host == "127.0.0.1" || 
+    context.destination_host == "localhost" || 
+    context.destination_host == "::1" || 
+    context.destination_host == "[::1]"
+};
+```
+Any attempt to scan external, unapproved domain names or IP addresses fails closed immediately with `CapabilityDenied`.
+
+### ⏱️ Dogwood Temporal Rate Limiter
+Evaluations are guarded by the **Dogwood Metric First-Order Temporal Logic (MFOTL)** engine:
+- Enforces a sliding-window rate limit: **maximum 30 evaluations per 300-second window**.
+- Prevents runaway probe storms or socket exhaustion during continuous fuzzing cycles.
+
+### 🔄 The 5-Step Evidence Pipeline & Arm Separation
+Arm 107 does not have ambient authority to certify a vulnerability or deploy detection rules on its own:
+1. **Discover**: Synthesize candidate probes from RFC specifications stored in `data/protocol_research.db`.
+2. **Baseline Subtraction**: Record baseline response attributes prior to probe execution and subtract legitimate multi-document or binary responses to prevent false positives.
+3. **Cedar + Dogwood Verification**: Verify that the target is allowlisted (`127.0.0.1`) and that velocity limits have not been exceeded.
+4. **Arm 106 Independent Differential Validation**: Candidate desyncs are handed off to **Arm 106 (`DifferentialProtocolAnalyzer`)** for independent cross-validation across disparate parser profiles.
+5. **Rule Promotion**: If Arm 106 confirms divergence, the finding is promoted to an authoritative detection rule and recorded in the append-only Merkle audit log.
+
+### 🌐 Protocol Research REST API Endpoints
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/protocol-research/status` | Subsystem health, Ring #107 status, isolated DB mode, RFC and probe totals. |
+| `GET` | `/api/protocol-research/knowledge-base` | Queries RFC fragments and candidate probes by keyword (e.g. `?keyword=chunked&limit=10`). |
+| `GET` | `/api/protocol-research/hypotheses` | Returns active protocol ambiguity hypotheses and evidence pipeline status. |
+| `POST` | `/api/protocol-research/evaluate` | Executes a Cedar + Dogwood authorized probe evaluation on a local target. |
+| `POST` | `/api/protocol-research/validate-arm106` | Hands off an Arm 107 finding to Arm 106 for independent differential verification. |
 
 ---
 
