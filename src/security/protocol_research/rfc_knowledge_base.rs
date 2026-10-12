@@ -280,6 +280,64 @@ impl RfcKnowledgeBase {
             .output();
     }
 
+    /// Retrieves all fragments/chunks belonging to a specific RFC.
+    pub fn get_fragments_for_rfc(&self, rfc_number: u32) -> Vec<RfcChunkDto> {
+        let query = format!(
+            "SELECT id, rfc_number, title, chunk_index, content, is_normative FROM fragments WHERE rfc_number = {} ORDER BY chunk_index ASC;",
+            rfc_number
+        );
+        let mut results = Vec::new();
+        let output = Command::new("sqlite3")
+            .arg(&self.db_path)
+            .arg("-separator")
+            .arg("<|OCT_SEP|>")
+            .arg(&query)
+            .output();
+
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                let fields: Vec<&str> = line.split("<|OCT_SEP|>").collect();
+                if fields.len() >= 6 {
+                    results.push(RfcChunkDto {
+                        id: fields[0].parse().unwrap_or(0),
+                        rfc_number: fields[1].parse().unwrap_or(0),
+                        title: fields[2].to_string(),
+                        chunk_index: fields[3].parse().unwrap_or(0),
+                        content: fields[4].to_string(),
+                        is_normative: fields[5] == "1",
+                    });
+                }
+            }
+        }
+        results
+    }
+
+    /// Returns the total chunk count for an RFC.
+    pub fn get_chunk_count_for_rfc(&self, rfc_number: u32) -> usize {
+        let query = format!("SELECT COUNT(*) FROM fragments WHERE rfc_number = {};", rfc_number);
+        if let Ok(out) = Command::new("sqlite3").arg(&self.db_path).arg(&query).output() {
+            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            text.parse().unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
+    /// Inserts a batch of structured chunks for an RFC.
+    pub fn insert_fragments_batch(&self, rfc_number: u32, title: &str, chunks: &[(usize, String, bool)]) {
+        let mut cmds = Vec::with_capacity(chunks.len());
+        let clean_title = title.replace('\'', "''");
+        for (idx, content, is_norm) in chunks {
+            let clean_content = content.replace('\'', "''");
+            cmds.push(format!(
+                "INSERT OR REPLACE INTO fragments (rfc_number, title, chunk_index, content, is_normative) VALUES ({}, '{}', {}, '{}', {});",
+                rfc_number, clean_title, idx, clean_content, if *is_norm { 1 } else { 0 }
+            ));
+        }
+        self.execute_batch(&cmds);
+    }
+
     /// Retrieves synchronization metadata by key (e.g. etag, last_sync).
     pub fn get_metadata(&self, key: &str) -> Option<String> {
         let clean_key = key.replace('\'', "''");

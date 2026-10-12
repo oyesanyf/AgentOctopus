@@ -13,7 +13,9 @@ OPERATIVE_KEYWORDS = [
     "transfer-encoding", "content-length", "content-type",
     "range", "multipart", "early data", "expect", "trailer",
     "upgrade", "connect", "tunnel", "chunked", "boundary",
-    "status line", "request line", "whitespace", "delimit"
+    "status line", "request line", "whitespace", "delimit",
+    "response", "status code", "pipelining", "bdat",
+    "folding", "dot-stuffing", "bare lf", "mail from", "rcpt to"
 ]
 
 

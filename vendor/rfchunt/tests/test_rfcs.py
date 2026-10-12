@@ -122,3 +122,41 @@ def test_rfc_fetcher_all_active(temp_env):
     # Keyword filter for "framing"
     framing_active = fetcher.get_all_active_rfcs(keywords=["framing"])
     assert framing_active == [1004]
+
+
+def test_kettle_corpus(temp_env):
+    temp_dir, db = temp_env
+    # Real cache dir with rfc-index.txt
+    real_cache = Path(__file__).resolve().parent.parent / "rfcs"
+    fetcher = RFCFetcher(cache_dir=str(real_cache), db=db)
+    corpus = fetcher.get_kettle_corpus(max_rfcs=138)
+    assert len(corpus) <= 138
+    assert len(corpus) > 20
+    # Core HTTP standards must be present
+    assert 9112 in corpus
+    assert 7230 in corpus
+    # Core SMTP standards must be present
+    assert 5321 in corpus
+    assert 5322 in corpus
+
+
+def test_explain_vulnerability_concept():
+    from fusion_engine import FusionArbiter
+    arbiter = FusionArbiter(db=None)
+
+    # Test heuristic fallback and concept synthesis for Response Rule Inversion
+    analysis = arbiter.explain_vulnerability_concept(
+        rfc_fragment="A server MUST NOT send a body in a 304 (Not Modified) response.",
+        probe_request="GET / HTTP/1.1\r\nHost: target.local\r\nContent-Length: 5\r\n\r\nhello$PAYLOAD",
+        baseline_resp="HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n1234567890",
+        probe_resp="HTTP/1.1 400 Bad Request\r\n\r\n",
+        retest_resp="CONNECTION_CLOSED",
+        anomalies=[],
+        details="Differential response triggering Connection Close on Conn A",
+    )
+
+    assert "concept_name" in analysis and len(analysis["concept_name"]) > 0
+    assert "architectural_explanation" in analysis and len(analysis["architectural_explanation"]) > 0
+    assert "rfc_clue_connection" in analysis and len(analysis["rfc_clue_connection"]) > 0
+    assert "generalization" in analysis and len(analysis["generalization"]) > 0
+    assert isinstance(analysis["validation_steps"], list) and len(analysis["validation_steps"]) > 0

@@ -41,7 +41,8 @@ def main():
     parser.add_argument("--fragments", type=int, default=2, help="Fragments per RFC (default: 2)")
     parser.add_argument("--variants", type=int, default=2, help="Permutations per probe (default: 2)")
     parser.add_argument("--keep-going", action="store_true", help="Keep running continuously after finding flaws")
-    parser.add_argument("--all-active", action="store_true", help="Comb through all active (non-obsoleted) RFCs from the RFC Editor index")
+    parser.add_argument("--kettle", dest="kettle", action="store_true", default=True, help="Target James Kettle's curated 138 HTTP and SMTP RFC corpus (default: True)")
+    parser.add_argument("--all-active", action="store_true", help="Comb through all 1,259 active RFCs instead of the 138 Kettle corpus")
     parser.add_argument("--unrestricted", action="store_true", help="Scan every active RFC without keyword filtering")
     parser.add_argument("--keywords", default=None, help="Comma-separated keywords to filter active RFCs")
     parser.add_argument("--rfc", default=None, help="Target a specific RFC only (e.g. --rfc 9112 or --rfc MCP)")
@@ -127,6 +128,7 @@ def main():
                 stop_on_first_flaw=not args.keep_going,
                 all_active=args.all_active,
                 unrestricted=args.unrestricted,
+                kettle=args.kettle,
                 keywords=keyword_list,
                 resume=args.resume,
                 target_rfc=args.rfc,

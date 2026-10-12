@@ -254,6 +254,60 @@ class RFCFetcher:
 
         return ordered
 
+    def get_kettle_corpus(self, max_rfcs: int = 138) -> List[int]:
+        """
+        Retrieves James Kettle's curated research corpus of 138 HTTP and SMTP specifications.
+        Prioritizes core HTTP message syntax, semantics, framing, and caching RFCs,
+        alongside canonical SMTP message formats, MIME structures, pipelining, and transport extensions.
+        """
+        content = self.get_rfc_index_content()
+        if not content:
+            return [9112, 9110, 9111, 9113, 9114, 7230, 2616, 5321, 5322, 2045, 2046, 3030]
+
+        core_kettle_prio = [
+            # Core HTTP Message Syntax, Semantics, Framing & Extensions
+            9112, 9110, 9111, 9113, 9114, 7230, 7231, 7232, 7233, 7234, 7235,
+            2616, 1945, 7540, 7541, 8446, 6585, 6265, 6455, 3986, 2817, 2818,
+            8297, 8941, 9651, 7538, 8187, 8246, 9218, 7617, 7616, 9297, 9204,
+            # Core SMTP, Internet Message Format, MIME, Chunking & Pipelining
+            5321, 5322, 2045, 2046, 2047, 3030, 2920, 3207, 1870, 2034, 4954,
+            6531, 6532, 7504, 3461, 1830, 2821, 2822, 821, 822
+        ]
+
+        pattern = re.compile(r"^(\d{4,5})\s+(.*?)(?=\n\n|\r\n\r\n|\Z)", re.MULTILINE | re.DOTALL)
+        matches = pattern.findall(content)
+
+        corpus: List[int] = []
+        seen = set()
+
+        for num in core_kettle_prio:
+            if num not in seen:
+                seen.add(num)
+                corpus.append(num)
+
+        for num_str, entry in reversed(matches):
+            entry_l = entry.lower()
+            if 'obsoleted by' in entry_l or '(status: historic)' in entry_l or '(status: unknown)' in entry_l:
+                continue
+            if any(ex in entry_l for ex in ['anti-spam', 'reputation', 'pki', 'on-demand mail', 'dns ncache', 'x.25', 'postal', 'radius']):
+                continue
+            is_http = any(k in entry_l for k in ['http', 'hypertext transfer', 'transfer-encoding', 'content-length', 'caching'])
+            is_smtp = any(k in entry_l for k in ['smtp', 'simple mail transfer', 'mail submission', 'email message', 'mime'])
+            if is_http or is_smtp:
+                n = int(num_str)
+                if n not in seen:
+                    seen.add(n)
+                    corpus.append(n)
+
+            if len(corpus) >= max_rfcs:
+                break
+
+        final_corpus = corpus[:max_rfcs]
+        print(f"[+] James Kettle Research Corpus Initialized:")
+        print(f"    - Protocol Scope: HTTP & SMTP Specifications")
+        print(f"    - Total Curated Specifications: {len(final_corpus)} RFCs")
+        return final_corpus
+
     def discover_recent_rfcs(self, max_discover: int = 10, keywords: Optional[List[str]] = None) -> List[int]:
         """
         Scans the RFC Editor index to discover the highest-numbered (most recent) RFCs

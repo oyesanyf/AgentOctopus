@@ -90,6 +90,13 @@ pub mod win32 {
         ) -> BOOL;
         pub fn IsTokenRestricted(TokenHandle: HANDLE) -> BOOL;
         pub fn FreeSid(pSid: PSID) -> *mut c_void;
+        pub fn GetTokenInformation(
+            TokenHandle: HANDLE,
+            TokenInformationClass: DWORD,
+            TokenInformation: *mut c_void,
+            TokenInformationLength: DWORD,
+            ReturnLength: *mut DWORD,
+        ) -> BOOL;
     }
 
     #[link(name = "kernel32")]
@@ -462,11 +469,12 @@ impl WindowsAppContainerProfile {
 
         #[cfg(windows)]
         {
-            if let Ok((sid, _)) = create_or_open_appcontainer_profile(
+            if let Ok((sid, psid)) = create_or_open_appcontainer_profile(
                 &container_name,
                 &format!("Agent Octopus {}", agent_id),
                 "AppContainer profile for Agent Octopus agent",
             ) {
+                unsafe { win32::FreeSid(psid); }
                 let mut allowed_capabilities = Vec::new();
                 if allow_google_only {
                     allowed_capabilities.push("internetClient".to_string());
@@ -501,6 +509,42 @@ impl WindowsAppContainerProfile {
             is_lpac,
             allow_internet_client: allow_google_only,
             allowed_capabilities,
+        }
+    }
+
+    /// Creates a mandatory AppContainer profile in production with genuine Windows kernel isolation.
+    /// FAIL-CLOSED: Fails with OctopusSecurityError if userenv profile creation cannot be completed.
+    pub fn create_mandatory(agent_id: &str, is_lpac: bool, allow_google_only: bool) -> Result<Self, OctopusSecurityError> {
+        let container_name = format!("AgentOctopus.AppContainer.{}", agent_id);
+
+        #[cfg(windows)]
+        {
+            let (sid, psid) = create_or_open_appcontainer_profile(
+                &container_name,
+                &format!("Agent Octopus {}", agent_id),
+                "AppContainer profile for Agent Octopus agent",
+            )?;
+            unsafe { win32::FreeSid(psid); }
+
+            let mut allowed_capabilities = Vec::new();
+            if allow_google_only {
+                allowed_capabilities.push("internetClient".to_string());
+            }
+
+            Ok(Self {
+                container_name,
+                package_sid: sid,
+                is_lpac,
+                allow_internet_client: allow_google_only,
+                allowed_capabilities,
+            })
+        }
+
+        #[cfg(not(windows))]
+        {
+            Err(OctopusSecurityError::IsolationViolation(
+                "FAIL-CLOSED: AppContainer kernel profile is only supported on Windows".to_string(),
+            ))
         }
     }
 

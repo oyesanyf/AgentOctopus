@@ -110,14 +110,10 @@ impl RfcIndexSynchronizer {
         }
 
         let raw_str = String::from_utf8_lossy(&output.stdout);
-        let header_end = raw_str.find("\r\n\r\n").or_else(|| raw_str.find("\n\n"));
-        let (headers, body) = match header_end {
-            Some(pos) => (&raw_str[..pos], raw_str[pos + 2..].trim_start_matches('\n')),
-            None => ("", raw_str.as_ref()),
-        };
+        let (status_code, headers, body) = parse_http_wire_response(&raw_str);
 
         // Check for 304 Not Modified (Freshness check)
-        if headers.contains("HTTP/1.1 304") || headers.contains("HTTP/2 304") {
+        if status_code == 304 {
             if cache_path.exists() {
                 if let Ok(cached) = std::fs::read_to_string(&cache_path) {
                     return Ok((
@@ -128,33 +124,28 @@ impl RfcIndexSynchronizer {
             }
         }
 
-        // Validate content authenticity
-        if (headers.contains("HTTP/1.1 200") || headers.contains("HTTP/2 200"))
-            && (body.contains("RFC INDEX") || body.contains("RFC Index") || body.contains("0001 "))
-        {
-            // Extract and update ETag if present
-            for line in headers.lines() {
-                if line.to_ascii_lowercase().starts_with("etag:") {
-                    let etag = line[5..].trim();
-                    self.knowledge_base.set_metadata("rfc_index_etag", etag);
-                }
+        // Validate content authenticity (HTTP 200 OK)
+        if status_code == 200 && (body.contains("RFC INDEX") || body.contains("RFC Index") || body.contains("0001 ")) {
+            if let Some(etag) = headers.get("etag") {
+                self.knowledge_base.set_metadata("rfc_index_etag", etag);
             }
 
             // Persist verified live index to local cache
             if let Some(parent) = cache_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            let _ = std::fs::write(&cache_path, body);
+            let _ = std::fs::write(&cache_path, &body);
 
             return Ok((
-                body.to_string(),
+                body,
                 "Live RFC Editor (https://www.rfc-editor.org/rfc-index.txt - TLS Verified)".to_string(),
             ));
         }
 
-        Err(OctopusSecurityError::DeterministicLayerViolation(
-            "RFC Editor response did not contain expected HTTP 200 or RFC Index markers".to_string()
-        ))
+        Err(OctopusSecurityError::DeterministicLayerViolation(format!(
+            "RFC Editor response status {} did not contain expected HTTP 200 or RFC Index markers",
+            status_code
+        )))
     }
 
     /// Executes an index synchronization pass against standard protocol repositories or managed index.
@@ -425,4 +416,177 @@ impl RfcIndexSynchronizer {
 9204 QPACK: Field Compression for HTTP/3. K. Oku. June 2022. (Status: PROPOSED STANDARD)
         "#.to_string()
     }
+}
+
+/// Reliably parses raw HTTP wire response streams, handling multiple header blocks
+/// (e.g. 100 Continue or 301/302 redirects), case-insensitive headers, chunked transfer
+/// decoding (`Transfer-Encoding: chunked`), and Content-Length slicing.
+pub fn parse_http_wire_response(raw: &str) -> (u16, std::collections::HashMap<String, String>, String) {
+    if raw.is_empty() {
+        return (0, std::collections::HashMap::new(), String::new());
+    }
+
+    // Handle multiple HTTP responses (e.g., 100 Continue preceding 200 OK)
+    // Find the last occurrence of an HTTP status line: "HTTP/1." or "HTTP/2" or "HTTP/3"
+    let mut last_status_idx = 0;
+    for (idx, _) in raw.match_indices("HTTP/") {
+        if idx == 0 || raw.as_bytes().get(idx - 1) == Some(&b'\n') {
+            last_status_idx = idx;
+        }
+    }
+
+    let active_slice = &raw[last_status_idx..];
+
+    // Locate boundary between header block and message body
+    let (header_str, body_slice) = if let Some(pos) = active_slice.find("\r\n\r\n") {
+        (&active_slice[..pos], &active_slice[pos + 4..])
+    } else if let Some(pos) = active_slice.find("\n\n") {
+        (&active_slice[..pos], &active_slice[pos + 2..])
+    } else {
+        ("", active_slice)
+    };
+
+    // Extract status code from status line
+    let mut status_code: u16 = 0;
+    let mut headers = std::collections::HashMap::new();
+
+    let mut lines = header_str.lines();
+    if let Some(status_line) = lines.next() {
+        let parts: Vec<&str> = status_line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            status_code = parts[1].parse().unwrap_or(0);
+        }
+    }
+
+    // Parse headers case-insensitively
+    for line in lines {
+        if let Some(colon_pos) = line.find(':') {
+            let key = line[..colon_pos].trim().to_ascii_lowercase();
+            let val = line[colon_pos + 1..].trim().to_string();
+            headers.insert(key, val);
+        }
+    }
+
+    // Handle chunked transfer decoding if present
+    let is_chunked = headers
+        .get("transfer-encoding")
+        .map(|v| v.to_ascii_lowercase().contains("chunked"))
+        .unwrap_or(false);
+
+    let decoded_body = if is_chunked {
+        decode_chunked_body(body_slice)
+    } else if let Some(cl_str) = headers.get("content-length") {
+        if let Ok(cl) = cl_str.parse::<usize>() {
+            if cl <= body_slice.len() {
+                body_slice[..cl].to_string()
+            } else {
+                body_slice.to_string()
+            }
+        } else {
+            body_slice.to_string()
+        }
+    } else {
+        body_slice.to_string()
+    };
+
+    (status_code, headers, decoded_body)
+}
+
+/// Decodes an HTTP/1.1 chunked transfer encoded stream into clean raw body bytes/text.
+pub fn decode_chunked_body(mut chunked_data: &str) -> String {
+    let mut result = String::new();
+
+    loop {
+        let trimmed = chunked_data.trim_start_matches(|c| c == '\r' || c == '\n');
+        if trimmed.is_empty() {
+            break;
+        }
+
+        // Locate end of chunk size line
+        let line_end = trimmed.find("\r\n").or_else(|| trimmed.find('\n'));
+        let (size_line, rest) = match line_end {
+            Some(idx) => (&trimmed[..idx], &trimmed[idx..]),
+            None => break,
+        };
+
+        // Parse hex chunk size (strip extensions like ';ext=foo')
+        let hex_token = size_line.split(';').next().unwrap_or("").trim();
+        let chunk_size = match usize::from_str_radix(hex_token, 16) {
+            Ok(s) => s,
+            Err(_) => {
+                // If not valid hex, return whatever data remains as best-effort fallback
+                result.push_str(trimmed);
+                return result;
+            }
+        };
+
+        if chunk_size == 0 {
+            // Reached terminal chunk (0\r\n\r\n)
+            break;
+        }
+
+        let chunk_data_start = if rest.starts_with("\r\n") {
+            &rest[2..]
+        } else if rest.starts_with('\n') {
+            &rest[1..]
+        } else {
+            rest
+        };
+
+        if chunk_data_start.len() >= chunk_size {
+            result.push_str(&chunk_data_start[..chunk_size]);
+            chunked_data = &chunk_data_start[chunk_size..];
+        } else {
+            // Incomplete final chunk
+            result.push_str(chunk_data_start);
+            break;
+        }
+    }
+
+    result
+}
+
+/// Splits RFC specification text into structured, indexed chunks while preserving
+/// paragraph integrity and tagging normative statements (RFC 2119 keywords).
+pub fn chunk_rfc_content(_rfc_number: u32, _title: &str, content: &str, max_chunk_chars: usize) -> Vec<(usize, String, bool)> {
+    let mut chunks = Vec::new();
+    let mut current_chunk = String::new();
+    let mut current_is_normative = false;
+    let mut chunk_idx = 0;
+
+    for paragraph in content.split("\n\n") {
+        let trimmed = paragraph.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let is_norm = trimmed.contains(" MUST ")
+            || trimmed.contains(" MUST NOT ")
+            || trimmed.contains(" SHALL ")
+            || trimmed.contains(" SHALL NOT ")
+            || trimmed.contains(" REQUIRED ")
+            || trimmed.contains(" SHOULD ")
+            || trimmed.contains(" SHOULD NOT ");
+
+        if current_chunk.len() + trimmed.len() + 2 > max_chunk_chars && !current_chunk.is_empty() {
+            chunks.push((chunk_idx, current_chunk.trim().to_string(), current_is_normative));
+            chunk_idx += 1;
+            current_chunk = String::new();
+            current_is_normative = false;
+        }
+
+        if !current_chunk.is_empty() {
+            current_chunk.push_str("\n\n");
+        }
+        current_chunk.push_str(trimmed);
+        if is_norm {
+            current_is_normative = true;
+        }
+    }
+
+    if !current_chunk.trim().is_empty() {
+        chunks.push((chunk_idx, current_chunk.trim().to_string(), current_is_normative));
+    }
+
+    chunks
 }

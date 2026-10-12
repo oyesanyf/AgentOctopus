@@ -87,6 +87,7 @@ async fn test_arm107_cedar_target_allowlist_enforcement() {
         target_host: "127.0.0.1".to_string(),
         target_port: test_port,
         baseline_request: Some("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_string()),
+        repetition_count: None,
     };
 
     let result = supervisor.evaluate_probe(local_req).await;
@@ -102,6 +103,7 @@ async fn test_arm107_cedar_target_allowlist_enforcement() {
         target_host: "unauthorized-target.com".to_string(),
         target_port: 80,
         baseline_request: None,
+        repetition_count: None,
     };
 
     let ext_result = supervisor.evaluate_probe(external_req).await;
@@ -236,6 +238,7 @@ async fn test_arm107_structured_transport_outcomes_no_synthetic_http() {
         target_host: "127.0.0.1".to_string(),
         target_port: 19876,
         baseline_request: None,
+        repetition_count: None,
     };
 
     let result = supervisor.evaluate_probe(closed_port_req).await;
@@ -294,6 +297,7 @@ async fn test_arm107_differential_baseline_response_comparison() {
         target_host: "127.0.0.1".to_string(),
         target_port: port,
         baseline_request: Some("POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n".to_string()),
+        repetition_count: None,
     };
 
     let result = supervisor.evaluate_probe(eval_req).await;
@@ -363,6 +367,7 @@ async fn test_arm107_transient_non_reproducible_anomaly_downgrade() {
         target_host: "127.0.0.1".to_string(),
         target_port: port,
         baseline_request: Some("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_string()),
+        repetition_count: None,
     };
 
     let result = supervisor.evaluate_probe(eval_req).await;
@@ -430,3 +435,103 @@ fn test_arm107_worker_packaging_validation_and_fail_closed() {
     assert!(incomplete_res.is_err(), "Worker directory with missing modules must fail closed");
     let _ = std::fs::remove_dir_all(&temp_incomplete);
 }
+
+#[tokio::test]
+async fn test_arm107_multi_trial_repetition_stable_baseline_and_arm106_confirmation() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("Bind test listener");
+    let test_port = listener.local_addr().expect("Get local addr").port();
+
+    tokio::spawn(async move {
+        loop {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 4096];
+                if let Ok(n) = stream.read(&mut buf).await {
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    if req.contains("Transfer-Encoding: chunked") && req.contains("Content-Length:") {
+                        let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 16\r\n\r\nFraming Anomaly!";
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    } else {
+                        let resp = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    }
+                }
+            }
+        }
+    });
+
+    let secret_seed = b"cedar_arm107_multi_trial_seed_32";
+    let rings = Arc::new(ArmRingRegistry::new(50, secret_seed));
+    let cedar = Arc::new(CedarPolicyEngine::default());
+    let dogwood = Arc::new(DogwoodTemporalEngine::new_simulation());
+    let audit_log = Arc::new(SecurityAuditLog::default());
+    let diff_engine = Arc::new(DifferentialProtocolEngine::with_containment(
+        Arc::clone(&rings),
+        Arc::clone(&audit_log),
+    ));
+    let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
+
+    // Configure 5 repeated trials with baseline request
+    let eval_req = EvaluationRequest {
+        raw_request: "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n0\r\n\r\n".to_string(),
+        target_host: "127.0.0.1".to_string(),
+        target_port: test_port,
+        baseline_request: Some("POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n".to_string()),
+        repetition_count: Some(5),
+    };
+
+    let result = supervisor.evaluate_probe(eval_req).await;
+    assert!(result.is_ok(), "Multi-trial evaluation must succeed: {:?}", result.as_ref().err());
+    let finding = result.unwrap();
+
+    assert!(finding.is_anomalous, "Anomaly must be detected across trials");
+    assert_eq!(finding.total_trials, 5, "Total trials must equal requested 5");
+    assert_eq!(finding.confirmation_count, 5, "All 5 trials must confirm the anomaly");
+    assert!(finding.baseline_stable, "Baseline response must be confirmed stable across all 5 trials");
+    assert!((finding.reproducibility_rate - 1.0).abs() < 1e-6, "Reproducibility rate must be 100%");
+    assert!(finding.ci95_low > 0.40, "95% confidence interval lower bound must be positive");
+    assert!(finding.ci95_high <= 1.0, "95% confidence interval upper bound must be <= 1.0");
+    assert!(finding.arm106_validated, "Arm 106 differential analysis must validate the framing anomaly");
+    assert_eq!(
+        finding.finding_status,
+        "CONFIRMED_VULNERABILITY",
+        "Finding must be classified as CONFIRMED_VULNERABILITY after 5 trials, stable baseline, and Arm 106 validation"
+    );
+    assert!(finding.details.contains("CONFIRMED VULNERABILITY"));
+}
+
+#[test]
+fn test_rfc_http_response_parsing_and_chunked_body_decoding() {
+    use agent_octopus::security::protocol_research::{
+        chunk_rfc_content, decode_chunked_body, parse_http_wire_response,
+    };
+
+    // 1. Multiple header blocks (e.g. 100 Continue preceding 200 OK)
+    let multi_block = "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, World!";
+    let (status, headers, body) = parse_http_wire_response(multi_block);
+    assert_eq!(status, 200, "Must extract 200 OK from secondary header block");
+    assert_eq!(headers.get("content-type"), Some(&"text/plain".to_string()));
+    assert_eq!(headers.get("content-length"), Some(&"13".to_string()));
+    assert_eq!(body, "Hello, World!");
+
+    // 2. HTTP/1.1 Chunked Transfer-Encoding wire stream
+    let chunked_stream = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\nWiki\r\n6;ext=foo\r\npedia \r\n0\r\n\r\n";
+    let (chunk_status, chunk_headers, chunk_body) = parse_http_wire_response(chunked_stream);
+    assert_eq!(chunk_status, 200);
+    assert_eq!(chunk_headers.get("transfer-encoding"), Some(&"chunked".to_string()));
+    assert_eq!(chunk_body, "Wikipedia ");
+
+    // 3. Raw decode_chunked_body unit verification
+    let raw_chunks = "5\r\nAgent\r\n8\r\n Octopus\r\n0\r\n\r\n";
+    let decoded = decode_chunked_body(raw_chunks);
+    assert_eq!(decoded, "Agent Octopus");
+
+    // 4. RFC normative chunking with RFC 2119 keywords
+    let sample_rfc = "This is a non-normative introduction paragraph.\n\nAn HTTP server MUST NOT send a Content-Length header with chunked transfer.\n\nClients SHOULD close connections when timeouts occur.";
+    let chunks = chunk_rfc_content(9112, "HTTP/1.1", sample_rfc, 2000);
+    assert_eq!(chunks.len(), 1, "Short RFC must produce 1 chunk");
+    assert!(chunks[0].2, "Chunk with MUST NOT and SHOULD must be flagged as normative");
+}
+
+

@@ -302,44 +302,125 @@ impl ProtocolResearchSupervisor {
             baseline_outcome.as_ref(),
         );
 
-        // Confirmation pass: If divergent and baseline provided, repeat to confirm reproducibility across trials
-        let (confirmed_anomalous, confirmation_count, finding_status) = if is_anomalous {
-            if request.baseline_request.is_some() {
-                // Repeat probe to confirm reproducibility across trials
-                let (rep_outcome, rep_response) = transmit_request(target_addr, &request.raw_request, timeout_duration).await;
-                
-                // Also repeat baseline transmission to ensure baseline stability
-                let (rep_base_outcome, rep_base_response) = if let Some(ref base_req) = request.baseline_request {
+        // Confirmation pass: Configurable repetition count, stable response comparison,
+        // Wilson score confidence interval, and independent Arm 106 cross-validation.
+        let requested_repetitions = request.repetition_count.unwrap_or(2).clamp(1, 10);
+
+        let mut probe_responses: Vec<(TransportOutcome, String)> = Vec::with_capacity(requested_repetitions);
+        let mut baseline_responses: Vec<(Option<TransportOutcome>, Option<String>)> = Vec::with_capacity(requested_repetitions);
+        let mut trial_anomalies: Vec<bool> = Vec::with_capacity(requested_repetitions);
+
+        // Trial 1 (Initial observation)
+        probe_responses.push((probe_outcome.clone(), probe_response.clone()));
+        baseline_responses.push((baseline_outcome.clone(), baseline_response.clone()));
+        trial_anomalies.push(is_anomalous);
+
+        // Repetition trials (if anomalous and multi-trial requested)
+        if is_anomalous && requested_repetitions >= 2 {
+            for _ in 1..requested_repetitions {
+                let (rep_base_out, rep_base_resp) = if let Some(ref base_req) = request.baseline_request {
                     let (b_out, b_resp) = transmit_request(target_addr, base_req, timeout_duration).await;
                     (Some(b_out), Some(b_resp))
                 } else {
                     (None, None)
                 };
 
+                let (rep_out, rep_resp) = transmit_request(target_addr, &request.raw_request, timeout_duration).await;
+
                 let rep_anomalous = self.detect_anomaly_differential(
                     &request.raw_request,
-                    &rep_response,
-                    &rep_outcome,
+                    &rep_resp,
+                    &rep_out,
                     request.baseline_request.as_deref(),
-                    rep_base_response.as_deref(),
-                    rep_base_outcome.as_ref(),
+                    rep_base_resp.as_deref(),
+                    rep_base_out.as_ref(),
                 );
 
-                // Verify repeated divergence across trials
-                if rep_anomalous {
-                    (true, 2, ResearchFindingStatus::LaboratoryResearchFinding.to_string())
-                } else {
-                    // Downgrade non-reproducible / transient anomalies
-                    (false, 1, ResearchFindingStatus::NonReproducibleTransient.to_string())
-                }
-            } else {
-                (true, 1, ResearchFindingStatus::LaboratoryResearchFinding.to_string())
+                probe_responses.push((rep_out, rep_resp));
+                baseline_responses.push((rep_base_out, rep_base_resp));
+                trial_anomalies.push(rep_anomalous);
             }
+        }
+
+        // Assess baseline response stability across trials
+        let baseline_stable = if request.baseline_request.is_some() && baseline_responses.len() >= 2 {
+            let first_base_resp = &baseline_responses[0].1;
+            let first_base_out = &baseline_responses[0].0;
+            baseline_responses.iter().all(|(out, resp)| out == first_base_out && resp == first_base_resp)
         } else {
-            (false, 1, "BENIGN_CONCORDANT".to_string())
+            true
         };
 
-        let details = if confirmed_anomalous {
+        let total_trials = trial_anomalies.len() as u32;
+        let confirmation_count = trial_anomalies.iter().filter(|&&a| a).count() as u32;
+        let reproducibility_rate = if total_trials > 0 {
+            confirmation_count as f64 / total_trials as f64
+        } else {
+            0.0
+        };
+
+        // Wilson score 95% confidence interval for anomaly reproducibility
+        let z: f64 = 1.96;
+        let n = total_trials.max(1) as f64;
+        let p_hat = reproducibility_rate;
+        let denom = 1.0 + (z * z) / n;
+        let center = (p_hat + (z * z) / (2.0 * n)) / denom;
+        let margin = (z / denom) * ((p_hat * (1.0 - p_hat) / n) + (z * z) / (4.0 * n * n)).sqrt();
+        let ci95_low = (center - margin).max(0.0);
+        let ci95_high = (center + margin).min(1.0);
+
+        // Verification condition: requires multi-trial reproducibility and stable baseline
+        let is_reproducible = is_anomalous
+            && ((total_trials <= 1) || (confirmation_count >= 2 && reproducibility_rate >= 0.60 && baseline_stable));
+
+        // Independent Arm 106 validation:
+        // Before classifying as a confirmed vulnerability, require independent Arm 106 differential validation!
+        let (arm106_validated, confirmed_vulnerability) = if is_reproducible && requested_repetitions >= 3 {
+            let arm106_report = self
+                .differential_engine
+                .evaluate_raw_stream(request.raw_request.as_bytes())
+                .await;
+
+            let validated = arm106_report.action != DifferentialAction::Allow
+                || arm106_report.divergence_vector.framing_conflict
+                || arm106_report.divergence_vector.novel_trigger_detected
+                || arm106_report.divergence_vector.novelty_score > 0.0;
+
+            // Record Arm 106 validation in Octopus research store
+            let hex_prefix = Sha256::digest(finding_id.as_bytes())[..8]
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>();
+            let validation_id = format!("val-{}", hex_prefix);
+            self.knowledge_base.record_arm106_validation(
+                &validation_id,
+                &finding_id,
+                &arm106_report.primary_verdict,
+                &format!("{:?}", arm106_report.action),
+                validated,
+            );
+
+            (validated, validated)
+        } else {
+            (false, false)
+        };
+
+        let finding_status = if confirmed_vulnerability {
+            ResearchFindingStatus::ConfirmedVulnerability.to_string()
+        } else if is_reproducible {
+            ResearchFindingStatus::LaboratoryResearchFinding.to_string()
+        } else if is_anomalous {
+            ResearchFindingStatus::NonReproducibleTransient.to_string()
+        } else {
+            "BENIGN_CONCORDANT".to_string()
+        };
+
+        let details = if confirmed_vulnerability {
+            format!(
+                "CONFIRMED VULNERABILITY: Anomaly verified reproducible across {}/{} trials (Reproducibility: {:.1}%, 95% CI: [{:.1}%, {:.1}%]). Baseline stability confirmed. Independently validated by Arm 106 differential analysis engine. Target: {}:{}.",
+                confirmation_count, total_trials, reproducibility_rate * 100.0, ci95_low * 100.0, ci95_high * 100.0, request.target_host, request.target_port
+            )
+        } else if is_reproducible {
             format!(
                 "Candidate divergence detected and verified reproducible on target {}:{}. Baseline subtraction applied. Outcome: {:?}. Confirmation count: {}. Requires Arm 106 independent cross-validation. Wire response length: {} bytes.",
                 request.target_host, request.target_port, probe_outcome, confirmation_count, probe_response.len()
@@ -362,7 +443,7 @@ impl ProtocolResearchSupervisor {
             &probe_id,
             &request.target_host,
             request.target_port,
-            confirmed_anomalous,
+            is_reproducible,
             &finding_status,
             &details,
             request.baseline_request.is_some(),
@@ -371,7 +452,7 @@ impl ProtocolResearchSupervisor {
         Ok(ResearchFinding {
             finding_id,
             probe_id,
-            is_anomalous: confirmed_anomalous,
+            is_anomalous: is_reproducible,
             finding_status,
             details,
             baseline_subtracted: request.baseline_request.is_some(),
@@ -379,6 +460,12 @@ impl ProtocolResearchSupervisor {
             transport_outcome: probe_outcome,
             baseline_response,
             confirmation_count,
+            total_trials,
+            baseline_stable,
+            reproducibility_rate,
+            ci95_low,
+            ci95_high,
+            arm106_validated,
         })
     }
 

@@ -479,4 +479,125 @@ fn test_supervisor_independent_termination_and_wallclock_timeout() {
     }
 }
 
+#[cfg(windows)]
+#[test]
+fn test_windows_runtime_token_privileges_and_integrity_audit() {
+    use agent_octopus::security::windows_sandbox::{win32, WindowsRestrictedTokenPolicy};
+    use windows_sys::Win32::Foundation::CloseHandle;
+
+    let token_policy = WindowsRestrictedTokenPolicy::default();
+    let restricted_token = token_policy.create_restricted_token().expect("Real Win32 restricted token creation");
+    assert!(!restricted_token.is_null());
+
+    let is_restricted = unsafe { win32::IsTokenRestricted(restricted_token) };
+    assert_ne!(is_restricted, 0, "Restricted token must be confirmed restricted via Win32 IsTokenRestricted");
+
+    // Query TokenPrivileges (TokenInformationClass = 3 in Win32: TokenUser=1, TokenGroups=2, TokenPrivileges=3)
+    let mut return_length: u32 = 0;
+    unsafe {
+        win32::GetTokenInformation(restricted_token, 3, std::ptr::null_mut(), 0, &mut return_length);
+    }
+    assert!(return_length > 0, "GetTokenInformation must return positive required buffer length");
+
+    let mut buf: Vec<u8> = vec![0u8; return_length as usize];
+    let ok = unsafe {
+        win32::GetTokenInformation(
+            restricted_token,
+            3,
+            buf.as_mut_ptr() as *mut std::ffi::c_void,
+            return_length,
+            &mut return_length,
+        )
+    };
+    assert_ne!(ok, 0, "GetTokenInformation for TokenPrivileges must succeed");
+
+    let priv_count = unsafe { *(buf.as_ptr() as *const u32) };
+    println!("[WINDOWS RUNTIME] Verified restricted token privileges count: {}", priv_count);
+    assert!(priv_count <= 1, "Restricted token must have all dangerous privileges stripped (privilege count <= 1)");
+
+    // Query TokenGroups (TokenInformationClass = 2) to verify S-1-5-32-544 (Administrators) restriction
+    let mut groups_len: u32 = 0;
+    unsafe {
+        win32::GetTokenInformation(restricted_token, 2, std::ptr::null_mut(), 0, &mut groups_len);
+    }
+    if groups_len > 0 {
+        let mut gbuf: Vec<u8> = vec![0u8; groups_len as usize];
+        let gok = unsafe {
+            win32::GetTokenInformation(
+                restricted_token,
+                2,
+                gbuf.as_mut_ptr() as *mut std::ffi::c_void,
+                groups_len,
+                &mut groups_len,
+            )
+        };
+        assert_ne!(gok, 0, "GetTokenInformation for TokenGroups must succeed");
+    }
+
+    unsafe { CloseHandle(restricted_token); }
+}
+
+#[cfg(windows)]
+#[test]
+fn test_windows_runtime_job_object_limits_and_escape_prevention() {
+    use agent_octopus::security::windows_sandbox::WindowsJobObject;
+    use std::os::windows::io::AsRawHandle;
+
+    // 1. Create a 64MB Job Object with active process limit = 3
+    let job = WindowsJobObject::create("TestJob-EscapePrevention", 3, 64 * 1024 * 1024)
+        .expect("Job Object creation");
+
+    // 2. Spawn a managed child process
+    let mut child = std::process::Command::new("cmd.exe")
+        .args(["/c", "ping -n 5 127.0.0.1 > nul"])
+        .spawn()
+        .expect("Spawn test child process");
+
+    let child_handle = child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+    job.assign_process(child_handle).expect("Assign child to Job Object");
+
+    // 3. Confirm kernel membership via IsProcessInJob
+    let in_job = job.verify_process_in_job(child_handle).expect("Verify child in job");
+    assert!(in_job, "Child process must reside in Job Object");
+
+    // 4. Verify Breakaway Escape Prevention and kernel limits:
+    // When JOB_OBJECT_LIMIT_BREAKAWAY_OK is NOT set on the job, child processes cannot break away.
+    let breakaway_contained = job.verify_breakaway_contained().expect("Breakaway check");
+    assert!(breakaway_contained, "Job Object must enforce breakaway containment and kill-on-close");
+
+    // 5. Clean up child process
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(windows)]
+#[test]
+fn test_windows_runtime_appcontainer_mandatory_isolation() {
+    use agent_octopus::security::windows_sandbox::{win32, WindowsAppContainerProfile};
+
+    let agent_id = format!("test_runtime_{:08x}", rand::random::<u32>());
+    let profile_res = WindowsAppContainerProfile::create_mandatory(&agent_id, true, true);
+    assert!(profile_res.is_ok(), "Mandatory AppContainer profile creation must succeed on Windows: {:?}", profile_res.err());
+
+    let profile = profile_res.unwrap();
+    assert!(profile.package_sid.starts_with("S-1-15-2-"), "AppContainer SID must have S-1-15-2- prefix");
+
+    let sid_parts: Vec<&str> = profile.package_sid.split('-').collect();
+    assert_eq!(sid_parts.len(), 11, "AppContainer SID must have 11 dash-separated components");
+
+    // Verify filesystem restriction enforcement
+    assert!(profile.verify_access(r"C:\Windows\System32\config\SAM", false).is_err());
+    assert!(profile.verify_access(r"C:\Users\Administrator\NTUSER.DAT", false).is_err());
+
+    // Verify network restriction enforcement
+    assert!(profile.verify_access("https://www.google.com/search?q=test", true).is_ok());
+    assert!(profile.verify_access("https://malicious-c2.attacker.com/exfil", true).is_err());
+
+    // Clean up created profile
+    let wide_name: Vec<u16> = profile.container_name.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        win32::DeleteAppContainerProfile(wide_name.as_ptr());
+    }
+}
+
 

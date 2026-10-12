@@ -92,6 +92,7 @@ class ForensicLogger:
         metadata: Dict[str, Any],
         weaponization: Optional[str] = None,
         cascade: Optional[Dict[str, Any]] = None,
+        concept_analysis: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Records a comprehensive forensic artifact for a confirmed breakthrough flaw."""
         anomalies = metadata.get("anomalies", [])
@@ -106,6 +107,9 @@ class ForensicLogger:
             "model_rationale": rationale,
             "raw_probe_request": raw_request,
             "attack_classification": desync_class or "Unclassified",
+            "vulnerability_concept_name": concept_analysis.get("concept_name", desync_class or "Unclassified") if concept_analysis else (desync_class or "Unclassified"),
+            "architectural_explanation": concept_analysis.get("architectural_explanation", "") if concept_analysis else "",
+            "kettle_analysis": concept_analysis,
             "verification_status": "CONFIRMED_VULNERABLE" if is_vuln else "ANOMALY",
             "verification_details": details,
             "forensic_evidence": {

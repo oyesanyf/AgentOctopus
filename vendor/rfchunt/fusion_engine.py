@@ -162,12 +162,18 @@ class FusionArbiter:
         # Phase 1: Protocol Specialist (Google Gemma)
         # ------------------------------------------------------------------
         gemma_sys = (
-            "You are a network protocol specification analyzer. Identify subtle state-machine "
-            "ambiguities or parsing edge-cases in this RFC snippet. Construct raw HTTP/1.1 requests "
-            "using explicit '\\r\\n' line delimiters, host 'target.local', and '$PAYLOAD' placeholder. "
+            "You are a network protocol specification researcher (James Kettle DEF CON 34 methodology). "
+            "The RFC snippet is a source of CLUES, but vulnerabilities are NOT written in the RFC. "
+            "Identify subtle state-machine rules, constraints, or delimiter parsing behaviors in the snippet. "
+            "CORE DISCOVERY HEURISTIC (Rule Inversion): "
+            "1. If the snippet specifies rules for HTTP RESPONSES (e.g. status lines, 304/204 body suppression, "
+            "   HEAD response handling, chunked response termination, trailers), INVERT it into an inbound client REQUEST "
+            "   to test if the server/proxy uses a shared parser that mistakenly applies response rules to requests (Shared-Parser Confusion). "
+            "2. If the snippet specifies SMTP/MIME rules (BDAT chunks, dot-stuffing, line folding), adapt the delimiter into an HTTP probe. "
+            "Construct raw HTTP/1.1 requests using explicit '\\r\\n' line delimiters, host 'target.local', and '$PAYLOAD' placeholder. "
             "Output JSON: [{\"rationale\": \"...\", \"raw_request\": \"...\", \"is_clean\": true/false}]"
         )
-        gemma_prompt = f"RFC Snippet:\n\"\"\"{rfc_fragment}\"\"\"\nGenerate 1-2 raw HTTP protocol edge-case templates."
+        gemma_prompt = f"RFC Snippet:\n\"\"\"{rfc_fragment}\"\"\"\nGenerate 1-2 raw HTTP protocol edge-case templates applying Rule Inversion."
         gemma_out = self._query_model(self.gemma_model, gemma_prompt, gemma_sys)
         participating_models.append(self.gemma_model)
 
@@ -185,12 +191,17 @@ class FusionArbiter:
         # Phase 2: Exploit Boundary Specialist (Foundation-Sec / Qwen)
         # ------------------------------------------------------------------
         sec_sys = (
-            "You are an offensive HTTP framing specialist. Identify boundary mismatch triggers, "
-            "dual-header conflicts, and parser-confusion request mutations based on this RFC text. "
+            "You are an offensive HTTP framing specialist (Cisco Foundation-Sec / PortSwigger methodology). "
+            "The RFC provides clues to structural parser weaknesses. Construct boundary mismatch triggers, "
+            "dual-header conflicts, and parser-confusion mutations. "
+            "CORE EXPLOIT HEURISTIC: "
+            "1. Response-to-Request Inversion: Test if front-end or back-end servers apply response parsing logic to incoming requests (Shared-Parser Confusion). "
+            "2. SMTP/MIME Cross-Protocol Inversion: Test if gateways or reverse proxies confuse SMTP framing (BDAT, foldings, dot delimiters) with HTTP. "
+            "3. Framing Discrepancies: Exploit dual Content-Length, Transfer-Encoding mutations, trailing whitespace, or null bytes. "
             "Produce raw HTTP requests with '\\r\\n', host 'target.local', and '$PAYLOAD'. "
             "Output JSON: [{\"rationale\": \"...\", \"raw_request\": \"...\", \"is_clean\": false}]"
         )
-        sec_prompt = f"RFC Snippet:\n\"\"\"{rfc_fragment}\"\"\"\nGenerate 1-2 boundary confusion probes."
+        sec_prompt = f"RFC Snippet:\n\"\"\"{rfc_fragment}\"\"\"\nGenerate 1-2 boundary confusion probes applying Cross-Context Inversion."
         sec_out = self._query_model(self.sec_model, sec_prompt, sec_sys)
         participating_models.append(self.sec_model)
 
@@ -243,12 +254,12 @@ class FusionArbiter:
         ])
 
         arbiter_sys = (
-            "You are the Fusion Arbiter for ModelFusion. "
-            "You are given competing HTTP probe proposals from the Protocol Specialist (Google Gemma) "
-            "and the Boundary Specialist (Foundation-Sec/Qwen). "
-            "Perform rigorous reasoning inside <think> tags to reconcile discrepancies. "
-            "Synthesize a superior, unified probe combining Gemma's subtle specification nuance "
-            "with the security specialist's aggressive boundary manipulation. "
+            "You are the Fusion Arbiter for ModelFusion (James Kettle research architect). "
+            "You are given competing HTTP probe proposals derived from an RFC clue. "
+            "Remember: The vulnerability was NOT written in the RFC. The RFC supplies a clue; the attack concept comes from "
+            "inverting protocol expectations—especially testing whether servers apply response parsing rules to incoming requests (Shared-Parser Confusion), "
+            "or whether reverse proxies disagree with backends on framing. "
+            "Perform rigorous reasoning inside <think> tags. Synthesize the most potent, novel unified probe combining nuance and boundary manipulation. "
             "Output JSON: [{\"rationale\": \"...\", \"raw_request\": \"...\", \"is_clean\": true/false}]"
         )
 
@@ -309,6 +320,102 @@ class FusionArbiter:
                 is_clean=p.get("is_clean", False),
                 source_type="fusion",
             )
+
+    def explain_vulnerability_concept(
+        self,
+        rfc_fragment: str,
+        probe_request: str,
+        baseline_resp: str = "",
+        probe_resp: str = "",
+        retest_resp: str = "",
+        anomalies: Optional[List[Dict[str, Any]]] = None,
+        desync_class: Optional[str] = None,
+        details: str = "",
+    ) -> Dict[str, Any]:
+        """
+        The James Kettle Discovery Synthesis:
+        The RFC fragment supplied the clue; the candidate request triggered unexpected behavior;
+        now the AI analyzes what happened on the live server and formulates the broader
+        architectural explanation (e.g. Shared-Parser Confusion, Response-Rule Inversion,
+        Differential Header Stripping) and proposes the formal attack concept name.
+        """
+        anom_summary = "\n".join([f"- {a.get('type')}: {a.get('description')}" for a in (anomalies or [])]) if anomalies else "None"
+
+        b_stat = baseline_resp.splitlines()[0] if baseline_resp else "200 OK"
+        p_stat = probe_resp.splitlines()[0] if probe_resp else "Unknown / Disconnected"
+        r_stat = retest_resp.splitlines()[0] if retest_resp else "CONNECTION_CLOSED"
+
+        sys_prompt = (
+            "You are an elite protocol security researcher (in the caliber of James Kettle / DEF CON 34 / Black Hat). "
+            "You are analyzing live test results produced by HTTP Terminator against a target server. "
+            "The vulnerability was NOT written in the RFC. The RFC provided the clue, and the attack concept comes from testing and analyzing what happened. "
+            "For example, in Shared-Parser Confusion, an RFC passage about responses inspired a request that exposed a flaw, "
+            "and the researcher/AI deduced that servers were applying response parsing rules to requests. "
+            "Formulate the broader architectural explanation and propose the formal attack concept name. "
+            "Output strict JSON with keys: 'concept_name', 'architectural_explanation', 'rfc_clue_connection', 'generalization', 'validation_steps'."
+        )
+
+        user_prompt = f"""
+RFC FRAGMENT (THE INSPIRATION CLUE):
+\"\"\"{rfc_fragment}\"\"\"
+
+PROBE REQUEST SENT (THE TRIGGER):
+{probe_request}
+
+OBSERVED LIVE ACTIVITY TRACE:
+- Diagnostic Details: {details}
+- Desync Classification: {desync_class or 'Unclassified / Anomaly'}
+- Conn A (Baseline Response) Status: {b_stat}
+- Conn B (Probe Response) Status: {p_stat}
+- Conn A (Re-Test Response) Status: {r_stat}
+- Detected Anomalies:
+{anom_summary}
+
+Full Probe Response Snippet (First 350 bytes):
+{probe_resp[:350]}
+
+Full Re-Test Response Snippet (First 350 bytes):
+{retest_resp[:350]}
+
+Analyze what happened. Did the server apply response parsing rules to requests (Shared-Parser Confusion)? Did the front-end proxy disagree on body length? Did cross-protocol parser reuse occur?
+Output strict JSON matching:
+{{
+  "concept_name": "Descriptive Vulnerability Concept Name",
+  "architectural_explanation": "Detailed explanation of what the server parser did internally",
+  "rfc_clue_connection": "How the RFC snippet inspired this discovery",
+  "generalization": "How this vulnerability applies to other servers/protocols",
+  "validation_steps": ["step 1", "step 2"]
+}}
+"""
+        try:
+            raw_out = self._query_model(self.arbiter_model, user_prompt, sys_prompt)
+            parsed = self._parse_json(raw_out)
+            if parsed and isinstance(parsed, list) and isinstance(parsed[0], dict):
+                return parsed[0]
+            elif parsed and isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+        # Heuristic fallback if arbiter times out
+        inferred_concept = desync_class or "Shared-Parser / Framing Discrepancy"
+        frag_lower = rfc_fragment.lower()
+        if any(w in frag_lower for w in ["response", "status", "304", "204", "head"]):
+            inferred_concept = "Shared-Parser Confusion (Response-to-Request Inversion)"
+            explanation = "The server appears to apply RFC response-handling rules to incoming client requests, causing differential body termination or socket confusion."
+        elif any(w in frag_lower for w in ["smtp", "bdat", "dot-stuffing", "mail"]):
+            inferred_concept = "Cross-Protocol Parser Reuse (SMTP/HTTP Demarcation Discrepancy)"
+            explanation = "The front-end or gateway appears to reuse socket parsers across SMTP and HTTP, failing to isolate multi-line stream delimiters."
+        else:
+            explanation = f"Observed differential behavior on target host triggered by RFC fragment: {details}"
+
+        return {
+            "concept_name": inferred_concept,
+            "architectural_explanation": explanation,
+            "rfc_clue_connection": f"Inspired by normative requirement in RFC fragment: {rfc_fragment[:80]}...",
+            "generalization": "Servers utilizing unified protocol parsers or multi-tier reverse proxy pipelines with differing delimiter assumptions.",
+            "validation_steps": ["Verify whether Conn A socket state persists across pipelined requests", "Test differential Content-Length vs chunked boundaries"],
+        }
 
     def _normalize_crlf(self, text: Any) -> str:
         if not text:

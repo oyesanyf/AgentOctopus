@@ -18,6 +18,8 @@ from probe_generator import ProbeGenerator
 from rfc_chunker import RFCChunker
 from rfc_fetcher import RFCFetcher
 from weaponizer import RQPWeaponizer
+from engine.orchestrator import ProtocolResearchOrchestrator
+from engine.taxonomy import ImplementationAnomaly, AnomalyCategory
 
 
 class ContinuousFlawHunter:
@@ -67,6 +69,9 @@ class ContinuousFlawHunter:
         self.cascade_engine = DiscoveryCascade(
             preferred_model=preferred_model, use_fusion=use_fusion, db=self.db
         )
+        self.research_engine = ProtocolResearchOrchestrator(
+            primary_host=target_host, primary_port=target_port
+        )
 
         self._stop_requested = False
 
@@ -81,6 +86,7 @@ class ContinuousFlawHunter:
         stop_on_first_flaw: bool = True,
         all_active: bool = False,
         unrestricted: bool = False,
+        kettle: bool = True,
         keywords: Optional[List[str]] = None,
         resume: bool = True,
         target_rfc: Optional[str] = None,
@@ -112,6 +118,10 @@ class ContinuousFlawHunter:
                 self.on_progress(f"[*] Querying RFC Editor index for active RFCs matching: {keywords}...")
                 discovered = self.fetcher.get_all_active_rfcs(keywords=keywords, max_rfcs=max_rfcs, reverse=True)
                 self.on_progress(f"[+] Discovered {len(discovered)} active RFCs matching keywords.")
+            elif kettle and not all_active:
+                self.on_progress("[*] Loading James Kettle Curated Corpus: 138 HTTP & SMTP Protocol Specifications...")
+                discovered = self.fetcher.get_kettle_corpus(max_rfcs=max_rfcs or 138)
+                self.on_progress(f"[+] Total Kettle Corpus RFCs queued: {len(discovered)}")
             else:
                 self.on_progress("[*] Indexing active (non-obsoleted) protocol RFCs from RFC Editor repository...")
                 discovered = self.fetcher.discover_active_protocol_rfcs(
@@ -156,6 +166,13 @@ class ContinuousFlawHunter:
 
             self.on_progress(f"[+] RFC {rfc_num}: Extracted {len(fragments)} micro-inspiration fragments.")
             saved_count = self.db.save_fragments(f"RFC{rfc_num}", fragments)
+
+            # Ingest into 12-Module Research Knowledge Graph (ABNF + Normative Constraints)
+            ingest_stats = self.research_engine.ingest_rfc_specification(f"RFC{rfc_num}", rfc_text)
+            self.on_progress(
+                f"    [Research Knowledge Graph]: Indexed {ingest_stats['abnf_rules_extracted']} ABNF rules and "
+                f"{ingest_stats['normative_rules_extracted']} normative assertions."
+            )
 
             # Sample top operative fragments
             selected_fragments = fragments[:fragments_per_rfc]
@@ -237,12 +254,36 @@ class ContinuousFlawHunter:
                             weaponization_msg = w_reason
                             flaw_record["weaponization"] = w_reason
 
+                        # 6.5 James Kettle Autonomous Vulnerability Concept Theorization
+                        concept_res = None
+                        if hasattr(self.generator, "arbiter") and self.generator.arbiter:
+                            self.on_progress("[+] ModelFusion Reasoning Arbiter: Formulating Vulnerability Concept (James Kettle Methodology)...")
+                            concept_res = self.generator.arbiter.explain_vulnerability_concept(
+                                rfc_fragment=frag_text,
+                                probe_request=candidate.get("raw_request", ""),
+                                baseline_resp=meta.get("baseline_resp", ""),
+                                probe_resp=meta.get("attacker_resp", ""),
+                                retest_resp=meta.get("polluted_resp", ""),
+                                anomalies=anomalies,
+                                desync_class=desync_class,
+                                details=details,
+                            )
+                            c_name = concept_res.get("concept_name", desync_class or "Novel Protocol Discrepancy")
+                            c_exp = concept_res.get("architectural_explanation", "")
+                            self.on_progress(f"    [Attack Concept Name]      : {c_name}")
+                            self.on_progress(f"    [Architectural Explanation]: {c_exp[:130]}...")
+                            flaw_record["concept_name"] = c_name
+                            flaw_record["architectural_explanation"] = c_exp
+                            flaw_record["concept_analysis"] = concept_res
+
                         # 7. Autonomous Discovery Cascade Extrapolation
                         self.on_progress("[+] Feeding finding into Discovery Cascade ('You are not thinking big enough')...")
                         cascade_res = self.cascade_engine.cascade_from_finding({
                             "rationale": p_rationale,
                             "rfc_fragment": frag_text,
                             "details": details,
+                            "concept_name": flaw_record.get("concept_name", ""),
+                            "architectural_explanation": flaw_record.get("architectural_explanation", ""),
                             "raw_evidence": str(meta),
                         })
                         if cascade_res:
@@ -250,6 +291,60 @@ class ContinuousFlawHunter:
                             self.on_progress(f"    [Cascade Hypothesis]: {cascade_res['hypothesis']}")
                             self.on_progress(f"    [Second-Order Probes Queued]: {len(cascade_res['suggested_probes'])}")
                             flaw_record["cascade"] = cascade_res
+
+                        # 7.5 Specification-Driven 4-Tier Taxonomy Triage & Arm 106/107 Publishing
+                        anom_id = f"ANOM-RFC{rfc_num}-{int(time.time()*1000)}"
+                        anom_obj = ImplementationAnomaly(
+                            anomaly_id=anom_id,
+                            target_engine=f"{self.target_host}:{self.target_port}",
+                            category=AnomalyCategory.PARSER_DIVERGENCE,
+                            observed_behavior=details,
+                            expected_behavior="Strict specification conformance",
+                            raw_probe=candidate.get("raw_request", "").encode("latin-1", errors="replace"),
+                            raw_response=meta.get("attacker_resp", "").encode("latin-1", errors="replace"),
+                        )
+                        self.db.save_implementation_anomaly(
+                            anomaly_id=anom_obj.anomaly_id,
+                            target_engine=anom_obj.target_engine,
+                            category=anom_obj.category.value,
+                            observed_behavior=anom_obj.observed_behavior,
+                            expected_behavior=anom_obj.expected_behavior,
+                            raw_probe=anom_obj.raw_probe.decode("latin-1", errors="replace"),
+                            raw_response=anom_obj.raw_response.decode("latin-1", errors="replace"),
+                        )
+
+                        # Delta Debugging Minimization (Mod 8)
+                        repro_vuln = self.research_engine.debugger.minimize_and_reproduce(anom_obj, max_verification_trials=3)
+                        self.db.save_reproducible_vulnerability(
+                            vuln_id=repro_vuln.vuln_id,
+                            anomaly_id=anom_obj.anomaly_id,
+                            impact=repro_vuln.impact.value,
+                            minimized_probe=repro_vuln.minimized_probe.decode("latin-1", errors="replace"),
+                            reproducibility_rate=repro_vuln.reproducibility_rate,
+                            verification_attempts=repro_vuln.verification_attempts,
+                            successful_reproductions=repro_vuln.successful_reproductions,
+                            delta_debug_steps=repro_vuln.delta_debug_steps,
+                            provenance_chain=repro_vuln.provenance_chain,
+                        )
+
+                        # Novelty check (Mod 9)
+                        is_novel, tech = self.research_engine.classifier.classify_novelty(repro_vuln)
+                        if is_novel and tech:
+                            self.db.save_novel_technique(
+                                technique_id=tech.technique_id,
+                                title=tech.title,
+                                conceptual_model=tech.conceptual_model,
+                                inversion_pattern=tech.inversion_pattern,
+                                affected_architectures=tech.affected_architectures,
+                                supporting_vulnerabilities=tech.supporting_vulnerabilities,
+                                recommended_mitigation=tech.recommended_mitigation,
+                            )
+                            self.on_progress(f"    [4-Tier Taxonomy]: Surfaced Novel Technique: {tech.title}")
+
+                        # Publish to Agent Octopus Arms 106 and 107 (Mod 12)
+                        arm106_rule, arm107_test = self.research_engine.publisher.publish_finding(repro_vuln, rfc_anchor=f"RFC{rfc_num}")
+                        self.on_progress(f"    [Arm 106 Defense Ingestion]: Published {arm106_rule.rule_id} ({arm106_rule.name})")
+                        self.on_progress(f"    [Arm 107 Regression Suite]: Published {arm107_test.test_id} (Expected Status: {arm107_test.expected_status_rejection})")
 
                         # Record Forensic Evidence Artifact
                         self.forensics.record_finding(
@@ -263,6 +358,7 @@ class ContinuousFlawHunter:
                             metadata=meta,
                             weaponization=weaponization_msg,
                             cascade=cascade_res,
+                            concept_analysis=concept_res,
                         )
 
                         if stop_on_first_flaw:

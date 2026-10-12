@@ -47,6 +47,7 @@ pub enum ResearchFindingStatus {
     ReproducibleDivergence,
     LaboratoryResearchFinding,
     IndependentlyValidated,
+    ConfirmedVulnerability,
     NonReproducibleTransient,
 }
 
@@ -57,6 +58,7 @@ impl ToString for ResearchFindingStatus {
             Self::ReproducibleDivergence => "REPRODUCIBLE_DIVERGENCE".to_string(),
             Self::LaboratoryResearchFinding => "LABORATORY_RESEARCH_FINDING".to_string(),
             Self::IndependentlyValidated => "INDEPENDENTLY_VALIDATED".to_string(),
+            Self::ConfirmedVulnerability => "CONFIRMED_VULNERABILITY".to_string(),
             Self::NonReproducibleTransient => "NON_REPRODUCIBLE_TRANSIENT".to_string(),
         }
     }
@@ -86,6 +88,18 @@ pub struct ResearchFinding {
     pub transport_outcome: TransportOutcome,
     pub baseline_response: Option<String>,
     pub confirmation_count: u32,
+    #[serde(default)]
+    pub total_trials: u32,
+    #[serde(default)]
+    pub baseline_stable: bool,
+    #[serde(default)]
+    pub reproducibility_rate: f64,
+    #[serde(default)]
+    pub ci95_low: f64,
+    #[serde(default)]
+    pub ci95_high: f64,
+    #[serde(default)]
+    pub arm106_validated: bool,
 }
 
 /// Structured handoff from Arm 107 (Hypothesis/Probe) to Arm 106 (Differential Protocol Analyzer).
@@ -124,4 +138,6 @@ pub struct EvaluationRequest {
     pub target_host: String,
     pub target_port: u16,
     pub baseline_request: Option<String>,
+    #[serde(default)]
+    pub repetition_count: Option<usize>,
 }

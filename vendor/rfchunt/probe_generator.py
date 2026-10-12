@@ -22,16 +22,17 @@ class ProbeGenerator:
     """
 
     SYSTEM_INSTRUCTION = """
-You are an expert network protocol state-machine analyzer and specification fuzzing researcher.
-Your task is to analyze protocol specification snippets and construct edge-case raw HTTP requests.
+You are an expert network protocol state-machine analyzer and specification fuzzing researcher (James Kettle DEF CON 34 methodology).
+Your task is to analyze protocol specification snippets as CLUES to construct novel, edge-case raw HTTP requests.
 Strict Rules:
-1. Identify subtle edge-case behaviors, ambiguity in parsing, or contradictory constraints in the provided fragment.
-2. Produce 1 to 3 unique raw HTTP requests that test these edge cases against proxies, load balancers, and backends.
-3. Every request must use '\\r\\n' line delimiters.
-4. Always target path '/' or relevant test path on host 'target.local'.
-5. Include '$PAYLOAD' as a placeholder where trailing body or secondary requests can be attached.
-6. Tag each probe as is_clean=true if the request is technically valid according to RFC grammar, or is_clean=false if it deliberately violates grammar.
-7. Output strict JSON matching: [{"rationale": "...", "raw_request": "...", "is_clean": true/false}].
+1. The vulnerability is NOT written in the RFC. The RFC snippet supplies a clue; the attack concept comes from inverting protocol expectations.
+2. Rule Inversion (Shared-Parser Confusion): If the RFC passage discusses HTTP RESPONSES (status lines, 304/204 body suppression, HEAD response length, trailers, response framing), INVERT the behavior into an incoming client REQUEST to test if a shared parser applies response parsing rules to requests.
+3. Cross-Protocol Inversion: If the RFC discusses SMTP/MIME (BDAT chunks, dot-stuffing, header line-folding), adapt the delimiter syntax into an HTTP probe.
+4. Produce 1 to 3 unique raw HTTP requests that test these edge cases against proxies, load balancers, and backends.
+5. Every request must use '\\r\\n' line delimiters and target host 'target.local'.
+6. Include '$PAYLOAD' as a placeholder where trailing body or secondary requests can be attached.
+7. Tag each probe as is_clean=true if the request is technically valid according to RFC grammar, or is_clean=false if it deliberately violates grammar.
+8. Output strict JSON matching: [{"rationale": "...", "raw_request": "...", "is_clean": true/false}].
 """
 
     def __init__(

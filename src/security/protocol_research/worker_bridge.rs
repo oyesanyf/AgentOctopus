@@ -114,33 +114,21 @@ impl PythonWorkerBridge {
             use windows_sys::Win32::Foundation::CloseHandle;
             use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, IsProcessInJob};
 
-            let mandatory_appcontainer = std::env::var("OCTOPUS_REQUIRE_APPCONTAINER")
-                .map(|v| v != "0" && v.to_lowercase() != "false")
-                .unwrap_or(true);
-
+            // AppContainer execution is MANDATORY in production. Non-bypassable.
             let container_name = format!("AgentOctopus.Arm107.Worker_{:08x}", rand::random::<u32>());
             let (sid_str, psid) = match create_or_open_appcontainer_profile(
                 &container_name,
                 "Arm 107 Protocol Research Worker",
                 "Isolated sandbox for HTTP protocol research worker",
             ) {
-                Ok((s, p)) => (Some(s), Some(p)),
+                Ok((s, p)) => (s, p),
                 Err(e) => {
-                    if mandatory_appcontainer {
-                        return Err(OctopusSecurityError::IsolationViolation(format!(
-                            "FAIL-CLOSED: Mandatory AppContainer profile creation failed for Arm 107 worker: {}. Fallback execution prohibited.",
-                            e
-                        )));
-                    }
-                    (None, None)
+                    return Err(OctopusSecurityError::IsolationViolation(format!(
+                        "FAIL-CLOSED: Mandatory AppContainer profile creation failed for Arm 107 worker: {}. Fallback execution prohibited.",
+                        e
+                    )));
                 }
             };
-
-            if mandatory_appcontainer && psid.is_none() {
-                return Err(OctopusSecurityError::IsolationViolation(
-                    "FAIL-CLOSED: Mandatory AppContainer SID is unavailable. Unisolated process execution strictly prohibited.".to_string(),
-                ));
-            }
 
             const CREATE_SUSPENDED: u32 = 0x00000004;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -152,106 +140,70 @@ impl PythonWorkerBridge {
             let cmdline = format!("python \"{}\"", script.display());
             let mut wide_cmdline: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
 
-            let create_res = if let Some(p_sid) = psid {
-                let mut sec_cap = win32::SECURITY_CAPABILITIES {
-                    AppContainerSid: p_sid,
-                    Capabilities: std::ptr::null_mut(),
-                    CapabilityCount: 0,
-                    Reserved: 0,
+            let mut sec_cap = win32::SECURITY_CAPABILITIES {
+                AppContainerSid: psid,
+                Capabilities: std::ptr::null_mut(),
+                CapabilityCount: 0,
+                Reserved: 0,
+            };
+
+            let mut attr_size: usize = 0;
+            unsafe { win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size); }
+            let mut attr_buf: Vec<u8> = vec![0u8; attr_size.max(1)];
+            let attr_list = attr_buf.as_mut_ptr() as *mut std::ffi::c_void;
+
+            let init_ok = unsafe { win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) };
+            let create_res = if init_ok != 0 {
+                let update_ok = unsafe {
+                    win32::UpdateProcThreadAttribute(
+                        attr_list,
+                        0,
+                        0x00020009, // PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES
+                        &mut sec_cap as *mut _ as *mut std::ffi::c_void,
+                        std::mem::size_of::<win32::SECURITY_CAPABILITIES>(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
                 };
 
-                let mut attr_size: usize = 0;
-                unsafe { win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size); }
-                let mut attr_buf: Vec<u8> = vec![0u8; attr_size.max(1)];
-                let attr_list = attr_buf.as_mut_ptr() as *mut std::ffi::c_void;
+                if update_ok != 0 {
+                    let mut si_ex: win32::STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+                    si_ex.StartupInfo.cb = std::mem::size_of::<win32::STARTUPINFOEXW>() as u32;
+                    si_ex.lpAttributeList = attr_list;
 
-                let init_ok = unsafe { win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) };
-                if init_ok != 0 {
-                    let update_ok = unsafe {
-                        win32::UpdateProcThreadAttribute(
-                            attr_list,
+                    let res = unsafe {
+                        win32::CreateProcessW(
+                            std::ptr::null(),
+                            wide_cmdline.as_mut_ptr(),
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
                             0,
-                            0x00020009, // PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES
-                            &mut sec_cap as *mut _ as *mut std::ffi::c_void,
-                            std::mem::size_of::<win32::SECURITY_CAPABILITIES>(),
+                            CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
                             std::ptr::null_mut(),
-                            std::ptr::null_mut(),
+                            wide_worker_dir.as_ptr(),
+                            &si_ex as *const _ as *const std::ffi::c_void,
+                            &mut pi,
                         )
                     };
-
-                    if update_ok != 0 {
-                        let mut si_ex: win32::STARTUPINFOEXW = unsafe { std::mem::zeroed() };
-                        si_ex.StartupInfo.cb = std::mem::size_of::<win32::STARTUPINFOEXW>() as u32;
-                        si_ex.lpAttributeList = attr_list;
-
-                        let res = unsafe {
-                            win32::CreateProcessW(
-                                std::ptr::null(),
-                                wide_cmdline.as_mut_ptr(),
-                                std::ptr::null_mut(),
-                                std::ptr::null_mut(),
-                                0,
-                                CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
-                                std::ptr::null_mut(),
-                                wide_worker_dir.as_ptr(),
-                                &si_ex as *const _ as *const std::ffi::c_void,
-                                &mut pi,
-                            )
-                        };
-                        unsafe { win32::DeleteProcThreadAttributeList(attr_list); }
-                        res
-                    } else {
-                        unsafe { win32::DeleteProcThreadAttributeList(attr_list); }
-                        0
-                    }
+                    unsafe { win32::DeleteProcThreadAttributeList(attr_list); }
+                    res
                 } else {
+                    unsafe { win32::DeleteProcThreadAttributeList(attr_list); }
                     0
                 }
             } else {
                 0
             };
 
-            if let Some(p_sid) = psid {
-                unsafe { win32::FreeSid(p_sid); }
-            }
+            unsafe { win32::FreeSid(psid); }
 
-            // If AppContainer spawn was not used or failed:
-            // FAIL-CLOSED: strictly prohibit fallback to standard unconstrained process if AppContainer isolation is mandatory
-            let final_create_res = if create_res != 0 {
-                create_res
-            } else if mandatory_appcontainer {
+            // FAIL-CLOSED: AppContainer execution is non-bypassable. Zero unconstrained fallback permitted.
+            if create_res == 0 {
                 let err = unsafe { win32::GetLastError() };
                 let wide_name: Vec<u16> = container_name.encode_utf16().chain(std::iter::once(0)).collect();
                 unsafe { win32::DeleteAppContainerProfile(wide_name.as_ptr()); }
                 return Err(OctopusSecurityError::IsolationViolation(format!(
-                    "FAIL-CLOSED: Failed to spawn research worker under mandatory AppContainer isolation (OS Error {}). Unconstrained fallback prohibited.",
-                    err
-                )));
-            } else {
-                let mut si: windows_sys::Win32::System::Threading::STARTUPINFOW = unsafe { std::mem::zeroed() };
-                si.cb = std::mem::size_of::<windows_sys::Win32::System::Threading::STARTUPINFOW>() as u32;
-                unsafe {
-                    win32::CreateProcessW(
-                        std::ptr::null(),
-                        wide_cmdline.as_mut_ptr(),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        0,
-                        CREATE_SUSPENDED | CREATE_NO_WINDOW,
-                        std::ptr::null_mut(),
-                        wide_worker_dir.as_ptr(),
-                        &si as *const _ as *const std::ffi::c_void,
-                        &mut pi,
-                    )
-                }
-            };
-
-            if final_create_res == 0 {
-                let err = unsafe { win32::GetLastError() };
-                let wide_name: Vec<u16> = container_name.encode_utf16().chain(std::iter::once(0)).collect();
-                unsafe { win32::DeleteAppContainerProfile(wide_name.as_ptr()); }
-                return Err(OctopusSecurityError::IsolationViolation(format!(
-                    "FAIL-CLOSED: Failed to spawn research worker in suspended state (OS Error {})",
+                    "FAIL-CLOSED: Failed to spawn research worker under mandatory AppContainer isolation (OS Error {}). Unconstrained execution prohibited.",
                     err
                 )));
             }
@@ -312,8 +264,8 @@ impl PythonWorkerBridge {
                 job_object: job,
                 process_handle: pi.hProcess,
                 pid: pi.dwProcessId,
-                container_name: if psid.is_some() { Some(container_name) } else { None },
-                package_sid: sid_str,
+                container_name: Some(container_name),
+                package_sid: Some(sid_str),
                 worker_identity_hash: identity_hash,
                 worker_dir,
             })
