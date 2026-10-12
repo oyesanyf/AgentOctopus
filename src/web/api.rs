@@ -239,6 +239,7 @@ impl Default for WebState {
             crate::security::protocol_research::ProtocolResearchSupervisor::new(
                 Arc::clone(&arm_rings),
                 Arc::new(crate::security::cedar_arm::CedarPolicyEngine::default()),
+                Arc::clone(&production_temporal_engine),
                 Arc::clone(&protocol_analyzer),
             ),
         );
@@ -2251,6 +2252,13 @@ pub fn handle_protocol_research_hypotheses(state: &WebState) -> String {
             })
         }).collect::<Vec<_>>()
     }).to_string()
+}
+
+pub async fn handle_protocol_research_sync_rfc(state: &WebState) -> Result<String, String> {
+    match state.protocol_research.sync_rfc_index().await {
+        Ok(report) => Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => Err(json_error_payload("RFC_SYNC_FAILED", &format!("{}", e))),
+    }
 }
 
 #[cfg(test)]

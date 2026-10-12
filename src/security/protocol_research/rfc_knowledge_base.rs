@@ -246,4 +246,31 @@ impl RfcKnowledgeBase {
             .arg(&query)
             .output();
     }
+
+    /// Inserts or updates an RFC metadata record in the database.
+    pub fn insert_or_update_rfc(&self, rfc_number: u32, title: &str, published_date: &str, status: &str) {
+        let clean_title = title.replace('\'', "''");
+        let query = format!(
+            "INSERT OR REPLACE INTO rfcs (rfc_number, title, published_date, status) VALUES ({}, '{}', '{}', '{}');",
+            rfc_number, clean_title, published_date, status
+        );
+        let _ = Command::new("sqlite3")
+            .arg(&self.db_path)
+            .arg(&query)
+            .output();
+    }
+
+    /// Inserts a chunk/normative fragment for an RFC.
+    pub fn insert_fragment(&self, rfc_number: u32, title: &str, chunk_index: usize, content: &str, is_normative: bool) {
+        let clean_title = title.replace('\'', "''");
+        let clean_content = content.replace('\'', "''");
+        let query = format!(
+            "INSERT INTO fragments (rfc_number, title, chunk_index, content, is_normative) VALUES ({}, '{}', {}, '{}', {});",
+            rfc_number, clean_title, chunk_index, clean_content, if is_normative { 1 } else { 0 }
+        );
+        let _ = Command::new("sqlite3")
+            .arg(&self.db_path)
+            .arg(&query)
+            .output();
+    }
 }

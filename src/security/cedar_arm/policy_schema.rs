@@ -156,6 +156,19 @@ pub const OCTOPUS_CEDAR_SCHEMA_JSON: &str = r#"{
             }
           }
         }
+      },
+      "evaluate": {
+        "appliesTo": {
+          "principalTypes": ["Agent"],
+          "resourceTypes": ["NetworkTarget"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "destination_host": { "type": "String", "required": true },
+              "destination_port": { "type": "Long", "required": false }
+            }
+          }
+        }
       }
     }
   }

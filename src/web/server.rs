@@ -17,7 +17,7 @@ use super::api::{
     handle_dogwood_evaluate, handle_dogwood_trace, handle_dogwood_simulate_trace, handle_dogwood_presets,
     handle_protocol_research_status, handle_protocol_research_knowledge_base,
     handle_protocol_research_evaluate, handle_protocol_research_validate_arm106,
-    handle_protocol_research_hypotheses,
+    handle_protocol_research_hypotheses, handle_protocol_research_sync_rfc,
     WebState,
 };
 use super::static_files::INDEX_HTML;
@@ -812,6 +812,20 @@ async fn handle_connection(
             let json_body = handle_protocol_research_hypotheses(&state);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/protocol-research/sync-rfc") => {
+            let (status_code, json_body) = match handle_protocol_research_sync_rfc(&state).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("500 Internal Server Error", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
                 json_body.len(),
                 json_body
             );

@@ -599,6 +599,13 @@ def run_all_tests():
     else:
         results.record_fail(tab, "POST /api/protocol-research/validate-arm106", f"Status {status}, Body: {body[:100]}")
 
+    # 11.6 Automated RFC Index Synchronization
+    status, body, _ = http_post("/api/protocol-research/sync-rfc", {})
+    if status == 200 and "SYNCHRONIZATION_SUCCESSFUL" in body:
+        results.record_pass(tab, "POST /api/protocol-research/sync-rfc (Automated RFC Index Discovery)", "200 OK")
+    else:
+        results.record_fail(tab, "POST /api/protocol-research/sync-rfc", f"Status {status}, Body: {body[:100]}")
+
     # =========================================================================
     # SUMMARY REPORT
     # =========================================================================
