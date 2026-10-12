@@ -226,23 +226,7 @@ def run_all_tests():
     else:
         results.record_fail(tab, "GET /api/dogwood/trace", f"Status {status}")
 
-    # 3.8 Dogwood Temporal Evaluation (Write-after-Read)
-    dw_eval = {
-        "policy": 'permit(principal, action == Octopus::Action::"LedgerWrite", resource) when temporal { formerly within 1h Octopus::Action::"LedgerRead"::response{ input.user: context.input.user, input.document: context.input.document } };',
-        "principal": "agent_worker_1",
-        "resource": "contracts/2026-q3.pdf",
-        "context": {
-            "input.user": "agent_worker_1",
-            "input.document": "contracts/2026-q3.pdf"
-        }
-    }
-    status, body, _ = http_post("/api/dogwood/evaluate", dw_eval)
-    if status == 200 and "PERMIT" in body:
-        results.record_pass(tab, "POST /api/dogwood/evaluate (Write-after-Read MFOTL)", "Verdict: PERMIT")
-    else:
-        results.record_fail(tab, "POST /api/dogwood/evaluate", f"Status {status}: {body[:100]}")
-
-    # 3.9 Dogwood Trace Event Simulation
+    # 3.8 Dogwood Trace Event Simulation (Prerequisite for Write-after-Read)
     dw_sim = {
         "action": 'Octopus::Action::"LedgerRead"',
         "kind": "response",
@@ -259,6 +243,22 @@ def run_all_tests():
         results.record_pass(tab, "POST /api/dogwood/simulate-trace (Synthetic Event Ingestion)", "200 OK")
     else:
         results.record_fail(tab, "POST /api/dogwood/simulate-trace", f"Status {status}")
+
+    # 3.9 Dogwood Temporal Evaluation (Write-after-Read)
+    dw_eval = {
+        "policy": 'permit(principal, action == Octopus::Action::"LedgerWrite", resource) when temporal { formerly within 1h Octopus::Action::"LedgerRead"::response{ input.user: context.input.user, input.document: context.input.document } };',
+        "principal": "agent_worker_1",
+        "resource": "contracts/2026-q3.pdf",
+        "context": {
+            "input.user": "agent_worker_1",
+            "input.document": "contracts/2026-q3.pdf"
+        }
+    }
+    status, body, _ = http_post("/api/dogwood/evaluate", dw_eval)
+    if status == 200 and "PERMIT" in body:
+        results.record_pass(tab, "POST /api/dogwood/evaluate (Write-after-Read MFOTL)", "Verdict: PERMIT")
+    else:
+        results.record_fail(tab, "POST /api/dogwood/evaluate", f"Status {status}: {body[:100]}")
 
     # =========================================================================
     # TAB 4: Cryptographic Audit Log (#audit-viewer)

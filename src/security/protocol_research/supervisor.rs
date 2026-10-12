@@ -302,23 +302,52 @@ impl ProtocolResearchSupervisor {
             baseline_outcome.as_ref(),
         );
 
-        // Confirmation pass: If divergent and baseline provided, repeat to confirm reproducibility
-        let (confirmation_count, finding_status) = if is_anomalous {
+        // Confirmation pass: If divergent and baseline provided, repeat to confirm reproducibility across trials
+        let (confirmed_anomalous, confirmation_count, finding_status) = if is_anomalous {
             if request.baseline_request.is_some() {
-                // Repeat probe to confirm reproducibility
-                let (_rep_outcome, _rep_response) = transmit_request(target_addr, &request.raw_request, timeout_duration).await;
-                (2, ResearchFindingStatus::LaboratoryResearchFinding.to_string())
+                // Repeat probe to confirm reproducibility across trials
+                let (rep_outcome, rep_response) = transmit_request(target_addr, &request.raw_request, timeout_duration).await;
+                
+                // Also repeat baseline transmission to ensure baseline stability
+                let (rep_base_outcome, rep_base_response) = if let Some(ref base_req) = request.baseline_request {
+                    let (b_out, b_resp) = transmit_request(target_addr, base_req, timeout_duration).await;
+                    (Some(b_out), Some(b_resp))
+                } else {
+                    (None, None)
+                };
+
+                let rep_anomalous = self.detect_anomaly_differential(
+                    &request.raw_request,
+                    &rep_response,
+                    &rep_outcome,
+                    request.baseline_request.as_deref(),
+                    rep_base_response.as_deref(),
+                    rep_base_outcome.as_ref(),
+                );
+
+                // Verify repeated divergence across trials
+                if rep_anomalous {
+                    (true, 2, ResearchFindingStatus::LaboratoryResearchFinding.to_string())
+                } else {
+                    // Downgrade non-reproducible / transient anomalies
+                    (false, 1, ResearchFindingStatus::NonReproducibleTransient.to_string())
+                }
             } else {
-                (1, ResearchFindingStatus::LaboratoryResearchFinding.to_string())
+                (true, 1, ResearchFindingStatus::LaboratoryResearchFinding.to_string())
             }
         } else {
-            (1, "BENIGN_CONCORDANT".to_string())
+            (false, 1, "BENIGN_CONCORDANT".to_string())
         };
 
-        let details = if is_anomalous {
+        let details = if confirmed_anomalous {
             format!(
-                "Candidate divergence detected on target {}:{}. Baseline subtraction applied. Outcome: {:?}. Requires Arm 106 independent cross-validation. Wire response length: {} bytes.",
-                request.target_host, request.target_port, probe_outcome, probe_response.len()
+                "Candidate divergence detected and verified reproducible on target {}:{}. Baseline subtraction applied. Outcome: {:?}. Confirmation count: {}. Requires Arm 106 independent cross-validation. Wire response length: {} bytes.",
+                request.target_host, request.target_port, probe_outcome, confirmation_count, probe_response.len()
+            )
+        } else if is_anomalous {
+            format!(
+                "Downgraded: Candidate divergence on target {}:{} failed reproducibility verification on repeated trial. Anomaly dismissed as non-reproducible transient. Wire response length: {} bytes.",
+                request.target_host, request.target_port, probe_response.len()
             )
         } else {
             format!(
@@ -333,7 +362,7 @@ impl ProtocolResearchSupervisor {
             &probe_id,
             &request.target_host,
             request.target_port,
-            is_anomalous,
+            confirmed_anomalous,
             &finding_status,
             &details,
             request.baseline_request.is_some(),
@@ -342,7 +371,7 @@ impl ProtocolResearchSupervisor {
         Ok(ResearchFinding {
             finding_id,
             probe_id,
-            is_anomalous,
+            is_anomalous: confirmed_anomalous,
             finding_status,
             details,
             baseline_subtracted: request.baseline_request.is_some(),
@@ -509,9 +538,7 @@ impl ProtocolResearchSupervisor {
             // Wire response divergence
             let response_diverged = !base_resp.is_empty() && !probe_response.is_empty() && base_resp != probe_response;
 
-            if transport_diverged || status_diverged || (has_probe_framing_anomaly && response_diverged) {
-                return true;
-            }
+            return transport_diverged || status_diverged || (has_probe_framing_anomaly && response_diverged);
         }
 
         has_probe_framing_anomaly

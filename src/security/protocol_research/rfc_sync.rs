@@ -40,8 +40,15 @@ impl RfcIndexSynchronizer {
         Self { knowledge_base }
     }
 
-    /// Locates the authoritative RFC Editor index, prioritizing live managed caches.
+    /// Locates or retrieves authoritative RFC Editor index, prioritizing live TLS synchronization.
     pub fn load_rfc_index_text(&self) -> (String, String) {
+        // Priority 0: Direct live RFC Editor retrieval with TLS (if online and not disabled)
+        if std::env::var("OCTOPUS_OFFLINE_RFC_SYNC").unwrap_or_default() != "1" {
+            if let Ok((live_content, source_label)) = self.fetch_live_rfc_editor_index() {
+                return (live_content, source_label);
+            }
+        }
+
         // Priority 1: Environment variable OCTOPUS_RFC_INDEX_PATH
         if let Ok(env_path) = std::env::var("OCTOPUS_RFC_INDEX_PATH") {
             let p = PathBuf::from(env_path);
@@ -76,8 +83,83 @@ impl RfcIndexSynchronizer {
         (self.get_core_protocol_index_text(), "Embedded Core Protocol Baseline Index".to_string())
     }
 
+    /// Fetches authoritative RFC index directly from rfc-editor.org over TLS with freshness verification.
+    pub fn fetch_live_rfc_editor_index(&self) -> Result<(String, String), OctopusSecurityError> {
+        let cache_path = PathBuf::from("data").join("rfcs").join("rfc-index.txt");
+        let last_etag = self.knowledge_base.get_metadata("rfc_index_etag").unwrap_or_default();
+
+        let mut cmd = std::process::Command::new("curl.exe");
+        cmd.arg("-s")
+           .arg("-i")
+           .arg("--max-time")
+           .arg("5");
+
+        if !last_etag.is_empty() {
+            cmd.arg("-H").arg(format!("If-None-Match: {}", last_etag));
+        }
+        cmd.arg("https://www.rfc-editor.org/rfc-index.txt");
+
+        let output = cmd.output().map_err(|e| {
+            OctopusSecurityError::DeterministicLayerViolation(format!("Live RFC Editor TLS request failed: {}", e))
+        })?;
+
+        if !output.status.success() {
+            return Err(OctopusSecurityError::DeterministicLayerViolation(
+                "curl command exited with non-zero status during RFC Editor retrieval".to_string()
+            ));
+        }
+
+        let raw_str = String::from_utf8_lossy(&output.stdout);
+        let header_end = raw_str.find("\r\n\r\n").or_else(|| raw_str.find("\n\n"));
+        let (headers, body) = match header_end {
+            Some(pos) => (&raw_str[..pos], raw_str[pos + 2..].trim_start_matches('\n')),
+            None => ("", raw_str.as_ref()),
+        };
+
+        // Check for 304 Not Modified (Freshness check)
+        if headers.contains("HTTP/1.1 304") || headers.contains("HTTP/2 304") {
+            if cache_path.exists() {
+                if let Ok(cached) = std::fs::read_to_string(&cache_path) {
+                    return Ok((
+                        cached,
+                        "Live RFC Editor (TLS 304 Not Modified - Freshness Confirmed)".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Validate content authenticity
+        if (headers.contains("HTTP/1.1 200") || headers.contains("HTTP/2 200"))
+            && (body.contains("RFC INDEX") || body.contains("RFC Index") || body.contains("0001 "))
+        {
+            // Extract and update ETag if present
+            for line in headers.lines() {
+                if line.to_ascii_lowercase().starts_with("etag:") {
+                    let etag = line[5..].trim();
+                    self.knowledge_base.set_metadata("rfc_index_etag", etag);
+                }
+            }
+
+            // Persist verified live index to local cache
+            if let Some(parent) = cache_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&cache_path, body);
+
+            return Ok((
+                body.to_string(),
+                "Live RFC Editor (https://www.rfc-editor.org/rfc-index.txt - TLS Verified)".to_string(),
+            ));
+        }
+
+        Err(OctopusSecurityError::DeterministicLayerViolation(
+            "RFC Editor response did not contain expected HTTP 200 or RFC Index markers".to_string()
+        ))
+    }
+
     /// Executes an index synchronization pass against standard protocol repositories or managed index.
     /// Automatically discovers new RFCs, updates metadata, and extracts genuine normative statements.
+    /// FAIL-CLOSED: Deduplicates fragments and wraps batch updates inside a single SQLite transaction.
     pub async fn sync_index(&self) -> Result<RfcSyncReport, OctopusSecurityError> {
         let (initial_rfcs, initial_frags, _, _) = self.knowledge_base.get_full_counts();
         let (content, source_used) = self.load_rfc_index_text();
@@ -96,11 +178,14 @@ impl RfcIndexSynchronizer {
             ));
             added_or_updated += 1;
 
-            // Index normative RFC fragments
+            // Transactional deduplication: purge stale fragments before reinserting
+            sql_batch.push(format!("DELETE FROM fragments WHERE rfc_number = {};", entry.rfc_number));
+
+            // Index normative RFC fragments with unique chunk indexing
             for (idx, fragment) in entry.normative_fragments.iter().enumerate() {
                 let clean_frag = fragment.replace('\'', "''");
                 sql_batch.push(format!(
-                    "INSERT INTO fragments (rfc_number, title, chunk_index, content, is_normative) VALUES ({}, '{}', {}, '{}', 1);",
+                    "INSERT OR REPLACE INTO fragments (rfc_number, title, chunk_index, content, is_normative) VALUES ({}, '{}', {}, '{}', 1);",
                     entry.rfc_number, clean_title, idx, clean_frag
                 ));
                 new_fragments += 1;

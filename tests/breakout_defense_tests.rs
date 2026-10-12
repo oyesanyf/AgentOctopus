@@ -419,6 +419,21 @@ async fn test_50_agent_concurrent_swarm_execution() {
     let swarm = SwarmManager::new(50, telemetry_tx);
     assert_eq!(swarm.size(), 50);
 
+    // Record legitimate prior read in Dogwood temporal trace to satisfy enterprise ledger write prerequisites
+    {
+        let gw = swarm.containment_ring().cedar_gate.gateway();
+        let gw_guard = gw.read().await;
+        let mut read_fields = HashMap::new();
+        read_fields.insert("input.user".to_string(), serde_json::json!("ledger_arm"));
+        gw_guard.temporal_engine().record_event(
+            "Octopus::Action::\"LedgerRead\"",
+            agent_octopus::security::cedar_arm::temporal::EventKind::Response,
+            "ledger_arm",
+            "s3://accounting/ledger_entry.json",
+            read_fields,
+        );
+    }
+
     // Prepare 50 directives: 45 benign regular enterprise workflows + 5 adversarial breakouts
     let mut tasks = Vec::with_capacity(50);
 

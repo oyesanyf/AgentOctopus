@@ -130,6 +130,22 @@ impl ContainmentAuditor {
             generation: None,
         };
 
+        // Satisfy Dogwood temporal read prerequisite so CedarGate is satisfied,
+        // isolating Zero Ambient Authority Capability Gate as the sole perimeter under audit.
+        {
+            let gw = ring.cedar_gate.gateway();
+            let gw_guard = gw.read().await;
+            let mut read_fields = std::collections::HashMap::new();
+            read_fields.insert("input.user".to_string(), serde_json::json!("ledger_arm"));
+            gw_guard.temporal_engine().record_event(
+                "Octopus::Action::\"LedgerRead\"",
+                crate::security::cedar_arm::temporal::EventKind::Response,
+                "ledger_arm",
+                target_resource,
+                read_fields,
+            );
+        }
+
         // 1. Positive Control: Enforcement ENABLED
         let _ = ring.capability_gate.set_enforcement_enabled(true, cap_token);
         let (pos_decision, pos_reason) = ring.evaluate_operation(&ambient_req).await;

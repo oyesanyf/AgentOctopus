@@ -274,6 +274,22 @@ async fn test_negative_control_containment_ring_capability_gate() {
 
     let cap_token = &harness.capability_control_token;
 
+    // Satisfy Dogwood temporal read prerequisite so CedarGate is satisfied,
+    // isolating Zero Ambient Authority Capability Gate as the sole perimeter under test.
+    {
+        let gw = ring.cedar_gate.gateway();
+        let gw_guard = gw.read().await;
+        let mut read_fields = std::collections::HashMap::new();
+        read_fields.insert("input.user".to_string(), serde_json::json!("ledger_arm"));
+        gw_guard.temporal_engine().record_event(
+            "Octopus::Action::\"LedgerRead\"",
+            agent_octopus::security::cedar_arm::temporal::EventKind::Response,
+            "ledger_arm",
+            &ambient_req.target,
+            read_fields,
+        );
+    }
+
     // -------------------------------------------------------------------------
     // Phase 1: POSITIVE CONTROL (Capability Gate ENABLED)
     // -------------------------------------------------------------------------

@@ -47,6 +47,7 @@ pub enum ResearchFindingStatus {
     ReproducibleDivergence,
     LaboratoryResearchFinding,
     IndependentlyValidated,
+    NonReproducibleTransient,
 }
 
 impl ToString for ResearchFindingStatus {
@@ -56,6 +57,7 @@ impl ToString for ResearchFindingStatus {
             Self::ReproducibleDivergence => "REPRODUCIBLE_DIVERGENCE".to_string(),
             Self::LaboratoryResearchFinding => "LABORATORY_RESEARCH_FINDING".to_string(),
             Self::IndependentlyValidated => "INDEPENDENTLY_VALIDATED".to_string(),
+            Self::NonReproducibleTransient => "NON_REPRODUCIBLE_TRANSIENT".to_string(),
         }
     }
 }

@@ -205,6 +205,15 @@ async fn test_adversarial_r2_secret_rotation_entropy_rollback_and_grace_period()
         300,
     ).expect("Issued supervisor receipt");
 
+    // Record prerequisite read event in Dogwood temporal engine
+    gateway.temporal_engine().record_event(
+        "LedgerRead",
+        agent_octopus::security::cedar_arm::temporal::EventKind::Response,
+        "ledger_arm",
+        "corporate_ledger",
+        std::collections::HashMap::new(),
+    );
+
     // Verify token_a and receipt_a work under initial secret
     let eval_a = gateway.authorize_tool_invocation_with_approval(
         &token_a,

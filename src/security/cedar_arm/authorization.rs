@@ -712,7 +712,7 @@ impl CedarAuthorizationGateway {
 
         if let Some(ref audit) = self.audit_log {
             audit.record_event(
-                "CEDAR_DOGWOOD_JOINT_AUTHORIZATION",
+                "CEDAR_AUTHORIZATION",
                 requesting_agent,
                 &details,
                 decision_str,

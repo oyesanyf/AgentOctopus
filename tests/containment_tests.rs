@@ -357,11 +357,43 @@ fn test_windows_job_object_and_appcontainer_kernel_isolation() {
     };
 
     // 1. Verify Windows Job Object creation and limits
-    let job = WindowsJobObject::create("TestJob-Octopus", 1, 64 * 1024 * 1024).expect("Job creation");
-    assert_eq!(job.max_processes, 1);
+    let job = WindowsJobObject::create("TestJob-Octopus", 5, 64 * 1024 * 1024).expect("Job creation");
+    assert_eq!(job.max_processes, 5);
     assert_eq!(job.max_memory_bytes, 64 * 1024 * 1024);
 
-    // 2. Verify AppContainer LPAC profile security checks
+    // 2. Breakaway containment verification: verify kernel limits block process breakaway
+    let breakaway_contained = job.verify_breakaway_contained().expect("Breakaway containment check");
+    assert!(breakaway_contained, "Job Object must enforce breakaway containment and kill-on-close");
+
+    // 3. Real Job Object membership verification using Win32 IsProcessInJob (positive & negative controls)
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        let mut child = std::process::Command::new("cmd.exe")
+            .args(["/c", "ping -n 5 127.0.0.1 > nul"])
+            .spawn()
+            .expect("Spawn test child process");
+        let child_handle = child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+        let assign_res = job.assign_process(child_handle);
+        assert!(assign_res.is_ok(), "Process must be assigned to Job Object: {:?}", assign_res);
+        let in_job = job.verify_process_in_job(child_handle).expect("IsProcessInJob check");
+        assert!(in_job, "Child process must be kernel-verified inside Job Object via IsProcessInJob");
+        let _ = child.kill();
+        let _ = child.wait();
+
+        // Negative control: unassigned child process must return false
+        let mut unassigned_child = std::process::Command::new("cmd.exe")
+            .args(["/c", "ping -n 5 127.0.0.1 > nul"])
+            .spawn()
+            .expect("Spawn unassigned child process");
+        let unassigned_handle = unassigned_child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+        let unassigned_in_job = job.verify_process_in_job(unassigned_handle).expect("IsProcessInJob check on unassigned child");
+        assert!(!unassigned_in_job, "Unassigned process must NOT be reported as inside Job Object");
+        let _ = unassigned_child.kill();
+        let _ = unassigned_child.wait();
+    }
+
+    // 4. Verify AppContainer LPAC profile security checks
     let app_container = WindowsAppContainerProfile::new("arm-worker-lpac", true, true);
     assert!(app_container.is_lpac);
     assert!(app_container.package_sid.starts_with("S-1-15-2-"));
@@ -377,11 +409,35 @@ fn test_windows_job_object_and_appcontainer_kernel_isolation() {
     let blocked_fs = app_container.verify_access(r"C:\Windows\System32\cmd.exe", false);
     assert!(blocked_fs.is_err());
 
-    // 3. Verify Windows Restricted Token privilege stripping
+    // 5. Verify Windows Restricted Token privilege stripping and genuine token creation
     let token_policy = WindowsRestrictedTokenPolicy::default();
     assert!(token_policy.stripped_privileges.contains(&"SeDebugPrivilege".to_string()));
     assert!(token_policy.stripped_privileges.contains(&"SeTcbPrivilege".to_string()));
     assert_eq!(token_policy.token_integrity_level, "Low");
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        let mut current_token: windows_sys::Win32::Foundation::HANDLE = std::ptr::null_mut();
+        unsafe {
+            agent_octopus::security::windows_sandbox::win32::OpenProcessToken(
+                GetCurrentProcess(),
+                0x0008, // TOKEN_QUERY
+                &mut current_token,
+            );
+        }
+        let original_restricted = unsafe { agent_octopus::security::windows_sandbox::win32::IsTokenRestricted(current_token) };
+        unsafe { CloseHandle(current_token); }
+        assert_eq!(original_restricted, 0, "Primary process token should not be restricted initially");
+
+        let restricted_token = token_policy.create_restricted_token().expect("Real Win32 restricted token creation");
+        assert!(!restricted_token.is_null());
+        assert_ne!(restricted_token, INVALID_HANDLE_VALUE);
+        let is_restricted = unsafe { agent_octopus::security::windows_sandbox::win32::IsTokenRestricted(restricted_token) };
+        assert_ne!(is_restricted, 0, "Restricted token must be confirmed restricted via IsTokenRestricted");
+        unsafe { CloseHandle(restricted_token); }
+    }
 }
 
 #[test]

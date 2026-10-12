@@ -383,7 +383,7 @@ fn test_redteam_1_context_manipulation_untrusted_approval() {
         attack_result
     );
 
-    // 2. DEFENSE: Provide genuine cryptographic SupervisorApprovalReceipt
+    // 2. DEFENSE: Provide genuine cryptographic SupervisorApprovalReceipt and satisfy Dogwood temporal read prerequisite
     let receipt = gateway.issue_supervisor_approval(
         "security_supervisor",
         "ledger_arm",
@@ -391,6 +391,14 @@ fn test_redteam_1_context_manipulation_untrusted_approval() {
         100000,
         300,
     ).expect("Supervisor should be able to issue approval for another agent");
+
+    gateway.temporal_engine().record_event(
+        "LedgerRead",
+        agent_octopus::security::cedar_arm::temporal::EventKind::Response,
+        "ledger_arm",
+        "corporate_ledger",
+        std::collections::HashMap::new(),
+    );
 
     let verified_result = gateway.authorize_tool_invocation_with_approval(
         &token,
@@ -870,6 +878,15 @@ fn test_secret_rotation_grace_period_dual_verification() {
         50000,
     );
     assert!(verify_receipt.is_ok(), "Supervisor approval must pass during 300s grace window");
+
+    // Record prerequisite read in Dogwood temporal trace
+    gateway.temporal_engine().record_event(
+        "LedgerRead",
+        agent_octopus::security::cedar_arm::temporal::EventKind::Response,
+        "ledger_arm",
+        "corporate_ledger",
+        std::collections::HashMap::new(),
+    );
 
     // Verify capability invocation still passes under grace period
     let verdict = gateway.authorize_tool_invocation_with_approval(

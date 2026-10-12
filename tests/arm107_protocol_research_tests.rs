@@ -63,10 +63,29 @@ async fn test_arm107_cedar_target_allowlist_enforcement() {
     let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
 
     // Positive Control: Local loopback 127.0.0.1 must be permitted through Cedar Policy 8
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("Bind test listener");
+    let test_port = listener.local_addr().expect("Get local addr").port();
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        loop {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 4096];
+                if let Ok(n) = stream.read(&mut buf).await {
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    if req.contains("Transfer-Encoding: chunked") && req.contains("Content-Length:") {
+                        let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n").await;
+                    } else {
+                        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK").await;
+                    }
+                }
+            }
+        }
+    });
+
     let local_req = EvaluationRequest {
         raw_request: "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n0\r\n\r\n".to_string(),
         target_host: "127.0.0.1".to_string(),
-        target_port: 5005,
+        target_port: test_port,
         baseline_request: Some("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_string()),
     };
 
@@ -287,4 +306,127 @@ async fn test_arm107_differential_baseline_response_comparison() {
     assert!(finding.raw_response.contains("HTTP/1.1 400 Bad Request"));
     assert!(finding.baseline_response.as_ref().unwrap().contains("HTTP/1.1 200 OK"));
     assert_eq!(finding.confirmation_count, 2, "Reproducible divergence must have confirmation count of 2");
+}
+
+#[tokio::test]
+async fn test_arm107_transient_non_reproducible_anomaly_downgrade() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Server returns divergent response on 1st request, but concordant response on repeat request
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("Bind test listener");
+    let server_addr = listener.local_addr().expect("Get local addr");
+    let port = server_addr.port();
+    let probe_attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_clone = Arc::clone(&probe_attempts);
+
+    tokio::spawn(async move {
+        loop {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 4096];
+                if let Ok(n) = stream.read(&mut buf).await {
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    if req.contains("X-Transient-Test:") {
+                        let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
+                        if count == 0 {
+                            // First attempt: trigger transient divergence
+                            let resp = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nError";
+                            let _ = stream.write_all(resp.as_bytes()).await;
+                        } else {
+                            // Repeat confirmation: converges with baseline 200 OK
+                            let resp = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+                            let _ = stream.write_all(resp.as_bytes()).await;
+                        }
+                    } else {
+                        // Baseline response
+                        let resp = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    }
+                }
+            }
+        }
+    });
+
+    let secret_seed = b"cedar_arm107_transient_seed_32b!";
+    let rings = Arc::new(ArmRingRegistry::new(50, secret_seed));
+    let cedar = Arc::new(CedarPolicyEngine::default());
+    let dogwood = Arc::new(DogwoodTemporalEngine::new_simulation());
+    let audit_log = Arc::new(SecurityAuditLog::default());
+    let diff_engine = Arc::new(DifferentialProtocolEngine::with_containment(
+        Arc::clone(&rings),
+        Arc::clone(&audit_log),
+    ));
+    let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
+
+    let eval_req = EvaluationRequest {
+        raw_request: "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Transient-Test: 1\r\n\r\n".to_string(),
+        target_host: "127.0.0.1".to_string(),
+        target_port: port,
+        baseline_request: Some("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_string()),
+    };
+
+    let result = supervisor.evaluate_probe(eval_req).await;
+    assert!(result.is_ok(), "Evaluation must execute");
+    let finding = result.unwrap();
+
+    // Verification: Transient non-reproducible divergence must be downgraded!
+    assert!(!finding.is_anomalous, "Non-reproducible anomaly must be downgraded to is_anomalous: false");
+    assert_eq!(finding.finding_status, "NON_REPRODUCIBLE_TRANSIENT", "Status must be downgraded to NON_REPRODUCIBLE_TRANSIENT");
+    assert!(finding.details.contains("Downgraded"), "Details must explain downgrade due to failed reproducibility");
+}
+
+#[tokio::test]
+async fn test_arm107_rfc_sync_transactional_deduplication() {
+    let temp_dir = std::env::temp_dir().join(format!("octopus_dedup_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let db_path = temp_dir.join("dedup_research.db");
+
+    let kb = Arc::new(RfcKnowledgeBase::from_path(&db_path));
+    let sync = RfcIndexSynchronizer::new(Arc::clone(&kb));
+
+    // First synchronization pass
+    let report1 = sync.sync_index().await.expect("1st sync pass");
+    let initial_frags = report1.fragments_indexed;
+    assert!(initial_frags > 0, "Fragments must be indexed on first pass");
+
+    // Second synchronization pass (must NOT duplicate fragments!)
+    let _report2 = sync.sync_index().await.expect("2nd sync pass");
+    let (_, total_frags_after_second_sync, _, _) = kb.get_full_counts();
+
+    assert_eq!(
+        total_frags_after_second_sync, initial_frags,
+        "Repeated sync must deduplicate fragments transactionally: expected {}, found {}",
+        initial_frags, total_frags_after_second_sync
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_arm107_worker_packaging_validation_and_fail_closed() {
+    use agent_octopus::security::protocol_research::PythonWorkerBridge;
+    use std::path::PathBuf;
+
+    // 1. Valid worker directory validation
+    let valid_dir = PathBuf::from("vendor").join("rfchunt");
+    if valid_dir.exists() {
+        let hash_res = PythonWorkerBridge::validate_worker_packaging(&valid_dir);
+        assert!(hash_res.is_ok(), "Managed worker packaging validation must succeed: {:?}", hash_res.err());
+        let hash = hash_res.unwrap();
+        assert_eq!(hash.len(), 64, "SHA-256 hash must be 64 hexadecimal characters");
+    }
+
+    // 2. Corrupt / Missing worker directory must fail closed
+    let invalid_dir = PathBuf::from("nonexistent_worker_directory_xyz");
+    let corrupt_res = PythonWorkerBridge::validate_worker_packaging(&invalid_dir);
+    assert!(corrupt_res.is_err(), "Non-existent directory must fail closed");
+
+    // 3. Incomplete packaging (missing required dependencies) must fail closed
+    let temp_incomplete = std::env::temp_dir().join(format!("incomplete_worker_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_incomplete);
+    let _ = std::fs::write(temp_incomplete.join("mcp_server.py"), "#!/usr/bin/env python3\nprint('hello')\n");
+    // Missing database.py, rfc_chunker.py, rfc_fetcher.py
+    let incomplete_res = PythonWorkerBridge::validate_worker_packaging(&temp_incomplete);
+    assert!(incomplete_res.is_err(), "Worker directory with missing modules must fail closed");
+    let _ = std::fs::remove_dir_all(&temp_incomplete);
 }

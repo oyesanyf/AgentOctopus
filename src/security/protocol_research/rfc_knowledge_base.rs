@@ -58,6 +58,12 @@ impl RfcKnowledgeBase {
                 content TEXT,
                 is_normative INTEGER
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_fragments_unique ON fragments (rfc_number, chunk_index);
+            CREATE TABLE IF NOT EXISTS sync_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT
+            );
             CREATE TABLE IF NOT EXISTS probes (
                 id TEXT PRIMARY KEY,
                 rfc_number INTEGER,
@@ -260,14 +266,54 @@ impl RfcKnowledgeBase {
             .output();
     }
 
-    /// Inserts a chunk/normative fragment for an RFC.
+    /// Inserts a chunk/normative fragment for an RFC with deduplication.
     pub fn insert_fragment(&self, rfc_number: u32, title: &str, chunk_index: usize, content: &str, is_normative: bool) {
         let clean_title = title.replace('\'', "''");
         let clean_content = content.replace('\'', "''");
         let query = format!(
-            "INSERT INTO fragments (rfc_number, title, chunk_index, content, is_normative) VALUES ({}, '{}', {}, '{}', {});",
+            "INSERT OR REPLACE INTO fragments (rfc_number, title, chunk_index, content, is_normative) VALUES ({}, '{}', {}, '{}', {});",
             rfc_number, clean_title, chunk_index, clean_content, if is_normative { 1 } else { 0 }
         );
+        let _ = Command::new("sqlite3")
+            .arg(&self.db_path)
+            .arg(&query)
+            .output();
+    }
+
+    /// Retrieves synchronization metadata by key (e.g. etag, last_sync).
+    pub fn get_metadata(&self, key: &str) -> Option<String> {
+        let clean_key = key.replace('\'', "''");
+        let query = format!("SELECT value FROM sync_metadata WHERE key = '{}';", clean_key);
+        let output = Command::new("sqlite3")
+            .arg(&self.db_path)
+            .arg(&query)
+            .output()
+            .ok()?;
+        let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if val.is_empty() {
+            None
+        } else {
+            Some(val)
+        }
+    }
+
+    /// Updates or inserts synchronization metadata.
+    pub fn set_metadata(&self, key: &str, value: &str) {
+        let clean_key = key.replace('\'', "''");
+        let clean_val = value.replace('\'', "''");
+        let query = format!(
+            "INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('{}', '{}', datetime('now'));",
+            clean_key, clean_val
+        );
+        let _ = Command::new("sqlite3")
+            .arg(&self.db_path)
+            .arg(&query)
+            .output();
+    }
+
+    /// Deletes all fragments for a given RFC number for transactional updates.
+    pub fn delete_rfc_fragments(&self, rfc_number: u32) {
+        let query = format!("DELETE FROM fragments WHERE rfc_number = {};", rfc_number);
         let _ = Command::new("sqlite3")
             .arg(&self.db_path)
             .arg(&query)

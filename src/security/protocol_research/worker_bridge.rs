@@ -1,5 +1,6 @@
 use crate::core::types::OctopusSecurityError;
 use crate::security::windows_sandbox::WindowsJobObject;
+use sha2::Digest;
 use std::path::{Path, PathBuf};
 
 pub struct PythonWorkerBridge {
@@ -9,6 +10,7 @@ pub struct PythonWorkerBridge {
     pub pid: u32,
     pub container_name: Option<String>,
     pub package_sid: Option<String>,
+    pub worker_identity_hash: String,
     worker_dir: PathBuf,
 }
 
@@ -56,11 +58,15 @@ impl PythonWorkerBridge {
         ))
     }
 
-    /// Spawns the research worker strictly inside a verified Windows Job Object and AppContainer.
-    /// FAIL-CLOSED: Spawns in CREATE_SUSPENDED state, binds and verifies Job Object limits
-    /// BEFORE resuming the primary thread. Zero pre-isolation execution window.
-    pub fn start_worker() -> Result<Self, OctopusSecurityError> {
-        let worker_dir = Self::locate_worker_dir()?;
+    /// Validates research worker packaging, entrypoint executable identity, and key dependencies.
+    pub fn validate_worker_packaging(worker_dir: &Path) -> Result<String, OctopusSecurityError> {
+        if !worker_dir.exists() || !worker_dir.is_dir() {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "FAIL-CLOSED: Worker directory '{}' is invalid or does not exist.",
+                worker_dir.display()
+            )));
+        }
+
         let script = worker_dir.join("mcp_server.py");
         if !script.exists() {
             return Err(OctopusSecurityError::IsolationViolation(format!(
@@ -68,6 +74,36 @@ impl PythonWorkerBridge {
                 script.display()
             )));
         }
+
+        // Verify key modular dependencies are packaged
+        for dep in &["database.py", "rfc_chunker.py", "rfc_fetcher.py"] {
+            let dep_path = worker_dir.join(dep);
+            if !dep_path.exists() {
+                return Err(OctopusSecurityError::IsolationViolation(format!(
+                    "FAIL-CLOSED: Missing required research worker module '{}' in '{}'",
+                    dep, worker_dir.display()
+                )));
+            }
+        }
+
+        // Verify executable identity via cryptographic digest of entrypoint
+        let content = std::fs::read(&script).map_err(|e| {
+            OctopusSecurityError::IsolationViolation(format!(
+                "FAIL-CLOSED: Failed to read research worker entrypoint for identity verification: {}",
+                e
+            ))
+        })?;
+        let digest = format!("{:x}", sha2::Sha256::digest(&content));
+        Ok(digest)
+    }
+
+    /// Spawns the research worker strictly inside a verified Windows Job Object and AppContainer.
+    /// FAIL-CLOSED: Spawns in CREATE_SUSPENDED state, binds and verifies Job Object limits
+    /// BEFORE resuming the primary thread. Zero pre-isolation execution window.
+    pub fn start_worker() -> Result<Self, OctopusSecurityError> {
+        let worker_dir = Self::locate_worker_dir()?;
+        let identity_hash = Self::validate_worker_packaging(&worker_dir)?;
+        let script = worker_dir.join("mcp_server.py");
 
         let max_memory_bytes = 64 * 1024 * 1024; // Strict 64 MB clamp
         let job = WindowsJobObject::create("protocol_research_worker", 10, max_memory_bytes)?;
@@ -78,6 +114,10 @@ impl PythonWorkerBridge {
             use windows_sys::Win32::Foundation::CloseHandle;
             use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, IsProcessInJob};
 
+            let mandatory_appcontainer = std::env::var("OCTOPUS_REQUIRE_APPCONTAINER")
+                .map(|v| v != "0" && v.to_lowercase() != "false")
+                .unwrap_or(true);
+
             let container_name = format!("AgentOctopus.Arm107.Worker_{:08x}", rand::random::<u32>());
             let (sid_str, psid) = match create_or_open_appcontainer_profile(
                 &container_name,
@@ -85,8 +125,22 @@ impl PythonWorkerBridge {
                 "Isolated sandbox for HTTP protocol research worker",
             ) {
                 Ok((s, p)) => (Some(s), Some(p)),
-                Err(_) => (None, None),
+                Err(e) => {
+                    if mandatory_appcontainer {
+                        return Err(OctopusSecurityError::IsolationViolation(format!(
+                            "FAIL-CLOSED: Mandatory AppContainer profile creation failed for Arm 107 worker: {}. Fallback execution prohibited.",
+                            e
+                        )));
+                    }
+                    (None, None)
+                }
             };
+
+            if mandatory_appcontainer && psid.is_none() {
+                return Err(OctopusSecurityError::IsolationViolation(
+                    "FAIL-CLOSED: Mandatory AppContainer SID is unavailable. Unisolated process execution strictly prohibited.".to_string(),
+                ));
+            }
 
             const CREATE_SUSPENDED: u32 = 0x00000004;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -98,7 +152,7 @@ impl PythonWorkerBridge {
             let cmdline = format!("python \"{}\"", script.display());
             let mut wide_cmdline: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
 
-            let (create_res, attr_list_ptr) = if let Some(p_sid) = psid {
+            let create_res = if let Some(p_sid) = psid {
                 let mut sec_cap = win32::SECURITY_CAPABILITIES {
                     AppContainerSid: p_sid,
                     Capabilities: std::ptr::null_mut(),
@@ -144,21 +198,35 @@ impl PythonWorkerBridge {
                                 &mut pi,
                             )
                         };
-                        (res, Some(attr_list))
+                        unsafe { win32::DeleteProcThreadAttributeList(attr_list); }
+                        res
                     } else {
                         unsafe { win32::DeleteProcThreadAttributeList(attr_list); }
-                        (0, None)
+                        0
                     }
                 } else {
-                    (0, None)
+                    0
                 }
             } else {
-                (0, None)
+                0
             };
 
-            // If AppContainer spawn was not used or failed, launch suspended with standard STARTUPINFOW
+            if let Some(p_sid) = psid {
+                unsafe { win32::FreeSid(p_sid); }
+            }
+
+            // If AppContainer spawn was not used or failed:
+            // FAIL-CLOSED: strictly prohibit fallback to standard unconstrained process if AppContainer isolation is mandatory
             let final_create_res = if create_res != 0 {
                 create_res
+            } else if mandatory_appcontainer {
+                let err = unsafe { win32::GetLastError() };
+                let wide_name: Vec<u16> = container_name.encode_utf16().chain(std::iter::once(0)).collect();
+                unsafe { win32::DeleteAppContainerProfile(wide_name.as_ptr()); }
+                return Err(OctopusSecurityError::IsolationViolation(format!(
+                    "FAIL-CLOSED: Failed to spawn research worker under mandatory AppContainer isolation (OS Error {}). Unconstrained fallback prohibited.",
+                    err
+                )));
             } else {
                 let mut si: windows_sys::Win32::System::Threading::STARTUPINFOW = unsafe { std::mem::zeroed() };
                 si.cb = std::mem::size_of::<windows_sys::Win32::System::Threading::STARTUPINFOW>() as u32;
@@ -178,12 +246,10 @@ impl PythonWorkerBridge {
                 }
             };
 
-            if let Some(attr_ptr) = attr_list_ptr {
-                unsafe { win32::DeleteProcThreadAttributeList(attr_ptr); }
-            }
-
             if final_create_res == 0 {
                 let err = unsafe { win32::GetLastError() };
+                let wide_name: Vec<u16> = container_name.encode_utf16().chain(std::iter::once(0)).collect();
+                unsafe { win32::DeleteAppContainerProfile(wide_name.as_ptr()); }
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "FAIL-CLOSED: Failed to spawn research worker in suspended state (OS Error {})",
                     err
@@ -198,6 +264,8 @@ impl PythonWorkerBridge {
                     win32::TerminateProcess(pi.hProcess, 1);
                     CloseHandle(pi.hProcess);
                     CloseHandle(pi.hThread);
+                    let wide_name: Vec<u16> = container_name.encode_utf16().chain(std::iter::once(0)).collect();
+                    win32::DeleteAppContainerProfile(wide_name.as_ptr());
                 };
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "FAIL-CLOSED: Failed to assign suspended worker process to Windows Job Object (OS Error {})",
@@ -213,6 +281,8 @@ impl PythonWorkerBridge {
                     win32::TerminateProcess(pi.hProcess, 1);
                     CloseHandle(pi.hProcess);
                     CloseHandle(pi.hThread);
+                    let wide_name: Vec<u16> = container_name.encode_utf16().chain(std::iter::once(0)).collect();
+                    win32::DeleteAppContainerProfile(wide_name.as_ptr());
                 };
                 return Err(OctopusSecurityError::IsolationViolation(
                     "FAIL-CLOSED: Worker process verified NOT in Windows Job Object. Execution halted.".to_string(),
@@ -227,6 +297,8 @@ impl PythonWorkerBridge {
                     win32::TerminateProcess(pi.hProcess, 1);
                     CloseHandle(pi.hProcess);
                     CloseHandle(pi.hThread);
+                    let wide_name: Vec<u16> = container_name.encode_utf16().chain(std::iter::once(0)).collect();
+                    win32::DeleteAppContainerProfile(wide_name.as_ptr());
                 };
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "FAIL-CLOSED: ResumeThread failed on sandboxed worker process (OS Error {})",
@@ -242,6 +314,7 @@ impl PythonWorkerBridge {
                 pid: pi.dwProcessId,
                 container_name: if psid.is_some() { Some(container_name) } else { None },
                 package_sid: sid_str,
+                worker_identity_hash: identity_hash,
                 worker_dir,
             })
         }

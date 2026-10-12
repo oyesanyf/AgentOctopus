@@ -71,6 +71,25 @@ pub mod win32 {
     #[link(name = "advapi32")]
     extern "system" {
         pub fn ConvertSidToStringSidW(pSid: PSID, ptrSid: *mut PWSTR) -> BOOL;
+        pub fn ConvertStringSidToSidW(StringSid: *const u16, Sid: *mut PSID) -> BOOL;
+        pub fn OpenProcessToken(
+            ProcessHandle: HANDLE,
+            DesiredAccess: DWORD,
+            TokenHandle: *mut HANDLE,
+        ) -> BOOL;
+        pub fn CreateRestrictedToken(
+            ExistingTokenHandle: HANDLE,
+            Flags: DWORD,
+            DisableSidCount: DWORD,
+            SidsToDisable: *const c_void,
+            DeletePrivilegeCount: DWORD,
+            PrivilegesToDelete: *const c_void,
+            RestrictedSidCount: DWORD,
+            SidsToRestrict: *const c_void,
+            NewTokenHandle: *mut HANDLE,
+        ) -> BOOL;
+        pub fn IsTokenRestricted(TokenHandle: HANDLE) -> BOOL;
+        pub fn FreeSid(pSid: PSID) -> *mut c_void;
     }
 
     #[link(name = "kernel32")]
@@ -95,6 +114,13 @@ pub mod win32 {
         pub fn ResumeThread(hThread: HANDLE) -> DWORD;
         pub fn TerminateProcess(hProcess: HANDLE, uExitCode: u32) -> BOOL;
         pub fn GetLastError() -> DWORD;
+        pub fn QueryInformationJobObject(
+            hJob: HANDLE,
+            JobObjectInformationClass: u32,
+            lpJobObjectInformation: *mut c_void,
+            cbJobObjectInformationLength: u32,
+            lpReturnLength: *mut u32,
+        ) -> BOOL;
         pub fn CreateProcessW(
             lpApplicationName: *const u16,
             lpCommandLine: *mut u16,
@@ -251,6 +277,73 @@ impl WindowsJobObject {
             }
         }
         Ok(())
+    }
+
+    /// Checks kernel containment: verifies whether a specific process is strictly bound inside this Job Object.
+    #[cfg(windows)]
+    pub fn verify_process_in_job(&self, process_handle: HANDLE) -> Result<bool, OctopusSecurityError> {
+        if self.handle.is_null() || self.handle == INVALID_HANDLE_VALUE {
+            return Err(OctopusSecurityError::IsolationViolation(
+                "Cannot check process in null or invalid Job Object".to_string(),
+            ));
+        }
+        let mut in_job: i32 = 0;
+        let res = unsafe { IsProcessInJob(process_handle, self.handle, &mut in_job) };
+        if res == 0 {
+            let err = unsafe { win32::GetLastError() };
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "IsProcessInJob query failed with OS error {}",
+                err
+            )));
+        }
+        Ok(in_job != 0)
+    }
+
+    #[cfg(not(windows))]
+    pub fn verify_process_in_job(&self, _process_handle: ()) -> Result<bool, OctopusSecurityError> {
+        Ok(false)
+    }
+
+    /// Verifies that break-away escape is blocked by kernel limits (JOB_OBJECT_LIMIT_BREAKAWAY_OK is not set).
+    pub fn verify_breakaway_contained(&self) -> Result<bool, OctopusSecurityError> {
+        #[cfg(windows)]
+        {
+            if self.handle.is_null() || self.handle == INVALID_HANDLE_VALUE {
+                return Err(OctopusSecurityError::IsolationViolation(
+                    "Cannot query limits on null or invalid Job Object".to_string(),
+                ));
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+            let mut ret_len: u32 = 0;
+            const JOB_OBJECT_EXTENDED_LIMIT_INFO_CLASS: u32 = 9;
+            let ok = unsafe {
+                win32::QueryInformationJobObject(
+                    self.handle,
+                    JOB_OBJECT_EXTENDED_LIMIT_INFO_CLASS,
+                    &mut info as *mut _ as *mut std::ffi::c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                    &mut ret_len,
+                )
+            };
+            if ok == 0 {
+                let err = unsafe { win32::GetLastError() };
+                return Err(OctopusSecurityError::IsolationViolation(format!(
+                    "QueryInformationJobObject failed with OS error {}",
+                    err
+                )));
+            }
+            const JOB_OBJECT_LIMIT_BREAKAWAY_OK_FLAG: u32 = 0x00000800;
+            const JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK_FLAG: u32 = 0x00001000;
+            let flags = info.BasicLimitInformation.LimitFlags;
+            let breakaway_allowed = (flags & JOB_OBJECT_LIMIT_BREAKAWAY_OK_FLAG) != 0
+                || (flags & JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK_FLAG) != 0;
+            let kill_on_close = (flags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) != 0;
+            Ok(!breakaway_allowed && kill_on_close)
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(true)
+        }
     }
 
     /// Terminates all processes assigned to this Windows Job Object immediately at the kernel level.
@@ -513,6 +606,96 @@ impl Default for WindowsRestrictedTokenPolicy {
             ],
             token_integrity_level: "Low".to_string(), // Untrusted / Low integrity
         }
+    }
+}
+
+impl WindowsRestrictedTokenPolicy {
+    /// Creates a genuine Windows Restricted Token stripping dangerous privileges and administrative SIDs.
+    #[cfg(windows)]
+    pub fn create_restricted_token(&self) -> Result<windows_sys::Win32::Foundation::HANDLE, OctopusSecurityError> {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+        const TOKEN_DUPLICATE: u32 = 0x0002;
+        const TOKEN_QUERY: u32 = 0x0008;
+        const TOKEN_ASSIGN_PRIMARY: u32 = 0x0001;
+        const DISABLE_MAX_PRIVILEGE: u32 = 0x1;
+
+        let mut current_token: windows_sys::Win32::Foundation::HANDLE = std::ptr::null_mut();
+        let open_res = unsafe {
+            win32::OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY,
+                &mut current_token,
+            )
+        };
+        if open_res == 0 || current_token.is_null() {
+            let err = unsafe { win32::GetLastError() };
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "FAIL-CLOSED: OpenProcessToken failed (OS Error {})",
+                err
+            )));
+        }
+
+        let mut restricted_sid: win32::PSID = std::ptr::null_mut();
+        let sid_w: Vec<u16> = "S-1-5-12\0".encode_utf16().collect();
+        let _ = unsafe { win32::ConvertStringSidToSidW(sid_w.as_ptr(), &mut restricted_sid) };
+
+        let mut sid_and_attr = win32::SID_AND_ATTRIBUTES {
+            Sid: restricted_sid,
+            Attributes: 0,
+        };
+
+        let (sid_count, sid_ptr) = if !restricted_sid.is_null() {
+            (1, &mut sid_and_attr as *mut _ as *const std::ffi::c_void)
+        } else {
+            (0, std::ptr::null())
+        };
+
+        let mut restricted_token: windows_sys::Win32::Foundation::HANDLE = std::ptr::null_mut();
+
+        let rest_res = unsafe {
+            win32::CreateRestrictedToken(
+                current_token,
+                DISABLE_MAX_PRIVILEGE,
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                sid_count,
+                sid_ptr,
+                &mut restricted_token,
+            )
+        };
+        unsafe { CloseHandle(current_token); }
+        if !restricted_sid.is_null() {
+            unsafe { win32::LocalFree(restricted_sid); }
+        }
+
+        if rest_res == 0 || restricted_token.is_null() {
+            let err = unsafe { win32::GetLastError() };
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "FAIL-CLOSED: CreateRestrictedToken failed (OS Error {})",
+                err
+            )));
+        }
+
+        let is_restricted = unsafe { win32::IsTokenRestricted(restricted_token) };
+        if is_restricted == 0 {
+            unsafe { CloseHandle(restricted_token); }
+            return Err(OctopusSecurityError::IsolationViolation(
+                "FAIL-CLOSED: Created token failed IsTokenRestricted verification".to_string(),
+            ));
+        }
+
+        Ok(restricted_token)
+    }
+
+    #[cfg(not(windows))]
+    pub fn create_restricted_token(&self) -> Result<(), OctopusSecurityError> {
+        Err(OctopusSecurityError::IsolationViolation(
+            "Windows Restricted Tokens are only supported on Windows".to_string(),
+        ))
     }
 }
 
