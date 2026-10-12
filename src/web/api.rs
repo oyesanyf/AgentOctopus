@@ -848,6 +848,7 @@ pub struct RlEvaluateActionRequest {
     pub action: String,
     pub resource: String,
     pub payload: Option<String>,
+    pub state_vector: Option<AdaptiveStateVector>,
 }
 
 pub fn handle_rl_evaluate_action(state: &WebState, body: &str) -> Result<String, String> {
@@ -862,11 +863,22 @@ pub fn handle_rl_evaluate_action(state: &WebState, body: &str) -> Result<String,
         &payload,
     );
 
-    let mut state_vec = AdaptiveStateVector::default();
-    if !breakout_eval.technical.is_clean { state_vec.credential_access_pressure = 0.95; }
-    if !breakout_eval.operational.is_clean { state_vec.credential_access_pressure = 0.85; }
-    if !breakout_eval.behavioral.is_clean { state_vec.eval_harness_tamper_signal = 0.95; }
-    if !breakout_eval.data.is_clean { state_vec.cross_agent_scratchpad_leak = 0.9; }
+    let mut state_vec = if let Some(sv) = req.state_vector {
+        sv
+    } else if let Ok(val) = serde_json::from_str::<serde_json::Value>(&payload) {
+        if let Some(sv_val) = val.get("state_vector") {
+            serde_json::from_value::<AdaptiveStateVector>(sv_val.clone()).unwrap_or_default()
+        } else {
+            AdaptiveStateVector::default()
+        }
+    } else {
+        AdaptiveStateVector::default()
+    };
+
+    if !breakout_eval.technical.is_clean { state_vec.credential_access_pressure = state_vec.credential_access_pressure.max(0.95); }
+    if !breakout_eval.operational.is_clean { state_vec.credential_access_pressure = state_vec.credential_access_pressure.max(0.85); }
+    if !breakout_eval.behavioral.is_clean { state_vec.eval_harness_tamper_signal = state_vec.eval_harness_tamper_signal.max(0.95); }
+    if !breakout_eval.data.is_clean { state_vec.cross_agent_scratchpad_leak = state_vec.cross_agent_scratchpad_leak.max(0.9); }
 
     let action = state.rl_defense.select_action(&state_vec);
 

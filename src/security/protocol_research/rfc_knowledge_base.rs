@@ -273,4 +273,32 @@ impl RfcKnowledgeBase {
             .arg(&query)
             .output();
     }
+
+    /// Executes a batch of SQL statements wrapped in a single transaction for high-performance synchronization.
+    pub fn execute_batch(&self, sql_commands: &[String]) {
+        if sql_commands.is_empty() {
+            return;
+        }
+
+        use std::io::Write;
+        let mut child = match Command::new("sqlite3")
+            .arg(&self.db_path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = writeln!(stdin, "BEGIN TRANSACTION;");
+            for cmd in sql_commands {
+                let _ = writeln!(stdin, "{}", cmd);
+            }
+            let _ = writeln!(stdin, "COMMIT;");
+        }
+        let _ = child.wait();
+    }
 }

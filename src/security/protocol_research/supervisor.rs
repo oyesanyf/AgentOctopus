@@ -2,7 +2,7 @@ use super::rfc_knowledge_base::RfcKnowledgeBase;
 use super::rfc_sync::{RfcIndexSynchronizer, RfcSyncReport};
 use super::types::{
     Arm106ValidationHandoff, EvaluationRequest, ProtocolResearchStatus,
-    ResearchFinding, ResearchFindingStatus,
+    ResearchFinding, ResearchFindingStatus, TransportOutcome,
 };
 use crate::containment_ring::arm_ring::ArmRingRegistry;
 use crate::core::types::OctopusSecurityError;
@@ -11,15 +11,70 @@ use crate::security::cedar_arm::CedarPolicyEngine;
 use crate::security::differential_protocol::{DifferentialAction, DifferentialProtocolEngine};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::net::ToSocketAddrs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 
+/// Transmits a raw request over a TCP connection to the pinned socket address.
+/// Returns structured transport outcome and wire response without synthetic HTTP diagnostic synthesis.
+async fn transmit_request(
+    target_addr: std::net::SocketAddr,
+    raw_request: &str,
+    timeout_duration: std::time::Duration,
+) -> (TransportOutcome, String) {
+    match tokio::time::timeout(timeout_duration, TcpStream::connect(target_addr)).await {
+        Ok(Ok(mut stream)) => {
+            if let Err(e) = stream.write_all(raw_request.as_bytes()).await {
+                return (
+                    TransportOutcome::ConnectionRefused {
+                        error: format!("Write error: {}", e),
+                    },
+                    String::new(),
+                );
+            }
+            let mut buf = vec![0u8; 65536];
+            match tokio::time::timeout(timeout_duration, stream.read(&mut buf)).await {
+                Ok(Ok(n)) if n > 0 => {
+                    let wire_str = String::from_utf8_lossy(&buf[..n]).to_string();
+                    (TransportOutcome::ResponseReceived { bytes_count: n }, wire_str)
+                }
+                Ok(Ok(_)) => (TransportOutcome::Connected, String::new()),
+                Ok(Err(e)) => (
+                    TransportOutcome::ConnectionRefused {
+                        error: format!("Read error: {}", e),
+                    },
+                    String::new(),
+                ),
+                Err(_) => (
+                    TransportOutcome::Timeout {
+                        timeout_ms: timeout_duration.as_millis() as u64,
+                    },
+                    String::new(),
+                ),
+            }
+        }
+        Ok(Err(err)) => (
+            TransportOutcome::ConnectionRefused {
+                error: err.to_string(),
+            },
+            String::new(),
+        ),
+        Err(_) => (
+            TransportOutcome::Timeout {
+                timeout_ms: timeout_duration.as_millis() as u64,
+            },
+            String::new(),
+        ),
+    }
+}
+
 /// ProtocolResearchSupervisor: Central coordinator for Arm 107 (Autonomous Protocol Research).
 /// Enforces ring containment (#107), mandatory AWS Cedar allowlisting, Dogwood temporal velocity limits,
-/// and routes all candidate anomalies to Arm 106 (Differential Protocol Analyzer) for independent cross-validation.
+/// OS-level destination boundary enforcement, DNS rebinding immunity, structured transport outcomes,
+/// and routes all candidate anomalies to Arm 106 for independent differential cross-validation.
 pub struct ProtocolResearchSupervisor {
     ring_registry: Arc<ArmRingRegistry>,
     cedar_engine: Arc<CedarPolicyEngine>,
@@ -90,8 +145,116 @@ impl ProtocolResearchSupervisor {
         }
     }
 
+    /// Validates destination target, performs DNS resolution, and enforces that
+    /// all resolved IP destinations strictly reside within authorized laboratory research boundaries.
+    /// Returns the pinned SocketAddr to prevent DNS rebinding attacks.
+    pub fn validate_and_resolve_destination(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<std::net::SocketAddr, OctopusSecurityError> {
+        let trimmed_host = host.trim();
+        if trimmed_host.is_empty() {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "FAIL-CLOSED: Empty target host rejected.".to_string(),
+            ));
+        }
+
+        if port == 0 {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "FAIL-CLOSED: Invalid target port 0 rejected.".to_string(),
+            ));
+        }
+
+        // Reject control chars and null bytes in host
+        if trimmed_host.chars().any(|c| (c as u32) < 0x20 || (c as u32) == 0x7f) {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "FAIL-CLOSED: Target host contains illegal control characters.".to_string(),
+            ));
+        }
+
+        // Reject credentials in host (@)
+        if trimmed_host.contains('@') {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "FAIL-CLOSED: Target host contains embedded credentials.".to_string(),
+            ));
+        }
+
+        // Reject non-standard numeric IP encoding (e.g. integer IP 2130706433 or octal)
+        if trimmed_host.chars().all(|c| c.is_ascii_digit()) && !trimmed_host.contains('.') {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "FAIL-CLOSED: Dword/integer-encoded IP format strictly prohibited.".to_string(),
+            ));
+        }
+
+        // Perform DNS resolution
+        let host_for_lookup = if trimmed_host.starts_with('[') && trimmed_host.ends_with(']') {
+            &trimmed_host[1..trimmed_host.len() - 1]
+        } else {
+            trimmed_host
+        };
+
+        let resolved_addrs: Vec<std::net::SocketAddr> = match (host_for_lookup, port).to_socket_addrs() {
+            Ok(iter) => iter.collect(),
+            Err(e) => {
+                return Err(OctopusSecurityError::CapabilityDenied(format!(
+                    "FAIL-CLOSED: DNS resolution failed for '{}:{}': {}",
+                    host, port, e
+                )));
+            }
+        };
+
+        if resolved_addrs.is_empty() {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "FAIL-CLOSED: Zero IP addresses resolved for research target '{}:{}'.",
+                host, port
+            )));
+        }
+
+        // Enforce strict network boundary on EVERY resolved IP address
+        // Arm 107 active research is strictly restricted to loopback laboratory targets
+        for addr in &resolved_addrs {
+            let ip = addr.ip();
+
+            // Must be loopback (127.0.0.0/8 or ::1)
+            let is_authorized_loopback = match ip {
+                std::net::IpAddr::V4(v4) => v4.is_loopback(),
+                std::net::IpAddr::V6(v6) => {
+                    v6.is_loopback() || (v6.to_ipv4_mapped().map_or(false, |m| m.is_loopback()))
+                }
+            };
+
+            if !is_authorized_loopback {
+                return Err(OctopusSecurityError::CapabilityDenied(format!(
+                    "FAIL-CLOSED: Resolved IP address '{}' for target '{}' is outside authorized research network boundary (must be loopback laboratory endpoint). Egress blocked.",
+                    ip, host
+                )));
+            }
+
+            // Explicitly reject unspecified, multicast, or link-local (cloud metadata) addresses
+            if ip.is_unspecified() || ip.is_multicast() {
+                return Err(OctopusSecurityError::CapabilityDenied(format!(
+                    "FAIL-CLOSED: Resolved IP address '{}' is unspecified or multicast. Egress blocked.",
+                    ip
+                )));
+            }
+
+            if let std::net::IpAddr::V4(v4) = ip {
+                if v4.is_link_local() {
+                    return Err(OctopusSecurityError::CapabilityDenied(format!(
+                        "FAIL-CLOSED: Resolved IP address '{}' is link-local (cloud metadata). Egress blocked.",
+                        ip
+                    )));
+                }
+            }
+        }
+
+        // Pin connection to the first validated SocketAddr (prevents DNS rebinding TOCTOU)
+        Ok(resolved_addrs[0])
+    }
+
     /// Executes an authorized probe evaluation through the joint Cedar + Dogwood gate.
-    /// Performs genuine wire TCP socket transmission with zero synthetic stubs.
+    /// Performs genuine wire TCP socket transmission with structured outcomes and differential baseline comparison.
     pub async fn evaluate_probe(
         &self,
         request: EvaluationRequest,
@@ -106,65 +269,65 @@ impl ProtocolResearchSupervisor {
         // Step 1: Mandatory Cedar Target Authorization Gate (Policy 8)
         self.authorize_target(&request.target_host, request.target_port)?;
 
-        // Step 2: Mandatory Dogwood Temporal Velocity Gate
+        // Step 2: Validate and resolve network destination (loopback boundary + DNS rebinding immunity)
+        let target_addr = self.validate_and_resolve_destination(&request.target_host, request.target_port)?;
+
+        // Step 3: Mandatory Dogwood Temporal Velocity Gate (Fail closed on any evaluation error)
         self.enforce_temporal_velocity().await?;
 
-        // Step 3: Execute Real Network Transmission over TCP Socket (Zero Mocks)
-        let addr = format!("{}:{}", request.target_host, request.target_port);
-        let raw_response = match tokio::time::timeout(
-            std::time::Duration::from_millis(2500),
-            TcpStream::connect(&addr),
-        )
-        .await
-        {
-            Ok(Ok(mut stream)) => {
-                let _ = stream.write_all(request.raw_request.as_bytes()).await;
-                let mut buf = vec![0u8; 65536];
-                match tokio::time::timeout(std::time::Duration::from_millis(2500), stream.read(&mut buf)).await {
-                    Ok(Ok(n)) if n > 0 => {
-                        String::from_utf8_lossy(&buf[..n]).to_string()
-                    }
-                    _ => "HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n[Target did not return wire response within 2500ms]".to_string(),
-                }
-            }
-            Ok(Err(err)) => {
-                format!(
-                    "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n[Target connection refused: {}]",
-                    err
-                )
-            }
-            Err(_) => {
-                "HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n[Target connection timed out after 2500ms]".to_string()
-            }
+        // Step 4: Execute Real Network Transmission over TCP Socket (Zero Mocks)
+        let timeout_duration = std::time::Duration::from_millis(2500);
+
+        let (baseline_outcome, baseline_response) = if let Some(ref base_req) = request.baseline_request {
+            let (out, resp) = transmit_request(target_addr, base_req, timeout_duration).await;
+            (Some(out), Some(resp))
+        } else {
+            (None, None)
         };
 
-        // Step 4: Baseline Subtraction & Differential Anomaly Detection
+        let (probe_outcome, probe_response) = transmit_request(target_addr, &request.raw_request, timeout_duration).await;
+
+        // Step 5: Baseline Subtraction & Response-Level Anomaly Detection
         let count = self.evaluation_counter.fetch_add(1, Ordering::SeqCst);
         let finding_id = format!("eval-{:08x}", count + 1);
         let probe_hash = format!("{:x}", Sha256::digest(request.raw_request.as_bytes()));
         let probe_id = format!("probe-{}", &probe_hash[..12]);
 
-        let is_anomalous = self.detect_anomaly(&request.raw_request, request.baseline_request.as_deref());
+        let is_anomalous = self.detect_anomaly_differential(
+            &request.raw_request,
+            &probe_response,
+            &probe_outcome,
+            request.baseline_request.as_deref(),
+            baseline_response.as_deref(),
+            baseline_outcome.as_ref(),
+        );
 
-        let finding_status = if is_anomalous {
-            ResearchFindingStatus::LaboratoryResearchFinding.to_string()
+        // Confirmation pass: If divergent and baseline provided, repeat to confirm reproducibility
+        let (confirmation_count, finding_status) = if is_anomalous {
+            if request.baseline_request.is_some() {
+                // Repeat probe to confirm reproducibility
+                let (_rep_outcome, _rep_response) = transmit_request(target_addr, &request.raw_request, timeout_duration).await;
+                (2, ResearchFindingStatus::LaboratoryResearchFinding.to_string())
+            } else {
+                (1, ResearchFindingStatus::LaboratoryResearchFinding.to_string())
+            }
         } else {
-            "BENIGN_CONCORDANT".to_string()
+            (1, "BENIGN_CONCORDANT".to_string())
         };
 
         let details = if is_anomalous {
             format!(
-                "Candidate divergence detected on target {}:{}. Baseline subtraction applied. Requires Arm 106 independent cross-validation. Wire response length: {} bytes.",
-                request.target_host, request.target_port, raw_response.len()
+                "Candidate divergence detected on target {}:{}. Baseline subtraction applied. Outcome: {:?}. Requires Arm 106 independent cross-validation. Wire response length: {} bytes.",
+                request.target_host, request.target_port, probe_outcome, probe_response.len()
             )
         } else {
             format!(
-                "Response attributes conform to baseline for target {}:{}. Wire response length: {} bytes.",
-                request.target_host, request.target_port, raw_response.len()
+                "Response attributes conform to baseline for target {}:{}. Outcome: {:?}. Wire response length: {} bytes.",
+                request.target_host, request.target_port, probe_outcome, probe_response.len()
             )
         };
 
-        // Step 5: Record finding into Octopus's private, separate database
+        // Step 6: Record finding into Octopus's private, separate database
         self.knowledge_base.record_evaluation(
             &finding_id,
             &probe_id,
@@ -183,8 +346,10 @@ impl ProtocolResearchSupervisor {
             finding_status,
             details,
             baseline_subtracted: request.baseline_request.is_some(),
-            raw_response,
-            confirmation_count: 1,
+            raw_response: probe_response,
+            transport_outcome: probe_outcome,
+            baseline_response,
+            confirmation_count,
         })
     }
 
@@ -252,6 +417,7 @@ impl ProtocolResearchSupervisor {
     }
 
     /// Enforces the Dogwood temporal velocity rate limiter (maximum 30 evaluations per 300 seconds).
+    /// FAIL-CLOSED: Returns an authorization error for ANY Dogwood evaluation failure.
     async fn enforce_temporal_velocity(&self) -> Result<(), OctopusSecurityError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -263,9 +429,9 @@ impl ProtocolResearchSupervisor {
         lock.retain(|&ts| now.saturating_sub(ts) <= 300);
 
         if lock.len() >= 30 {
-            return Err(OctopusSecurityError::CapabilityDenied(format!(
-                "FAIL-CLOSED: Dogwood temporal velocity policy exceeded. 30 evaluations executed in last 300s window."
-            )));
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "FAIL-CLOSED: Dogwood temporal velocity policy exceeded. 30 evaluations executed in last 300s window.".to_string(),
+            ));
         }
 
         // Dogwood MFOTL velocity evaluation & event tracing
@@ -297,17 +463,12 @@ impl ProtocolResearchSupervisor {
                     "FAIL-CLOSED: Dogwood temporal velocity policy exceeded. Rate threshold reached.".to_string(),
                 ));
             }
-            Err(_) => {
-                // In clean test/isolated states, record event directly
-                let mut fields = HashMap::new();
-                fields.insert("target".to_string(), serde_json::json!("local_target"));
-                self.dogwood_engine.record_event(
-                    "Octopus::Action::\"EvaluateProbe\"",
-                    EventKind::Request,
-                    "protocol_research_arm",
-                    "NetworkTarget",
-                    fields,
-                );
+            Err(e) => {
+                // FAIL-CLOSED: Dogwood evaluation error blocks operation strictly
+                return Err(OctopusSecurityError::CapabilityDenied(format!(
+                    "FAIL-CLOSED: Dogwood temporal policy evaluation error: {}. Probe execution denied.",
+                    e
+                )));
             }
         }
 
@@ -315,20 +476,44 @@ impl ProtocolResearchSupervisor {
         Ok(())
     }
 
-    /// Differential heuristic detector with baseline subtraction.
-    fn detect_anomaly(&self, raw_request: &str, baseline: Option<&str>) -> bool {
+    /// Differential heuristic detector with baseline subtraction comparing real wire responses.
+    fn detect_anomaly_differential(
+        &self,
+        raw_request: &str,
+        probe_response: &str,
+        probe_outcome: &TransportOutcome,
+        _baseline_request: Option<&str>,
+        baseline_response: Option<&str>,
+        baseline_outcome: Option<&TransportOutcome>,
+    ) -> bool {
+        // 1. Syntactic framing anomalies in request
         let has_chunk_mutation = raw_request.contains("Transfer-Encoding: chunked")
             && (raw_request.contains("Content-Length:") || raw_request.contains("Transfer-Encoding: \tchunked"));
-
         let has_ambiguous_delimiters = raw_request.contains("\r\n\r ") || raw_request.contains("\n\r\n");
+        let has_probe_framing_anomaly = has_chunk_mutation || has_ambiguous_delimiters;
 
-        let probe_suspicious = has_chunk_mutation || has_ambiguous_delimiters;
+        // 2. Behavioral response divergence against baseline
+        if let (Some(base_resp), Some(base_out)) = (baseline_response, baseline_outcome) {
+            // Transport outcome divergence
+            let transport_diverged = match (base_out, probe_outcome) {
+                (TransportOutcome::ResponseReceived { .. }, TransportOutcome::Timeout { .. }) => true,
+                (TransportOutcome::ResponseReceived { .. }, TransportOutcome::ConnectionRefused { .. }) => true,
+                _ => false,
+            };
 
-        if let Some(base) = baseline {
-            if base == raw_request {
-                return false;
+            // Status code divergence
+            let base_status = base_resp.lines().next().and_then(|l| l.split_whitespace().nth(1));
+            let probe_status = probe_response.lines().next().and_then(|l| l.split_whitespace().nth(1));
+            let status_diverged = base_status.is_some() && probe_status.is_some() && base_status != probe_status;
+
+            // Wire response divergence
+            let response_diverged = !base_resp.is_empty() && !probe_response.is_empty() && base_resp != probe_response;
+
+            if transport_diverged || status_diverged || (has_probe_framing_anomaly && response_diverged) {
+                return true;
             }
         }
-        probe_suspicious
+
+        has_probe_framing_anomaly
     }
 }

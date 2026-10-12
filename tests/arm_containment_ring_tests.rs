@@ -19,7 +19,8 @@ const TEST_MASTER_SEED: &[u8] = b"OCTOPUS_TEST_CONTAINMENT_SEED_2026";
 #[tokio::test]
 async fn test_fleet_initialization_of_50_distinct_arm_rings() {
     let registry = ArmRingRegistry::new(50, TEST_MASTER_SEED);
-    assert_eq!(registry.len().await, 57);
+    // 50 worker arms + 8 dedicated security arms (100 to 107) = 58
+    assert_eq!(registry.len().await, 58);
 
     // Verify all 50 arms have distinct identities and proper role distribution
     for arm_id in 0..50 {
@@ -63,6 +64,61 @@ async fn test_level_1_arm_ring_tool_and_resource_bounds() {
         .validate_tool_invocation("doc_extractor", "s3://accounting/ledger.json", 1)
         .await;
     assert!(matches!(bad_resource, Err(OctopusSecurityError::EnclaveViolation(_))));
+}
+
+#[tokio::test]
+async fn test_arm_ring_resource_boundary_canonicalization_and_adversarial_rejections() {
+    let ring = ArmContainmentRing::new(
+        17,
+        ArmRole::UntrustedDocIngest,
+        1,
+        TEST_MASTER_SEED,
+    );
+
+    // 1. Path traversal attacks
+    let traversal_1 = ring.validate_tool_invocation("doc_extractor", "s3://invoices/../accounting/ledger.json", 1).await;
+    assert!(matches!(traversal_1, Err(OctopusSecurityError::EnclaveViolation(_))));
+
+    let traversal_2 = ring.validate_tool_invocation("doc_extractor", "s3://invoices/../../secret.key", 1).await;
+    assert!(matches!(traversal_2, Err(OctopusSecurityError::EnclaveViolation(_))));
+
+    // 2. Encoded separators (%2e%2e, %2f, %5c, null byte)
+    let encoded_dots = ring.validate_tool_invocation("doc_extractor", "s3://invoices/%2e%2e/accounting/ledger.json", 1).await;
+    assert!(matches!(encoded_dots, Err(OctopusSecurityError::EnclaveViolation(_))));
+
+    let encoded_slash = ring.validate_tool_invocation("doc_extractor", "s3://invoices%2faccounting", 1).await;
+    assert!(matches!(encoded_slash, Err(OctopusSecurityError::EnclaveViolation(_))));
+
+    let null_byte = ring.validate_tool_invocation("doc_extractor", "s3://invoices/\0admin", 1).await;
+    assert!(matches!(null_byte, Err(OctopusSecurityError::EnclaveViolation(_))));
+
+    // 3. Ambiguous backslash in URI
+    let backslash = ring.validate_tool_invocation("doc_extractor", "s3://invoices\\subfolder\\doc.pdf", 1).await;
+    assert!(matches!(backslash, Err(OctopusSecurityError::EnclaveViolation(_))));
+
+    // 4. Substring containment bypass attempt (permitted prefix in query parameter or middle)
+    let substring_attack = ring.validate_tool_invocation("doc_extractor", "https://attacker.com/?ref=s3://invoices/", 1).await;
+    assert!(matches!(substring_attack, Err(OctopusSecurityError::EnclaveViolation(_))));
+
+    // 5. AutonomousProtocolResearch arm: prefix collision tests
+    let ring_107 = ArmContainmentRing::new(
+        107,
+        ArmRole::AutonomousProtocolResearch,
+        1,
+        TEST_MASTER_SEED,
+    );
+
+    // Prefix collision: http://localhost.attacker.com must NOT match http://localhost
+    let collision_1 = ring_107.validate_tool_invocation("rfc_intelligence", "http://localhost.attacker.com/evil", 1).await;
+    assert!(matches!(collision_1, Err(OctopusSecurityError::EnclaveViolation(_))));
+
+    // Prefix collision: http://127.0.0.1.nip.io must NOT match http://127.0.0.1
+    let collision_2 = ring_107.validate_tool_invocation("rfc_intelligence", "http://127.0.0.1.nip.io/evil", 1).await;
+    assert!(matches!(collision_2, Err(OctopusSecurityError::EnclaveViolation(_))));
+
+    // Valid port-bound destination must succeed
+    let valid_port = ring_107.validate_tool_invocation("isolated_evaluator", "http://127.0.0.1:5005/test", 1).await;
+    assert!(valid_port.is_ok(), "Valid port-bound local loopback must be accepted: {:?}", valid_port.err());
 }
 
 #[tokio::test]
@@ -250,9 +306,9 @@ async fn test_swarm_manager_integrates_50_individual_arm_rings() {
     let swarm = SwarmManager::new(50, tx);
     assert_eq!(swarm.size(), 50);
 
-    // Verify SwarmManager exposes containment ring with all arm rings
+    // Verify SwarmManager exposes containment ring with all arm rings (50 + 8 = 58)
     let ocr = swarm.containment_ring();
-    assert_eq!(ocr.arm_registry.len().await, 57);
+    assert_eq!(ocr.arm_registry.len().await, 58);
 
     // Dispatch a legitimate invoice extraction task
     let tasks = vec![StrategicDirective {

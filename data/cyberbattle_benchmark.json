@@ -1,0 +1,47 @@
+{
+  "timestamp": 1791825811.3822567,
+  "episodes_per_policy": 10,
+  "network_nodes": 16,
+  "results": {
+    "Agent Octopus (Learned RL / D3QN)": {
+      "policy_name": "Agent Octopus (Learned RL / D3QN)",
+      "episodes": 10,
+      "mean_reward": 53.2,
+      "std_reward": 42.69,
+      "containment_rate": 100.0,
+      "crown_jewel_survival_rate": 100.0,
+      "mean_mttd": 1.0,
+      "mean_mttr": 11.1
+    },
+    "Fixed Heuristic Defender": {
+      "policy_name": "Fixed Heuristic Defender",
+      "episodes": 10,
+      "mean_reward": 302.2,
+      "std_reward": 51.78,
+      "containment_rate": 100.0,
+      "crown_jewel_survival_rate": 100.0,
+      "mean_mttd": 1.0,
+      "mean_mttr": 37.0
+    },
+    "Random Action Defender": {
+      "policy_name": "Random Action Defender",
+      "episodes": 10,
+      "mean_reward": 12.3,
+      "std_reward": 13.7,
+      "containment_rate": 100.0,
+      "crown_jewel_survival_rate": 100.0,
+      "mean_mttd": 1.2,
+      "mean_mttr": 3.6
+    },
+    "Disabled Defender (Passive Zero Mitigation)": {
+      "policy_name": "Disabled Defender (Passive Zero Mitigation)",
+      "episodes": 10,
+      "mean_reward": -489.9,
+      "std_reward": 41.74,
+      "containment_rate": 59.4,
+      "crown_jewel_survival_rate": 100.0,
+      "mean_mttd": 40.0,
+      "mean_mttr": 40.0
+    }
+  }
+}

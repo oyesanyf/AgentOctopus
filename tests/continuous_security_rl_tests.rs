@@ -131,6 +131,71 @@ fn test_rl_adaptive_defense_engine_q_learning_and_reward() {
 }
 
 #[test]
+fn test_prioritized_experience_replay_weighted_sampling_and_training() {
+    let rl = AdaptiveRlDefenseEngine::new("config/test_per_rl.json");
+
+    // Seed the replay buffer with distinct transitions having different TD priorities
+    for i in 0..20 {
+        let mut s = AdaptiveStateVector::default();
+        s.credential_access_pressure = (i as f32 * 0.05).min(1.0);
+        s.step_count_drift = 0.1;
+        let mut s_next = s.clone();
+        s_next.step_count_drift += 0.05;
+
+        let action = if i % 2 == 0 {
+            AdaptiveDefenseAction::HardMitigation
+        } else {
+            AdaptiveDefenseAction::PassiveObserve
+        };
+        let is_threat = i >= 10;
+        let is_contained = action.is_containment();
+
+        let _ = rl.step(&s, action, is_threat, is_contained, 15.0, &s_next, false);
+    }
+
+    assert!(rl.stats().replay_buffer_size >= 20);
+
+    // Execute explicit PER batch training pass
+    let metrics = rl.train_prioritized_replay(8);
+    assert!(metrics.is_some(), "PER training pass must execute successfully");
+    let m = metrics.unwrap();
+    assert_eq!(m.sampled_batch_size, 8);
+    assert!(m.max_importance_weight > 0.0);
+    assert_eq!(m.priorities_updated, 8);
+}
+
+#[test]
+fn test_rl_policy_empirical_baseline_comparison() {
+    let rl = AdaptiveRlDefenseEngine::new("config/test_eval_rl.json");
+
+    // Train on 30 initial exploration steps
+    for i in 0..30 {
+        let mut s = AdaptiveStateVector::default();
+        let is_threat = i % 2 == 0;
+        if is_threat {
+            s.credential_access_pressure = 0.85;
+            s.step_count_drift = 0.5;
+        } else {
+            s.credential_access_pressure = 0.05;
+            s.step_count_drift = 0.02;
+        }
+        let action = rl.select_action(&s);
+        let is_contained = action.is_containment();
+        let mut s_next = s.clone();
+        s_next.step_count_drift += 0.01;
+        let _ = rl.step(&s, action, is_threat, is_contained, 10.0, &s_next, true);
+    }
+
+    // Evaluate against 50 held-out evaluation episodes
+    let benchmark = rl.evaluate_policy_against_baselines(50);
+    assert_eq!(benchmark.episodes_evaluated, 50);
+    assert!(benchmark.learned_containment_rate >= 0.80, "Learned policy must contain at least 80% of threats, got {:.2}", benchmark.learned_containment_rate);
+    assert!(benchmark.learned_false_positive_rate <= 0.20, "Learned policy FP rate must be <= 20%, got {:.2}", benchmark.learned_false_positive_rate);
+    assert!(benchmark.learned_cumulative_reward > benchmark.random_cumulative_reward, "Learned RL must outperform random defender");
+    assert!(benchmark.learned_cumulative_reward > benchmark.disabled_cumulative_reward, "Learned RL must outperform disabled baseline");
+}
+
+#[test]
 fn test_opentelemetry_session_telemetry_and_resilience_metrics() {
     let otel = OtelSessionTelemetry::new("logs/test_otel_sessions.jsonl", 100);
 

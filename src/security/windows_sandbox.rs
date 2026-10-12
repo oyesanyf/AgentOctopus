@@ -206,6 +206,7 @@ impl WindowsJobObject {
     /// Assigns an operating system process handle to this Job Object.
     /// This binds the process and all its future child tasks to the kernel limits.
     #[cfg(windows)]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn assign_process(&self, process_handle: HANDLE) -> Result<(), OctopusSecurityError> {
         if self.handle.is_null() || self.handle == INVALID_HANDLE_VALUE {
             return Err(OctopusSecurityError::IsolationViolation(

@@ -1,0 +1,63 @@
+Model Context Protocol (MCP) Specification
+RFC Draft / Protocol Standard: Model Context Protocol Architecture and Transport Specification
+Version: 2026-07-28 / Current Standard
+
+1. Introduction and Scope
+The Model Context Protocol (MCP) is an open standard protocol that enables secure, bidirectional
+communication between AI applications (MCP Hosts) and context providers or execution tools (MCP Servers).
+The protocol specifies message formatting, connection lifecycles, capability negotiation, transport framing,
+and error handling.
+
+An MCP implementation MUST adhere to the framing, message boundary, and security constraints defined herein.
+Every client MUST establish a dedicated connection with each server. A server MUST NOT mix message contexts
+or allow state contamination across independent client sessions.
+
+2. Architecture and Layering
+MCP operates on two distinct layers:
+A. The Transport Layer: Responsible for connection establishment, byte stream framing, message delimitation,
+and underlying transport isolation. Standard transports include:
+   - Standard Input/Output (STDIO): Messages MUST be serialized as single-line JSON-RPC strings delimited strictly by newline (\n) or CRLF (\r\n) characters. Servers MUST NOT emit debug text or non-protocol output to standard output.
+   - Streamable HTTP Transport: Uses Server-Sent Events (SSE) for server-to-client streaming, and HTTP POST requests for client-to-server messaging. The server MUST process incoming POST messages containing a Content-Type of application/json.
+   - Multiplexed WebSocket Transport: Messages are framed within individual text or binary WebSocket frames.
+
+B. The Data Layer: Implements JSON-RPC 2.0 message semantics (RFC 8259). Every message MUST be one of:
+   - Request: Contains "jsonrpc": "2.0", "id": (string | integer), "method": string, and optional "params".
+   - Response: Contains "jsonrpc": "2.0", "id": matching request id, and either "result" or "error".
+   - Notification: Contains "jsonrpc": "2.0", "method": string, and optional "params", with no "id".
+
+3. Framing, Delimitation, and Parsing Constraints
+3.1 Newline and Buffer Framing in STDIO
+In the STDIO transport, every JSON-RPC message MUST be terminated by a newline character.
+A client or server parser MUST NOT assume that an entire JSON-RPC message will arrive in a single read call.
+If a partial message is received, the receiver MUST buffer the incoming fragment until the terminating newline is received.
+If a received message contains embedded unescaped newline characters within string literals or comments,
+the parser MUST reject the framing as malformed.
+A server that encounters invalid JSON or unexpected binary byte sequences MUST return a Parse Error (-32700)
+and MUST NOT corrupt its internal queue or pipeline subsequent messages.
+
+3.2 HTTP and SSE Transport Boundary Rules
+When using the Streamable HTTP transport:
+- The server MUST maintain session isolation. A client MUST supply an authorization token or session identifier in request headers.
+- The server MUST NOT apply response headers to incoming requests or allow shared parser confusion.
+- HTTP POST endpoints accepting JSON-RPC messages MUST enforce strict Content-Length checking.
+- If a client sends a request with both Transfer-Encoding and Content-Length, the server MUST reject the message as faulty framing.
+- The server MUST NOT reuse back-end socket connections across distinct authorization boundaries without re-validating credentials.
+- When sending Server-Sent Events (SSE), the event stream MUST delimit events with double newlines (\n\n). An unescaped newline within an event data field MUST be prefixed with "data: ".
+
+4. Capability Negotiation and Discovery
+Upon connection establishment, the client MUST send an "initialize" request containing protocolVersion, capabilities,
+and clientInfo. The server MUST respond with its protocolVersion, supported capabilities (tools, resources, prompts),
+and serverInfo.
+If the protocolVersion requested by the client is unsupported, the server MUST reject the initialization or negotiate
+a compatible protocol era. The client MUST NOT invoke tools or access resources before receiving a successful initialization response.
+
+5. Tool Invocation and Parameter Validation
+Clients invoke tools via the "tools/call" method. The request params MUST contain "name" and an "arguments" object.
+The server MUST validate all tool call arguments against the tool's declared JSON schema before executing the tool.
+If argument validation fails, the server MUST return an Invalid Params error (-32602).
+Tool implementations MUST NOT permit command injection, arbitrary path traversal, or unescaped parameter expansion.
+
+6. Security and Isolation Guarantees
+- No State Leakage: A server MUST isolate state between client connections. Responses intended for Client A MUST NEVER be delivered to Client B.
+- No Pipeline Poisoning: If a malformed message is injected into a connection, the parser MUST discard the malformed bytes without shifting the alignment of subsequent requests.
+- Dangling Bytes and Framing Deadlocks: If a message body is shorter than the declared Content-Length or framing boundary, the receiver MUST timeout after a bounded duration and MUST NOT hang the shared server connection.

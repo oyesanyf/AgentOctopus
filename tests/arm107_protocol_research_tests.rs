@@ -5,7 +5,7 @@ use agent_octopus::security::cedar_arm::CedarPolicyEngine;
 use agent_octopus::security::differential_protocol::DifferentialProtocolEngine;
 use agent_octopus::security::protocol_research::{
     Arm106ValidationHandoff, CandidateProbeDto, EvaluationRequest, ProtocolResearchSupervisor,
-    RfcIndexSynchronizer, RfcKnowledgeBase,
+    RfcIndexSynchronizer, RfcKnowledgeBase, TransportOutcome,
 };
 use agent_octopus::security::SecurityAuditLog;
 use std::sync::Arc;
@@ -159,4 +159,132 @@ async fn test_arm107_rfc_index_synchronization() {
     assert_eq!(report.status, "SYNCHRONIZATION_SUCCESSFUL");
 
     let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[tokio::test]
+async fn test_arm107_destination_egress_and_dns_rebinding_defense() {
+    let secret_seed = b"cedar_arm107_boundary_test_32bytes!";
+    let rings = Arc::new(ArmRingRegistry::new(50, secret_seed));
+    let cedar = Arc::new(CedarPolicyEngine::default());
+    let dogwood = Arc::new(DogwoodTemporalEngine::new_simulation());
+    let audit_log = Arc::new(SecurityAuditLog::default());
+    let diff_engine = Arc::new(DifferentialProtocolEngine::with_containment(
+        Arc::clone(&rings),
+        Arc::clone(&audit_log),
+    ));
+    let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
+
+    // 1. Authorized loopback target must resolve and pass
+    let valid_dest = supervisor.validate_and_resolve_destination("127.0.0.1", 5005);
+    assert!(valid_dest.is_ok(), "127.0.0.1 loopback must resolve");
+    assert!(valid_dest.unwrap().ip().is_loopback());
+
+    // 2. Localhost alias must resolve and pass
+    let localhost_dest = supervisor.validate_and_resolve_destination("localhost", 5005);
+    assert!(localhost_dest.is_ok(), "localhost loopback must resolve");
+    assert!(localhost_dest.unwrap().ip().is_loopback());
+
+    // 3. Link-local cloud metadata (169.254.169.254) must be blocked fail-closed
+    let metadata_dest = supervisor.validate_and_resolve_destination("169.254.169.254", 80);
+    assert!(metadata_dest.is_err(), "Cloud metadata destination must be rejected");
+
+    // 4. Non-standard dword/integer IP format (2130706433) must be blocked fail-closed
+    let dword_dest = supervisor.validate_and_resolve_destination("2130706433", 80);
+    assert!(dword_dest.is_err(), "Dword-encoded IP must be rejected");
+
+    // 5. Port 0 must be rejected
+    let port0_dest = supervisor.validate_and_resolve_destination("127.0.0.1", 0);
+    assert!(port0_dest.is_err(), "Port 0 must be rejected");
+}
+
+#[tokio::test]
+async fn test_arm107_structured_transport_outcomes_no_synthetic_http() {
+    let secret_seed = b"cedar_arm107_transport_seed_32bytes";
+    let rings = Arc::new(ArmRingRegistry::new(50, secret_seed));
+    let cedar = Arc::new(CedarPolicyEngine::default());
+    let dogwood = Arc::new(DogwoodTemporalEngine::new_simulation());
+    let audit_log = Arc::new(SecurityAuditLog::default());
+    let diff_engine = Arc::new(DifferentialProtocolEngine::with_containment(
+        Arc::clone(&rings),
+        Arc::clone(&audit_log),
+    ));
+    let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
+
+    // Negative connection: closed port (e.g. port 19876)
+    // Must return ConnectionRefused and raw_response must be EMPTY (NO synthetic 502/504 HTTP string)
+    let closed_port_req = EvaluationRequest {
+        raw_request: "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_string(),
+        target_host: "127.0.0.1".to_string(),
+        target_port: 19876,
+        baseline_request: None,
+    };
+
+    let result = supervisor.evaluate_probe(closed_port_req).await;
+    assert!(result.is_ok(), "Evaluation must execute and return structured outcome");
+    let finding = result.unwrap();
+
+    // Verify structured transport outcome
+    assert!(matches!(finding.transport_outcome, TransportOutcome::ConnectionRefused { .. }));
+    // Verify raw_response does NOT contain fabricated HTTP status lines
+    assert!(!finding.raw_response.contains("HTTP/1.1 504 Gateway Timeout"), "Must NOT synthesize 504 response");
+    assert!(!finding.raw_response.contains("HTTP/1.1 502 Bad Gateway"), "Must NOT synthesize 502 response");
+    assert_eq!(finding.raw_response, "", "Failed connection must leave actual received bytes empty");
+}
+
+#[tokio::test]
+async fn test_arm107_differential_baseline_response_comparison() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Spin up a genuine loopback TCP server for protocol research differential testing
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("Bind test listener");
+    let server_addr = listener.local_addr().expect("Get local addr");
+    let port = server_addr.port();
+
+    // Handle incoming connections: baseline gets 200 OK, probe gets 400 Bad Request
+    tokio::spawn(async move {
+        loop {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 4096];
+                if let Ok(n) = stream.read(&mut buf).await {
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    if req.contains("Transfer-Encoding: chunked") && req.contains("Content-Length:") {
+                        let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 15\r\n\r\nFraming Conflict";
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    } else {
+                        let resp = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    }
+                }
+            }
+        }
+    });
+
+    let secret_seed = b"cedar_arm107_diff_seed_32bytes_long!";
+    let rings = Arc::new(ArmRingRegistry::new(50, secret_seed));
+    let cedar = Arc::new(CedarPolicyEngine::default());
+    let dogwood = Arc::new(DogwoodTemporalEngine::new_simulation());
+    let audit_log = Arc::new(SecurityAuditLog::default());
+    let diff_engine = Arc::new(DifferentialProtocolEngine::with_containment(
+        Arc::clone(&rings),
+        Arc::clone(&audit_log),
+    ));
+    let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
+
+    let eval_req = EvaluationRequest {
+        raw_request: "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n0\r\n\r\n".to_string(),
+        target_host: "127.0.0.1".to_string(),
+        target_port: port,
+        baseline_request: Some("POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n".to_string()),
+    };
+
+    let result = supervisor.evaluate_probe(eval_req).await;
+    assert!(result.is_ok(), "Differential probe evaluation must succeed: {:?}", result.as_ref().err());
+    let finding = result.unwrap();
+
+    assert!(finding.is_anomalous, "Divergence between baseline (200) and probe (400) must be detected");
+    assert!(finding.baseline_subtracted, "Baseline subtraction must be flagged as active");
+    assert!(matches!(finding.transport_outcome, TransportOutcome::ResponseReceived { .. }));
+    assert!(finding.raw_response.contains("HTTP/1.1 400 Bad Request"));
+    assert!(finding.baseline_response.as_ref().unwrap().contains("HTTP/1.1 200 OK"));
+    assert_eq!(finding.confirmation_count, 2, "Reproducible divergence must have confirmation count of 2");
 }

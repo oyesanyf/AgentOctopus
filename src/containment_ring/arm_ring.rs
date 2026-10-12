@@ -112,6 +112,162 @@ fn compute_ring_hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
     out
 }
 
+/// Canonicalizes and enforces exact, resource-type-aware boundaries for arm resources.
+/// Strictly rejects ambiguous paths, directory traversals, encoded separators, and prefix collisions.
+pub fn validate_resource_boundary(
+    resource: &str,
+    allowed_prefixes: &[String],
+) -> Result<(), OctopusSecurityError> {
+    let trimmed = resource.trim();
+    if trimmed.is_empty() {
+        return Err(OctopusSecurityError::EnclaveViolation(
+            "Empty or whitespace-only resource identifier rejected".to_string(),
+        ));
+    }
+
+    // 1. Control character / null byte rejection
+    if trimmed.chars().any(|c| (c as u32) < 0x20 || (c as u32) == 0x7f) {
+        return Err(OctopusSecurityError::EnclaveViolation(
+            "Resource contains illegal ASCII control characters or null bytes".to_string(),
+        ));
+    }
+
+    // 2. Reject ambiguous encodings and traversal tokens
+    let lower = trimmed.to_lowercase();
+    if lower.contains("%00") || lower.contains("%2e%2e") || lower.contains("%2f") || lower.contains("%5c") || lower.contains("%25") {
+        return Err(OctopusSecurityError::EnclaveViolation(
+            "Ambiguous or malicious percent-encoding detected in resource identifier".to_string(),
+        ));
+    }
+
+    // Reject directory traversal sequences
+    if lower.contains("..") {
+        return Err(OctopusSecurityError::EnclaveViolation(
+            "Path traversal sequence '..' detected in resource identifier".to_string(),
+        ));
+    }
+
+    // Reject backslashes in URI-style resources (e.g. s3://..., http://...)
+    if trimmed.contains("://") && trimmed.contains('\\') {
+        return Err(OctopusSecurityError::EnclaveViolation(
+            "Ambiguous separator '\\' detected in URI resource identifier".to_string(),
+        ));
+    }
+
+    // 3. For HTTP/HTTPS URLs, validate structure and parse authority
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        let parsed = url::Url::parse(trimmed).map_err(|e| {
+            OctopusSecurityError::EnclaveViolation(format!(
+                "Malformed HTTP/HTTPS URL resource '{}': {}",
+                trimmed, e
+            ))
+        })?;
+
+        // Prohibit embedded credentials
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err(OctopusSecurityError::EnclaveViolation(
+                "Resource URL contains embedded credentials (user:pass@host)".to_string(),
+            ));
+        }
+
+        // Canonicalize host
+        let host_str = match parsed.host() {
+            Some(url::Host::Domain(d)) => d.to_lowercase(),
+            Some(url::Host::Ipv4(ip)) => ip.to_string(),
+            Some(url::Host::Ipv6(ip)) => format!("[{}]", ip),
+            None => {
+                return Err(OctopusSecurityError::EnclaveViolation(
+                    "Resource URL is missing valid host".to_string(),
+                ));
+            }
+        };
+
+        // Reject non-standard octal/hex IP evasion
+        if host_str.chars().all(|c| c.is_ascii_digit()) && !host_str.contains('.') {
+            return Err(OctopusSecurityError::EnclaveViolation(
+                "Dword/integer-encoded IP address format rejected in resource".to_string(),
+            ));
+        }
+    }
+
+    // 4. Strict resource-type-aware prefix matching
+    // Never allow substring containment (resource.contains(p))
+    let mut matched = false;
+    for prefix in allowed_prefixes {
+        let p = prefix.trim();
+        if p.is_empty() {
+            continue;
+        }
+
+        // Exact match
+        if trimmed == p {
+            matched = true;
+            break;
+        }
+
+        // Scheme prefix: e.g. "kernel://", "stix://", "protocol://", "tarpit://"
+        if p.ends_with("://") {
+            if trimmed.starts_with(p) {
+                matched = true;
+                break;
+            }
+            continue;
+        }
+
+        // Path-terminated prefix: e.g. "s3://invoices/", "https://raw.githubusercontent.com/mitre-atlas/"
+        if p.ends_with('/') {
+            if trimmed.starts_with(p) {
+                matched = true;
+                break;
+            }
+            continue;
+        }
+
+        // URI host prefix without trailing slash: e.g. "http://127.0.0.1", "http://localhost", "http://[::1]"
+        if p.starts_with("http://") || p.starts_with("https://") {
+            if trimmed.starts_with(p) {
+                // Must be followed by a path separator ('/'), port separator (':'), or query/fragment
+                let remainder = &trimmed[p.len()..];
+                if remainder.is_empty() || remainder.starts_with('/') || remainder.starts_with(':') || remainder.starts_with('?') || remainder.starts_with('#') {
+                    // Check if port separator, ensure port doesn't have suffix collision
+                    if let Some(port_rest) = remainder.strip_prefix(':') {
+                        let port_digits: String = port_rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                        if !port_digits.is_empty() {
+                            let after_port = &port_rest[port_digits.len()..];
+                            if after_port.is_empty() || after_port.starts_with('/') || after_port.starts_with('?') || after_port.starts_with('#') {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    } else {
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Token or local resource identifier: e.g. "local_scratchpad"
+        if trimmed.starts_with(p) {
+            let remainder = &trimmed[p.len()..];
+            if remainder.is_empty() || remainder.starts_with('/') || remainder.starts_with(':') {
+                matched = true;
+                break;
+            }
+        }
+    }
+
+    if !matched {
+        return Err(OctopusSecurityError::EnclaveViolation(format!(
+            "Resource '{}' violates containment boundaries (not within permitted namespaces)",
+            resource
+        )));
+    }
+
+    Ok(())
+}
+
 /// Level 1: An individual Arm Containment Ring.
 /// Operates as an independent security perimeter around a single arm worker.
 #[derive(Clone)]
@@ -414,13 +570,12 @@ impl ArmContainmentRing {
         }
 
         let prefixes = self.allowed_resource_prefixes.read().await;
-        let allowed = prefixes.iter().any(|p| resource.starts_with(p) || resource.contains(p));
-        if !allowed {
-            return Err(OctopusSecurityError::EnclaveViolation(format!(
-                "Arm {} (role {:?}) attempted out-of-scope resource access: '{}'",
-                self.arm_id, self.role, resource
-            )));
-        }
+        validate_resource_boundary(resource, &prefixes).map_err(|e| {
+            OctopusSecurityError::EnclaveViolation(format!(
+                "Arm {} (role {:?}) attempted out-of-scope resource access: '{}' ({})",
+                self.arm_id, self.role, resource, e
+            ))
+        })?;
 
         Ok(())
     }

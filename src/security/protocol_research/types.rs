@@ -60,6 +60,17 @@ impl ToString for ResearchFindingStatus {
     }
 }
 
+/// Structured transport outcome separating actual wire bytes from local diagnostics.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TransportOutcome {
+    Connected,
+    ResponseReceived { bytes_count: usize },
+    Timeout { timeout_ms: u64 },
+    ConnectionRefused { error: String },
+    EgressBoundaryViolation { error: String },
+    DnsResolutionFailed { error: String },
+}
+
 /// Structured finding produced by Arm 107 research probes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResearchFinding {
@@ -70,6 +81,8 @@ pub struct ResearchFinding {
     pub details: String,
     pub baseline_subtracted: bool,
     pub raw_response: String,
+    pub transport_outcome: TransportOutcome,
+    pub baseline_response: Option<String>,
     pub confirmation_count: u32,
 }
 
