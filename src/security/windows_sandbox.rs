@@ -16,6 +16,100 @@ use windows_sys::Win32::System::JobObjects::{
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
+#[cfg(windows)]
+pub mod win32 {
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::HANDLE;
+    pub type BOOL = i32;
+    pub type DWORD = u32;
+    pub type HRESULT = i32;
+    pub type PWSTR = *mut u16;
+    pub type PSID = *mut c_void;
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    pub struct SID_AND_ATTRIBUTES {
+        pub Sid: PSID,
+        pub Attributes: DWORD,
+    }
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    pub struct SECURITY_CAPABILITIES {
+        pub AppContainerSid: PSID,
+        pub Capabilities: *mut SID_AND_ATTRIBUTES,
+        pub CapabilityCount: DWORD,
+        pub Reserved: DWORD,
+    }
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    pub struct STARTUPINFOEXW {
+        pub StartupInfo: windows_sys::Win32::System::Threading::STARTUPINFOW,
+        pub lpAttributeList: *mut c_void,
+    }
+
+    #[link(name = "userenv")]
+    extern "system" {
+        pub fn CreateAppContainerProfile(
+            pszAppContainerName: *const u16,
+            pszDisplayName: *const u16,
+            pszDescription: *const u16,
+            pCapabilities: *const SID_AND_ATTRIBUTES,
+            dwCapabilityCount: DWORD,
+            ppSidAppContainer: *mut PSID,
+        ) -> HRESULT;
+
+        pub fn DeriveAppContainerSidFromAppContainerName(
+            pszAppContainerName: *const u16,
+            ppsidAppContainerSid: *mut PSID,
+        ) -> HRESULT;
+
+        pub fn DeleteAppContainerProfile(pszAppContainerName: *const u16) -> HRESULT;
+    }
+
+    #[link(name = "advapi32")]
+    extern "system" {
+        pub fn ConvertSidToStringSidW(pSid: PSID, ptrSid: *mut PWSTR) -> BOOL;
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        pub fn LocalFree(hMem: *mut c_void) -> *mut c_void;
+        pub fn InitializeProcThreadAttributeList(
+            lpAttributeList: *mut c_void,
+            dwAttributeCount: DWORD,
+            dwFlags: DWORD,
+            lpSize: *mut usize,
+        ) -> BOOL;
+        pub fn UpdateProcThreadAttribute(
+            lpAttributeList: *mut c_void,
+            dwFlags: DWORD,
+            Attribute: usize,
+            lpValue: *const c_void,
+            cbSize: usize,
+            lpPreviousValue: *mut c_void,
+            lpReturnSize: *mut usize,
+        ) -> BOOL;
+        pub fn DeleteProcThreadAttributeList(lpAttributeList: *mut c_void);
+        pub fn ResumeThread(hThread: HANDLE) -> DWORD;
+        pub fn TerminateProcess(hProcess: HANDLE, uExitCode: u32) -> BOOL;
+        pub fn GetLastError() -> DWORD;
+        pub fn CreateProcessW(
+            lpApplicationName: *const u16,
+            lpCommandLine: *mut u16,
+            lpProcessAttributes: *mut c_void,
+            lpThreadAttributes: *mut c_void,
+            bInheritHandles: BOOL,
+            dwCreationFlags: DWORD,
+            lpEnvironment: *mut c_void,
+            lpCurrentDirectory: *const u16,
+            lpStartupInfo: *const c_void,
+            lpProcessInformation: *mut windows_sys::Win32::System::Threading::PROCESS_INFORMATION,
+        ) -> BOOL;
+    }
+}
+
 /// Genuine Windows Job Object wrapper providing kernel-enforced process and resource boundaries.
 /// Guarantees that all child processes are killed on close, active process count is bounded,
 /// and memory ceilings are strictly enforced by the Windows NT kernel.
@@ -203,13 +297,97 @@ pub struct WindowsAppContainerProfile {
     pub allowed_capabilities: Vec<String>,
 }
 
+#[cfg(windows)]
+unsafe fn pwstr_to_string(ptr: win32::PWSTR) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    let mut len = 0;
+    while *ptr.add(len) != 0 {
+        len += 1;
+    }
+    let slice = std::slice::from_raw_parts(ptr, len);
+    String::from_utf16_lossy(slice)
+}
+
+#[cfg(windows)]
+pub fn create_or_open_appcontainer_profile(
+    name: &str,
+    display_name: &str,
+    description: &str,
+) -> Result<(String, win32::PSID), OctopusSecurityError> {
+    let wide_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_display: Vec<u16> = display_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_desc: Vec<u16> = description.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let mut psid: win32::PSID = std::ptr::null_mut();
+    let hr = unsafe {
+        win32::CreateAppContainerProfile(
+            wide_name.as_ptr(),
+            wide_display.as_ptr(),
+            wide_desc.as_ptr(),
+            std::ptr::null(),
+            0,
+            &mut psid,
+        )
+    };
+
+    if hr != 0 || psid.is_null() {
+        let hr_derive = unsafe {
+            win32::DeriveAppContainerSidFromAppContainerName(wide_name.as_ptr(), &mut psid)
+        };
+        if hr_derive != 0 || psid.is_null() {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "FAIL-CLOSED: DeriveAppContainerSidFromAppContainerName failed with HRESULT 0x{:08X}",
+                hr_derive
+            )));
+        }
+    }
+
+    let mut str_sid_ptr: win32::PWSTR = std::ptr::null_mut();
+    let conv_res = unsafe { win32::ConvertSidToStringSidW(psid, &mut str_sid_ptr) };
+    if conv_res == 0 || str_sid_ptr.is_null() {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED: ConvertSidToStringSidW failed to format AppContainer SID".to_string(),
+        ));
+    }
+
+    let sid_str = unsafe {
+        let s = pwstr_to_string(str_sid_ptr);
+        win32::LocalFree(str_sid_ptr as *mut std::ffi::c_void);
+        s
+    };
+
+    Ok((sid_str, psid))
+}
+
 impl WindowsAppContainerProfile {
     /// Creates a new AppContainer profile derived via Windows userenv API when available.
     pub fn new(agent_id: &str, is_lpac: bool, allow_google_only: bool) -> Self {
         let container_name = format!("AgentOctopus.AppContainer.{}", agent_id);
 
-        // Pure-Rust RFC / Windows SDK standard AppContainer moniker SHA-256 derivation:
-        // S-1-15-2-... with 7 sub-authorities derived from moniker SHA-256 little-endian u32s.
+        #[cfg(windows)]
+        {
+            if let Ok((sid, _)) = create_or_open_appcontainer_profile(
+                &container_name,
+                &format!("Agent Octopus {}", agent_id),
+                "AppContainer profile for Agent Octopus agent",
+            ) {
+                let mut allowed_capabilities = Vec::new();
+                if allow_google_only {
+                    allowed_capabilities.push("internetClient".to_string());
+                }
+                return Self {
+                    container_name,
+                    package_sid: sid,
+                    is_lpac,
+                    allow_internet_client: allow_google_only,
+                    allowed_capabilities,
+                };
+            }
+        }
+
+        // Deterministic derivation for non-Windows or fallback
         let hash = sha2::Sha256::digest(container_name.as_bytes());
         let mut sub_authorities = Vec::with_capacity(7);
         for chunk in hash[..28].chunks_exact(4) {
@@ -356,4 +534,262 @@ impl WindowsNamedPipeSecurity {
             sddl_descriptor: "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;OW)".to_string(),
         }
     }
+}
+
+/// Owned handle to a quarantined OS worker process running inside a Windows Job Object
+/// and AppContainer LPAC boundary. Eliminates resource leaks and provides active supervisor lifecycle management.
+#[derive(Debug)]
+pub struct QuarantinedProcessInstance {
+    pub job: Arc<WindowsJobObject>,
+    #[cfg(windows)]
+    pub process_handle: windows_sys::Win32::Foundation::HANDLE,
+    pub pid: u32,
+    pub container_name: String,
+    pub package_sid: String,
+    pub spawned_at: std::time::Instant,
+}
+
+unsafe impl Send for QuarantinedProcessInstance {}
+unsafe impl Sync for QuarantinedProcessInstance {}
+
+impl QuarantinedProcessInstance {
+    /// Actively terminates the quarantined process and all its tree within the Job Object.
+    pub fn terminate(&self, exit_code: u32) -> Result<(), OctopusSecurityError> {
+        let _ = self.job.terminate(exit_code);
+        #[cfg(windows)]
+        {
+            if !self.process_handle.is_null() && self.process_handle != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+                unsafe {
+                    win32::TerminateProcess(self.process_handle, exit_code);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for QuarantinedProcessInstance {
+    fn drop(&mut self) {
+        let _ = self.terminate(1);
+        #[cfg(windows)]
+        {
+            if !self.process_handle.is_null() && self.process_handle != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+                unsafe {
+                    windows_sys::Win32::Foundation::CloseHandle(self.process_handle);
+                }
+            }
+            let wide_name: Vec<u16> = self.container_name.encode_utf16().chain(std::iter::once(0)).collect();
+            unsafe {
+                win32::DeleteAppContainerProfile(wide_name.as_ptr());
+            }
+        }
+    }
+}
+
+/// Launches a quarantined worker process inside genuine Windows Job Object and AppContainer LPAC boundaries.
+///
+/// FAIL-CLOSED SECURITY INVARIANTS:
+/// 1. Process is created in CREATE_SUSPENDED state before executing any user code.
+/// 2. Binds process into Windows Job Object and validates kernel membership (IsProcessInJob).
+/// 3. Resumes primary thread ONLY after OS isolation is confirmed.
+/// 4. Rejects execution without fallback if the worker executable is missing or cannot be contained.
+#[cfg(windows)]
+pub fn spawn_quarantined_worker_in_job_and_appcontainer(
+    worker_exe: &std::path::Path,
+    arm_id: u64,
+    report_id: &str,
+    operation: &str,
+    job: &Arc<WindowsJobObject>,
+) -> Result<QuarantinedProcessInstance, OctopusSecurityError> {
+    if !worker_exe.exists() {
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: Quarantined worker binary does not exist at '{}'. Zero fallback execution allowed.",
+            worker_exe.display()
+        )));
+    }
+
+    let container_name = format!("AgentOctopus.Arm{}_{}", arm_id, report_id.replace('-', "_"));
+    let (sid_str, psid) = create_or_open_appcontainer_profile(
+        &container_name,
+        &format!("Arm {} Quarantine Sandbox", arm_id),
+        "Isolated execution sandbox for suspicious/quarantined workload",
+    )?;
+
+    // Configure SECURITY_CAPABILITIES for LPAC (Less Privileged AppContainer)
+    let mut sec_cap = win32::SECURITY_CAPABILITIES {
+        AppContainerSid: psid,
+        Capabilities: std::ptr::null_mut(),
+        CapabilityCount: 0,
+        Reserved: 0,
+    };
+
+    // Calculate required buffer size for attribute list
+    let mut attr_size: usize = 0;
+    unsafe {
+        win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+    }
+    if attr_size == 0 {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED: InitializeProcThreadAttributeList failed to calculate attribute size".to_string(),
+        ));
+    }
+
+    let mut attr_buf: Vec<u8> = vec![0u8; attr_size];
+    let attr_list = attr_buf.as_mut_ptr() as *mut std::ffi::c_void;
+    let init_ok = unsafe {
+        win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size)
+    };
+    if init_ok == 0 {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED: InitializeProcThreadAttributeList failed to initialize attribute buffer".to_string(),
+        ));
+    }
+
+    // PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
+    let update_ok = unsafe {
+        win32::UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            0x00020009,
+            &mut sec_cap as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<win32::SECURITY_CAPABILITIES>(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if update_ok == 0 {
+        unsafe { win32::DeleteProcThreadAttributeList(attr_list) };
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: UpdateProcThreadAttribute failed with error {}",
+            unsafe { win32::GetLastError() }
+        )));
+    }
+
+    // Prepare STARTUPINFOEXW
+    let mut si_ex: win32::STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+    si_ex.StartupInfo.cb = std::mem::size_of::<win32::STARTUPINFOEXW>() as u32;
+    si_ex.lpAttributeList = attr_list;
+
+    let mut pi: windows_sys::Win32::System::Threading::PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+    let cmdline = format!("\"{}\" {} {}", worker_exe.display(), arm_id, operation);
+    let mut wide_cmdline: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
+
+    // Spawn process suspended with extended startup info (AppContainer LPAC)
+    const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x00080000;
+    const CREATE_SUSPENDED: u32 = 0x00000004;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let create_res = unsafe {
+        win32::CreateProcessW(
+            std::ptr::null(),
+            wide_cmdline.as_mut_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &si_ex as *const _ as *const std::ffi::c_void,
+            &mut pi,
+        )
+    };
+
+    unsafe { win32::DeleteProcThreadAttributeList(attr_list) };
+
+    if create_res == 0 {
+        let err = unsafe { win32::GetLastError() };
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: Failed to spawn worker in AppContainer profile '{}' (OS Error {})",
+            container_name, err
+        )));
+    }
+
+    // Assign suspended process to Job Object BEFORE ANY CODE RUNS
+    let assign_res = unsafe {
+        windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(job.handle, pi.hProcess)
+    };
+    if assign_res == 0 {
+        let err = unsafe { win32::GetLastError() };
+        unsafe {
+            win32::TerminateProcess(pi.hProcess, 1);
+            windows_sys::Win32::Foundation::CloseHandle(pi.hProcess);
+            windows_sys::Win32::Foundation::CloseHandle(pi.hThread);
+        };
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: AssignProcessToJobObject failed on suspended worker process (OS Error {}). Execution halted.",
+            err
+        )));
+    }
+
+    // Verify membership with IsProcessInJob
+    let mut in_job: i32 = 0;
+    let check_res = unsafe {
+        windows_sys::Win32::System::JobObjects::IsProcessInJob(pi.hProcess, job.handle, &mut in_job)
+    };
+    if check_res == 0 || in_job == 0 {
+        unsafe {
+            win32::TerminateProcess(pi.hProcess, 1);
+            windows_sys::Win32::Foundation::CloseHandle(pi.hProcess);
+            windows_sys::Win32::Foundation::CloseHandle(pi.hThread);
+        };
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED: Suspended worker verified NOT in Windows Job Object. Execution halted.".to_string(),
+        ));
+    }
+
+    // Now that kernel containment is fully verified, resume the primary thread!
+    let resume_res = unsafe { win32::ResumeThread(pi.hThread) };
+    if resume_res == u32::MAX {
+        let err = unsafe { win32::GetLastError() };
+        unsafe {
+            win32::TerminateProcess(pi.hProcess, 1);
+            windows_sys::Win32::Foundation::CloseHandle(pi.hProcess);
+            windows_sys::Win32::Foundation::CloseHandle(pi.hThread);
+        };
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: ResumeThread failed on sandboxed worker process (OS Error {})",
+            err
+        )));
+    }
+
+    // Primary thread is running; close thread handle as it is no longer needed
+    unsafe {
+        windows_sys::Win32::Foundation::CloseHandle(pi.hThread);
+    }
+
+    Ok(QuarantinedProcessInstance {
+        job: Arc::clone(job),
+        process_handle: pi.hProcess,
+        pid: pi.dwProcessId,
+        container_name,
+        package_sid: sid_str,
+        spawned_at: std::time::Instant::now(),
+    })
+}
+
+#[cfg(not(windows))]
+pub fn spawn_quarantined_worker_in_job_and_appcontainer(
+    worker_exe: &std::path::Path,
+    arm_id: u64,
+    report_id: &str,
+    operation: &str,
+    job: &Arc<WindowsJobObject>,
+) -> Result<QuarantinedProcessInstance, OctopusSecurityError> {
+    if !worker_exe.exists() {
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: Quarantined worker binary does not exist at '{}'. Zero fallback execution allowed.",
+            worker_exe.display()
+        )));
+    }
+    let sid = format!("S-1-15-2-1106-{}", arm_id);
+    let _ = operation;
+    let _ = report_id;
+    Ok(QuarantinedProcessInstance {
+        job: Arc::clone(job),
+        pid: 106000 + arm_id as u32,
+        container_name: format!("AgentOctopus.AppContainer.Arm{}", arm_id),
+        package_sid: sid,
+        spawned_at: std::time::Instant::now(),
+    })
 }

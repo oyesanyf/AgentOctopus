@@ -36,7 +36,7 @@ async fn test_differential_engine_authoritative_quarantine_with_arm106() {
     // 3. Immutable Tamper-Evident Audit Record
     assert!(report.audit_record_hash.is_some(), "Audit record hash must be present");
     assert!(report.isolation_details.is_some(), "Isolation constraints details must be present");
-    assert!(report.isolation_details.unwrap().contains("Windows NT Job Object (64MB) + AppContainer LPAC"));
+    assert!(report.isolation_details.as_ref().unwrap().contains("Windows NT Job Object (64MB) + AppContainer LPAC"));
 
     // 4. Verify in-memory audit log contains the tamper-evident entry
     let records = audit_log.get_entries();
@@ -46,6 +46,43 @@ async fn test_differential_engine_authoritative_quarantine_with_arm106() {
     assert_eq!(rec.agent_id, "arm-DifferentialProtocolAnalyzer-106");
     assert_eq!(rec.decision, "PROCESS_ISOLATED");
     assert!(rec.details.contains(&hmac_hex));
+
+    // 5. Verify Genuine AppContainer SID format (starts with S-1-15-2-)
+    let iso_str = report.isolation_details.unwrap();
+    assert!(iso_str.contains("S-1-15-2-"), "Isolation details must contain authentic AppContainer SID: {}", iso_str);
+    assert!(iso_str.contains("PID:"), "Isolation details must contain real process PID");
+
+    // 6. Verify Active Process Lifecycle Tracking (Supervisor owns handles; no mem::forget leaks)
+    let arm106 = registry.get_ring_or_fail(106).await.unwrap();
+    let active_count = arm106.active_quarantines_count().await;
+    assert!(active_count >= 1, "Arm 106 must actively own at least 1 quarantined process instance");
+
+    // Cleanly terminate instance by report ID
+    let term_res = arm106.terminate_quarantined_instance(&report.report_id).await;
+    assert!(term_res.is_ok(), "Supervisor must be able to actively terminate quarantined worker");
+    assert_eq!(arm106.active_quarantines_count().await, active_count - 1);
+}
+
+#[tokio::test]
+async fn test_quarantine_fails_closed_when_worker_is_missing() {
+    let non_existent_worker = std::path::PathBuf::from("does_not_exist_worker.exe");
+    let job = Arc::new(agent_octopus::security::windows_sandbox::WindowsJobObject::create(
+        "TestMissingWorkerJob",
+        1,
+        64 * 1024 * 1024,
+    ).unwrap());
+
+    let res = agent_octopus::security::windows_sandbox::spawn_quarantined_worker_in_job_and_appcontainer(
+        &non_existent_worker,
+        106,
+        "test-missing-1",
+        "doc_ingest",
+        &job,
+    );
+
+    assert!(res.is_err(), "Must fail closed if worker binary is missing");
+    let err_str = format!("{:?}", res.err().unwrap());
+    assert!(err_str.contains("Zero fallback execution allowed"), "Error was: {}", err_str);
 }
 
 #[tokio::test]

@@ -23,7 +23,7 @@ use crate::security::CapabilityToken;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -133,6 +133,7 @@ pub struct ArmContainmentRing {
     tool_enforcement_enabled: Arc<AtomicBool>,
     budget_enforcement_enabled: Arc<AtomicBool>,
     audit_control_token: Arc<String>,
+    pub(crate) quarantined_instances: Arc<RwLock<HashMap<String, Arc<crate::security::windows_sandbox::QuarantinedProcessInstance>>>>,
 }
 
 impl ArmContainmentRing {
@@ -267,6 +268,7 @@ impl ArmContainmentRing {
             tool_enforcement_enabled: Arc::new(AtomicBool::new(true)),
             budget_enforcement_enabled: Arc::new(AtomicBool::new(true)),
             audit_control_token: audit_token,
+            quarantined_instances: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -319,6 +321,12 @@ impl ArmContainmentRing {
         self.is_severed.store(true, Ordering::SeqCst);
         let mut revoked = self.revoked_epochs.write().await;
         revoked.insert(current_gen);
+
+        // Terminate and clean up all active quarantined worker processes
+        let mut instances = self.quarantined_instances.write().await;
+        for (_, inst) in instances.drain() {
+            let _ = inst.terminate(1);
+        }
     }
 
     /// Autotomy regeneration: Revokes the current generation epoch, advances to Gen N+1,
@@ -333,6 +341,13 @@ impl ArmContainmentRing {
         let next_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.step_counter.store(0, Ordering::SeqCst);
         self.is_severed.store(false, Ordering::SeqCst);
+
+        // Terminate any stale quarantined instances before regeneration
+        let mut instances = self.quarantined_instances.write().await;
+        for (_, inst) in instances.drain() {
+            let _ = inst.terminate(1);
+        }
+
         next_gen
     }
 
@@ -593,7 +608,8 @@ impl ArmContainmentRing {
 
     /// Executes an authoritative Level 1 containment ring quarantine operation on an arm.
     /// Validates active epoch, tool permissions, step budget, and 64MB memory clamp,
-    /// then outputs a cryptographic HMAC containment proof derived from the epoch key.
+    /// launches the quarantined worker inside a Windows Job Object and AppContainer LPAC boundary,
+    /// verifies kernel containment before execution, and outputs an HMAC containment proof.
     pub async fn execute_quarantine_containment(
         &self,
         report_id: &str,
@@ -607,10 +623,15 @@ impl ArmContainmentRing {
         self.check_step_budget(1)?;
         self.check_memory_budget(payload_len)?;
 
-        // Apply OS Isolation by spawning a suspended/worker process and attaching it.
-        let job_name = format!("QuarantineJob_Arm{}_{}", self.arm_id, report_id);
-        let job = crate::security::windows_sandbox::WindowsJobObject::create(&job_name, 1, self.config.max_memory_bytes)?;
-        
+        // Apply OS Isolation: Create Windows Job Object with strict 64MB clamp & 1 active process limit
+        let job_name = format!("QuarantineJob_Arm{}_{}_{}", self.arm_id, report_id, rand::random::<u32>());
+        let job = Arc::new(crate::security::windows_sandbox::WindowsJobObject::create(
+            &job_name,
+            1,
+            self.config.max_memory_bytes,
+        )?);
+
+        // Resolve quarantined worker binary: strictly fail-closed if missing (zero fallback)
         let mut worker_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("octopus-worker.exe"));
         if worker_path.is_absolute() {
             worker_path.pop();
@@ -619,45 +640,42 @@ impl ArmContainmentRing {
             }
             worker_path.push("octopus-worker.exe");
         }
-        
-        let mut child_cmd = std::process::Command::new(worker_path);
-        child_cmd.arg(self.arm_id.to_string()).arg("doc_ingest")
-                 .stdout(std::process::Stdio::null())
-                 .stderr(std::process::Stdio::null());
-        let child_res = child_cmd.spawn();
-        // Fallback if worker not found
-        let child = match child_res {
-            Ok(c) => c,
-            Err(_) => {
-                let mut fallback = std::process::Command::new("timeout");
-                fallback.arg("3600")
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null());
-                fallback.spawn().map_err(|e| OctopusSecurityError::IsolationViolation(format!("Failed to spawn worker: {}", e)))?
-            }
-        };
-        let pid = child.id();
-        
-        #[cfg(windows)]
-        {
-            use std::os::windows::io::AsRawHandle;
-            let handle = child.as_raw_handle() as *mut std::ffi::c_void;
-            if let Err(e) = job.assign_process(handle) {
-                if format!("{:?}", e).contains("Failed to assign process handle") && std::env::var("CARGO_MANIFEST_DIR").is_ok() {
-                    // Ignore assignment error during test because Cargo's Job Object blocks nested/breakaway
-                } else {
-                    return Err(e);
+        if !worker_path.exists() {
+            let cwd_worker = std::path::PathBuf::from("octopus-worker.exe");
+            if cwd_worker.exists() {
+                worker_path = cwd_worker;
+            } else {
+                let release_worker = std::path::PathBuf::from("target/release/octopus-worker.exe");
+                if release_worker.exists() {
+                    worker_path = release_worker;
                 }
             }
         }
-        
-        // We leak the job object or keep it alive so it doesn't kill the child immediately
-        // Actually, returning it or leaking it is necessary if we want the job to survive. 
-        // We'll just leak the Job Object so the process stays isolated.
-        let job_ptr = std::sync::Arc::new(job);
-        std::mem::forget(job_ptr);
-        
-        let app_container = crate::security::windows_sandbox::WindowsAppContainerProfile::new(&format!("Arm{}", self.arm_id), true, false);
+
+        if !worker_path.exists() {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "FAIL-CLOSED: Quarantined worker binary does not exist at '{}'. Fallback execution strictly forbidden.",
+                worker_path.display()
+            )));
+        }
+
+        // Spawn suspended in genuine AppContainer LPAC and assign to Job Object before resuming
+        let quarantined_proc = crate::security::windows_sandbox::spawn_quarantined_worker_in_job_and_appcontainer(
+            &worker_path,
+            self.arm_id as u64,
+            report_id,
+            "doc_ingest",
+            &job,
+        )?;
+
+        let pid = quarantined_proc.pid;
+        let ac_sid = quarantined_proc.package_sid.clone();
+
+        // Supervisor owns the active quarantined instance (retains handle, NO std::mem::forget)
+        {
+            let mut instances = self.quarantined_instances.write().await;
+            instances.insert(report_id.to_string(), Arc::new(quarantined_proc));
+        }
 
         let epoch_key = self.epoch_key(current_gen);
         let signing_content = format!(
@@ -665,7 +683,33 @@ impl ArmContainmentRing {
             report_id, payload_sha256, current_gen, novelty_score
         );
         let sig = compute_ring_hmac(&epoch_key, signing_content.as_bytes());
-        Ok((hex::encode(sig), job_name, app_container.package_sid, self.config.max_memory_bytes, pid))
+        Ok((hex::encode(sig), job_name, ac_sid, self.config.max_memory_bytes, pid))
+    }
+
+    /// Returns the number of active quarantined processes held by this ring.
+    pub async fn active_quarantines_count(&self) -> usize {
+        let instances = self.quarantined_instances.read().await;
+        instances.len()
+    }
+
+    /// Explicitly terminates a quarantined worker instance by its report ID.
+    pub async fn terminate_quarantined_instance(&self, report_id: &str) -> Result<(), OctopusSecurityError> {
+        let mut instances = self.quarantined_instances.write().await;
+        if let Some(inst) = instances.remove(report_id) {
+            inst.terminate(0)?;
+            Ok(())
+        } else {
+            Err(OctopusSecurityError::IsolationViolation(format!(
+                "No active quarantined instance found for report ID '{}'",
+                report_id
+            )))
+        }
+    }
+
+    /// Retrieves an active quarantined process instance by its report ID.
+    pub async fn get_quarantined_instance(&self, report_id: &str) -> Option<Arc<crate::security::windows_sandbox::QuarantinedProcessInstance>> {
+        let instances = self.quarantined_instances.read().await;
+        instances.get(report_id).cloned()
     }
 
     // Negative-control test hook methods
