@@ -49,5 +49,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("[WORKER {}] Forbidden tool blocked by ACR: {}", arm_id, forbidden_check.is_err());
 
     println!("[WORKER {}] Execution finished safely under Ring 1 boundary.", arm_id);
+    
+    // Sleep to allow parent process to attach Job Object and verify isolation
+    std::thread::sleep(std::time::Duration::from_secs(3600));
+    
     Ok(())
 }

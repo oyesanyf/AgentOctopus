@@ -159,7 +159,7 @@ async fn test_arm_106_sandbox_containment_properties() {
     assert!(!ring.is_severed());
 
     // Authoritative execution of Level 1 Ring quarantine operation
-    let hmac_proof = ring.execute_quarantine_containment(
+    let (hmac_proof, _job_name, _ac_sid, _mem, _pid) = ring.execute_quarantine_containment(
         "diff-test-001",
         "mock-sha256-hash",
         512,

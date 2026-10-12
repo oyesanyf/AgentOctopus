@@ -40,11 +40,11 @@ async fn test_differential_engine_authoritative_quarantine_with_arm106() {
 
     // 4. Verify in-memory audit log contains the tamper-evident entry
     let records = audit_log.get_entries();
-    let quarantine_record = records.iter().find(|r| r.event_type == "DIFFERENTIAL_PROTOCOL_ARM106_QUARANTINE");
-    assert!(quarantine_record.is_some(), "Quarantine event must be recorded in SecurityAuditLog");
+    let quarantine_record = records.iter().find(|r| r.event_type == "DIFFERENTIAL_PROTOCOL_ARM106_QUARANTINE" && r.decision == "PROCESS_ISOLATED");
+    assert!(quarantine_record.is_some(), "PROCESS_ISOLATED event must be recorded in SecurityAuditLog");
     let rec = quarantine_record.unwrap();
     assert_eq!(rec.agent_id, "arm-DifferentialProtocolAnalyzer-106");
-    assert_eq!(rec.decision, "QUARANTINE_AND_SEVER");
+    assert_eq!(rec.decision, "PROCESS_ISOLATED");
     assert!(rec.details.contains(&hmac_hex));
 }
 

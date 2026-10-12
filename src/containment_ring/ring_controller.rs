@@ -196,10 +196,28 @@ impl ContainmentRing {
         }
 
         // 1.5. Level 1: Individual Arm Containment Ring & Epoch Verification
-        if let Some(epoch) = req.generation {
-            if let Some(arm_ring) = self.arm_registry.get_ring_by_name(&req.agent_id).await {
-                if let Err(e) = arm_ring.validate_tool_invocation(&req.operation_type, &req.target, epoch).await {
-                    return (RingDecision::Deny, format!("Level 1 Arm Ring veto: {}", e));
+        let is_security_arm = ["100", "101", "102", "103", "104", "105", "106"].iter().any(|&id| req.agent_id.contains(id));
+
+        if is_security_arm {
+            let epoch = match req.generation {
+                Some(e) => e,
+                None => return (RingDecision::Deny, "Fail-Closed: Missing required generation epoch for containment ring verification".to_string()),
+            };
+
+            let arm_ring = match self.arm_registry.get_ring_by_name(&req.agent_id).await {
+                Some(r) => r,
+                None => return (RingDecision::Deny, format!("Fail-Closed: Missing containment ring for arm '{}'", req.agent_id)),
+            };
+
+            if let Err(e) = arm_ring.validate_tool_invocation(&req.operation_type, &req.target, epoch).await {
+                return (RingDecision::Deny, format!("Level 1 Arm Ring veto: {}", e));
+            }
+        } else {
+            if let Some(epoch) = req.generation {
+                if let Some(arm_ring) = self.arm_registry.get_ring_by_name(&req.agent_id).await {
+                    if let Err(e) = arm_ring.validate_tool_invocation(&req.operation_type, &req.target, epoch).await {
+                        return (RingDecision::Deny, format!("Level 1 Arm Ring veto: {}", e));
+                    }
                 }
             }
         }

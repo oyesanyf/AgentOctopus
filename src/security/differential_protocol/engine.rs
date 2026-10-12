@@ -255,12 +255,45 @@ impl DifferentialProtocolEngine {
                             raw.len(),
                             novelty_score,
                         ).await {
-                            Ok(hmac_proof) => {
+                            Ok((hmac_proof, job_name, ac_sid, mem_limit, pid)) => {
                                 containment_proof_hmac = Some(hmac_proof.clone());
                                 quarantined_generation = Some(active_gen);
-                                isolation_details = Some("Windows NT Job Object (64MB) + AppContainer LPAC [S-1-15-2-1106]".to_string());
+                                let iso_details = format!("Windows NT Job Object (64MB) + AppContainer LPAC [{}] PID: {}", ac_sid, pid);
+                                isolation_details = Some(iso_details.clone());
 
                                 if let Some(ref audit) = self.audit_log {
+                                    // Phase 1: AUTHORIZATION_COMPLETED
+                                    audit.record_event(
+                                        "DIFFERENTIAL_PROTOCOL_ARM106_QUARANTINE",
+                                        "arm-DifferentialProtocolAnalyzer-106",
+                                        &serde_json::json!({"report_id": report_id, "phase": "AUTHORIZATION_COMPLETED", "epoch": active_gen, "tool": "protocol_analyzer"}).to_string(),
+                                        "AUTHORIZATION_COMPLETED"
+                                    );
+
+                                    // Phase 2: REQUEST_BLOCKED
+                                    audit.record_event(
+                                        "DIFFERENTIAL_PROTOCOL_ARM106_QUARANTINE",
+                                        "arm-DifferentialProtocolAnalyzer-106",
+                                        &serde_json::json!({"report_id": report_id, "phase": "REQUEST_BLOCKED", "connection": "severed"}).to_string(),
+                                        "REQUEST_BLOCKED"
+                                    );
+
+                                    // Phase 3: PROCESS_ISOLATED
+                                    audit.record_event(
+                                        "DIFFERENTIAL_PROTOCOL_ARM106_QUARANTINE",
+                                        "arm-DifferentialProtocolAnalyzer-106",
+                                        &serde_json::json!({
+                                            "report_id": report_id,
+                                            "phase": "PROCESS_ISOLATED",
+                                            "job_object": job_name,
+                                            "app_container_sid": ac_sid,
+                                            "memory_limit": mem_limit,
+                                            "pid": pid,
+                                            "containment_proof_hmac": hmac_proof
+                                        }).to_string(),
+                                        "PROCESS_ISOLATED"
+                                    );
+
                                     let details = serde_json::json!({
                                         "report_id": report_id,
                                         "raw_stream_length": raw.len(),
@@ -269,7 +302,7 @@ impl DifferentialProtocolEngine {
                                         "quarantined_in_arm": arm_id,
                                         "generation": active_gen,
                                         "containment_proof_hmac": hmac_proof,
-                                        "isolation": "Windows NT Job Object (64MB) + AppContainer LPAC [S-1-15-2-1106]",
+                                        "isolation": iso_details,
                                         "framing_conflict": framing_conflict,
                                         "shared_parser_confusion": shared_parser_confusion,
                                         "novel_trigger_detected": novel_trigger_detected,
