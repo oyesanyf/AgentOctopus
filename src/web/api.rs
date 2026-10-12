@@ -177,6 +177,12 @@ impl Default for WebState {
         let oss_fuzz_arm = Arc::new(crate::security::oss_fuzz_arm::ContinuousOssFuzzArm::default());
         let osv_scanner_arm = Arc::new(crate::security::osv_scanner_arm::ContinuousOsvScannerArm::default());
         let arm_rings = Arc::new(crate::containment_ring::ArmRingRegistry::new(50, &secret_seed));
+        let protocol_analyzer = Arc::new(
+            crate::security::differential_protocol::DifferentialProtocolEngine::with_containment(
+                Arc::clone(&arm_rings),
+                Arc::clone(&audit_log),
+            ),
+        );
         let sentinel = Arc::new(crate::sentinel_ring::SentinelSupervisor::new(&secret_seed, 50));
 
         Self {
@@ -197,7 +203,7 @@ impl Default for WebState {
             osv_scanner_arm,
             arm_rings,
             sentinel,
-            protocol_analyzer: Arc::new(crate::security::differential_protocol::DifferentialProtocolEngine::new()),
+            protocol_analyzer,
         }
     }
 }

@@ -81,6 +81,9 @@ impl StrictRfc7230Parser {
         if parts.len() == 3 {
             interp.method = String::from_utf8(parts[0].to_vec()).ok();
             let uri_str = String::from_utf8_lossy(parts[1]).to_string();
+            if uri_str.starts_with('*') {
+                interp.detected_anomalies.push("NOVEL_DESYNC_TRIGGER_ASTERISK_URI".to_string());
+            }
             interp.normalized_path = normalize_path_strict(&uri_str);
             interp.target_uri = Some(uri_str);
             interp.version = String::from_utf8(parts[2].to_vec()).ok();
@@ -153,6 +156,14 @@ impl StrictRfc7230Parser {
             if key == "early-data" {
                 interp.detected_anomalies.push("NOVEL_DESYNC_TRIGGER_EARLY_DATA".to_string());
             }
+            if key == "max-forwards" {
+                if let Some(ref m) = interp.method {
+                    let method_upper = m.to_ascii_uppercase();
+                    if method_upper != "OPTIONS" && method_upper != "TRACE" && val.trim() == "0" {
+                        interp.detected_anomalies.push("NOVEL_DESYNC_TRIGGER_MAX_FORWARDS_ZERO".to_string());
+                    }
+                }
+            }
 
             interp.headers.insert(key, val);
         }
@@ -201,8 +212,9 @@ impl PermissiveLegacyParser {
         }
         if let Some(u) = parts.next() {
             let uri_str = String::from_utf8_lossy(u).to_string();
-            // Permissive: unnormalized or path traversal retained
-            interp.normalized_path = uri_str.clone();
+            // Permissive: unnormalized path retained (leaves .., //, ;, %2e uncollapsed for differential comparison)
+            let path_part = uri_str.split('?').next().unwrap_or(&uri_str).to_string();
+            interp.normalized_path = path_part;
             interp.target_uri = Some(uri_str);
         }
         if let Some(v) = parts.next() {

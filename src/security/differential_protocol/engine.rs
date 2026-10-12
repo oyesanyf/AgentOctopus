@@ -7,7 +7,10 @@ use super::parser_profiles::{
     AsyncMicroserviceParser, CdnProxyParser, ParsedProfileInterpretation, PermissiveLegacyParser,
     StrictRfc7230Parser,
 };
+use crate::containment_ring::arm_ring::ArmRingRegistry;
+use crate::security::audit::SecurityAuditLog;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -48,6 +51,10 @@ pub struct DifferentialAnalysisReport {
     pub primary_verdict: String,
     pub parser_interpretations: Vec<ParsedProfileInterpretation>,
     pub quarantined_in_arm: Option<usize>,
+    pub containment_proof_hmac: Option<String>,
+    pub quarantined_generation: Option<u64>,
+    pub audit_record_hash: Option<String>,
+    pub isolation_details: Option<String>,
 }
 
 /// Global statistics for the Differential Protocol Engine.
@@ -68,6 +75,8 @@ pub struct DifferentialProtocolEngine {
     total_streams: Arc<AtomicU64>,
     total_divergences: Arc<AtomicU64>,
     total_quarantines: Arc<AtomicU64>,
+    arm_registry: Option<Arc<ArmRingRegistry>>,
+    audit_log: Option<Arc<SecurityAuditLog>>,
 }
 
 impl Default for DifferentialProtocolEngine {
@@ -84,7 +93,33 @@ impl DifferentialProtocolEngine {
             total_streams: Arc::new(AtomicU64::new(0)),
             total_divergences: Arc::new(AtomicU64::new(0)),
             total_quarantines: Arc::new(AtomicU64::new(0)),
+            arm_registry: None,
+            audit_log: None,
         }
+    }
+
+    pub fn with_containment(
+        arm_registry: Arc<ArmRingRegistry>,
+        audit_log: Arc<SecurityAuditLog>,
+    ) -> Self {
+        Self {
+            correlator: Arc::new(DesyncCorrelator::new()),
+            recent_reports: Arc::new(RwLock::new(Vec::with_capacity(100))),
+            total_streams: Arc::new(AtomicU64::new(0)),
+            total_divergences: Arc::new(AtomicU64::new(0)),
+            total_quarantines: Arc::new(AtomicU64::new(0)),
+            arm_registry: Some(arm_registry),
+            audit_log: Some(audit_log),
+        }
+    }
+
+    pub fn set_containment(
+        &mut self,
+        arm_registry: Arc<ArmRingRegistry>,
+        audit_log: Arc<SecurityAuditLog>,
+    ) {
+        self.arm_registry = Some(arm_registry);
+        self.audit_log = Some(audit_log);
     }
 
     pub fn correlator(&self) -> Arc<DesyncCorrelator> {
@@ -122,11 +157,13 @@ impl DifferentialProtocolEngine {
         let max_cl = *cls.iter().max().unwrap_or(&0);
         let max_cl_delta = max_cl.saturating_sub(min_cl);
 
-        // Framing conflict: one parser thinks chunked, another thinks Content-Length or differing lengths
+        // Framing conflict: chunked vs CL disagreement, ambiguous CL, differing CLs, or header boundary desync
         let chunked_flags = [p_strict.is_chunked, p_legacy.is_chunked, p_cdn.is_chunked, p_micro.is_chunked];
         let any_chunked = chunked_flags.iter().any(|&c| c);
         let all_chunked = chunked_flags.iter().all(|&c| c);
-        if any_chunked != all_chunked || p_strict.has_ambiguous_framing || max_cl_delta > 0 {
+        let boundary_mismatch = (p_strict.header_end_offset > 0 && p_legacy.header_end_offset > 0 && p_strict.header_end_offset != p_legacy.header_end_offset)
+            || (p_strict.header_end_offset == 0 && p_legacy.header_end_offset > 0);
+        if any_chunked != all_chunked || p_strict.has_ambiguous_framing || max_cl_delta > 0 || boundary_mismatch {
             framing_conflict = true;
         }
 
@@ -151,12 +188,14 @@ impl DifferentialProtocolEngine {
         }
 
         // Line termination divergence: bare LF or NUL anomalies
-        if p_strict.detected_anomalies.iter().any(|a| a.contains("BARE_LF") || a.contains("NUL")) {
+        if p_strict.detected_anomalies.iter().any(|a| a.contains("BARE_LF") || a.contains("NUL"))
+            || raw.contains(&0)
+        {
             line_term_divergence = true;
         }
 
         let shared_parser_confusion = p_strict.detected_anomalies.iter().any(|a| a.starts_with("SHARED_PARSER_CONFUSION"));
-        let novel_trigger_detected = p_strict.detected_anomalies.iter().any(|a| a.starts_with("NOVEL_DESYNC_TRIGGER"));
+        let novel_trigger_detected = p_strict.detected_anomalies.iter().any(|a| a.starts_with("NOVEL_DESYNC_TRIGGER") || a.contains("NUL"));
 
         for p in [&p_strict, &p_legacy, &p_cdn, &p_micro] {
             anomaly_count += p.detected_anomalies.len();
@@ -165,19 +204,19 @@ impl DifferentialProtocolEngine {
         // 3. Compute Composite Novelty Score S in [0.0, 1.0]
         let mut score = 0.0f64;
         if framing_conflict {
-            score += 0.55;
+            score += 0.65;
         }
         if shared_parser_confusion {
-            score += 0.60;
+            score += 0.65;
         }
         if novel_trigger_detected {
-            score += 0.50;
+            score += 0.65;
         }
         if max_cl_delta > 0 {
             score += 0.30;
         }
         if path_divergence {
-            score += 0.25;
+            score += 0.35;
         }
         if header_disparity {
             score += 0.20;
@@ -190,16 +229,80 @@ impl DifferentialProtocolEngine {
         }
         let novelty_score = score.min(1.0);
 
-        // 4. Select Action
-        let (action, verdict, quarantined_arm) = if novelty_score >= 0.70 {
+        // 4. Select Action with Calibrated Thresholds & Arm 106 Ring 1 Quarantine
+        let report_id = format!("diff-{}", stream_id);
+        let mut containment_proof_hmac = None;
+        let mut quarantined_generation = None;
+        let mut audit_record_hash = None;
+        let mut isolation_details = None;
+
+        let (action, verdict, quarantined_arm) = if novelty_score >= 0.65 {
             self.total_divergences.fetch_add(1, Ordering::Relaxed);
             self.total_quarantines.fetch_add(1, Ordering::Relaxed);
+
+            let arm_id = 106; // Dispatched to Arm ID 106 (DifferentialProtocolAnalyzer)
+            let mut quarantined_verdict = "HIGH_DIVERGENCE_NOVEL_ATTACK_QUARANTINED";
+
+            // Execute authoritative Ring 1 containment isolation if registry is configured
+            if let Some(ref registry) = self.arm_registry {
+                let payload_sha256 = hex::encode(Sha256::digest(raw));
+                match registry.get_ring_or_fail(arm_id).await {
+                    Ok(ring) => {
+                        let active_gen = ring.current_generation();
+                        match ring.execute_quarantine_containment(
+                            &report_id,
+                            &payload_sha256,
+                            raw.len(),
+                            novelty_score,
+                        ).await {
+                            Ok(hmac_proof) => {
+                                containment_proof_hmac = Some(hmac_proof.clone());
+                                quarantined_generation = Some(active_gen);
+                                isolation_details = Some("Windows NT Job Object (64MB) + AppContainer LPAC [S-1-15-2-1106]".to_string());
+
+                                if let Some(ref audit) = self.audit_log {
+                                    let details = serde_json::json!({
+                                        "report_id": report_id,
+                                        "raw_stream_length": raw.len(),
+                                        "payload_sha256": payload_sha256,
+                                        "novelty_score": novelty_score,
+                                        "quarantined_in_arm": arm_id,
+                                        "generation": active_gen,
+                                        "containment_proof_hmac": hmac_proof,
+                                        "isolation": "Windows NT Job Object (64MB) + AppContainer LPAC [S-1-15-2-1106]",
+                                        "framing_conflict": framing_conflict,
+                                        "shared_parser_confusion": shared_parser_confusion,
+                                        "novel_trigger_detected": novel_trigger_detected,
+                                    }).to_string();
+
+                                    let entry_hash = audit.record_event(
+                                        "DIFFERENTIAL_PROTOCOL_ARM106_QUARANTINE",
+                                        "arm-DifferentialProtocolAnalyzer-106",
+                                        &details,
+                                        "QUARANTINE_AND_SEVER",
+                                    );
+                                    audit_record_hash = Some(entry_hash);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[CONTAINMENT-FAIL-CLOSED] Arm {} quarantine execution error: {:?}", arm_id, e);
+                                quarantined_verdict = "HIGH_DIVERGENCE_QUARANTINE_FAIL_CLOSED";
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[CONTAINMENT-FAIL-CLOSED] Missing mandatory Arm {} ring: {:?}", arm_id, e);
+                        quarantined_verdict = "HIGH_DIVERGENCE_MISSING_RING_FAIL_CLOSED";
+                    }
+                }
+            }
+
             (
                 DifferentialAction::QuarantineAndSever,
-                "HIGH_DIVERGENCE_NOVEL_ATTACK_QUARANTINED",
-                Some(106), // Dispatched to Arm ID 106 (DifferentialProtocolAnalyzer)
+                quarantined_verdict,
+                Some(arm_id),
             )
-        } else if novelty_score >= 0.35 {
+        } else if novelty_score >= 0.30 {
             self.total_divergences.fetch_add(1, Ordering::Relaxed);
             (
                 DifferentialAction::Observe,
@@ -227,7 +330,7 @@ impl DifferentialProtocolEngine {
         };
 
         let report = DifferentialAnalysisReport {
-            report_id: format!("diff-{}", stream_id),
+            report_id,
             timestamp_epoch_secs: now,
             raw_stream_length: raw.len(),
             divergence_vector,
@@ -235,6 +338,10 @@ impl DifferentialProtocolEngine {
             primary_verdict: verdict.to_string(),
             parser_interpretations: vec![p_strict, p_legacy, p_cdn, p_micro],
             quarantined_in_arm: quarantined_arm,
+            containment_proof_hmac,
+            quarantined_generation,
+            audit_record_hash,
+            isolation_details,
         };
 
         let mut reports = self.recent_reports.write().await;

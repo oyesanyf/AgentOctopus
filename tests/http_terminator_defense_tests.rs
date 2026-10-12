@@ -157,4 +157,13 @@ async fn test_arm_106_sandbox_containment_properties() {
     assert_eq!(ring.role, ArmRole::DifferentialProtocolAnalyzer);
     assert_eq!(ring.current_generation(), 1);
     assert!(!ring.is_severed());
+
+    // Authoritative execution of Level 1 Ring quarantine operation
+    let hmac_proof = ring.execute_quarantine_containment(
+        "diff-test-001",
+        "mock-sha256-hash",
+        512,
+        0.85,
+    ).await.expect("Quarantine containment must succeed on active Arm 106");
+    assert_eq!(hmac_proof.len(), 64, "Containment HMAC must be 64-char hex");
 }

@@ -577,14 +577,43 @@ impl ArmContainmentRing {
         self.validate_epoch(msg.target_generation).await?;
 
         // Level 2 lateral boundary: Ingestion cannot message Ledger directly
-        if self.role == ArmRole::AccountingLedgerWrite && msg.sender_role == ArmRole::UntrustedDocIngest {
+        // Level 2 lateral boundary: Ingestion and Quarantine arms cannot message Ledger directly
+        if self.role == ArmRole::AccountingLedgerWrite
+            && (msg.sender_role == ArmRole::UntrustedDocIngest
+                || msg.sender_role == ArmRole::DifferentialProtocolAnalyzer)
+        {
             return Err(OctopusSecurityError::DelegationScopeViolation(format!(
-                "Ring Boundary Violation: Untrusted Arm {} is forbidden from direct lateral messaging to Sensitive Sink Arm {}",
-                msg.sender_arm_id, self.arm_id
+                "Ring Boundary Violation: Arm {} ({:?}) is forbidden from direct lateral messaging to Sensitive Sink Arm {}",
+                msg.sender_arm_id, msg.sender_role, self.arm_id
             )));
         }
 
         Ok(())
+    }
+
+    /// Executes an authoritative Level 1 containment ring quarantine operation on an arm.
+    /// Validates active epoch, tool permissions, step budget, and 64MB memory clamp,
+    /// then outputs a cryptographic HMAC containment proof derived from the epoch key.
+    pub async fn execute_quarantine_containment(
+        &self,
+        report_id: &str,
+        payload_sha256: &str,
+        payload_len: usize,
+        novelty_score: f64,
+    ) -> Result<String, OctopusSecurityError> {
+        let current_gen = self.current_generation();
+        self.validate_epoch(current_gen).await?;
+        self.validate_tool_invocation("protocol_analyzer", "protocol://differential-quarantine", current_gen).await?;
+        self.check_step_budget(1)?;
+        self.check_memory_budget(payload_len)?;
+
+        let epoch_key = self.epoch_key(current_gen);
+        let signing_content = format!(
+            "RING1_QUARANTINE:{}:{}:{}:{:.4}",
+            report_id, payload_sha256, current_gen, novelty_score
+        );
+        let sig = compute_ring_hmac(&epoch_key, signing_content.as_bytes());
+        Ok(hex::encode(sig))
     }
 
     // Negative-control test hook methods

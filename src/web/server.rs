@@ -284,7 +284,7 @@ async fn handle_connection(
     let mut current_body_len = total_buffer.len().saturating_sub(body_start);
     while current_body_len < content_length {
         let read_res = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
+            std::time::Duration::from_millis(1500), // Enforce strict 1.5s body read timeout against dangling-byte stall attacks
             stream.read(&mut chunk),
         )
         .await;
@@ -292,18 +292,45 @@ async fn handle_connection(
             Ok(Ok(n)) => n,
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => {
+                eprintln!(
+                    "[HTTP-SECURITY] Dangling-byte stall detected: declared CL={} but received only {} bytes before timeout",
+                    content_length, current_body_len
+                );
+                let conn_id = state.protocol_analyzer.correlator().next_connection_id();
+                state.protocol_analyzer.correlator().record_residue(
+                    conn_id,
+                    content_length.saturating_sub(current_body_len),
+                    b"DANGLING_BYTE_STALL_INCOMPLETE_STREAM",
+                ).await;
                 let resp = api_error_response(
                     "408 Request Timeout",
-                    "REQUEST_TIMEOUT",
-                    "Timed out waiting for HTTP request body",
+                    "DANGLING_BYTE_TIMEOUT_SEVERED",
+                    "Timed out waiting for declared HTTP request body; socket severed to prevent response queue poisoning",
                 );
                 let _ = stream.write_all(resp.as_bytes()).await;
-                let _ = stream.flush().await;
+                let _ = stream.shutdown().await;
                 return Ok(());
             }
         };
         if n == 0 {
-            break;
+            eprintln!(
+                "[HTTP-SECURITY] Premature stream EOF with incomplete body: declared CL={} but stream ended at {} bytes",
+                content_length, current_body_len
+            );
+            let conn_id = state.protocol_analyzer.correlator().next_connection_id();
+            state.protocol_analyzer.correlator().record_residue(
+                conn_id,
+                content_length.saturating_sub(current_body_len),
+                b"PREMATURE_EOF_INCOMPLETE_STREAM",
+            ).await;
+            let resp = api_error_response(
+                "400 Bad Request",
+                "PREMATURE_STREAM_EOF",
+                "Client connection closed prematurely before declared Content-Length was transmitted",
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+            let _ = stream.shutdown().await;
+            return Ok(());
         }
         total_buffer.extend_from_slice(&chunk[..n]);
         current_body_len += n;
