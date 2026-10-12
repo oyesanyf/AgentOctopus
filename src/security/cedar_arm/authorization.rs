@@ -60,6 +60,8 @@ pub struct CedarAuthorizationGateway {
     grace_period_secs: u64,
     generation: u64,
     arm_ring: std::sync::Arc<crate::containment_ring::ArmContainmentRing>,
+    temporal_engine: std::sync::Arc<crate::security::cedar_arm::temporal::DogwoodTemporalEngine>,
+    temporal_policies: std::sync::RwLock<std::collections::HashMap<String, String>>,
 }
 
 impl CedarAuthorizationGateway {
@@ -82,6 +84,31 @@ impl CedarAuthorizationGateway {
             1,
             secret_seed,
         ));
+
+        let temporal_engine = std::sync::Arc::new(
+            crate::security::cedar_arm::temporal::DogwoodTemporalEngine::new_simulation()
+        );
+
+        let mut default_temporal_policies = std::collections::HashMap::new();
+        // Mandatory temporal prerequisite for ledger writes: must have performed a read/extract within 1 hour
+        default_temporal_policies.insert(
+            "ledger_writer".to_string(),
+            r#"when temporal { formerly within 1h (Octopus::Action::"LedgerRead"::response{ callerPrincipal: principal } || Octopus::Action::"extract"::response{ callerPrincipal: principal } || Octopus::Action::"Read"::response{ callerPrincipal: principal }) };"#.to_string(),
+        );
+        default_temporal_policies.insert(
+            "write".to_string(),
+            r#"when temporal { formerly within 1h (Octopus::Action::"LedgerRead"::response{ callerPrincipal: principal } || Octopus::Action::"extract"::response{ callerPrincipal: principal } || Octopus::Action::"Read"::response{ callerPrincipal: principal }) };"#.to_string(),
+        );
+        // Mandatory temporal prerequisite for kernel enforcement: must be preceded by authentication step within 60s
+        default_temporal_policies.insert(
+            "kernel_sentinel".to_string(),
+            r#"when temporal { formerly within 60s (Octopus::Action::"AuthenticateStep"::response{ callerPrincipal: principal } || Octopus::Action::"CredentialsVerified"::response{ callerPrincipal: principal }) };"#.to_string(),
+        );
+        default_temporal_policies.insert(
+            "kernel_enforce".to_string(),
+            r#"when temporal { formerly within 60s (Octopus::Action::"AuthenticateStep"::response{ callerPrincipal: principal } || Octopus::Action::"CredentialsVerified"::response{ callerPrincipal: principal }) };"#.to_string(),
+        );
+
         Self {
             engine: CedarPolicyEngine::default(),
             auth_engine: ExternalAuthorizationEngine::new(secret_seed, 300, policy_fingerprint),
@@ -93,6 +120,8 @@ impl CedarAuthorizationGateway {
             grace_period_secs: 300,
             generation: 1,
             arm_ring,
+            temporal_engine,
+            temporal_policies: std::sync::RwLock::new(default_temporal_policies),
         }
     }
 
@@ -108,6 +137,27 @@ impl CedarAuthorizationGateway {
     pub fn with_audit_log(mut self, log: SecurityAuditLog) -> Self {
         self.audit_log = Some(log);
         self
+    }
+
+    pub fn with_temporal_engine(mut self, engine: std::sync::Arc<crate::security::cedar_arm::temporal::DogwoodTemporalEngine>) -> Self {
+        self.temporal_engine = engine;
+        self
+    }
+
+    pub fn temporal_engine(&self) -> &std::sync::Arc<crate::security::cedar_arm::temporal::DogwoodTemporalEngine> {
+        &self.temporal_engine
+    }
+
+    pub fn temporal_policies(&self) -> &std::sync::RwLock<std::collections::HashMap<String, String>> {
+        &self.temporal_policies
+    }
+
+    pub fn register_temporal_policy(&self, action_or_tool: &str, policy_clause: &str) {
+        self.temporal_policies.write().unwrap().insert(action_or_tool.to_string(), policy_clause.to_string());
+    }
+
+    pub fn remove_temporal_policy(&self, action_or_tool: &str) {
+        self.temporal_policies.write().unwrap().remove(action_or_tool);
     }
 
     pub fn engine(&self) -> &CedarPolicyEngine {
@@ -551,31 +601,118 @@ impl CedarAuthorizationGateway {
                 action_name,
                 target_resource,
                 resource_type,
-                verified_context,
+                verified_context.clone(),
             )
             .map_err(|e| OctopusSecurityError::CapabilityDenied(format!("Cedar evaluation error: {}", e)))?;
 
-        // 5. Record decision in audit trail
-        let decision_str = if verdict.is_allowed { "ALLOW" } else { "DENY" };
+        if !verdict.is_allowed {
+            let decision_str = "DENY";
+            let details = format!(
+                "Tool: {}, Resource: {}, Cedar DENY: {:?}",
+                tool_name, target_resource, verdict.diagnostic_errors
+            );
+            if let Some(ref audit) = self.audit_log {
+                audit.record_event(
+                    "CEDAR_AUTHORIZATION",
+                    requesting_agent,
+                    &details,
+                    decision_str,
+                );
+            }
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "Action '{}' on '{}' denied by Cedar policy: errors={:?}",
+                tool_name, target_resource, verdict.diagnostic_errors
+            )));
+        }
+
+        // 5. JOINT DOGWOOD TEMPORAL ENFORCEMENT (FAIL-CLOSED)
+        let temporal_rules = self.temporal_policies.read().unwrap();
+        if let Some(temporal_policy) = temporal_rules.get(tool_name).or_else(|| temporal_rules.get(action_name)) {
+            let now_sec = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            let mut ctx_fields = std::collections::HashMap::new();
+            if let Some(obj) = verified_context.as_object() {
+                for (k, v) in obj {
+                    ctx_fields.insert(k.clone(), v.clone());
+                }
+            }
+
+            let decision_ctx = crate::security::cedar_arm::temporal::DecisionContext {
+                current_time_secs: now_sec,
+                principal: requesting_agent.to_string(),
+                resource: target_resource.to_string(),
+                context_fields: ctx_fields,
+            };
+
+            let temporal_verdict = self.temporal_engine.evaluate_policy(temporal_policy, &decision_ctx);
+            match temporal_verdict {
+                Ok(true) => {
+                    // Both Cedar and Dogwood temporal preconditions satisfied
+                }
+                Ok(false) => {
+                    if let Some(ref audit) = self.audit_log {
+                        audit.record_event(
+                            "DOGWOOD_TEMPORAL_AUTHORIZATION",
+                            requesting_agent,
+                            &format!("Tool: {}, Resource: {}, Temporal policy '{}' unsatisfied", tool_name, target_resource, temporal_policy),
+                            "FORBID",
+                        );
+                    }
+                    return Err(OctopusSecurityError::CapabilityDenied(format!(
+                        "Dogwood temporal policy prerequisite unsatisfied for action '{}' on resource '{}'",
+                        tool_name, target_resource
+                    )));
+                }
+                Err(err) => {
+                    // Evaluation error fails closed
+                    if let Some(ref audit) = self.audit_log {
+                        audit.record_event(
+                            "DOGWOOD_TEMPORAL_ERROR",
+                            requesting_agent,
+                            &format!("Tool: {}, Resource: {}, Error: {}", tool_name, target_resource, err),
+                            "FORBID",
+                        );
+                    }
+                    return Err(OctopusSecurityError::CapabilityDenied(format!(
+                        "Dogwood temporal evaluation error (failing closed): {}",
+                        err
+                    )));
+                }
+            }
+        }
+
+        // 6. Joint approval granted: Commit approved action into production temporal history trace
+        let mut event_fields = std::collections::HashMap::new();
+        if let Some(obj) = verified_context.as_object() {
+            for (k, v) in obj {
+                event_fields.insert(k.clone(), v.clone());
+            }
+        }
+        self.temporal_engine.record_event(
+            &format!("Octopus::Action::\"{}\"", action_name),
+            crate::security::cedar_arm::temporal::EventKind::Request,
+            requesting_agent,
+            target_resource,
+            event_fields,
+        );
+
+        // 7. Record joint decision in audit trail
+        let decision_str = "ALLOW";
         let details = format!(
-            "Tool: {}, Resource: {}, Determining: {:?}",
+            "Tool: {}, Resource: {}, Cedar+Dogwood JOINT ALLOW: {:?}",
             tool_name, target_resource, verdict.determining_policies
         );
 
         if let Some(ref audit) = self.audit_log {
             audit.record_event(
-                "CEDAR_AUTHORIZATION",
+                "CEDAR_DOGWOOD_JOINT_AUTHORIZATION",
                 requesting_agent,
                 &details,
                 decision_str,
             );
-        }
-
-        if !verdict.is_allowed {
-            return Err(OctopusSecurityError::CapabilityDenied(format!(
-                "Action '{}' on '{}' denied by Cedar policy: errors={:?}",
-                tool_name, target_resource, verdict.diagnostic_errors
-            )));
         }
 
         Ok(verdict)

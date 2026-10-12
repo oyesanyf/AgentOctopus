@@ -68,6 +68,7 @@ pub struct TemporalEvent {
     pub caller_principal: String,
     pub caller_resource: String,
     pub fields: HashMap<String, serde_json::Value>, // nested keys like "input.user", "output.result", "amount"
+    pub record_hash: String,
 }
 
 /// Term pattern in a predicate field: field: pattern

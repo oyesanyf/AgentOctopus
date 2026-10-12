@@ -1,4 +1,6 @@
 use agent_octopus::security::cedar_arm::temporal::*;
+use agent_octopus::security::audit::SecurityAuditLog;
+use agent_octopus::security::CedarAuthorizationGateway;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,7 +15,7 @@ fn test_dogwood_write_after_read_success() {
     fields.insert("output.result".to_string(), serde_json::json!(true));
 
     // 1. Record past Read response at t = 1000
-    engine.record_event(
+    engine.record_simulated_event(
         1000,
         "Drupe::Action::\"Read\"",
         EventKind::Response,
@@ -70,7 +72,7 @@ fn test_dogwood_velocity_burst_rate_limiter() {
     for i in 0..4 {
         let mut fields = HashMap::new();
         fields.insert("query_id".to_string(), serde_json::json!(i));
-        engine.record_event(
+        engine.record_simulated_event(
             1000 + i * 20,
             "Octopus::Action::\"QueryTool\"",
             EventKind::Request,
@@ -102,7 +104,7 @@ fn test_dogwood_open_session_since_revocation() {
     fields.insert("user".to_string(), serde_json::json!("bob"));
 
     // 1. Grant event at t = 2000
-    engine.record_event(
+    engine.record_simulated_event(
         2000,
         "Octopus::Action::\"Grant\"",
         EventKind::Request,
@@ -112,7 +114,7 @@ fn test_dogwood_open_session_since_revocation() {
     );
 
     // 2. Intervening innocuous events (heartbeats)
-    engine.record_event(
+    engine.record_simulated_event(
         2100,
         "Octopus::Action::\"Heartbeat\"",
         EventKind::Request,
@@ -134,7 +136,7 @@ fn test_dogwood_open_session_since_revocation() {
     assert!(verdict, "Session should be valid: grant exists and no revoke occurred since");
 
     // 3. Now record a Revoke event at t = 2300
-    engine.record_event(
+    engine.record_simulated_event(
         2300,
         "Octopus::Action::\"Revoke\"",
         EventKind::Request,
@@ -163,7 +165,7 @@ fn test_dogwood_cumulative_spend_ceiling() {
     for amount in [200, 300, 400] {
         let mut fields = HashMap::new();
         fields.insert("amount".to_string(), serde_json::json!(amount));
-        engine.record_event(
+        engine.record_simulated_event(
             5000,
             "Octopus::Action::\"Transfer\"",
             EventKind::Response,
@@ -197,7 +199,7 @@ fn test_dogwood_previous_step_sequencing() {
     let engine = DogwoodTemporalEngine::new(trace);
 
     // Record Step 1: CredentialsVerified at t = 3000
-    engine.record_event(
+    engine.record_simulated_event(
         3000,
         "Octopus::Action::\"CredentialsVerified\"",
         EventKind::Response,
@@ -217,4 +219,161 @@ fn test_dogwood_previous_step_sequencing() {
     let policy = r#"when temporal { previous within 30s Octopus::Action::"CredentialsVerified"::response{ callerPrincipal: principal } };"#;
     let verdict = engine.evaluate_policy(policy, &decision_ctx).expect("Should evaluate");
     assert!(verdict, "Sequence permitted: immediate previous event was verification within 15s");
+}
+
+#[test]
+fn test_event_history_persistence_and_tamper_resistance() {
+    let temp_dir = std::env::temp_dir().join(format!("octopus_audit_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let audit_file = temp_dir.join("audit.jsonl");
+    let durable_temporal_file = temp_dir.join("temporal_events.jsonl");
+
+    let audit_log = Arc::new(SecurityAuditLog::with_disk_persistence(&audit_file));
+    let trace = TemporalEventTrace::new_production(audit_log.clone(), &durable_temporal_file);
+
+    assert!(!trace.is_simulation(), "Production trace must flag is_simulation as false");
+
+    // 1. Record authentic production event (uses SystemTime::now() monotonic timestamp)
+    let mut fields = HashMap::new();
+    fields.insert("doc_id".to_string(), serde_json::json!("classified_v1"));
+    let event_id = trace.record_event(
+        "Octopus::Action::\"LedgerRead\"",
+        EventKind::Response,
+        "agent_auditor",
+        "classified_v1",
+        fields,
+    );
+
+    assert_eq!(event_id, 0);
+    assert_eq!(trace.len(), 1);
+
+    let history = trace.get_history_up_to(None);
+    assert_eq!(history.len(), 1);
+    assert!(!history[0].record_hash.is_empty(), "Event must have cryptographic hash");
+    assert_ne!(history[0].record_hash, "SIMULATION_SANDBOX_HASH");
+
+    // 2. Tamper resistance: attempting to clear() production history MUST be rejected
+    let clear_result = trace.clear();
+    assert!(clear_result.is_err(), "Clearing production temporal history must fail");
+    assert_eq!(trace.len(), 1, "Trace length must remain intact after clear attempt");
+
+    // 3. File persistence check
+    assert!(durable_temporal_file.exists(), "Durable log file must exist on disk");
+    let contents = std::fs::read_to_string(&durable_temporal_file).expect("File must be readable");
+    assert!(contents.contains("LedgerRead"), "Durable log must contain recorded event");
+
+    // 4. Persistence recovery check: re-instantiate from same durable path
+    let trace2 = TemporalEventTrace::new_production(audit_log, &durable_temporal_file);
+    assert_eq!(trace2.len(), 1, "Recovered trace must contain persisted event");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_simulation_vs_production_trace_isolation() {
+    let temp_dir = std::env::temp_dir().join(format!("octopus_iso_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let audit_file = temp_dir.join("audit.jsonl");
+    let durable_temporal_file = temp_dir.join("temporal_events.jsonl");
+
+    let audit_log = Arc::new(SecurityAuditLog::with_disk_persistence(&audit_file));
+    let prod_engine = DogwoodTemporalEngine::new_production(audit_log, &durable_temporal_file);
+    let sim_engine = DogwoodTemporalEngine::new_simulation();
+
+    assert!(!prod_engine.is_simulation());
+    assert!(sim_engine.is_simulation());
+
+    // Record an event strictly into the simulation engine
+    sim_engine.record_simulated_event(
+        1000,
+        "Octopus::Action::\"LedgerRead\"",
+        EventKind::Response,
+        "agent_adversary",
+        "secret_vault",
+        HashMap::new(),
+    );
+
+    // Verify complete isolation
+    assert_eq!(sim_engine.trace().len(), 1, "Simulation engine has 1 event");
+    assert_eq!(prod_engine.trace().len(), 0, "Production engine must remain completely uncontaminated with 0 events");
+    assert!(!durable_temporal_file.exists(), "Simulation event must not create durable disk file");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_joint_cedar_dogwood_authorization_enforcement() {
+    let secret = b"secret_seed_for_cedar_dogwood_test_32_bytes!!";
+    let policy_fp = "test_fp_v1";
+
+    let temp_dir = std::env::temp_dir().join(format!("octopus_joint_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let audit_file = temp_dir.join("audit.jsonl");
+    let durable_temporal_file = temp_dir.join("temporal_events.jsonl");
+
+    let audit_log = Arc::new(SecurityAuditLog::with_disk_persistence(&audit_file));
+    let prod_temporal = Arc::new(DogwoodTemporalEngine::new_production(audit_log.clone(), &durable_temporal_file));
+
+    let gateway = CedarAuthorizationGateway::new(secret, policy_fp)
+        .with_temporal_engine(prod_temporal.clone())
+        .with_audit_log((*audit_log).clone());
+
+    // Issue capability token for ledger_arm to invoke ledger_writer
+    let token = gateway.auth_engine().issue_capability(
+        "ledger_arm",
+        "ledger_arm",
+        agent_octopus::core::types::ArmRole::AccountingLedgerWrite,
+        "ledger_writer",
+        "Ledger",
+    );
+
+    // 1. Initial attempt: Cedar would permit (amount <= $100k and supervisor approved), but
+    // Dogwood temporal prerequisite ("formerly within 1h LedgerRead") is NOT satisfied!
+    // Must FAIL CLOSED!
+    let supervisor_receipt = gateway.issue_supervisor_approval("supervisor_bob", "ledger_arm", "Ledger", 500_000, 300).expect("Receipt");
+    let untrusted_context = serde_json::json!({
+        "amount_cents": 50000,
+        "approved": true
+    });
+
+    let first_res = gateway.authorize_tool_invocation_with_approval(
+        &token,
+        "ledger_arm",
+        "ledger_writer",
+        "Ledger",
+        untrusted_context.clone(),
+        Some(&supervisor_receipt),
+    );
+
+    assert!(first_res.is_err(), "First attempt must be DENIED fail-closed because temporal prerequisite (LedgerRead) is missing");
+
+    // 2. Now record genuine prerequisite event (LedgerRead) into the production temporal engine
+    let mut read_fields = HashMap::new();
+    read_fields.insert("input.user".to_string(), serde_json::json!("ledger_arm"));
+    prod_temporal.record_event(
+        "Octopus::Action::\"LedgerRead\"",
+        EventKind::Response,
+        "ledger_arm",
+        "Ledger",
+        read_fields,
+    );
+
+    // 3. Retry attempt: NOW both Cedar and Dogwood temporal policy permit!
+    let second_res = gateway.authorize_tool_invocation_with_approval(
+        &token,
+        "ledger_arm",
+        "ledger_writer",
+        "Ledger",
+        untrusted_context,
+        Some(&supervisor_receipt),
+    );
+
+    assert!(second_res.is_ok(), "Second attempt must SUCCEED because both Cedar and Dogwood permit");
+    let verdict = second_res.unwrap();
+    assert!(verdict.is_allowed);
+
+    // 4. Verify the approved action was committed to the production temporal trace
+    assert!(prod_temporal.trace().len() >= 2, "Production trace must contain both LedgerRead and the approved action");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }

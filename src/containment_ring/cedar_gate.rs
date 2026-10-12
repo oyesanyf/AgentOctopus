@@ -323,7 +323,7 @@ impl CedarGate {
         let gw = self.gateway.read().await;
         let verdict = gw
             .engine()
-            .evaluate(principal_str, action_name, resource, resource_type, context)
+            .evaluate(principal_str, action_name, resource, resource_type, context.clone())
             .map_err(|e| OctopusSecurityError::CapabilityDenied(format!("Cedar evaluation error: {:?}", e)))?;
 
         if !verdict.is_allowed {
@@ -332,6 +332,63 @@ impl CedarGate {
                 agent_id, principal_str, action_name, resource
             )));
         }
+
+        // Joint Dogwood Temporal Enforcement (Fail-Closed)
+        let temporal_rules = gw.temporal_policies().read().unwrap();
+        if let Some(temporal_policy) = temporal_rules.get(action_name).or_else(|| temporal_rules.get(action)) {
+            let now_sec = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            let mut ctx_map = std::collections::HashMap::new();
+            if let Some(obj) = context.as_object() {
+                for (k, v) in obj {
+                    ctx_map.insert(k.clone(), v.clone());
+                }
+            }
+
+            let decision_ctx = crate::security::cedar_arm::temporal::DecisionContext {
+                current_time_secs: now_sec,
+                principal: principal_str.to_string(),
+                resource: resource.to_string(),
+                context_fields: ctx_map,
+            };
+
+            match gw.temporal_engine().evaluate_policy(temporal_policy, &decision_ctx) {
+                Ok(true) => {
+                    // Temporal prerequisite satisfied
+                }
+                Ok(false) => {
+                    return Err(OctopusSecurityError::CapabilityDenied(format!(
+                        "Dogwood temporal policy precondition unsatisfied for agent '{}' action '{}' on resource '{}'",
+                        agent_id, action_name, resource
+                    )));
+                }
+                Err(err) => {
+                    // Fails closed on evaluation or syntax errors
+                    return Err(OctopusSecurityError::CapabilityDenied(format!(
+                        "Dogwood temporal policy evaluation error (failing closed): {}",
+                        err
+                    )));
+                }
+            }
+        }
+
+        // Record approved action into production temporal history trace
+        let mut event_fields = std::collections::HashMap::new();
+        if let Some(obj) = context.as_object() {
+            for (k, v) in obj {
+                event_fields.insert(k.clone(), v.clone());
+            }
+        }
+        gw.temporal_engine().record_event(
+            &format!("Octopus::Action::\"{}\"", action_name),
+            crate::security::cedar_arm::temporal::EventKind::Request,
+            principal_str,
+            resource,
+            event_fields,
+        );
 
         Ok(true)
     }

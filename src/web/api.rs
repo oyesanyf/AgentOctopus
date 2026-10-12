@@ -72,6 +72,8 @@ pub struct WebState {
     pub arm_rings: Arc<crate::containment_ring::ArmRingRegistry>,
     pub sentinel: Arc<crate::sentinel_ring::SentinelSupervisor>,
     pub protocol_analyzer: Arc<crate::security::differential_protocol::DifferentialProtocolEngine>,
+    pub production_temporal_engine: Arc<DogwoodTemporalEngine>,
+    pub simulation_temporal_engine: Arc<DogwoodTemporalEngine>,
     pub dogwood_engine: Arc<DogwoodTemporalEngine>,
 }
 
@@ -143,8 +145,16 @@ impl Default for WebState {
         let logs_dir = std::path::PathBuf::from("logs");
         let _ = std::fs::create_dir_all(&logs_dir);
         let audit_log = Arc::new(SecurityAuditLog::with_disk_persistence(logs_dir.join("audit.log")));
+        let durable_temporal_path = logs_dir.join("temporal_events.jsonl");
+        let production_temporal_engine = Arc::new(DogwoodTemporalEngine::new_production(
+            Arc::clone(&audit_log),
+            durable_temporal_path,
+        ));
+        let simulation_temporal_engine = Arc::new(DogwoodTemporalEngine::new_simulation());
+
         let gateway = Arc::new(
             CedarAuthorizationGateway::new(&secret_seed, policy_fingerprint)
+                .with_temporal_engine(Arc::clone(&production_temporal_engine))
                 .with_audit_log((*audit_log).clone()),
         );
         let live_events = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -186,15 +196,12 @@ impl Default for WebState {
         );
         let sentinel = Arc::new(crate::sentinel_ring::SentinelSupervisor::new(&secret_seed, 50));
 
-        let temporal_trace = Arc::new(TemporalEventTrace::default());
-        let dogwood_engine = Arc::new(DogwoodTemporalEngine::new(temporal_trace));
-
-        // Seed demo events in temporal trace for interactive sandbox presets
+        // Seed demo events STRICTLY in isolated simulation temporal trace for sandbox presets
         let now_sec = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
         let mut seed_read_fields = std::collections::HashMap::new();
         seed_read_fields.insert("input.user".to_string(), serde_json::json!("agent_worker_1"));
         seed_read_fields.insert("input.document".to_string(), serde_json::json!("contracts/2026-q3.pdf"));
-        dogwood_engine.record_event(
+        simulation_temporal_engine.record_simulated_event(
             now_sec.saturating_sub(600), // 10 minutes ago
             "Octopus::Action::\"LedgerRead\"",
             EventKind::Response,
@@ -205,7 +212,7 @@ impl Default for WebState {
 
         let mut seed_grant_fields = std::collections::HashMap::new();
         seed_grant_fields.insert("user".to_string(), serde_json::json!("agent_admin"));
-        dogwood_engine.record_event(
+        simulation_temporal_engine.record_simulated_event(
             now_sec.saturating_sub(3600), // 1 hour ago
             "Octopus::Action::\"Grant\"",
             EventKind::Request,
@@ -216,7 +223,7 @@ impl Default for WebState {
 
         let mut seed_auth_fields = std::collections::HashMap::new();
         seed_auth_fields.insert("status".to_string(), serde_json::json!("verified"));
-        dogwood_engine.record_event(
+        simulation_temporal_engine.record_simulated_event(
             now_sec.saturating_sub(15), // 15 seconds ago
             "Octopus::Action::\"AuthenticateStep\"",
             EventKind::Response,
@@ -224,6 +231,8 @@ impl Default for WebState {
             "production_db",
             seed_auth_fields,
         );
+
+        let dogwood_engine = Arc::clone(&production_temporal_engine);
 
         Self {
             gateway,
@@ -244,6 +253,8 @@ impl Default for WebState {
             arm_rings,
             sentinel,
             protocol_analyzer,
+            production_temporal_engine,
+            simulation_temporal_engine,
             dogwood_engine,
         }
     }
@@ -1997,14 +2008,23 @@ pub fn handle_dogwood_evaluate(state: &WebState, body: &str) -> Result<String, S
         context_fields: req.context.clone(),
     };
 
+    // By default in web sandbox, evaluate against simulation_temporal_engine (sandbox trace)
+    // unless context explicitly specifies eval_target == "production"
+    let is_prod = req.context.get("eval_target").and_then(|v| v.as_str()) == Some("production");
+    let target_engine = if is_prod {
+        &state.production_temporal_engine
+    } else {
+        &state.simulation_temporal_engine
+    };
+
     let start = std::time::Instant::now();
-    let verdict_result = state.dogwood_engine.evaluate_policy(&req.policy, &decision_ctx);
+    let verdict_result = target_engine.evaluate_policy(&req.policy, &decision_ctx);
     let eval_duration_us = start.elapsed().as_micros();
 
     match verdict_result {
         Ok(allowed) => {
             let verdict_str = if allowed { "PERMIT" } else { "FORBID" };
-            let history_len = state.dogwood_engine.trace().len();
+            let history_len = target_engine.trace().len();
             Ok(json!({
                 "allowed": allowed,
                 "verdict": verdict_str,
@@ -2013,6 +2033,7 @@ pub fn handle_dogwood_evaluate(state: &WebState, body: &str) -> Result<String, S
                 "resource": req.resource,
                 "trace_history_length": history_len,
                 "evaluation_duration_us": eval_duration_us,
+                "eval_target": if is_prod { "production" } else { "simulation" },
                 "engine": "Dogwood-MFOTL-v1.0"
             }).to_string())
         }
@@ -2021,10 +2042,15 @@ pub fn handle_dogwood_evaluate(state: &WebState, body: &str) -> Result<String, S
 }
 
 pub fn handle_dogwood_trace(state: &WebState) -> String {
-    let events = state.dogwood_engine.trace().get_history_up_to(None);
+    let prod_events = state.production_temporal_engine.trace().get_history_up_to(None);
+    let sim_events = state.simulation_temporal_engine.trace().get_history_up_to(None);
     json!({
-        "total_events": events.len(),
-        "events": events
+        "total_events": sim_events.len() + prod_events.len(),
+        "total_production_events": prod_events.len(),
+        "production_events": prod_events,
+        "total_simulation_events": sim_events.len(),
+        "simulation_events": sim_events,
+        "events": if !sim_events.is_empty() { sim_events } else { prod_events }
     }).to_string()
 }
 
@@ -2053,7 +2079,9 @@ pub fn handle_dogwood_simulate_trace(state: &WebState, body: &str) -> Result<Str
     let event_ts = now_sec.saturating_sub(req.offset_secs_ago.unwrap_or(0));
     let kind = EventKind::from(req.kind.as_str());
 
-    let event_id = state.dogwood_engine.record_event(
+    // STRICT ISOLATION: Simulated events strictly record into simulation_temporal_engine.
+    // They NEVER touch the production trace, audit log, or disk persistence.
+    let event_id = state.simulation_temporal_engine.record_simulated_event(
         event_ts,
         &req.action,
         kind,
@@ -2066,7 +2094,10 @@ pub fn handle_dogwood_simulate_trace(state: &WebState, body: &str) -> Result<Str
         "status": "RECORDED",
         "event_id": event_id,
         "timestamp_secs": event_ts,
-        "total_trace_events": state.dogwood_engine.trace().len()
+        "isolated_simulation": true,
+        "production_trace_protected": true,
+        "simulation_trace_length": state.simulation_temporal_engine.trace().len(),
+        "production_trace_length": state.production_temporal_engine.trace().len()
     }).to_string())
 }
 
