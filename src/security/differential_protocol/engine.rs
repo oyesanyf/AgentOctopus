@@ -258,7 +258,7 @@ impl DifferentialProtocolEngine {
                             Ok((hmac_proof, job_name, ac_sid, mem_limit, pid)) => {
                                 containment_proof_hmac = Some(hmac_proof.clone());
                                 quarantined_generation = Some(active_gen);
-                                let iso_details = format!("Windows NT Job Object (64MB) + AppContainer LPAC [{}] PID: {}", ac_sid, pid);
+                                let iso_details = format!("Windows NT Job Object (64MB) + AppContainer [{}] PID: {}", ac_sid, pid);
                                 isolation_details = Some(iso_details.clone());
 
                                 if let Some(ref audit) = self.audit_log {

@@ -3,7 +3,7 @@
 //! Isolated Worker Process for a single Agent Octopus arm.
 //! Operates within a restricted OS security context:
 //! - Bound to Windows NT Job Object (64MB memory limit, active process limit 1)
-//! - Scoped by AppContainer Low Privilege AppContainer (LPAC) SID
+//! - Scoped by AppContainer isolation SID
 //! - Enforced by Level 1 Arm Containment Ring (ACR) and Generation Epochs
 
 use agent_octopus::containment_ring::ArmContainmentRing;

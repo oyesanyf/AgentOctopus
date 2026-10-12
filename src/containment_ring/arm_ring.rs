@@ -608,7 +608,7 @@ impl ArmContainmentRing {
 
     /// Executes an authoritative Level 1 containment ring quarantine operation on an arm.
     /// Validates active epoch, tool permissions, step budget, and 64MB memory clamp,
-    /// launches the quarantined worker inside a Windows Job Object and AppContainer LPAC boundary,
+    /// launches the quarantined worker inside a Windows Job Object and AppContainer boundary,
     /// verifies kernel containment before execution, and outputs an HMAC containment proof.
     pub async fn execute_quarantine_containment(
         &self,
@@ -659,7 +659,7 @@ impl ArmContainmentRing {
             )));
         }
 
-        // Spawn suspended in genuine AppContainer LPAC and assign to Job Object before resuming
+        // Spawn suspended in genuine AppContainer and assign to Job Object before resuming
         let quarantined_proc = crate::security::windows_sandbox::spawn_quarantined_worker_in_job_and_appcontainer(
             &worker_path,
             self.arm_id as u64,
@@ -747,6 +747,29 @@ impl ArmContainmentRing {
     pub async fn to_status_dto(&self) -> ArmRingStatusDto {
         let tools: Vec<String> = self.allowed_tools.read().await.iter().cloned().collect();
         let prefixes: Vec<String> = self.allowed_resource_prefixes.read().await.clone();
+
+        let instances = self.quarantined_instances.read().await;
+        let (os_isolation, job_object_clamped, appcontainer_sid) = if let Some(inst) = instances.values().next() {
+            let is_active = !inst.job.is_terminated.load(Ordering::SeqCst);
+            let desc = if instances.len() == 1 {
+                format!("Windows NT Job Object (64MB) + AppContainer [{}] PID: {}", inst.package_sid, inst.pid)
+            } else {
+                let pids: Vec<String> = instances.values().map(|i| i.pid.to_string()).collect();
+                format!("Windows NT Job Object (64MB) + AppContainer [{}] PIDs: {}", inst.package_sid, pids.join(","))
+            };
+            (desc, is_active, inst.package_sid.clone())
+        } else {
+            (
+                if self.is_severed() {
+                    "Severed (Unattached)".to_string()
+                } else {
+                    "Standby (Pre-allocated Ring Boundary)".to_string()
+                },
+                false,
+                "None (No Active OS Process)".to_string(),
+            )
+        };
+
         ArmRingStatusDto {
             arm_id: self.arm_id,
             agent_name: self.agent_name.clone(),
@@ -757,9 +780,9 @@ impl ArmContainmentRing {
             step_limit: self.config.step_limit,
             allowed_tools: tools,
             allowed_resource_prefixes: prefixes,
-            os_isolation: "Windows NT Job Object (64MB) + AppContainer LPAC".to_string(),
-            job_object_clamped: true,
-            appcontainer_sid: format!("S-1-15-2-{}", 1000 + self.arm_id),
+            os_isolation,
+            job_object_clamped,
+            appcontainer_sid,
         }
     }
 }

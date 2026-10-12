@@ -1605,7 +1605,7 @@ pub async fn handle_containment_rings(state: &WebState) -> String {
                 "default_memory_clamp_mb": 64,
                 "default_step_limit": 10,
                 "crypto_epoch_key_derivation": "HMAC-SHA256(MasterSeed, EpochKey)",
-                "os_isolation_primitive": "Windows NT Job Object + AppContainer LPAC SID"
+                "os_isolation_primitive": "Windows NT Job Object + AppContainer SID"
             }
         },
         "sentinel_snapshot": sentinel_snap,

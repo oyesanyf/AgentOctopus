@@ -537,7 +537,7 @@ impl WindowsNamedPipeSecurity {
 }
 
 /// Owned handle to a quarantined OS worker process running inside a Windows Job Object
-/// and AppContainer LPAC boundary. Eliminates resource leaks and provides active supervisor lifecycle management.
+/// and AppContainer isolation boundary. Eliminates resource leaks and provides active supervisor lifecycle management.
 #[derive(Debug)]
 pub struct QuarantinedProcessInstance {
     pub job: Arc<WindowsJobObject>,
@@ -586,7 +586,7 @@ impl Drop for QuarantinedProcessInstance {
     }
 }
 
-/// Launches a quarantined worker process inside genuine Windows Job Object and AppContainer LPAC boundaries.
+/// Launches a quarantined worker process inside genuine Windows Job Object and AppContainer isolation boundaries.
 ///
 /// FAIL-CLOSED SECURITY INVARIANTS:
 /// 1. Process is created in CREATE_SUSPENDED state before executing any user code.
@@ -608,14 +608,19 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
         )));
     }
 
-    let container_name = format!("AgentOctopus.Arm{}_{}", arm_id, report_id.replace('-', "_"));
+    let container_name = format!(
+        "AgentOctopus.Arm{}_{}_{:08x}",
+        arm_id,
+        report_id.replace('-', "_"),
+        rand::random::<u32>()
+    );
     let (sid_str, psid) = create_or_open_appcontainer_profile(
         &container_name,
         &format!("Arm {} Quarantine Sandbox", arm_id),
         "Isolated execution sandbox for suspicious/quarantined workload",
     )?;
 
-    // Configure SECURITY_CAPABILITIES for LPAC (Less Privileged AppContainer)
+    // Configure SECURITY_CAPABILITIES for AppContainer isolation
     let mut sec_cap = win32::SECURITY_CAPABILITIES {
         AppContainerSid: psid,
         Capabilities: std::ptr::null_mut(),
@@ -675,7 +680,7 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
     let cmdline = format!("\"{}\" {} {}", worker_exe.display(), arm_id, operation);
     let mut wide_cmdline: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
 
-    // Spawn process suspended with extended startup info (AppContainer LPAC)
+    // Spawn process suspended with extended startup info (AppContainer isolation)
     const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x00080000;
     const CREATE_SUSPENDED: u32 = 0x00000004;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -770,26 +775,13 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
 
 #[cfg(not(windows))]
 pub fn spawn_quarantined_worker_in_job_and_appcontainer(
-    worker_exe: &std::path::Path,
-    arm_id: u64,
-    report_id: &str,
-    operation: &str,
-    job: &Arc<WindowsJobObject>,
+    _worker_exe: &std::path::Path,
+    _arm_id: u64,
+    _report_id: &str,
+    _operation: &str,
+    _job: &Arc<WindowsJobObject>,
 ) -> Result<QuarantinedProcessInstance, OctopusSecurityError> {
-    if !worker_exe.exists() {
-        return Err(OctopusSecurityError::IsolationViolation(format!(
-            "FAIL-CLOSED: Quarantined worker binary does not exist at '{}'. Zero fallback execution allowed.",
-            worker_exe.display()
-        )));
-    }
-    let sid = format!("S-1-15-2-1106-{}", arm_id);
-    let _ = operation;
-    let _ = report_id;
-    Ok(QuarantinedProcessInstance {
-        job: Arc::clone(job),
-        pid: 106000 + arm_id as u32,
-        container_name: format!("AgentOctopus.AppContainer.Arm{}", arm_id),
-        package_sid: sid,
-        spawned_at: std::time::Instant::now(),
-    })
+    Err(OctopusSecurityError::IsolationViolation(
+        "FAIL-CLOSED: Windows Job Object and AppContainer process isolation is strictly unsupported on non-Windows platforms. Production containment refused.".to_string(),
+    ))
 }

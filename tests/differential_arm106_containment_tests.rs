@@ -36,7 +36,7 @@ async fn test_differential_engine_authoritative_quarantine_with_arm106() {
     // 3. Immutable Tamper-Evident Audit Record
     assert!(report.audit_record_hash.is_some(), "Audit record hash must be present");
     assert!(report.isolation_details.is_some(), "Isolation constraints details must be present");
-    assert!(report.isolation_details.as_ref().unwrap().contains("Windows NT Job Object (64MB) + AppContainer LPAC"));
+    assert!(report.isolation_details.as_ref().unwrap().contains("Windows NT Job Object (64MB) + AppContainer"));
 
     // 4. Verify in-memory audit log contains the tamper-evident entry
     let records = audit_log.get_entries();
@@ -259,4 +259,40 @@ async fn test_moderate_divergence_triggers_observe_tier() {
     assert_eq!(report.action, DifferentialAction::Observe);
     assert_eq!(report.primary_verdict, "MODERATE_PARSER_DIVERGENCE_OBSERVED");
     assert_eq!(report.quarantined_in_arm, None);
+}
+
+#[tokio::test]
+async fn test_to_status_dto_reports_live_os_telemetry_without_hardcoding() {
+    let seed = ArmRingRegistry::generate_master_seed();
+    let registry = Arc::new(ArmRingRegistry::new(50, &seed));
+    let arm106 = registry.get_ring_or_fail(106).await.unwrap();
+
+    // 1. Initial Standby state (no active worker process)
+    let dto_before = arm106.to_status_dto().await;
+    assert_eq!(dto_before.job_object_clamped, false, "Initial standby state must not report clamped");
+    assert_eq!(dto_before.appcontainer_sid, "None (No Active OS Process)", "Initial SID must indicate no active OS process");
+    assert_eq!(dto_before.os_isolation, "Standby (Pre-allocated Ring Boundary)");
+
+    // 2. Perform quarantine
+    let audit_log = Arc::new(SecurityAuditLog::new());
+    let engine = DifferentialProtocolEngine::with_containment(Arc::clone(&registry), Arc::clone(&audit_log));
+    let raw_payload = b"POST /api/checkout HTTP/1.1\r\nHost: 127.0.0.1:5005\r\nContent-Type: multipart/byteranges; boundary=SEC_BOUND\r\nContent-Length: 128\r\n\r\n--SEC_BOUND\r\n";
+    let report = engine.evaluate_raw_stream(raw_payload).await;
+    assert_eq!(report.action, DifferentialAction::QuarantineAndSever);
+
+    // 3. Active quarantine state: real live OS telemetry
+    let dto_active = arm106.to_status_dto().await;
+    assert_eq!(dto_active.job_object_clamped, true, "Active quarantine must report job object clamped");
+    assert!(dto_active.appcontainer_sid.starts_with("S-1-15-2-"), "Authentic SID expected: {}", dto_active.appcontainer_sid);
+    assert!(dto_active.os_isolation.contains("Windows NT Job Object (64MB) + AppContainer"));
+    assert!(dto_active.os_isolation.contains("PID:"));
+
+    // 4. Terminate quarantine: clamps and processes cleaned up
+    let term_res = arm106.terminate_quarantined_instance(&report.report_id).await;
+    assert!(term_res.is_ok());
+
+    let dto_after = arm106.to_status_dto().await;
+    assert_eq!(dto_after.job_object_clamped, false, "After termination, clamped must be false");
+    assert_eq!(dto_after.appcontainer_sid, "None (No Active OS Process)");
+    assert_eq!(dto_after.os_isolation, "Standby (Pre-allocated Ring Boundary)");
 }

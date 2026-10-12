@@ -1468,7 +1468,7 @@ forbid (
         <div style="font-size: 0.825rem; color: var(--text-muted); line-height: 1.7;">
           <div><strong>Role:</strong> 50 individually enforced per-arm security perimeters</div>
           <div><strong>Process Identity:</strong> Anti-PID reuse (PID + creation time + GUID)</div>
-          <div><strong>Isolation:</strong> Windows NT Job Object 64MB clamp + AppContainer LPAC SID</div>
+          <div><strong>Isolation:</strong> Windows NT Job Object 64MB clamp + AppContainer SID</div>
           <div><strong>Epoch Binding:</strong> Monotonic generation epochs (e.g. Gen 1..Gen 8)</div>
           <div><strong>Tool Whitelist:</strong> Strictly scoped tools and URI resource prefixes</div>
           <div><strong>Autotomy Rebirth:</strong> Sever one arm without collateral swarm impact</div>
@@ -1549,7 +1549,7 @@ forbid (
         </div>
       </div>
       <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
-        Every single one of the 50 arms holds its own independent cryptographic key derived from master seed, Windows NT Job Object 64MB memory clamp, and AppContainer LPAC SID. Severing any arm revokes its generation epoch instantly without disturbing remaining limbs.
+        Every single one of the 50 arms holds its own independent cryptographic key derived from master seed, Windows NT Job Object 64MB memory clamp, and AppContainer SID. Severing any arm revokes its generation epoch instantly without disturbing remaining limbs.
       </div>
       <div id="fleet-50-arms-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 0.85rem; max-height: 480px; overflow-y: auto; padding: 0.5rem; background: rgba(15, 23, 42, 0.4); border-radius: 0.5rem; border: 1px solid var(--card-border);">
         <div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 2rem;">Loading 50-Arm Containment Fleet telemetry...</div>
@@ -1586,7 +1586,7 @@ forbid (
           <tr>
             <td><strong>3. Operating System Kernel Hardening</strong></td>
             <td>Unbypassable OS Boundary</td>
-            <td>Windows NT Job Objects (64MB clamp) + AppContainer LPAC</td>
+            <td>Windows NT Job Objects (64MB clamp) + AppContainer isolation</td>
             <td>Enforced by Windows NT Kernel memory manager. Even with full RCE, cannot exceed 64MB, create raw sockets, access SAM hive, or spawn child processes.</td>
           </tr>
           <tr>
