@@ -4,6 +4,7 @@ pub mod policy_audit;
 pub mod policy_engine;
 pub mod policy_schema;
 pub mod policy_validator;
+pub mod temporal;
 
 pub use authorization::{CedarAuthorizationGateway, SupervisorApprovalReceipt};
 pub use delegation_policy::CedarDelegationPolicyGuard;
@@ -13,3 +14,7 @@ pub use policy_engine::{
 };
 pub use policy_schema::{CedarSchema, SchemaError, OCTOPUS_CEDAR_SCHEMA_JSON};
 pub use policy_validator::{CedarPolicyValidator, CedarValidationReport};
+pub use temporal::{
+    DecisionContext, DogwoodEvaluator, DogwoodParser, DogwoodTemporalEngine, EventKind,
+    TemporalEvent, TemporalEventTrace, TemporalExpr,
+};

@@ -72,6 +72,7 @@ pub struct WebState {
     pub arm_rings: Arc<crate::containment_ring::ArmRingRegistry>,
     pub sentinel: Arc<crate::sentinel_ring::SentinelSupervisor>,
     pub protocol_analyzer: Arc<crate::security::differential_protocol::DifferentialProtocolEngine>,
+    pub dogwood_engine: Arc<DogwoodTemporalEngine>,
 }
 
 fn load_or_init_egress_domains() -> Vec<String> {
@@ -185,6 +186,45 @@ impl Default for WebState {
         );
         let sentinel = Arc::new(crate::sentinel_ring::SentinelSupervisor::new(&secret_seed, 50));
 
+        let temporal_trace = Arc::new(TemporalEventTrace::default());
+        let dogwood_engine = Arc::new(DogwoodTemporalEngine::new(temporal_trace));
+
+        // Seed demo events in temporal trace for interactive sandbox presets
+        let now_sec = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        let mut seed_read_fields = std::collections::HashMap::new();
+        seed_read_fields.insert("input.user".to_string(), serde_json::json!("agent_worker_1"));
+        seed_read_fields.insert("input.document".to_string(), serde_json::json!("contracts/2026-q3.pdf"));
+        dogwood_engine.record_event(
+            now_sec.saturating_sub(600), // 10 minutes ago
+            "Octopus::Action::\"LedgerRead\"",
+            EventKind::Response,
+            "agent_worker_1",
+            "contracts/2026-q3.pdf",
+            seed_read_fields,
+        );
+
+        let mut seed_grant_fields = std::collections::HashMap::new();
+        seed_grant_fields.insert("user".to_string(), serde_json::json!("agent_admin"));
+        dogwood_engine.record_event(
+            now_sec.saturating_sub(3600), // 1 hour ago
+            "Octopus::Action::\"Grant\"",
+            EventKind::Request,
+            "agent_admin",
+            "secure_vault",
+            seed_grant_fields,
+        );
+
+        let mut seed_auth_fields = std::collections::HashMap::new();
+        seed_auth_fields.insert("status".to_string(), serde_json::json!("verified"));
+        dogwood_engine.record_event(
+            now_sec.saturating_sub(15), // 15 seconds ago
+            "Octopus::Action::\"AuthenticateStep\"",
+            EventKind::Response,
+            "agent_operator",
+            "production_db",
+            seed_auth_fields,
+        );
+
         Self {
             gateway,
             audit_log,
@@ -204,6 +244,7 @@ impl Default for WebState {
             arm_rings,
             sentinel,
             protocol_analyzer,
+            dogwood_engine,
         }
     }
 }
@@ -1928,6 +1969,168 @@ pub async fn handle_protocol_analyzer_analyze(
     let report = state.protocol_analyzer.evaluate_raw_stream(unescaped.as_bytes()).await;
 
     Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DogwoodEvaluateRequest {
+    pub policy: String,
+    pub principal: String,
+    pub resource: String,
+    #[serde(default)]
+    pub context: std::collections::HashMap<String, serde_json::Value>,
+}
+
+pub fn handle_dogwood_evaluate(state: &WebState, body: &str) -> Result<String, String> {
+    let req: DogwoodEvaluateRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_JSON", &format!("Invalid JSON request: {}", e))
+    })?;
+
+    let now_sec = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let decision_ctx = DecisionContext {
+        current_time_secs: now_sec,
+        principal: req.principal.clone(),
+        resource: req.resource.clone(),
+        context_fields: req.context.clone(),
+    };
+
+    let start = std::time::Instant::now();
+    let verdict_result = state.dogwood_engine.evaluate_policy(&req.policy, &decision_ctx);
+    let eval_duration_us = start.elapsed().as_micros();
+
+    match verdict_result {
+        Ok(allowed) => {
+            let verdict_str = if allowed { "PERMIT" } else { "FORBID" };
+            let history_len = state.dogwood_engine.trace().len();
+            Ok(json!({
+                "allowed": allowed,
+                "verdict": verdict_str,
+                "policy": req.policy,
+                "principal": req.principal,
+                "resource": req.resource,
+                "trace_history_length": history_len,
+                "evaluation_duration_us": eval_duration_us,
+                "engine": "Dogwood-MFOTL-v1.0"
+            }).to_string())
+        }
+        Err(err) => Err(json_error_payload("DOGWOOD_EVAL_ERROR", &err)),
+    }
+}
+
+pub fn handle_dogwood_trace(state: &WebState) -> String {
+    let events = state.dogwood_engine.trace().get_history_up_to(None);
+    json!({
+        "total_events": events.len(),
+        "events": events
+    }).to_string()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DogwoodSimulateTraceRequest {
+    pub action: String,
+    pub kind: String,
+    pub principal: String,
+    pub resource: String,
+    #[serde(default)]
+    pub fields: std::collections::HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub offset_secs_ago: Option<u64>,
+}
+
+pub fn handle_dogwood_simulate_trace(state: &WebState, body: &str) -> Result<String, String> {
+    let req: DogwoodSimulateTraceRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_JSON", &format!("Invalid JSON request: {}", e))
+    })?;
+
+    let now_sec = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let event_ts = now_sec.saturating_sub(req.offset_secs_ago.unwrap_or(0));
+    let kind = EventKind::from(req.kind.as_str());
+
+    let event_id = state.dogwood_engine.record_event(
+        event_ts,
+        &req.action,
+        kind,
+        &req.principal,
+        &req.resource,
+        req.fields,
+    );
+
+    Ok(json!({
+        "status": "RECORDED",
+        "event_id": event_id,
+        "timestamp_secs": event_ts,
+        "total_trace_events": state.dogwood_engine.trace().len()
+    }).to_string())
+}
+
+pub fn handle_dogwood_presets() -> String {
+    json!([
+        {
+            "id": "write_after_read",
+            "name": "Write-after-Read Integrity",
+            "category": "Arm 100 / Untrusted Ingest",
+            "description": "Requires that the agent has successfully read the target document within the last 1 hour before granting write privileges.",
+            "policy": "permit(principal, action == Octopus::Action::\"LedgerWrite\", resource) when temporal { formerly within 1h Octopus::Action::\"LedgerRead\"::response{ input.user: context.input.user, input.document: context.input.document } };",
+            "default_principal": "agent_worker_1",
+            "default_action": "Octopus::Action::\"LedgerWrite\"",
+            "default_resource": "contracts/2026-q3.pdf",
+            "default_context": {
+                "input.user": "agent_worker_1",
+                "input.document": "contracts/2026-q3.pdf"
+            }
+        },
+        {
+            "id": "rate_limiting_burst",
+            "name": "Velocity Anomaly Throttle",
+            "category": "Arm 102 / RL Active Defense",
+            "description": "Throttles high-risk tool execution if the same agent executed more than 3 sensitive queries in a 10-minute sliding window.",
+            "policy": "forbid(principal, action == Octopus::Action::\"QueryTool\", resource) when temporal { (count for (t: Timepoint). where (formerly within 10m (Octopus::Action::\"QueryTool\"::request{ callerPrincipal: principal } && tp(t)))) > 3 };",
+            "default_principal": "agent_worker_1",
+            "default_action": "Octopus::Action::\"QueryTool\"",
+            "default_resource": "db_analytics",
+            "default_context": {}
+        },
+        {
+            "id": "open_session_revocation",
+            "name": "Unbroken Session Since Grant",
+            "category": "Central Brain / Sentinel Ring",
+            "description": "Permits privileged vault operations only if no autotomy severance or revocation has occurred since the initial attestation grant in the past 24 hours.",
+            "policy": "permit(principal, action == Octopus::Action::\"VaultAccess\", resource) when temporal { !Octopus::Action::\"Revoke\"::request{ callerPrincipal: principal } since within 24h Octopus::Action::\"Grant\"::request{ callerPrincipal: principal } };",
+            "default_principal": "agent_admin",
+            "default_action": "Octopus::Action::\"VaultAccess\"",
+            "default_resource": "secure_vault",
+            "default_context": {}
+        },
+        {
+            "id": "cumulative_spend_cap",
+            "name": "24-Hour Cumulative Spend Ceiling",
+            "category": "Arm 103 / Ledger Financial Guard",
+            "description": "Enforces a hard $50,000 cumulative transfer limit over any rolling 24-hour window.",
+            "policy": "forbid(principal, action == Octopus::Action::\"Transfer\", resource) when temporal { (sum amount for (amount: Long), (t: Timepoint). where (formerly within 24h (Octopus::Action::\"Transfer\"::response{ amount: amount } && tp(t)))) > 50000 };",
+            "default_principal": "agent_treasury",
+            "default_action": "Octopus::Action::\"Transfer\"",
+            "default_resource": "vault",
+            "default_context": {}
+        },
+        {
+            "id": "step_sequence_enforcement",
+            "name": "Multi-Step Sequencing Guard",
+            "category": "Arm 106 / Protocol Analyzer",
+            "description": "Guarantees strict operational order: allows privileged execution only if the immediately preceding event within 30 seconds was credential authentication.",
+            "policy": "permit(principal, action == Octopus::Action::\"ExecuteCommand\", resource) when temporal { previous within 30s Octopus::Action::\"AuthenticateStep\"::response{ callerPrincipal: principal } };",
+            "default_principal": "agent_operator",
+            "default_action": "Octopus::Action::\"ExecuteCommand\"",
+            "default_resource": "production_db",
+            "default_context": {}
+        }
+    ]).to_string()
 }
 
 #[cfg(test)]

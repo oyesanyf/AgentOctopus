@@ -1174,6 +1174,105 @@ forbid (
         </div>
       </div>
     </div>
+
+    <!-- DOGWOOD TEMPORAL POLICY ENGINE SECTION -->
+    <div class="card" style="margin-top: 1.5rem; background: linear-gradient(135deg, rgba(16, 24, 39, 0.95), rgba(30, 41, 59, 0.8)); border: 1px solid #10b981;">
+      <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
+        <div>
+          <h2 style="color: #34d399; margin: 0; font-size: 1.15rem; display: flex; align-items: center; gap: 0.5rem;">
+            <span>🪵</span> Dogwood Temporal Policy Engine (Metric First-Order Temporal Logic)
+          </h2>
+          <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.2rem;">
+            Extends instantaneous Cedar authorization with bounded past-only MFOTL operators: <code>formerly</code>, <code>previous</code>, <code>since</code>, <code>count</code>, and <code>sum</code> over history.
+          </div>
+        </div>
+        <div style="display: flex; gap: 0.4rem; align-items: center;">
+          <span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #10b981;">● MFOTL Engine Online</span>
+          <button type="button" class="btn btn-secondary" onclick="fetchDogwoodTrace()" style="font-size: 0.72rem; padding: 0.2rem 0.5rem;">🔄 Refresh Trace</button>
+        </div>
+      </div>
+
+      <!-- Presets Selector -->
+      <div style="margin-top: 1rem; margin-bottom: 1rem; display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;">
+        <label style="font-size: 0.8rem; color: #94a3b8; font-weight: 700; text-transform: uppercase;">Dogwood Preset:</label>
+        <select id="dogwood-preset-select" onchange="onDogwoodPresetChange()" style="flex: 1; min-width: 280px; padding: 0.4rem 0.65rem; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px; font-size: 0.85rem;">
+          <option value="write_after_read">📄 Write-after-Read Integrity (formerly within 1h)</option>
+          <option value="rate_limiting_burst">⚡ Velocity Anomaly Throttle (count for (t: Timepoint) ... > 3 in 10m)</option>
+          <option value="open_session_revocation">🔒 Unbroken Session Since Grant (!Revoke since within 24h Grant)</option>
+          <option value="cumulative_spend_cap">💰 24h Cumulative Spending Cap (sum amount for ... > 50000)</option>
+          <option value="step_sequence_enforcement">🪜 Multi-Step Sequencing Guard (previous within 30s AuthenticateStep)</option>
+        </select>
+        <span id="dogwood-preset-category" class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid #38bdf8;">Arm 100 / Untrusted Ingest</span>
+      </div>
+
+      <div style="font-size: 0.82rem; color: #cbd5e1; margin-bottom: 1rem; padding: 0.6rem; background: rgba(0,0,0,0.25); border-left: 3px solid #34d399; border-radius: 2px;" id="dogwood-preset-desc">
+        Requires that the agent has successfully read the target document within the last 1 hour before granting write privileges.
+      </div>
+
+      <div class="grid-2">
+        <div>
+          <!-- Policy Code -->
+          <div class="form-group">
+            <label style="display: flex; justify-content: space-between;">
+              <span>Dogwood Cedar+Temporal Policy (.dw)</span>
+              <span style="font-size: 0.7rem; color: #64748b; font-family: monospace;">MFOTL Sublanguage</span>
+            </label>
+            <textarea id="dogwood-policy-code" rows="5" style="font-family: monospace; font-size: 0.82rem; width: 100%; background: #020617; border: 1px solid #334155; color: #38bdf8; border-radius: 4px; padding: 0.5rem;"></textarea>
+          </div>
+
+          <!-- Principal & Resource -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem;">
+            <div class="form-group">
+              <label>Candidate Principal</label>
+              <input type="text" id="dogwood-principal" value="agent_worker_1" style="font-family: monospace; font-size: 0.8rem;" />
+            </div>
+            <div class="form-group">
+              <label>Candidate Resource</label>
+              <input type="text" id="dogwood-resource" value="contracts/2026-q3.pdf" style="font-family: monospace; font-size: 0.8rem;" />
+            </div>
+          </div>
+
+          <!-- Context JSON -->
+          <div class="form-group">
+            <label>Request Context JSON</label>
+            <textarea id="dogwood-context" rows="3" style="font-family: monospace; font-size: 0.8rem; width: 100%; background: #020617; border: 1px solid #334155; color: #f8fafc; border-radius: 4px; padding: 0.4rem;">{
+  "input.user": "agent_worker_1",
+  "input.document": "contracts/2026-q3.pdf"
+}</textarea>
+          </div>
+
+          <button type="button" class="btn btn-primary" onclick="evaluateDogwoodPolicy()" style="width: 100%; margin-top: 0.5rem; background: #059669; border-color: #10b981; font-weight: 700;">
+            ⚡ Evaluate Temporal Policy Against Event History
+          </button>
+        </div>
+
+        <div>
+          <!-- Live Event Trace Timeline -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+            <label style="margin: 0; font-size: 0.8rem; font-weight: 700; color: #94a3b8; text-transform: uppercase;">
+              Active Event Trace (<span id="dogwood-trace-count">0</span> events)
+            </label>
+            <button type="button" class="btn btn-secondary" onclick="simulateDogwoodPastEvent()" style="font-size: 0.68rem; padding: 0.15rem 0.4rem;">
+              ➕ Push Test Event
+            </button>
+          </div>
+          <div id="dogwood-trace-timeline" style="max-height: 240px; overflow-y: auto; background: #020617; border: 1px solid #1e293b; border-radius: 4px; padding: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.75rem;">
+            <!-- Timeline items rendered here -->
+          </div>
+
+          <!-- Verdict Result Card -->
+          <div id="dogwood-verdict-card" style="margin-top: 0.85rem; padding: 0.75rem; background: rgba(15, 23, 42, 0.8); border: 1px solid #334155; border-radius: 6px;">
+            <div style="font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; font-weight: 700; margin-bottom: 0.25rem;">Temporal Verdict</div>
+            <div id="dogwood-verdict-badge" style="font-size: 1.25rem; font-weight: 800; color: #94a3b8;">
+              READY TO EVALUATE
+            </div>
+            <div id="dogwood-verdict-details" style="font-size: 0.78rem; color: #cbd5e1; margin-top: 0.25rem;">
+              Select a preset and click "Evaluate Temporal Policy".
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- TAB 3: AUDIT TRAIL VIEWER -->
@@ -2678,6 +2777,8 @@ with urllib.request.urlopen(req) as resp:
         <div class="stat-label">Authoritative Feed</div>
       </div>
     </div>
+  </div>
+
   <!-- TAB: UNIFIED RUNTIME ACTIVITY FEED (ANTI-AGENTJACKING & GHOSTJACKING DEFENSE) -->
   <div id="runtime-feed" class="tab-content">
     <!-- BREADCRUMB -->
@@ -2998,6 +3099,9 @@ with urllib.request.urlopen(req) as resp:
         fetchOsvStatus(true);
       } else if (tabId === 'containment-rings') {
         fetchContainmentRings(true);
+      } else if (tabId === 'cedar-sandbox') {
+        fetchDogwoodTrace();
+        loadEgressDomains();
       }
     } catch (err) {
       showDiagnosticToast({
@@ -3475,6 +3579,193 @@ with urllib.request.urlopen(req) as resp:
         message: 'Network or runtime error evaluating Cedar query: ' + err.message,
         retryFn: () => evaluateCedar(e)
       });
+    }
+  }
+
+  // =========================================================================
+  // DOGWOOD TEMPORAL POLICY SANDBOX & EVENT HISTORY MONITOR
+  // =========================================================================
+  let dogwoodPresetsData = [];
+
+  async function loadDogwoodPresets() {
+    try {
+      const res = await fetch('/api/dogwood/presets');
+      if (!res.ok) return;
+      dogwoodPresetsData = await res.json();
+      const sel = document.getElementById('dogwood-preset-select');
+      if (!sel) return;
+      sel.innerHTML = dogwoodPresetsData.map(p => `
+        <option value="${p.id}">${escapeHtml(p.name)} (${p.category})</option>
+      `).join('');
+      onDogwoodPresetChange();
+    } catch (e) {
+      console.warn('Failed to load Dogwood presets:', e);
+    }
+  }
+
+  function onDogwoodPresetChange() {
+    const sel = document.getElementById('dogwood-preset-select');
+    if (!sel || !dogwoodPresetsData.length) return;
+    const selected = dogwoodPresetsData.find(p => p.id === sel.value) || dogwoodPresetsData[0];
+    if (!selected) return;
+
+    const codeEl = document.getElementById('dogwood-policy-code');
+    const princEl = document.getElementById('dogwood-principal');
+    const resEl = document.getElementById('dogwood-resource');
+    const ctxEl = document.getElementById('dogwood-context');
+    const descEl = document.getElementById('dogwood-preset-desc');
+    const catEl = document.getElementById('dogwood-preset-category');
+
+    if (codeEl) codeEl.value = selected.policy;
+    if (princEl) princEl.value = selected.default_principal;
+    if (resEl) resEl.value = selected.default_resource;
+    if (ctxEl) ctxEl.value = JSON.stringify(selected.default_context || {}, null, 2);
+    if (descEl) descEl.textContent = selected.description;
+    if (catEl) catEl.textContent = selected.category;
+
+    const badge = document.getElementById('dogwood-verdict-badge');
+    const details = document.getElementById('dogwood-verdict-details');
+    if (badge) {
+      badge.textContent = 'READY TO EVALUATE';
+      badge.style.color = '#94a3b8';
+    }
+    if (details) {
+      details.textContent = 'Click "Evaluate Temporal Policy Against Event History" below.';
+    }
+  }
+
+  async function evaluateDogwoodPolicy() {
+    try {
+      const policy = (document.getElementById('dogwood-policy-code')?.value || '').trim();
+      const principal = (document.getElementById('dogwood-principal')?.value || '').trim();
+      const resource = (document.getElementById('dogwood-resource')?.value || '').trim();
+      const rawCtx = (document.getElementById('dogwood-context')?.value || '{}').trim();
+
+      let context = {};
+      try {
+        context = JSON.parse(rawCtx);
+      } catch (err) {
+        showDiagnosticToast({
+          status: 'SYNTAX_ERROR',
+          message: 'Invalid JSON in Dogwood context: ' + err.message,
+          retryFn: null
+        });
+        return;
+      }
+
+      const res = await fetch('/api/dogwood/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy, principal, resource, context })
+      });
+
+      const data = await res.json();
+      const badge = document.getElementById('dogwood-verdict-badge');
+      const details = document.getElementById('dogwood-verdict-details');
+      const card = document.getElementById('dogwood-verdict-card');
+
+      if (!res.ok || data.error) {
+        if (badge) {
+          badge.textContent = 'ERROR / REJECTED';
+          badge.style.color = '#ef4444';
+        }
+        if (details) details.textContent = data.message || 'Evaluation error';
+        if (card) card.style.borderColor = '#ef4444';
+        return;
+      }
+
+      const isPermit = data.verdict === 'PERMIT';
+      if (badge) {
+        badge.textContent = isPermit ? '✔ PERMIT (ALLOWED)' : '🛑 FORBID (BLOCKED)';
+        badge.style.color = isPermit ? '#10b981' : '#ef4444';
+      }
+      if (details) {
+        details.innerHTML = `
+          <strong>Verdict:</strong> ${data.verdict} &bull; 
+          <strong>History Evaluated:</strong> ${data.trace_history_length} events &bull; 
+          <strong>Latency:</strong> ${data.evaluation_duration_us} &mu;s &bull; 
+          <strong>Engine:</strong> ${data.engine}
+        `;
+      }
+      if (card) card.style.borderColor = isPermit ? '#10b981' : '#ef4444';
+
+      fetchDogwoodTrace();
+    } catch (e) {
+      showDiagnosticToast({
+        status: 'DOGWOOD_FAULT',
+        message: 'Dogwood evaluation request failed: ' + e.message,
+        retryFn: evaluateDogwoodPolicy
+      });
+    }
+  }
+
+  async function fetchDogwoodTrace() {
+    try {
+      const res = await fetch('/api/dogwood/trace');
+      if (!res.ok) return;
+      const data = await res.json();
+      const countEl = document.getElementById('dogwood-trace-count');
+      const timeline = document.getElementById('dogwood-trace-timeline');
+      if (countEl) countEl.textContent = data.total_events || 0;
+      if (!timeline) return;
+
+      const events = data.events || [];
+      if (events.length === 0) {
+        timeline.innerHTML = '<div style="color: #64748b; text-align: center; padding: 1rem;">No historical events recorded yet.</div>';
+        return;
+      }
+
+      timeline.innerHTML = events.slice().reverse().map(ev => {
+        const timeStr = new Date(ev.timestamp_secs * 1000).toLocaleTimeString();
+        let kindColor = '#38bdf8';
+        if (ev.kind === 'Response') kindColor = '#10b981';
+        else if (ev.kind === 'Attempt') kindColor = '#fbbf24';
+
+        const fieldsStr = Object.entries(ev.fields || {})
+          .map(([k, v]) => `${escapeHtml(k)}=${typeof v === 'string' ? escapeHtml(v) : JSON.stringify(v)}`)
+          .join(', ');
+
+        return `
+          <div style="padding: 0.35rem 0.5rem; background: #0f172a; border-left: 3px solid ${kindColor}; border-radius: 2px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-weight: 700; color: #f8fafc;">${escapeHtml(ev.action)}</span>
+              <span style="color: #94a3b8; font-family: monospace; font-size: 0.7rem;">${timeStr}</span>
+            </div>
+            <div style="color: #94a3b8; font-size: 0.7rem; margin-top: 0.15rem;">
+              <span style="color: ${kindColor}; font-weight: 600;">${escapeHtml(ev.kind)}</span> &bull; 
+              <code>${escapeHtml(ev.caller_principal)}</code> &rarr; <code>${escapeHtml(ev.caller_resource)}</code>
+              ${fieldsStr ? `&bull; <span style="color: #cbd5e1;">{${fieldsStr}}</span>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+    } catch (e) {
+      console.warn('Failed to fetch Dogwood trace:', e);
+    }
+  }
+
+  async function simulateDogwoodPastEvent() {
+    const action = prompt('Enter Action (e.g. Octopus::Action::"LedgerRead", Octopus::Action::"Grant", Octopus::Action::"QueryTool"):', 'Octopus::Action::"LedgerRead"');
+    if (!action) return;
+    const kind = prompt('Enter Event Kind (request, response, attempt):', 'response') || 'response';
+    const principal = prompt('Enter Principal (e.g. agent_worker_1):', 'agent_worker_1') || 'agent_worker_1';
+    const resource = prompt('Enter Resource:', 'contracts/2026-q3.pdf') || 'contracts/2026-q3.pdf';
+    const rawFields = prompt('Enter JSON fields (or empty for default):', '{"input.user":"agent_worker_1","input.document":"contracts/2026-q3.pdf"}') || '{}';
+
+    let fields = {};
+    try { fields = JSON.parse(rawFields); } catch (_) {}
+
+    try {
+      const res = await fetch('/api/dogwood/simulate-trace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, kind, principal, resource, fields, offset_secs_ago: 60 })
+      });
+      if (res.ok) {
+        fetchDogwoodTrace();
+      }
+    } catch (e) {
+      alert('Failed to simulate event: ' + e.message);
     }
   }
 
@@ -5622,6 +5913,8 @@ with urllib.request.urlopen(req) as resp:
   fetchAuditLog();
   fetchUnifiedRuntimeActivity();
   loadEgressDomains();
+  loadDogwoodPresets();
+  fetchDogwoodTrace();
   fetchRlDefenseStatus();
   fetchGovernorStatus();
   fetchRaspData();

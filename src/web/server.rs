@@ -14,6 +14,7 @@ use super::api::{
     handle_containment_rings, handle_containment_ring_sever, handle_containment_ring_regenerate,
     handle_containment_ring_stale_replay, handle_sentinel_simulate_breach, handle_sentinel_reset_lockdown,
     handle_protocol_analyzer_status, handle_protocol_analyzer_events, handle_protocol_analyzer_analyze,
+    handle_dogwood_evaluate, handle_dogwood_trace, handle_dogwood_simulate_trace, handle_dogwood_presets,
     WebState,
 };
 use super::static_files::INDEX_HTML;
@@ -750,6 +751,54 @@ async fn handle_connection(
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/dogwood/evaluate") => {
+            let (status_code, json_body) = match handle_dogwood_evaluate(&state, body) {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/dogwood/trace") => {
+            let json_body = handle_dogwood_trace(&state);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/dogwood/simulate-trace") => {
+            let (status_code, json_body) = match handle_dogwood_simulate_trace(&state, body) {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/dogwood/presets") => {
+            let json_body = handle_dogwood_presets();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
