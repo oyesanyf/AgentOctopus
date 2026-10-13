@@ -69,22 +69,74 @@ impl NetworkVerifier {
             return Ok(NetworkVerificationVerdict::BlockedSsrfMetadata);
         }
 
-        // 2. Private subnet detection (RFC 1918)
+        // 2. Extract host and check IP ranges (RFC 1918, Loopback, Link-Local, CGNAT, Unspecified)
+        let host = if let Ok(parsed_url) = url::Url::parse(&clean_dest) {
+            match parsed_url.host() {
+                Some(url::Host::Ipv4(v4)) => {
+                    let o = v4.octets();
+                    if v4.is_link_local() || (o[0] == 169 && o[1] == 254) {
+                        return Ok(NetworkVerificationVerdict::BlockedSsrfMetadata);
+                    }
+                    if v4.is_loopback()
+                        || v4.is_private()
+                        || v4.is_unspecified()
+                        || (o[0] == 100 && (o[1] & 0b1100_0000) == 64)
+                    {
+                        return Ok(NetworkVerificationVerdict::BlockedPrivateSubnet(clean_dest));
+                    }
+                    v4.to_string()
+                }
+                Some(url::Host::Ipv6(v6)) => {
+                    let o = v6.octets();
+                    let is_unique_local = (o[0] & 0xfe) == 0xfc;
+                    let is_link_local_v6 = (o[0] == 0xfe) && ((o[1] & 0xc0) == 0x80);
+                    if v6.is_loopback() || v6.is_unspecified() || is_unique_local || is_link_local_v6 {
+                        return Ok(NetworkVerificationVerdict::BlockedPrivateSubnet(clean_dest));
+                    }
+                    format!("[{}]", v6)
+                }
+                Some(url::Host::Domain(d)) => d.to_string(),
+                None => String::new(),
+            }
+        } else {
+            clean_dest.clone()
+        };
+
+        if let Ok(ip) = host.trim_matches(|c| c == '[' || c == ']').parse::<std::net::IpAddr>() {
+            match ip {
+                std::net::IpAddr::V4(v4) => {
+                    let o = v4.octets();
+                    if v4.is_link_local() || (o[0] == 169 && o[1] == 254) {
+                        return Ok(NetworkVerificationVerdict::BlockedSsrfMetadata);
+                    }
+                    if v4.is_loopback()
+                        || v4.is_private()
+                        || v4.is_unspecified()
+                        || (o[0] == 100 && (o[1] & 0b1100_0000) == 64)
+                    {
+                        return Ok(NetworkVerificationVerdict::BlockedPrivateSubnet(clean_dest));
+                    }
+                }
+                std::net::IpAddr::V6(v6) => {
+                    let o = v6.octets();
+                    let is_unique_local = (o[0] & 0xfe) == 0xfc;
+                    let is_link_local_v6 = (o[0] == 0xfe) && ((o[1] & 0xc0) == 0x80);
+                    if v6.is_loopback() || v6.is_unspecified() || is_unique_local || is_link_local_v6 {
+                        return Ok(NetworkVerificationVerdict::BlockedPrivateSubnet(clean_dest));
+                    }
+                }
+            }
+        }
+
         if clean_dest.contains("127.0.0.1")
             || clean_dest.contains("localhost")
+            || clean_dest.contains("0.0.0.0")
             || clean_dest.contains("10.")
             || clean_dest.contains("192.168.")
             || clean_dest.contains("172.16.")
         {
             return Ok(NetworkVerificationVerdict::BlockedPrivateSubnet(clean_dest));
         }
-
-        // 3. Extract host domain
-        let host = if let Ok(parsed_url) = url::Url::parse(&clean_dest) {
-            parsed_url.host_str().unwrap_or("").to_string()
-        } else {
-            clean_dest.clone()
-        };
 
         // 4. Check domain whitelist
         let approved = self.approved_domains.read().await;

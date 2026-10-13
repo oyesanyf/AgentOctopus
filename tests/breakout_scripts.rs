@@ -191,3 +191,171 @@ fn test_breakout_sender_role_tampering_blocked() {
         other => panic!("Expected IdentitySpoofingDetected, got {:?}", other),
     }
 }
+
+/// BREAKOUT TEST 7: 4-Taxonomy BreakoutDefenseCoordinator Auto-Quarantine inside ContainmentRing.
+/// Verifies that Docker socket mounts, credential leaks, memory scraping, and cross-agent memory pollution
+/// trigger immediate RingDecision::Quarantine at Ring 3.
+#[tokio::test]
+async fn test_breakout_defense_coordinator_auto_quarantine_in_containment_ring() {
+    use agent_octopus::containment_ring::{ContainmentRing, RingDecision, RingOperationRequest};
+
+    let ring = ContainmentRing::default();
+
+    // 1. Technical Breakout: Docker daemon socket escape attempt
+    let tech_req = RingOperationRequest {
+        agent_id: "arm-UntrustedDocIngest-0".to_string(),
+        role: ArmRole::UntrustedDocIngest,
+        operation_type: "doc_extractor".to_string(),
+        target: "s3://invoices/inv.pdf".to_string(),
+        capability_token: None,
+        step_count: 1,
+        payload: Some("mount /var/run/docker.sock --privileged".to_string()),
+        amount_cents: None,
+        generation: Some(1),
+    };
+    let (dec1, reason1) = ring.evaluate_operation(&tech_req).await;
+    assert_eq!(dec1, RingDecision::Quarantine, "Technical breakout must trigger Quarantine");
+    assert!(reason1.contains("TECHNICAL_BREAKOUT"));
+
+    // 2. Operational Breakout: Live API credential exfiltration
+    let oper_req = RingOperationRequest {
+        agent_id: "arm-UntrustedDocIngest-0".to_string(),
+        role: ArmRole::UntrustedDocIngest,
+        operation_type: "doc_extractor".to_string(),
+        target: "s3://invoices/inv.pdf".to_string(),
+        capability_token: None,
+        step_count: 1,
+        payload: Some("OPENAI_API_KEY=sk-proj-secret123456".to_string()),
+        amount_cents: None,
+        generation: Some(1),
+    };
+    let (dec2, reason2) = ring.evaluate_operation(&oper_req).await;
+    assert_eq!(dec2, RingDecision::Quarantine, "Operational credential leak must trigger Quarantine");
+    assert!(reason2.contains("OPERATIONAL_FAILURE"));
+
+    // 3. Data Breakout: Low-privilege agent attempting to pollute privileged ledger scratchpad
+    let data_req = RingOperationRequest {
+        agent_id: "document_arm".to_string(),
+        role: ArmRole::UntrustedDocIngest,
+        operation_type: "doc_extractor".to_string(),
+        target: "s3://invoices/inv.pdf".to_string(),
+        capability_token: None,
+        step_count: 1,
+        payload: Some("write override to /shared/state/ledger and run procdump".to_string()),
+        amount_cents: None,
+        generation: Some(1),
+    };
+    let (dec3, reason3) = ring.evaluate_operation(&data_req).await;
+    assert_eq!(dec3, RingDecision::Quarantine, "Data breakout must trigger Quarantine");
+    assert!(reason3.contains("DATA_BREAKOUT"));
+}
+
+/// BREAKOUT TEST 8: IsolationManager Path::join Absolute-Path, Drive Letter, UNC & ADS Escape Prevention.
+#[tokio::test]
+async fn test_breakout_isolation_manager_path_join_and_ads_escape_blocked() {
+    use agent_octopus::containment_ring::IsolationManager;
+
+    let mgr = IsolationManager::default();
+
+    // 1. Arbitrary host drive letter (previously bypassed c:\windows check)
+    assert!(
+        mgr.validate_filesystem_access(r"D:\harfile\AgentOctopus\.env").await.is_err(),
+        "Host drive path D:\\ must be blocked"
+    );
+    assert!(
+        mgr.validate_filesystem_access(r"C:\ProgramData\secrets.json").await.is_err(),
+        "C:\\ProgramData must be blocked"
+    );
+
+    // 2. Root-relative backslash path
+    assert!(
+        mgr.validate_filesystem_access(r"\Users\Administrator\.ssh\id_rsa").await.is_err(),
+        "Leading backslash root path must be blocked"
+    );
+
+    // 3. UNC network share / named pipe path
+    assert!(
+        mgr.validate_filesystem_access(r"\\127.0.0.1\c$\Windows\win.ini").await.is_err(),
+        "UNC path must be blocked"
+    );
+
+    // 4. NTFS Alternate Data Stream (ADS)
+    assert!(
+        mgr.validate_filesystem_access("invoice.pdf:$DATA").await.is_err(),
+        "NTFS Alternate Data Stream must be blocked"
+    );
+
+    // 5. Percent-encoded traversal
+    assert!(
+        mgr.validate_filesystem_access("subdir/%2e%2e/secrets.txt").await.is_err(),
+        "Percent-encoded traversal must be blocked"
+    );
+
+    // 6. Legitimate relative scratchpad path succeeds and remains inside local_scratchpad
+    let safe = mgr
+        .validate_filesystem_access("batch_01/extracted_invoice.json")
+        .await
+        .expect("Relative path inside scratchpad must succeed");
+    assert!(safe.starts_with("local_scratchpad"));
+}
+
+/// BREAKOUT TEST 9: Mathematical RFC1918 (172.16.0.0/12), CGNAT (100.64.0.0/10), and Loopback SSRF Prevention.
+#[tokio::test]
+async fn test_breakout_egress_proxy_and_network_verifier_rfc1918_and_cgnat_ssrf_blocked() {
+    use agent_octopus::containment_ring::{EgressProxy, EgressRequest};
+    use agent_octopus::sentinel_ring::{NetworkVerificationVerdict, NetworkVerifier};
+
+    let proxy = EgressProxy::default();
+    let verifier = NetworkVerifier::new();
+
+    for target in [
+        "https://172.20.0.1/internal",
+        "https://172.31.255.1/metadata",
+        "https://127.0.0.2/loopback_alt",
+        "https://100.64.0.1/cgnat",
+        "https://169.254.10.20/link_local",
+        "https://[::ffff:172.16.0.5]/v4_mapped",
+    ] {
+        let req = EgressRequest {
+            agent_id: "arm-egress-02".to_string(),
+            target_url: target.to_string(),
+            method: "GET".to_string(),
+            payload: None,
+        };
+        assert!(
+            proxy.dispatch_egress(&req).await.is_err(),
+            "EgressProxy must block SSRF target {}",
+            target
+        );
+
+        let verdict = verifier.verify_egress(2, target, true).await.unwrap();
+        assert!(
+            matches!(
+                verdict,
+                NetworkVerificationVerdict::BlockedPrivateSubnet(_)
+                    | NetworkVerificationVerdict::BlockedSsrfMetadata
+            ),
+            "NetworkVerifier must block private/link-local target {}, got {:?}",
+            target,
+            verdict
+        );
+    }
+}
+
+/// BREAKOUT TEST 10: CentralBrain Limb Regeneration Advances Generation Epoch (N -> N + 1).
+#[tokio::test]
+async fn test_breakout_central_brain_regeneration_advances_epoch() {
+    use agent_octopus::CentralBrain;
+    use std::collections::HashMap;
+    use tokio::sync::mpsc;
+
+    let (telemetry_tx, _telemetry_rx) = mpsc::channel(32);
+    let mut brain = CentralBrain::new(HashMap::new(), HashMap::new(), telemetry_tx);
+
+    assert_eq!(brain.arm_generation(&ArmRole::UntrustedDocIngest), 1);
+    brain.regenerate_limb(ArmRole::UntrustedDocIngest);
+    assert_eq!(brain.arm_generation(&ArmRole::UntrustedDocIngest), 2);
+    brain.regenerate_limb(ArmRole::UntrustedDocIngest);
+    assert_eq!(brain.arm_generation(&ArmRole::UntrustedDocIngest), 3);
+}
+

@@ -148,21 +148,67 @@ impl EgressProxy {
             OctopusSecurityError::SsrfBlocked("URL missing valid hostname".to_string())
         })?;
 
-        // 2. Anti-SSRF / Cloud Metadata & Loopback Invariant
+        // 2. Anti-SSRF / Cloud Metadata, RFC1918, Link-Local, CGNAT & Loopback Invariant
         let host_lower = host.to_lowercase();
-        let is_ipv6_loopback = match parsed_url.host() {
+        let is_prohibited_ip = match parsed_url.host() {
+            Some(url::Host::Ipv4(ip)) => {
+                let octets = ip.octets();
+                ip.is_loopback()
+                    || ip.is_private()
+                    || ip.is_link_local()
+                    || ip.is_unspecified()
+                    || ip.is_broadcast()
+                    || ip.is_multicast()
+                    || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 64) // 100.64.0.0/10 CGNAT
+                    || (octets[0] == 169 && octets[1] == 254)
+            }
             Some(url::Host::Ipv6(ip)) => {
+                let octets = ip.octets();
+                let is_unique_local = (octets[0] & 0xfe) == 0xfc; // fc00::/7
+                let is_link_local_v6 = (octets[0] == 0xfe) && ((octets[1] & 0xc0) == 0x80); // fe80::/10
+                let is_v4_mapped_private = if let Some(v4) = ip.to_ipv4_mapped() {
+                    let o = v4.octets();
+                    v4.is_loopback()
+                        || v4.is_private()
+                        || v4.is_link_local()
+                        || v4.is_unspecified()
+                        || (o[0] == 100 && (o[1] & 0b1100_0000) == 64)
+                } else {
+                    false
+                };
                 ip.is_loopback()
                     || ip.is_unspecified()
-                    || ip.to_string() == "::1"
-                    || ip.to_string() == "fe80::1"
-                    || ip.octets().starts_with(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127])
+                    || ip.is_multicast()
+                    || is_unique_local
+                    || is_link_local_v6
+                    || is_v4_mapped_private
             }
-            _ => false,
+            Some(url::Host::Domain(d)) => {
+                if let Ok(ip) = d.parse::<std::net::IpAddr>() {
+                    match ip {
+                        std::net::IpAddr::V4(v4) => {
+                            let octets = v4.octets();
+                            v4.is_loopback()
+                                || v4.is_private()
+                                || v4.is_link_local()
+                                || v4.is_unspecified()
+                                || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 64)
+                        }
+                        std::net::IpAddr::V6(v6) => {
+                            v6.is_loopback() || v6.is_unspecified()
+                        }
+                    }
+                } else {
+                    false
+                }
+            }
+            None => true,
         };
 
-        if host_lower == "127.0.0.1"
+        if is_prohibited_ip
+            || host_lower == "127.0.0.1"
             || host_lower == "localhost"
+            || host_lower == "0.0.0.0"
             || host_lower == "169.254.169.254"
             || host_lower.starts_with("10.")
             || host_lower.starts_with("192.168.")
@@ -170,15 +216,6 @@ impl EgressProxy {
             || host_lower.contains("internal")
             || host_lower.contains("evil-c2.com")
             || host_lower.contains("attacker.com")
-            || host_lower == "[::1]"
-            || host_lower == "::1"
-            || host_lower == "[::]"
-            || host_lower == "::"
-            || host_lower == "[fe80::1]"
-            || host_lower == "fe80::1"
-            || host_lower == "[::ffff:127.0.0.1]"
-            || host_lower == "::ffff:127.0.0.1"
-            || is_ipv6_loopback
         {
             return Err(OctopusSecurityError::SsrfBlocked(format!(
                 "SSRF / Cloud Metadata probe blocked: '{}' is a prohibited destination",
@@ -189,7 +226,15 @@ impl EgressProxy {
         // 3. Domain Allowlist Invariant
         if self.is_allowlist_enabled() {
             let domains = self.allowed_domains.read().await;
-            let is_allowed = domains.iter().any(|d| host_lower == *d || host_lower.ends_with(&format!(".{}", d)));
+            let is_allowed = match level {
+                EgressSecurityLevel::StrictGoogleOnly => {
+                    domains.iter().any(|d| host_lower == *d)
+                }
+                EgressSecurityLevel::ApprovedEnterpriseTier => {
+                    domains.iter().any(|d| host_lower == *d || host_lower.ends_with(&format!(".{}", d)))
+                }
+                EgressSecurityLevel::QuarantineSinkhole => false,
+            };
             if !is_allowed {
                 return Err(OctopusSecurityError::SsrfBlocked(format!(
                     "Egress destination '{}' is not in the approved Containment Ring allowlist",

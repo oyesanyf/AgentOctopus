@@ -448,6 +448,7 @@ pub fn create_or_open_appcontainer_profile(
     let mut str_sid_ptr: win32::PWSTR = std::ptr::null_mut();
     let conv_res = unsafe { win32::ConvertSidToStringSidW(psid, &mut str_sid_ptr) };
     if conv_res == 0 || str_sid_ptr.is_null() {
+        unsafe { win32::FreeSid(psid) };
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: ConvertSidToStringSidW failed to format AppContainer SID".to_string(),
         ));
@@ -609,12 +610,21 @@ impl WindowsAppContainerProfile {
         } else {
             // Kernel-level AppContainer blocks all access outside authorized sandboxed prefixes
             let lower = target_resource.to_lowercase();
-            if lower.contains("c:\\windows") || lower.contains("c:\\users") || lower.contains("/etc/") || lower.contains("..") {
+            if lower.contains("c:\\windows")
+                || lower.contains("c:\\users")
+                || lower.contains("/etc/")
+                || lower.contains("..")
+                || lower.contains("%2e")
+                || lower.starts_with("\\\\")
+                || lower.contains("docker.sock")
+            {
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "AppContainer [{}] kernel ACL blocked unauthorized filesystem access to '{}'",
                     self.container_name, target_resource
                 )));
             }
+            crate::security::isolation::SandboxConfinementPolicy::default()
+                .validate_filesystem_confinement(target_resource)?;
         }
         Ok(())
     }
@@ -862,6 +872,7 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
         win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
     }
     if attr_size == 0 {
+        unsafe { win32::FreeSid(psid) };
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: InitializeProcThreadAttributeList failed to calculate attribute size".to_string(),
         ));
@@ -873,6 +884,7 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
         win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size)
     };
     if init_ok == 0 {
+        unsafe { win32::FreeSid(psid) };
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: InitializeProcThreadAttributeList failed to initialize attribute buffer".to_string(),
         ));
@@ -891,7 +903,10 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
         )
     };
     if update_ok == 0 {
-        unsafe { win32::DeleteProcThreadAttributeList(attr_list) };
+        unsafe {
+            win32::DeleteProcThreadAttributeList(attr_list);
+            win32::FreeSid(psid);
+        };
         return Err(OctopusSecurityError::IsolationViolation(format!(
             "FAIL-CLOSED: UpdateProcThreadAttribute failed with error {}",
             unsafe { win32::GetLastError() }
@@ -928,7 +943,10 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
         )
     };
 
-    unsafe { win32::DeleteProcThreadAttributeList(attr_list) };
+    unsafe {
+        win32::DeleteProcThreadAttributeList(attr_list);
+        win32::FreeSid(psid);
+    };
 
     if create_res == 0 {
         let err = unsafe { win32::GetLastError() };

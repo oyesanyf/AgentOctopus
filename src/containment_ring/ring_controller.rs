@@ -46,6 +46,7 @@ pub struct ContainmentRing {
     pub attestation: Arc<RingAttestation>,
     pub audit_ledger: Arc<RingAuditLedger>,
     pub trusted_controller: RingController,
+    pub breakout_coordinator: Arc<crate::security::BreakoutDefenseCoordinator>,
 }
 
 impl Default for ContainmentRing {
@@ -83,6 +84,7 @@ impl ContainmentRing {
         let attestation = Arc::new(RingAttestation::new(seed));
         let audit_ledger = Arc::new(RingAuditLedger::new());
         let arm_registry = Arc::new(super::arm_ring::ArmRingRegistry::new(50, seed));
+        let breakout_coordinator = Arc::new(crate::security::BreakoutDefenseCoordinator::default());
 
         let authorizer = Arc::new(CedarAuthorizer::new(cedar_gate.clone()));
         let executor = Arc::new(EnclaveToolExecutor::new(egress_proxy.clone()));
@@ -112,6 +114,7 @@ impl ContainmentRing {
             attestation,
             audit_ledger,
             trusted_controller,
+            breakout_coordinator,
         }
     }
 
@@ -137,6 +140,7 @@ impl ContainmentRing {
         let attestation = Arc::new(RingAttestation::new(seed));
         let audit_ledger = Arc::new(RingAuditLedger::new());
         let arm_registry = Arc::new(super::arm_ring::ArmRingRegistry::new(50, seed));
+        let breakout_coordinator = Arc::new(crate::security::BreakoutDefenseCoordinator::default());
 
         let authorizer = Arc::new(CedarAuthorizer::new(cedar_gate.clone()));
         let executor = Arc::new(EnclaveToolExecutor::new(egress_proxy.clone()));
@@ -166,6 +170,7 @@ impl ContainmentRing {
             attestation,
             audit_ledger,
             trusted_controller,
+            breakout_coordinator,
         };
 
         let harness = ContainmentAuditHarness {
@@ -195,10 +200,48 @@ impl ContainmentRing {
             );
         }
 
-        // 1.5. Level 1: Individual Arm Containment Ring & Epoch Verification
-        let is_security_arm = ["100", "101", "102", "103", "104", "105", "106"].iter().any(|&id| req.agent_id.contains(id));
+        // 1.25. 4-Category Agent Breakout Defense Evaluation (Technical, Operational, Behavioral, Data)
+        let payload_str = req.payload.as_deref().unwrap_or("");
+        let breakout_eval = self.breakout_coordinator.evaluate_action(
+            &req.agent_id,
+            &req.operation_type,
+            &req.target,
+            payload_str,
+        );
+        if !breakout_eval.is_clean {
+            return (
+                RingDecision::Quarantine,
+                format!(
+                    "Breakout Defense Veto ({}): tech={:?}, oper={:?}, behav={:?}, data={:?}",
+                    breakout_eval.composite_verdict,
+                    breakout_eval.technical.detected_vectors,
+                    breakout_eval.operational.detected_leaks,
+                    breakout_eval.behavioral.detected_deviations,
+                    breakout_eval.data.detected_violations,
+                ),
+            );
+        }
 
-        if is_security_arm {
+        // 1.5. Level 1: Individual Arm Containment Ring & Epoch Verification
+        let is_security_role = matches!(
+            req.role,
+            ArmRole::CedarPolicyEvaluation
+                | ArmRole::AtlasThreatIntelligence
+                | ArmRole::AnomalyDetection
+                | ArmRole::VulnerabilityResearch
+                | ArmRole::ContinuousOssFuzz
+                | ArmRole::ContinuousOsvScanner
+                | ArmRole::DifferentialProtocolAnalyzer
+                | ArmRole::AutonomousProtocolResearch
+                | ArmRole::PostQuantumAttestation
+                | ArmRole::EvolutionaryOptimizer
+                | ArmRole::DreamRsiOptimizer
+        );
+        let is_security_arm_id = ["100", "101", "102", "103", "104", "105", "106", "107", "108", "109", "110"]
+            .iter()
+            .any(|&id| req.agent_id.ends_with(&format!("-{}", id)) || req.agent_id == id);
+
+        if is_security_role || is_security_arm_id {
             let epoch = match req.generation {
                 Some(e) => e,
                 None => return (RingDecision::Deny, "Fail-Closed: Missing required generation epoch for containment ring verification".to_string()),
@@ -206,18 +249,19 @@ impl ContainmentRing {
 
             let arm_ring = match self.arm_registry.get_ring_by_name(&req.agent_id).await {
                 Some(r) => r,
-                None => return (RingDecision::Deny, format!("Fail-Closed: Missing containment ring for arm '{}'", req.agent_id)),
+                None => match self.arm_registry.get_security_ring(req.role.clone()).await {
+                    Some(r) => r,
+                    None => return (RingDecision::Deny, format!("Fail-Closed: Missing containment ring for arm '{}'", req.agent_id)),
+                },
             };
 
             if let Err(e) = arm_ring.validate_tool_invocation(&req.operation_type, &req.target, epoch).await {
                 return (RingDecision::Deny, format!("Level 1 Arm Ring veto: {}", e));
             }
-        } else {
-            if let Some(epoch) = req.generation {
-                if let Some(arm_ring) = self.arm_registry.get_ring_by_name(&req.agent_id).await {
-                    if let Err(e) = arm_ring.validate_tool_invocation(&req.operation_type, &req.target, epoch).await {
-                        return (RingDecision::Deny, format!("Level 1 Arm Ring veto: {}", e));
-                    }
+        } else if let Some(epoch) = req.generation {
+            if let Some(arm_ring) = self.arm_registry.get_ring_by_name(&req.agent_id).await {
+                if let Err(e) = arm_ring.validate_tool_invocation(&req.operation_type, &req.target, epoch).await {
+                    return (RingDecision::Deny, format!("Level 1 Arm Ring veto: {}", e));
                 }
             }
         }

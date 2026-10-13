@@ -112,25 +112,54 @@ impl IsolationManager {
     }
 
     /// Validates that a requested file path strictly adheres to the sandbox filesystem boundary.
+    /// Prevents `Path::join` replacement via absolute paths, Windows drive letters, UNC paths,
+    /// percent-encoded traversals, and NTFS Alternate Data Streams (ADS).
     pub async fn validate_filesystem_access(&self, requested_path: &str) -> Result<PathBuf, OctopusSecurityError> {
-        // 1. Path Traversal Invariant
-        if requested_path.contains("..") || requested_path.contains("/../") || requested_path.contains("\\..\\") {
+        let trimmed = requested_path.trim();
+        if trimmed.is_empty() {
+            return Err(OctopusSecurityError::IsolationViolation(
+                "Empty filesystem path rejected by sandbox boundary".to_string(),
+            ));
+        }
+
+        // 0. Reject control characters and null bytes
+        if trimmed.chars().any(|c| (c as u32) < 0x20 || (c as u32) == 0x7f) {
+            return Err(OctopusSecurityError::IsolationViolation(
+                "Illegal control characters or null byte in filesystem path".to_string(),
+            ));
+        }
+
+        let lower = trimmed.to_lowercase();
+
+        // 1. Path Traversal & Encoded Traversal Invariant
+        if lower.contains("..")
+            || lower.contains("/../")
+            || lower.contains("\\..\\")
+            || lower.contains("%2e")
+            || lower.contains("%2f")
+            || lower.contains("%5c")
+            || lower.contains("%00")
+        {
             return Err(OctopusSecurityError::IsolationViolation(format!(
                 "Path traversal attempt blocked: '{}' attempts directory traversal",
                 requested_path
             )));
         }
 
-        // 2. Sensitive Host / Windows Directories & Registry Invariant
-        let lower = requested_path.to_lowercase();
+        // 2. Sensitive Host / Windows Directories, Registry & Device Paths Invariant
         if lower.starts_with("c:\\windows")
             || lower.starts_with("/etc")
             || lower.starts_with("/sys")
+            || lower.starts_with("/proc")
+            || lower.starts_with("/dev")
+            || lower.starts_with("/var")
+            || lower.starts_with("\\\\")
             || lower.contains("system32")
             || lower.contains("hklm")
             || lower.contains("hkcu")
             || lower.contains("registry")
-            || lower.starts_with("c:\\users\\") && !lower.contains("scratch")
+            || lower.contains("docker.sock")
+            || (lower.starts_with("c:\\users\\") && !lower.contains("scratch"))
         {
             return Err(OctopusSecurityError::IsolationViolation(format!(
                 "Host filesystem boundary violation: Access to sensitive path '{}' is denied",
@@ -138,8 +167,41 @@ impl IsolationManager {
             )));
         }
 
+        // 3. Strip optional authorized sandbox prefix if present
+        let rel_slice = if let Some(s) = trimmed.strip_prefix("sandbox://") {
+            s.trim_start_matches('/')
+        } else if let Some(s) = trimmed.strip_prefix("local_scratchpad/") {
+            s
+        } else if let Some(s) = trimmed.strip_prefix("local_scratchpad\\") {
+            s
+        } else {
+            trimmed
+        };
+
+        // 4. Reject Windows drive prefixes, absolute root paths, and NTFS Alternate Data Streams (':')
+        if rel_slice.contains(':') || rel_slice.starts_with('/') || rel_slice.starts_with('\\') {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "Host filesystem boundary violation: Absolute path, drive prefix, or NTFS stream '{}' is forbidden outside scratchpad",
+                requested_path
+            )));
+        }
+
+        // 5. Verify every path component is strictly a normal relative segment
+        for comp in std::path::Path::new(rel_slice).components() {
+            match comp {
+                std::path::Component::Normal(_) => {}
+                std::path::Component::CurDir => {}
+                _ => {
+                    return Err(OctopusSecurityError::IsolationViolation(format!(
+                        "Host filesystem boundary violation: Non-relative path component in '{}'",
+                        requested_path
+                    )));
+                }
+            }
+        }
+
         let constraints = self.constraints.read().await;
-        let safe_path = constraints.scratchpad_root.join(requested_path);
+        let safe_path = constraints.scratchpad_root.join(rel_slice);
         Ok(safe_path)
     }
 

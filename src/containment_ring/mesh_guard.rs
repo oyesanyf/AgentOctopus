@@ -57,8 +57,19 @@ impl MeshGuard {
             ));
         }
 
-        // 2. High-trust inter-arm boundary: Ingestion arms cannot message Ledger arms directly
-        if (sender.contains("ingest") || sender.contains("doc")) && (recipient.contains("ledger") || recipient.contains("accounting")) {
+        // 2. High-trust inter-arm boundary: Untrusted/fuzzing/quarantine arms cannot message Ledger arms directly
+        let sender_lower = sender.to_ascii_lowercase();
+        let recipient_lower = recipient.to_ascii_lowercase();
+        let is_untrusted_sender = sender_lower.contains("ingest")
+            || sender_lower.contains("doc")
+            || sender_lower.contains("fuzz")
+            || sender_lower.contains("tarpit")
+            || sender_lower.contains("differential")
+            || sender_lower.contains("protocolresearch");
+        let is_ledger_sink = recipient_lower.contains("ledger")
+            || recipient_lower.contains("accounting");
+
+        if is_untrusted_sender && is_ledger_sink {
             return Err(OctopusSecurityError::DelegationScopeViolation(format!(
                 "Inner Ring Boundary Violation: Untrusted Arm '{}' is forbidden from direct lateral messaging to Sensitive Sink Arm '{}'",
                 sender, recipient

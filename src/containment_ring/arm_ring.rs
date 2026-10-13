@@ -407,6 +407,7 @@ impl ArmContainmentRing {
                 prefixes.push("differential://".to_string());
             }
             ArmRole::AutonomousProtocolResearch => {
+                tools.insert("protocol_research".to_string());
                 tools.insert("rfc_intelligence".to_string());
                 tools.insert("generate_probes".to_string());
                 tools.insert("isolated_evaluator".to_string());
@@ -418,6 +419,7 @@ impl ArmContainmentRing {
                 prefixes.push("http://[::1]".to_string());
             }
             ArmRole::PostQuantumAttestation => {
+                tools.insert("pqc_attestation".to_string());
                 tools.insert("pqc_kem_encapsulate".to_string());
                 tools.insert("pqc_kem_decapsulate".to_string());
                 tools.insert("pqc_dsa_sign".to_string());
@@ -430,6 +432,7 @@ impl ArmContainmentRing {
                 prefixes.push("cbom://".to_string());
             }
             ArmRole::EvolutionaryOptimizer => {
+                tools.insert("evolutionary_optimizer".to_string());
                 tools.insert("openevolve_run".to_string());
                 tools.insert("openevolve_evaluate".to_string());
                 tools.insert("openevolve_stage_candidate".to_string());
@@ -441,6 +444,7 @@ impl ArmContainmentRing {
                 prefixes.push("staging://".to_string());
             }
             ArmRole::DreamRsiOptimizer => {
+                tools.insert("dream_rsi_optimizer".to_string());
                 tools.insert("dream_rsi_replay".to_string());
                 tools.insert("dream_rsi_train_world_model".to_string());
                 tools.insert("dream_rsi_policy_rollout".to_string());
@@ -493,17 +497,22 @@ impl ArmContainmentRing {
         &self.master_seed
     }
 
-    /// Derives an epoch-specific cryptographic secret key for this arm.
-    fn epoch_key(&self, epoch: u64) -> [u8; 32] {
+    /// Derives an epoch-specific cryptographic secret key for any arm sharing this master seed.
+    fn derive_arm_epoch_key(&self, arm_id: usize, epoch: u64, role: &ArmRole) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(&self.master_seed);
-        hasher.update(self.arm_id.to_le_bytes());
+        hasher.update(arm_id.to_le_bytes());
         hasher.update(epoch.to_le_bytes());
-        hasher.update(format!("{:?}", self.role).as_bytes());
+        hasher.update(format!("{:?}", role).as_bytes());
         let hash = hasher.finalize();
         let mut key = [0u8; 32];
         key.copy_from_slice(&hash);
         key
+    }
+
+    /// Derives an epoch-specific cryptographic secret key for this arm.
+    fn epoch_key(&self, epoch: u64) -> [u8; 32] {
+        self.derive_arm_epoch_key(self.arm_id, epoch, &self.role)
     }
 
     /// Returns the current active generation epoch for this arm.
@@ -775,8 +784,8 @@ impl ArmContainmentRing {
     }
 
     /// Verifies an incoming Neural Mesh message at the recipient's Level 1 arm ring.
-    /// If the message is addressed to a stale generation (e.g. Gen 8 when arm is Gen 9),
-    /// it is rejected immediately!
+    /// Verifies target arm ID, recipient active epoch, sender cryptographic HMAC signature,
+    /// and Level 2 lateral sink isolation.
     pub async fn verify_incoming_message(
         &self,
         msg: &ArmRingMeshMessage,
@@ -788,15 +797,49 @@ impl ArmContainmentRing {
             )));
         }
 
+        if msg.sender_generation == 0 {
+            return Err(OctopusSecurityError::IdentitySpoofingDetected(
+                "Invalid sender generation epoch 0 in incoming mesh message".to_string(),
+            ));
+        }
+
         // Validate recipient epoch: will reject if msg.target_generation is revoked or obsolete
         self.validate_epoch(msg.target_generation).await?;
 
-        // Level 2 lateral boundary: Ingestion cannot message Ledger directly
-        // Level 2 lateral boundary: Ingestion and Quarantine arms cannot message Ledger directly
-        if self.role == ArmRole::AccountingLedgerWrite
-            && (msg.sender_role == ArmRole::UntrustedDocIngest
-                || msg.sender_role == ArmRole::DifferentialProtocolAnalyzer)
-        {
+        // Verify cryptographic HMAC-SHA256 signature bound to sender_arm_id, sender_generation, and sender_role
+        let sender_epoch_key = self.derive_arm_epoch_key(
+            msg.sender_arm_id,
+            msg.sender_generation,
+            &msg.sender_role,
+        );
+        let expected_data = format!(
+            "{}:{}:{}:{}:{:?}:{}:{}",
+            msg.sender_arm_id,
+            msg.sender_generation,
+            msg.target_arm_id,
+            msg.target_generation,
+            msg.kind,
+            msg.correlation_id,
+            msg.payload
+        );
+        let expected_sig = hex::encode(compute_ring_hmac(&sender_epoch_key, expected_data.as_bytes()));
+        if msg.signature_hex != expected_sig {
+            return Err(OctopusSecurityError::IdentitySpoofingDetected(format!(
+                "Cryptographic mesh signature mismatch from sender arm {} ({:?}, gen {}): payload tampering or role spoofing detected",
+                msg.sender_arm_id, msg.sender_role, msg.sender_generation
+            )));
+        }
+
+        // Level 2 lateral boundary: Untrusted, fuzzing, and quarantine arms cannot message Ledger directly
+        let is_untrusted_or_quarantine_sender = matches!(
+            msg.sender_role,
+            ArmRole::UntrustedDocIngest
+                | ArmRole::DifferentialProtocolAnalyzer
+                | ArmRole::AutonomousProtocolResearch
+                | ArmRole::ContinuousOssFuzz
+                | ArmRole::TarpitDecoyDefense
+        );
+        if self.role == ArmRole::AccountingLedgerWrite && is_untrusted_or_quarantine_sender {
             return Err(OctopusSecurityError::DelegationScopeViolation(format!(
                 "Ring Boundary Violation: Arm {} ({:?}) is forbidden from direct lateral messaging to Sensitive Sink Arm {}",
                 msg.sender_arm_id, msg.sender_role, self.arm_id

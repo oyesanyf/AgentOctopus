@@ -71,6 +71,37 @@ impl HttpEgressGate {
             )));
         }
 
+        // Mathematical IPv4 / IPv6 SSRF & Private Range Check
+        match parsed.host() {
+            Some(url::Host::Ipv4(v4)) => {
+                let o = v4.octets();
+                if v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_unspecified()
+                    || (o[0] == 100 && (o[1] & 0b1100_0000) == 64)
+                    || (o[0] == 169 && o[1] == 254)
+                {
+                    return Err(OctopusSecurityError::SsrfBlocked(format!(
+                        "SSRF/Metadata access violation: private/loopback IPv4 '{}' blocked by egress gate",
+                        v4
+                    )));
+                }
+            }
+            Some(url::Host::Ipv6(v6)) => {
+                let o = v6.octets();
+                let is_unique_local = (o[0] & 0xfe) == 0xfc;
+                let is_link_local_v6 = (o[0] == 0xfe) && ((o[1] & 0xc0) == 0x80);
+                if v6.is_loopback() || v6.is_unspecified() || is_unique_local || is_link_local_v6 {
+                    return Err(OctopusSecurityError::SsrfBlocked(format!(
+                        "SSRF/Metadata access violation: private/loopback IPv6 '{}' blocked by egress gate",
+                        v6
+                    )));
+                }
+            }
+            _ => {}
+        }
+
         // Hostname verification against exact allowlist (prevents google.com.attacker.example)
         let host = parsed.host_str().unwrap_or("").to_lowercase();
         let is_authorized_google = host == "google.com" || host == "www.google.com";

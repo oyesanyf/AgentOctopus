@@ -17,6 +17,7 @@ pub struct CentralBrain {
         )>,
     >,
     arm_kill_switches: HashMap<ArmRole, KillSwitch>,
+    arm_generations: HashMap<ArmRole, u64>,
     telemetry_tx: mpsc::Sender<TelemetryPacket>,
 }
 
@@ -32,11 +33,24 @@ impl CentralBrain {
         arm_kill_switches: HashMap<ArmRole, KillSwitch>,
         telemetry_tx: mpsc::Sender<TelemetryPacket>,
     ) -> Self {
+        let mut arm_generations = HashMap::new();
+        for role in dispatch_table.keys() {
+            arm_generations.insert(role.clone(), 1);
+        }
+        for role in arm_kill_switches.keys() {
+            arm_generations.entry(role.clone()).or_insert(1);
+        }
         Self {
             dispatch_table,
             arm_kill_switches,
+            arm_generations,
             telemetry_tx,
         }
+    }
+
+    /// Returns the current active generation epoch for a peripheral limb role.
+    pub fn arm_generation(&self, role: &ArmRole) -> u64 {
+        self.arm_generations.get(role).copied().unwrap_or(1)
     }
 
     /// Dispatches a high-level strategic directive to a peripheral limb with strict timeout enforcement.
@@ -131,9 +145,15 @@ impl CentralBrain {
         }
     }
 
-    /// Regenerates a severed or terminated limb with a pristine, unpoisoned state.
+    /// Regenerates a severed or terminated limb with a pristine, unpoisoned state and advances its generation epoch (N -> N + 1).
     pub fn regenerate_limb(&mut self, role: ArmRole) {
-        println!("[CENTRAL BRAIN] Regenerating peripheral limb: {:?}", role);
+        let prev_gen = self.arm_generations.get(&role).copied().unwrap_or(1);
+        let next_gen = prev_gen + 1;
+        self.arm_generations.insert(role.clone(), next_gen);
+        println!(
+            "[CENTRAL BRAIN] Regenerating peripheral limb: {:?} (Advancing Epoch {} -> {})",
+            role, prev_gen, next_gen
+        );
         let (tx, rx) = mpsc::channel(16);
         let kill_switch = KillSwitch::new();
 
@@ -142,7 +162,8 @@ impl CentralBrain {
             rx,
             self.telemetry_tx.clone(),
             kill_switch.clone(),
-        );
+        )
+        .with_generation(next_gen);
 
         tokio::spawn(arm.run());
 

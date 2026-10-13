@@ -262,6 +262,28 @@ impl ArmRuntime {
     /// Primary execution loop running inside an asynchronous task
     pub async fn run(mut self) {
         let agent_name = self.arm_name();
+        if self.generation > 1 {
+            let target_arm_id = self.arm_id.unwrap_or(0);
+            if let Some(reg_ring) = self.containment_ring.arm_registry.get_ring(target_arm_id).await {
+                if reg_ring.current_generation() < self.generation {
+                    reg_ring
+                        .generation
+                        .store(self.generation, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            if let Some(sec_ring) = self
+                .containment_ring
+                .arm_registry
+                .get_security_ring(self.role.clone())
+                .await
+            {
+                if sec_ring.current_generation() < self.generation {
+                    sec_ring
+                        .generation
+                        .store(self.generation, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
         self.containment_ring
             .isolation_manager
             .register_kill_switch(&agent_name, self.kill_switch.clone())

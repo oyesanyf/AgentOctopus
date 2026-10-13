@@ -184,7 +184,18 @@ impl Authorizer for CedarAuthorizer {
                 "tarpit" | "TarpitDecoyDefense" => crate::core::types::ArmRole::TarpitDecoyDefense,
                 "sentinel" | "kernel" | "KernelLevelSentinel" => crate::core::types::ArmRole::KernelLevelSentinel,
                 "notifier" | "OutboundNotification" => crate::core::types::ArmRole::OutboundNotification,
-                _ => crate::core::types::ArmRole::UntrustedDocIngest,
+                "cedar" | "CedarPolicyEvaluation" => crate::core::types::ArmRole::CedarPolicyEvaluation,
+                "atlas" | "AtlasThreatIntelligence" => crate::core::types::ArmRole::AtlasThreatIntelligence,
+                "anomaly" | "AnomalyDetection" => crate::core::types::ArmRole::AnomalyDetection,
+                "vulnerability" | "VulnerabilityResearch" => crate::core::types::ArmRole::VulnerabilityResearch,
+                "oss_fuzz" | "ContinuousOssFuzz" => crate::core::types::ArmRole::ContinuousOssFuzz,
+                "osv_scanner" | "ContinuousOsvScanner" => crate::core::types::ArmRole::ContinuousOsvScanner,
+                "differential" | "DifferentialProtocolAnalyzer" => crate::core::types::ArmRole::DifferentialProtocolAnalyzer,
+                "protocol_research" | "AutonomousProtocolResearch" => crate::core::types::ArmRole::AutonomousProtocolResearch,
+                "pqc" | "PostQuantumAttestation" => crate::core::types::ArmRole::PostQuantumAttestation,
+                "evolution" | "EvolutionaryOptimizer" => crate::core::types::ArmRole::EvolutionaryOptimizer,
+                "dream_rsi" | "DreamRsiOptimizer" => crate::core::types::ArmRole::DreamRsiOptimizer,
+                _ => return Ok(false),
             };
 
             let action = match request.operation {
