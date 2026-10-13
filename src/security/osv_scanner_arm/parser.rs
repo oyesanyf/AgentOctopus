@@ -50,14 +50,53 @@ impl DependencyManifestParser {
         deps
     }
 
-    /// Automatically scans the workspace root for Cargo.lock and dependency files.
-    pub fn scan_workspace_dependencies(workspace_dir: &str) -> Vec<DiscoveredDependency> {
-        let cargo_lock = Path::new(workspace_dir).join("Cargo.lock");
-        if cargo_lock.exists() {
-            if let Ok(content) = std::fs::read_to_string(&cargo_lock) {
-                return Self::parse_cargo_lock(&content);
+    /// Parses Python requirements.txt and extracts package names and minimum pinned versions.
+    pub fn parse_requirements_txt(req_content: &str, origin: &str) -> Vec<DiscoveredDependency> {
+        let mut deps = Vec::new();
+        for line in req_content.lines() {
+            let trimmed = line.split('#').next().unwrap_or("").trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let first_clause = trimmed.split(',').next().unwrap_or(trimmed).trim();
+            for sep in ["==", ">=", "~=", ">"] {
+                if let Some((pkg, ver)) = first_clause.split_once(sep) {
+                    let name = pkg.trim().to_string();
+                    let version = ver.trim().to_string();
+                    if !name.is_empty() && !version.is_empty() {
+                        deps.push(DiscoveredDependency {
+                            name,
+                            version,
+                            ecosystem: "PyPI".to_string(),
+                            manifest_origin: origin.to_string(),
+                        });
+                    }
+                    break;
+                }
             }
         }
-        Vec::new()
+        deps
+    }
+
+    /// Automatically scans the workspace root for Cargo.lock and Python requirements.txt files.
+    pub fn scan_workspace_dependencies(workspace_dir: &str) -> Vec<DiscoveredDependency> {
+        let mut all_deps = Vec::new();
+        let root = Path::new(workspace_dir);
+
+        let cargo_lock = root.join("Cargo.lock");
+        if cargo_lock.exists() {
+            if let Ok(content) = std::fs::read_to_string(&cargo_lock) {
+                all_deps.extend(Self::parse_cargo_lock(&content));
+            }
+        }
+
+        let py_reqs = root.join("vendor").join("rfchunt").join("requirements.txt");
+        if py_reqs.exists() {
+            if let Ok(content) = std::fs::read_to_string(&py_reqs) {
+                all_deps.extend(Self::parse_requirements_txt(&content, "vendor/rfchunt/requirements.txt"));
+            }
+        }
+
+        all_deps
     }
 }

@@ -36,6 +36,11 @@ Desktop.ini
 .agents/
 
 # SQLite databases
+/terminator.db
 data/*.db
 data/*.db-journal
 data/*.db-wal
+*.db-journal
+*.db-wal
+*.db-shm
+

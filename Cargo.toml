@@ -6,8 +6,8 @@ authors = ["Femo <oyesanyf@gmail.com>"]
 description = "Biologically-inspired decentralized agent swarm breakout defense & Real-Time Agentic Self-Protection (RT-ASP) architecture"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-homepage = "https://github.com/agent-octopus/agent-octopus"
-repository = "https://github.com/agent-octopus/agent-octopus"
+homepage = "https://github.com/oyesanyf/AgentOctopus"
+repository = "https://github.com/oyesanyf/AgentOctopus"
 documentation = "https://docs.rs/agent_octopus"
 keywords = ["security", "ai-agents", "rasp", "cedar-policy", "sandbox"]
 categories = ["cryptography", "development-tools", "command-line-utilities"]
@@ -55,7 +55,7 @@ thiserror = "1.0"
 regex = "1.10"
 sha2 = "0.10"
 hex = "0.4"
-wasmtime = "21.0"
+wasmtime = { version = "49.0", default-features = false, features = ["cranelift", "runtime", "wat"] }
 url = "2.5"
 rand = "0.8"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }

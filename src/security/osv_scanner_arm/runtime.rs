@@ -188,6 +188,31 @@ impl ContinuousOsvScannerArm {
     /// Generates a SARIF report of all supply chain scan findings.
     pub fn generate_osv_sarif_report(&self) -> String {
         let report = self.get_or_run_scan();
+        let results: Vec<serde_json::Value> = report
+            .advisories
+            .iter()
+            .map(|adv| {
+                serde_json::json!({
+                    "ruleId": adv.advisory_id,
+                    "level": match adv.severity {
+                        OsvSeverity::Critical | OsvSeverity::High => "error",
+                        OsvSeverity::Medium => "warning",
+                        OsvSeverity::Low => "note",
+                    },
+                    "message": {
+                        "text": format!("{} ({} {}): {}", adv.advisory_id, adv.package_name, adv.affected_version, adv.summary)
+                    },
+                    "locations": [{
+                        "physicalLocation": {
+                            "artifactLocation": {
+                                "uri": if adv.ecosystem == "PyPI" { "vendor/rfchunt/requirements.txt" } else { "Cargo.lock" }
+                            }
+                        }
+                    }]
+                })
+            })
+            .collect();
+
         serde_json::json!({
             "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
             "version": "2.1.0",
@@ -206,7 +231,7 @@ impl ContinuousOsvScannerArm {
                         "supply_chain_security_posture": report.supply_chain_security_posture,
                         "health_score_pct": report.health_score_pct
                     },
-                    "results": []
+                    "results": results
                 }
             ]
         }).to_string()

@@ -481,7 +481,7 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
-        ("GET", "/api/status") => {
+        ("GET", "/api/status") | ("GET", "/api/system/status") | ("GET", "/api/health") | ("GET", "/health") => {
             let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_status(&state))) {
                 Ok(body) => ("200 OK", body),
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/status")),
