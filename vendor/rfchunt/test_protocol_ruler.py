@@ -58,6 +58,20 @@ class TestProtocolRuler(unittest.TestCase):
         self.assertGreater(len(report["expansions"]), 0)
         self.assertTrue(any(exp["name"] == "Kettle Overlong UTF-8 (c0 8a)" for exp in report["expansions"]))
 
+    def test_05_reject_inaddr_any_host(self):
+        """Validates that ProtocolRuler rejects 0.0.0.0 and :: as destination targets."""
+        with self.assertRaises(ValueError):
+            ProtocolRuler(host="0.0.0.0", port=80)
+        with self.assertRaises(ValueError):
+            ProtocolRuler(host="::", port=80)
+
+    def test_06_connection_drop_handling(self):
+        """Validates that connection drops or closed ports return status code 0 cleanly."""
+        dead_ruler = ProtocolRuler(host="127.0.0.1", port=65431, timeout=0.5)
+        status, resp, latency = dead_ruler.send_probe(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        self.assertEqual(status, 0)
+        self.assertEqual(resp, b"")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,7 @@
     "rule_id": "OCTO-ARM106-0001",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC10042",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0001,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -11,7 +11,7 @@
     "rule_id": "OCTO-ARM106-0002",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC10042",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0002,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -19,7 +19,7 @@
     "rule_id": "OCTO-ARM106-0003",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC10033",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0003,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -27,7 +27,7 @@
     "rule_id": "OCTO-ARM106-0004",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC10033",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0004,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -35,7 +35,7 @@
     "rule_id": "OCTO-ARM106-0005",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC10024",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0005,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -43,7 +43,7 @@
     "rule_id": "OCTO-ARM106-0006",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC10024",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0006,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -51,7 +51,7 @@
     "rule_id": "OCTO-ARM106-0007",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC10024",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0007,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -59,7 +59,7 @@
     "rule_id": "OCTO-ARM106-0008",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9980",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0008,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -67,23 +67,23 @@
     "rule_id": "OCTO-ARM106-0009",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9980",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0009,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
   {
     "rule_id": "OCTO-ARM106-0010",
-    "name": "Hardening Rule for PARSER_CONFUSION",
-    "type": "WAF_MODSEC",
-    "anchor": "RFC9958",
-    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0010,phase:1,deny,status:400\"",
+    "name": "Reject Pre-Colon Whitespace",
+    "type": "RUST_PARSER_GUARD",
+    "anchor": "RFC9112",
+    "body": "// Arm 106 Defense: Pre-colon whitespace rejection\nif header_name.ends_with(' ') || header_name.ends_with('\\t') {\n    return Err(ProtocolError::IllegalHeaderWhitespace);\n}",
     "severity": "HIGH"
   },
   {
     "rule_id": "OCTO-ARM106-0011",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9958",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0011,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -91,7 +91,7 @@
     "rule_id": "OCTO-ARM106-0012",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9954",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0012,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -99,7 +99,7 @@
     "rule_id": "OCTO-ARM106-0013",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9954",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0013,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -107,7 +107,7 @@
     "rule_id": "OCTO-ARM106-0014",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9954",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0014,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -115,7 +115,7 @@
     "rule_id": "OCTO-ARM106-0015",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9936",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0015,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -123,7 +123,7 @@
     "rule_id": "OCTO-ARM106-0016",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9936",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0016,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -131,7 +131,7 @@
     "rule_id": "OCTO-ARM106-0017",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9935",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0017,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -139,7 +139,7 @@
     "rule_id": "OCTO-ARM106-0018",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9935",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0018,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -147,7 +147,7 @@
     "rule_id": "OCTO-ARM106-0019",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9935",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0019,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -155,7 +155,7 @@
     "rule_id": "OCTO-ARM106-0020",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9909",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0020,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -163,7 +163,7 @@
     "rule_id": "OCTO-ARM106-0021",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9909",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0021,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -171,7 +171,7 @@
     "rule_id": "OCTO-ARM106-0022",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9881",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0022,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -179,7 +179,7 @@
     "rule_id": "OCTO-ARM106-0023",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9881",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0023,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -187,7 +187,7 @@
     "rule_id": "OCTO-ARM106-0024",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9881",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0024,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -195,7 +195,7 @@
     "rule_id": "OCTO-ARM106-0025",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9867",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0025,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -203,7 +203,7 @@
     "rule_id": "OCTO-ARM106-0026",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9867",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0026,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -211,23 +211,23 @@
     "rule_id": "OCTO-ARM106-0027",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9867",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0027,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
   {
     "rule_id": "OCTO-ARM106-0028",
-    "name": "Hardening Rule for PARSER_CONFUSION",
-    "type": "WAF_MODSEC",
-    "anchor": "RFC9858",
-    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0028,phase:1,deny,status:400\"",
+    "name": "Reject Pre-Colon Whitespace",
+    "type": "RUST_PARSER_GUARD",
+    "anchor": "RFC9112",
+    "body": "// Arm 106 Defense: Pre-colon whitespace rejection\nif header_name.ends_with(' ') || header_name.ends_with('\\t') {\n    return Err(ProtocolError::IllegalHeaderWhitespace);\n}",
     "severity": "HIGH"
   },
   {
     "rule_id": "OCTO-ARM106-0029",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9858",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0029,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -235,7 +235,7 @@
     "rule_id": "OCTO-ARM106-0030",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9802",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0030,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -243,7 +243,7 @@
     "rule_id": "OCTO-ARM106-0031",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9802",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0031,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -251,7 +251,7 @@
     "rule_id": "OCTO-ARM106-0032",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9794",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0032,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -259,7 +259,7 @@
     "rule_id": "OCTO-ARM106-0033",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9794",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0033,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -267,7 +267,7 @@
     "rule_id": "OCTO-ARM106-0034",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9708",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0034,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -275,7 +275,7 @@
     "rule_id": "OCTO-ARM106-0035",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9708",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0035,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -283,7 +283,7 @@
     "rule_id": "OCTO-ARM106-0036",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9708",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0036,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -291,7 +291,7 @@
     "rule_id": "OCTO-ARM106-0037",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9690",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0037,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -299,7 +299,7 @@
     "rule_id": "OCTO-ARM106-0038",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9690",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0038,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -307,7 +307,7 @@
     "rule_id": "OCTO-ARM106-0039",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9629",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0039,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -315,7 +315,7 @@
     "rule_id": "OCTO-ARM106-0040",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9629",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0040,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -323,7 +323,7 @@
     "rule_id": "OCTO-ARM106-0041",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9583",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0041,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -331,7 +331,7 @@
     "rule_id": "OCTO-ARM106-0042",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9583",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0042,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -339,7 +339,7 @@
     "rule_id": "OCTO-ARM106-0043",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9583",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0043,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -347,7 +347,7 @@
     "rule_id": "OCTO-ARM106-0044",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9340",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0044,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -355,7 +355,7 @@
     "rule_id": "OCTO-ARM106-0045",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9340",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0045,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -363,7 +363,7 @@
     "rule_id": "OCTO-ARM106-0046",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC9340",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0046,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -371,7 +371,7 @@
     "rule_id": "OCTO-ARM106-0047",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC8784",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0047,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -379,7 +379,7 @@
     "rule_id": "OCTO-ARM106-0048",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC8784",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0048,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -387,7 +387,7 @@
     "rule_id": "OCTO-ARM106-0049",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC8784",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0049,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -395,7 +395,7 @@
     "rule_id": "OCTO-ARM106-0050",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC8778",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0050,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -403,7 +403,7 @@
     "rule_id": "OCTO-ARM106-0051",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC8778",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0051,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -411,7 +411,7 @@
     "rule_id": "OCTO-ARM106-0052",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC8774",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0052,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -419,23 +419,23 @@
     "rule_id": "OCTO-ARM106-0053",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC8774",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0053,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
   {
     "rule_id": "OCTO-ARM106-0054",
-    "name": "Reject Dual TE/CL Framing",
-    "type": "RUST_PARSER_GUARD",
-    "anchor": "RFC8734",
-    "body": "// Arm 106 Defense: TE/CL dual-header conflict resolution\nif headers.contains_key('transfer-encoding') && headers.contains_key('content-length') {\n    return Err(ProtocolError::ConflictingMessageFraming);\n}",
-    "severity": "CRITICAL"
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0054,phase:1,deny,status:400\"",
+    "severity": "HIGH"
   },
   {
     "rule_id": "OCTO-ARM106-0055",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC8734",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0055,phase:1,deny,status:400\"",
     "severity": "HIGH"
   },
@@ -443,8 +443,248 @@
     "rule_id": "OCTO-ARM106-0056",
     "name": "Hardening Rule for PARSER_CONFUSION",
     "type": "WAF_MODSEC",
-    "anchor": "RFC8734",
+    "anchor": "RFC9112",
     "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0056,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0057",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0057,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0058",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0058,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0059",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0059,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0060",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0060,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0061",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0061,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0062",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0062,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0063",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0063,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0064",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0064,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0065",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0065,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0066",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0066,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0067",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0067,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0068",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0068,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0069",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0069,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0070",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0070,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0071",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0071,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0072",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0072,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0073",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0073,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0074",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0074,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0075",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0075,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0076",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0076,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0077",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0077,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0078",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0078,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0079",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0079,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0080",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0080,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0081",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0081,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0082",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0082,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0083",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0083,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0084",
+    "name": "Reject Dual TE/CL Framing",
+    "type": "RUST_PARSER_GUARD",
+    "anchor": "RFC9112",
+    "body": "// Arm 106 Defense: TE/CL dual-header conflict resolution\nif headers.contains_key('transfer-encoding') && headers.contains_key('content-length') {\n    return Err(ProtocolError::ConflictingMessageFraming);\n}",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0085",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0085,phase:1,deny,status:400\"",
+    "severity": "HIGH"
+  },
+  {
+    "rule_id": "OCTO-ARM106-0086",
+    "name": "Hardening Rule for PARSER_CONFUSION",
+    "type": "WAF_MODSEC",
+    "anchor": "RFC9112",
+    "body": "SecRule REQUEST_HEADERS_NAMES \"@rx .*\" \"id:0086,phase:1,deny,status:400\"",
     "severity": "HIGH"
   }
 ]

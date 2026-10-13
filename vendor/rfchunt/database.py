@@ -442,6 +442,47 @@ class Database:
                 ),
             )
 
+    def save_arm106_defensive_rule(
+        self,
+        rule_id: str,
+        name: str,
+        rule_type: str,
+        target_protocol: str,
+        specification_anchor: str,
+        rule_body: str,
+        severity: str,
+    ) -> None:
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO arm106_defensive_rules
+                    (rule_id, name, rule_type, target_protocol, specification_anchor, rule_body, severity)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (rule_id, name, rule_type, target_protocol, specification_anchor, rule_body, severity),
+                )
+
+    def save_arm107_regression_test(
+        self,
+        test_id: str,
+        vuln_id: str,
+        protocol: str,
+        expected_status_rejection: str,
+        probe_bytes_hex: str,
+        validation_logic: str,
+    ) -> None:
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO arm107_regression_tests
+                    (test_id, vuln_id, protocol, expected_status_rejection, probe_bytes_hex, validation_logic)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (test_id, vuln_id, protocol, expected_status_rejection, probe_bytes_hex, validation_logic),
+                )
+
     def get_tier_taxonomy_counts(self) -> Dict[str, int]:
         cursor = self.conn.cursor()
         counts = {}

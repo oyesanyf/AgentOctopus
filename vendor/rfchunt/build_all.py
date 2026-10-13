@@ -180,11 +180,9 @@ def build_step_package_zips() -> Tuple[bool, str]:
     try:
         zip1 = ROOT_DIR / "http_terminator.zip"
         zip2 = ROOT_DIR / "http_terminator_with_db.zip"
-        zip3 = ROOT_DIR.parent / "agent_octopus_source_code.zip"
 
         _zip_folder(ROOT_DIR, zip1, include_db=False)
         _zip_folder(ROOT_DIR, zip2, include_db=True)
-        _zip_folder(ROOT_DIR, zip3, include_db=True)
 
         size1_mb = zip1.stat().st_size / (1024 * 1024)
         size2_mb = zip2.stat().st_size / (1024 * 1024)

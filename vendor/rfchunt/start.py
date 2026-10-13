@@ -59,7 +59,11 @@ def main():
 
     # Determine TLS requirement (automatic for port 443)
     use_tls = args.tls or (args.port == 443)
-    is_local_target = args.host in ("127.0.0.1", "localhost", "0.0.0.0")
+    if args.host in ("0.0.0.0", "::"):
+        print("[!] ERROR: Target destination address cannot be 0.0.0.0 or :: (INADDR_ANY bind address).")
+        print("[*] For local protocol research, please specify --host 127.0.0.1 or --host localhost.")
+        sys.exit(1)
+    is_local_target = args.host in ("127.0.0.1", "localhost", "::1", "[::1]")
 
     print("=" * 70)
     print("  HTTP TERMINATOR: AUTONOMOUS RESEARCH FACTORY")

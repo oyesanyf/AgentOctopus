@@ -89,6 +89,8 @@ class ProtocolRuler:
         debug: bool = False,
         on_trace: Optional[Callable[[str], None]] = None,
     ):
+        if host in ("0.0.0.0", "::"):
+            raise ValueError(f"Target host cannot be {host} (INADDR_ANY listening address). Use 127.0.0.1 or localhost.")
         self.host = host
         self.port = port
         self.use_tls = use_tls

@@ -8,7 +8,7 @@ Agent Octopus Arm 106 (Defensive Hardening) and Arm 107 (Continuous Regression T
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from engine.taxonomy import (
     Arm106DefensiveRule,
     Arm107RegressionTest,
@@ -23,15 +23,20 @@ class DefensiveIntelligencePublisher:
     and regression verification tests for Arm 107.
     """
 
-    def __init__(self, output_dir: Optional[str] = None):
+    def __init__(self, output_dir: Optional[str] = None, db: Optional[Any] = None):
         self.output_dir = Path(output_dir or "data")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.octopus_dir = Path("D:/harfile/AgentOctopus/data") if Path("D:/harfile/AgentOctopus/data").exists() else None
+        self.db = db
         self.arm106_rules: List[Arm106DefensiveRule] = []
         self.arm107_tests: List[Arm107RegressionTest] = []
 
     def publish_finding(
-        self, vuln: ReproducibleVulnerability, rfc_anchor: str = "RFC9112", evidence_verified: bool = True
+        self,
+        vuln: ReproducibleVulnerability,
+        rfc_anchor: str = "RFC9112",
+        evidence_verified: bool = True,
+        auto_export: bool = True,
     ) -> Tuple[Optional[Arm106DefensiveRule], Optional[Arm107RegressionTest]]:
         """
         Processes a confirmed reproducible vulnerability and synthesizes both
@@ -50,8 +55,30 @@ class DefensiveIntelligencePublisher:
         arm107_test = self._synthesize_arm107_test(vuln)
         self.arm107_tests.append(arm107_test)
 
-        # 3. Export to filesystem
-        self.export_all()
+        # 3. Persist directly to SQLite database
+        if self.db and hasattr(self.db, "save_arm106_defensive_rule"):
+            self.db.save_arm106_defensive_rule(
+                rule_id=arm106_rule.rule_id,
+                name=arm106_rule.name,
+                rule_type=arm106_rule.rule_type,
+                target_protocol=arm106_rule.target_protocol,
+                specification_anchor=arm106_rule.specification_anchor,
+                rule_body=arm106_rule.rule_body,
+                severity=arm106_rule.severity,
+            )
+        if self.db and hasattr(self.db, "save_arm107_regression_test"):
+            self.db.save_arm107_regression_test(
+                test_id=arm107_test.test_id,
+                vuln_id=arm107_test.vuln_id,
+                protocol=arm107_test.protocol,
+                expected_status_rejection=json.dumps(arm107_test.expected_status_rejection),
+                probe_bytes_hex=arm107_test.probe_bytes.hex() if isinstance(arm107_test.probe_bytes, bytes) else str(arm107_test.probe_bytes),
+                validation_logic=arm107_test.validation_logic,
+            )
+
+        # 4. Export to filesystem
+        if auto_export:
+            self.export_all()
 
         return arm106_rule, arm107_test
 
