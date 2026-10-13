@@ -88,6 +88,7 @@ async fn test_arm107_cedar_target_allowlist_enforcement() {
         target_port: test_port,
         baseline_request: Some("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_string()),
         repetition_count: None,
+        ..Default::default()
     };
 
     let result = supervisor.evaluate_probe(local_req).await;
@@ -104,6 +105,7 @@ async fn test_arm107_cedar_target_allowlist_enforcement() {
         target_port: 80,
         baseline_request: None,
         repetition_count: None,
+        ..Default::default()
     };
 
     let ext_result = supervisor.evaluate_probe(external_req).await;
@@ -239,6 +241,7 @@ async fn test_arm107_structured_transport_outcomes_no_synthetic_http() {
         target_port: 19876,
         baseline_request: None,
         repetition_count: None,
+        ..Default::default()
     };
 
     let result = supervisor.evaluate_probe(closed_port_req).await;
@@ -298,6 +301,7 @@ async fn test_arm107_differential_baseline_response_comparison() {
         target_port: port,
         baseline_request: Some("POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n".to_string()),
         repetition_count: None,
+        ..Default::default()
     };
 
     let result = supervisor.evaluate_probe(eval_req).await;
@@ -368,6 +372,7 @@ async fn test_arm107_transient_non_reproducible_anomaly_downgrade() {
         target_port: port,
         baseline_request: Some("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_string()),
         repetition_count: None,
+        ..Default::default()
     };
 
     let result = supervisor.evaluate_probe(eval_req).await;
@@ -479,6 +484,7 @@ async fn test_arm107_multi_trial_repetition_stable_baseline_and_arm106_confirmat
         target_port: test_port,
         baseline_request: Some("POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n".to_string()),
         repetition_count: Some(5),
+        ..Default::default()
     };
 
     let result = supervisor.evaluate_probe(eval_req).await;

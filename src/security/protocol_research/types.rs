@@ -132,7 +132,7 @@ pub struct ProtocolResearchStatus {
 }
 
 /// Incoming evaluation request submitted to Arm 107.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EvaluationRequest {
     pub raw_request: String,
     pub target_host: String,
