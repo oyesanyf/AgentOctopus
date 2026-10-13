@@ -33,16 +33,128 @@ class CausalAnomalyClassifier:
     def __init__(self):
         self.novel_techniques: Dict[str, NovelTechnique] = {}
 
+    def is_framing_artifact(
+        self,
+        anomaly: ImplementationAnomaly,
+        baseline_resp: Optional[bytes] = None,
+    ) -> Tuple[bool, str]:
+        """
+        Validates whether anomalous bytes or reported pipeline leaks can be explained
+        by ordinary HTTP response framing (e.g. unconsumed baseline HTML body,
+        standard RFC 9112 400 Bad Request connection closure, or socket buffer leftovers).
+        Returns (is_artifact, reason).
+        """
+        obs_lower = anomaly.observed_behavior.lower()
+        raw_resp = anomaly.raw_response or b""
+        raw_lower = raw_resp.lower()
+
+        # Check for explicit scanner artifact indicator
+        if "scanner artifact" in obs_lower:
+            return True, "Scanner artifact: residual baseline response bytes detected on socket."
+
+        # Check for residual HTML body fragment from previous baseline request
+        html_markers = [b"<!doctype html", b"<html", b"<head", b"<title", b"<script", b"<style", b"<div", b"<body"]
+        is_html_fragment = any(marker in raw_lower for marker in html_markers)
+        is_residual_mention = (
+            "residual pipeline leak" in obs_lower
+            or "residual html body fragment" in obs_lower
+            or "residual data leak" in obs_lower
+            or "unconsumed response body" in obs_lower
+        )
+
+        if is_residual_mention or (is_html_fragment and not raw_resp.startswith(b"HTTP/")):
+            return True, "Residual baseline HTML/body bytes from incomplete socket consumption; ordinary framing artifact, not a pipeline leak."
+
+        # Compare directly against baseline response if available
+        if baseline_resp:
+            baseline_lower = baseline_resp.lower()
+            if b"\r\n\r\n" in baseline_resp:
+                _, baseline_body = baseline_resp.split(b"\r\n\r\n", 1)
+                if baseline_body and raw_resp in baseline_body:
+                    return True, "Residual body bytes matching baseline response; ordinary framing artifact."
+            if raw_resp and raw_resp in baseline_lower:
+                return True, "Anomalous response matches baseline content; ordinary framing artifact."
+
+        # Check for ordinary connection closure after client error (400 Bad Request)
+        if anomaly.category == AnomalyCategory.PIPELINE_LEAK:
+            if (
+                "connection closed by server after candidate probe" in obs_lower
+                or "premature connection termination before canary" in obs_lower
+            ):
+                return True, "Ordinary RFC 9112 Section 9.3 connection teardown on client error rejection; not a vulnerability."
+            if "client framing omission" in obs_lower:
+                return True, "Client sent un-framed body without Content-Length or Transfer-Encoding; trailing bytes are an RFC 9112 §6.1 framing omission, not a pipeline leak."
+
+        # Check if probe sent un-framed body without Content-Length or Transfer-Encoding
+        raw_probe = anomaly.raw_probe or b""
+        if b"\r\n\r\n" in raw_probe:
+            probe_lower = raw_probe.lower()
+            _, body = raw_probe.split(b"\r\n\r\n", 1)
+            if len(body.strip()) > 0 and b"content-length" not in probe_lower and b"transfer-encoding" not in probe_lower:
+                return True, "Probe contains body without Content-Length or Transfer-Encoding; trailing bytes are un-framed per RFC 9112 Section 6.1, not a server vulnerability."
+
+        return False, ""
+
+    def validate_evidence(
+        self,
+        vuln: ReproducibleVulnerability,
+        anomaly: ImplementationAnomaly,
+        baseline_resp: Optional[bytes] = None,
+    ) -> Tuple[bool, str]:
+        """
+        Evidence Validator: Confirms that anomalous bytes cannot be explained by
+        ordinary response framing before allowing classification as a confirmed vulnerability
+        or publication of defensive rules.
+        """
+        is_artifact, reason = self.is_framing_artifact(anomaly, baseline_resp)
+        if is_artifact:
+            return False, f"Anomalous bytes explained by ordinary response framing: {reason}"
+
+        if vuln.reproducibility_rate < 0.66:
+            return False, f"Low reproducibility rate ({vuln.reproducibility_rate:.1%}); network flake or non-deterministic behavior."
+
+        # Stage 3: Metamorphic validity gate
+        if anomaly.category == AnomalyCategory.METAMORPHIC_VIOLATION:
+            obs_lower = anomaly.observed_behavior.lower()
+            if (
+                "200 vs 400" in obs_lower
+                or "returned 400" in obs_lower
+                or "rfc-compliant rejection" in obs_lower
+            ):
+                return False, (
+                    "Stage 3 Metamorphic Validity Gate: Status difference (200 vs 400) reflects RFC-compliant "
+                    "server rejection of modified syntax under RFC 9112 Section 5.1/5.5; not evidence of a vulnerability."
+                )
+
+        # For pipeline leaks / queue desync, verify that desynchronization was actually demonstrated
+        if (
+            vuln.impact in (ImpactClass.QUEUE_POISONING, ImpactClass.DESYNCHRONIZATION)
+            or anomaly.category == AnomalyCategory.PIPELINE_LEAK
+            or "pipeline leak" in anomaly.observed_behavior.lower()
+        ):
+            probe_lower = vuln.minimized_probe.lower()
+            has_desync_vectors = (
+                (b"transfer-encoding" in probe_lower and b"content-length" in probe_lower)
+                or b"canary" in probe_lower
+                or b"terminator_marker" in probe_lower
+                or (b"transfer-encoding" in probe_lower and b"chunk" in probe_lower)
+            )
+            if not has_desync_vectors:
+                return False, "Unvalidated pipeline leak: does not exhibit verified cross-request queue desynchronization or conflicting framing headers."
+
+        return True, "Evidence verified: anomaly cannot be explained by ordinary response framing."
+
     def filter_environmental_noise(
         self,
         anomaly: ImplementationAnomaly,
         baseline_is_healthy: bool,
         socket_error_type: Optional[str] = None,
+        baseline_resp: Optional[bytes] = None,
     ) -> bool:
         """
         Determines if an anomaly is caused by environmental noise (e.g. OS port exhaustion,
-        server crash/shutdown, transient connection refusal).
-        Returns True if it IS environmental noise (should be discarded).
+        server crash/shutdown, transient connection refusal, or leftover framing bytes).
+        Returns True if it IS environmental noise / framing artifact (should be discarded).
         """
         if not baseline_is_healthy:
             # If server cannot handle even a clean baseline request, network/target is degraded
@@ -51,6 +163,13 @@ class CausalAnomalyClassifier:
 
         if socket_error_type in ("WSAEADDRINUSE", "ECONNREFUSED", "WSAENOBUFS"):
             anomaly.is_environmental_noise = True
+            return True
+
+        # Check for response framing artifacts
+        is_artifact, reason = self.is_framing_artifact(anomaly, baseline_resp)
+        if is_artifact:
+            anomaly.is_environmental_noise = True
+            anomaly.observed_behavior += f" [DISCARDED_AS_FRAMING_ARTIFACT: {reason}]"
             return True
 
         anomaly.is_environmental_noise = False

@@ -12,22 +12,30 @@ from typing import Dict, List, Optional
 import httpx
 
 from database import Database
+from engine.terminator_rfc_selector import TerminatorRFCSelector, TERMINATOR_CORE_RFCS
 
 
-# Canonical core modern and historic protocol RFCs (starting with MCP specification)
+# Canonical core modern and historic protocol RFCs for HTTP Terminators
 DEFAULT_CORE_RFCS = [
-    {"id": "RFC-MCP", "num": 0, "title": "Model Context Protocol Architecture and Transport Specification"},
-    {"id": "RFC9110", "num": 9110, "title": "HTTP Semantics"},
-    {"id": "RFC9111", "num": 9111, "title": "HTTP Caching"},
-    {"id": "RFC9112", "num": 9112, "title": "HTTP/1.1"},
-    {"id": "RFC9113", "num": 9113, "title": "HTTP/2"},
-    {"id": "RFC9114", "num": 9114, "title": "HTTP/3"},
-    {"id": "RFC8446", "num": 8446, "title": "The Transport Layer Security (TLS) Protocol Version 1.3"},
+    {"id": "RFC9112", "num": 9112, "title": "HTTP/1.1 (Message Syntax and Framing - Primary Line Terminator Spec)"},
+    {"id": "RFC9110", "num": 9110, "title": "HTTP Semantics (Intermediaries, Gateways, and Connection Management)"},
     {"id": "RFC7230", "num": 7230, "title": "Hypertext Transfer Protocol (HTTP/1.1): Message Syntax and Routing"},
-    {"id": "RFC2616", "num": 2616, "title": "Hypertext Transfer Protocol -- HTTP/1.1"},
+    {"id": "RFC2616", "num": 2616, "title": "Hypertext Transfer Protocol -- HTTP/1.1 (Historic Discrepancies & Multipart/Byteranges)"},
+    {"id": "RFC9113", "num": 9113, "title": "HTTP/2 (Section 8: Intermediary Gateway Translation to HTTP/1.1)"},
+    {"id": "RFC7540", "num": 7540, "title": "Hypertext Transfer Protocol Version 2 (HTTP/2 - Legacy Framing)"},
+    {"id": "RFC9114", "num": 9114, "title": "HTTP/3 (QUIC Gateway Termination & Mapping)"},
+    {"id": "RFC8446", "num": 8446, "title": "The Transport Layer Security (TLS) Protocol Version 1.3"},
+    {"id": "RFC3986", "num": 3986, "title": "Uniform Resource Identifier (URI): Generic Syntax (Path & NUL Byte Normalization)"},
+    {"id": "RFC6265", "num": 6265, "title": "HTTP State Management Mechanism (Cookies)"},
+    {"id": "RFC9111", "num": 9111, "title": "HTTP Caching"},
     {"id": "RFC1945", "num": 1945, "title": "Hypertext Transfer Protocol -- HTTP/1.0"},
     {"id": "RFC9218", "num": 9218, "title": "Extensible Prioritization Scheme for HTTP"},
     {"id": "RFC9204", "num": 9204, "title": "QPACK: Field Compression for HTTP/3"},
+]
+
+# Ancillary specifications (opt-in via --rfc MCP or explicit selector)
+ANCILLARY_PROTOCOL_RFCS = [
+    {"id": "RFC-MCP", "num": 0, "title": "Model Context Protocol Architecture and Transport Specification"},
 ]
 
 RFC_EDITOR_BASE = "https://www.rfc-editor.org/rfc"
@@ -338,3 +346,61 @@ class RFCFetcher:
             self.fetch_rfc_by_number(num)
             # trigger hypotheses
         return new_rfcs
+
+    def get_pqc_corpus(self, max_rfcs: int = 25) -> List[int]:
+        """
+        Retrieves active Post-Quantum Cryptography (PQC), Hybrid Key Exchange,
+        and Quantum-Resistant Transport specifications from the IETF registry.
+        """
+        core_pqc = [9980, 9958, 9954, 9370, 9180, 8937, 8554, 8446, 8391]
+        discovered = self.get_all_active_rfcs(
+            keywords=['quantum', 'post-quantum', 'kem', 'hpke', 'hash-based', 'lattice', 'hybrid key', 'merkle'],
+            max_rfcs=max_rfcs,
+            reverse=True
+        )
+        seen = set(discovered)
+        for rfc in core_pqc:
+            if rfc not in seen:
+                discovered.append(rfc)
+                seen.add(rfc)
+        print(f"[+] Post-Quantum Cryptography (PQC) Research Corpus Initialized:")
+        print(f"    - Protocol Scope: Post-Quantum KEM, Hybrid Key Exchange, ML-KEM, HPKE, & Quantum-Resistant TLS")
+        print(f"    - Total Curated Specifications: {len(discovered)} RFCs")
+        return discovered
+
+    def get_terminator_corpus(self, max_rfcs: Optional[int] = None) -> List[int]:
+        """
+        Retrieves the curated Terminator RFC suite (RFC 9112, 9110, 7230, 2616, 9113, etc.)
+        specifically prioritized for finding desync, framing, and line-terminator discrepancies.
+        """
+        return TerminatorRFCSelector.get_terminator_corpus(max_rfcs=max_rfcs)
+
+    def ensure_terminator_rfcs_cached(self) -> Dict[str, Any]:
+        """
+        Guarantees that all canonical Terminator RFCs are downloaded and cached locally
+        for offline, zero-network execution.
+        """
+        cached_count = 0
+        fetched_count = 0
+        failed_count = 0
+
+        specs = TerminatorRFCSelector.get_terminator_specs()
+        for spec in specs:
+            fpath = self.cache_dir / f"rfc{spec.num}.txt"
+            if fpath.exists() and fpath.stat().st_size > 1000:
+                cached_count += 1
+            else:
+                txt = self.fetch_rfc_by_number(spec.num, title=spec.title)
+                if txt and len(txt) > 1000:
+                    fetched_count += 1
+                else:
+                    failed_count += 1
+
+        return {
+            "total_specs": len(specs),
+            "cached": cached_count,
+            "fetched": fetched_count,
+            "failed": failed_count,
+            "ready": (failed_count == 0),
+        }
+

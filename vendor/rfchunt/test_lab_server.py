@@ -5,6 +5,7 @@ dangling-byte queue poisoning, and anomaly signatures (memory leaks, double HTML
 Used for safe, deterministic local evaluation and automated verification.
 """
 
+import re
 import socket
 import threading
 import time
@@ -14,9 +15,10 @@ from typing import Optional
 class TestLabServer:
     __test__ = False
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8080):
+    def __init__(self, host: str = "127.0.0.1", port: int = 8080, max_header_limit: int = 64040):
         self.host = host
         self.port = port
+        self.max_header_limit = max_header_limit
         self.server_sock: Optional[socket.socket] = None
         self.is_running = False
         self.thread: Optional[threading.Thread] = None
@@ -111,6 +113,32 @@ class TestLabServer:
                 if b"\r\n\r\n" in buffer:
                     header_bytes, rest = bytes(buffer).split(b"\r\n\r\n", 1)
                     request_line = header_bytes.split(b"\r\n")[0].decode("latin-1", errors="ignore")
+
+                    # Protocol Ruler Simulation:
+                    # Backend maximum header limit (e.g. 64,040 bytes)
+                    # Simulated front-end expansion: b"\xc0\x8a" expands by 10 bytes!
+                    a_header_match = re.search(rb"(?i)\r\nA:\s*([^\r\n]*)", b"\r\n" + header_bytes)
+                    if a_header_match:
+                        a_payload = a_header_match.group(1)
+                        expansion_bytes = 0
+                        if b"\xc0\x8a" in a_payload:
+                            expansion_bytes += 10 * a_payload.count(b"\xc0\x8a")
+                        if b"\xef\xac\x81" in a_payload:
+                            expansion_bytes -= 1 * a_payload.count(b"\xef\xac\x81")
+                        if b"\r\n " in header_bytes:
+                            expansion_bytes -= 2 * header_bytes.count(b"\r\n ")
+
+                        effective_a_len = len(a_payload) + expansion_bytes
+                        if effective_a_len > self.max_header_limit:
+                            resp = (
+                                b"HTTP/1.1 400 Bad Request\r\n"
+                                b"Content-Type: text/plain\r\n"
+                                b"Connection: close\r\n"
+                                b"Content-Length: 35\r\n\r\n"
+                                b"400 Bad Request: Header Size Limit\n"
+                            )
+                            client_sock.sendall(resp)
+                            break
 
                     # Handle Dangling-Byte simulation:
                     # If request is POST with Content-Length: 1 but 0 body bytes present

@@ -10,6 +10,7 @@ import socket
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+from engine.http_framing import HTTPFramingReader
 from engine.taxonomy import AnomalyCategory, ImplementationAnomaly
 
 
@@ -54,19 +55,8 @@ class MultiImplementationDifferentialOracle:
             sock = socket.create_connection((target.host, target.port), timeout=target.timeout)
             sock.sendall(raw_probe)
 
-            response_data = b""
-            sock.settimeout(target.timeout)
-            while True:
-                try:
-                    chunk = sock.recv(4096)
-                    if not chunk:
-                        break
-                    response_data += chunk
-                    if b"\r\n\r\n" in response_data and len(response_data) > 8192:
-                        break
-                except socket.timeout:
-                    break
-
+            framed = HTTPFramingReader.read_response(sock, timeout=target.timeout)
+            response_data = framed.raw_response
             latency = time.time() - start_time
             if not response_data:
                 return TargetResponse(
@@ -78,7 +68,8 @@ class MultiImplementationDifferentialOracle:
                     socket_state="CONNECTION_CLOSED",
                 )
 
-            status_code, headers = self._parse_http_response(response_data)
+            status_code = framed.status_code
+            headers = framed.headers
             return TargetResponse(
                 target_name=target.name,
                 status_code=status_code,

@@ -61,3 +61,4 @@ def test_swarm_agent_routing_logic(tmp_path):
     assert swarm.route_after_execution({"current_anomaly": anom}) == "triage_debugger_agent"
     assert swarm.route_after_execution({"current_anomaly": None, "generated_candidates": [1]}) == "execution_oracle_agent"
     assert swarm.route_after_execution({"current_anomaly": None, "generated_candidates": [], "cycle_count": 5, "max_cycles": 3}) == "__end__"
+    assert swarm.route_after_execution({"current_anomaly": None, "generated_candidates": [], "cycle_count": 5, "max_cycles": 3, "enable_dream_rsi": True}) == "dream_rsi_agent"

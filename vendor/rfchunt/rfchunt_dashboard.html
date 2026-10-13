@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>RFC Hunt Swarm & Protocol Ruler Mission Control</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    /* Clean custom scrollbars & tabs */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased p-4 md:p-8 min-h-screen">
+  <div class="max-w-6xl mx-auto space-y-6">
+
+    <!-- Header & Hero -->
+    <header class="bg-[var(--card)] border border-[var(--border)] rounded-2xl p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div>
+        <div class="flex items-center gap-3">
+          <span class="px-2.5 py-1 text-xs font-mono font-semibold rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+            James Kettle DEF CON 34 / PortSwigger Research
+          </span>
+          <span class="px-2.5 py-1 text-xs font-mono font-medium rounded-full bg-cyan-500/10 text-cyan-500 border border-cyan-500/20">
+            LangGraph 12-Agent Swarm
+          </span>
+        </div>
+        <h1 class="text-2xl md:text-3xl font-bold tracking-tight mt-2 text-[var(--foreground)]">
+          RFC Hunt Swarm & Protocol Ruler
+        </h1>
+        <p class="text-sm text-[var(--muted-foreground)] mt-1 leading-relaxed">
+          <span class="font-semibold text-emerald-400">Inspired by James Kettle:</span> An autonomous, 12-agent research swarm orchestrated via LangGraph that extracts normative grammar rules and micro-inspiration from Post-Quantum Cryptography (PQC) and IETF RFC specifications, synthesizes novel boundary and desynchronization probes via ModelFusion, executes stateful pipelined canary sequences against live HTTP/TLS endpoints, and delta-debugs reproducible anomalies.
+        </p>
+      </div>
+      <div class="flex items-center gap-2">
+        <a href="https://github.com/oyesanyf/rfchunt" target="_blank" class="px-4 py-2 text-xs font-medium rounded-lg border border-[var(--border)] hover:bg-[var(--content)] transition flex items-center gap-2">
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+          GitHub Repo
+        </a>
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="flex border-b border-[var(--border)] gap-2 overflow-x-auto text-sm font-medium">
+      <button onclick="switchTab('cli-builder')" id="tab-cli-builder" class="tab-btn px-4 py-2.5 border-b-2 border-emerald-500 text-emerald-500 font-semibold transition">
+        CLI Command Builder
+      </button>
+      <button onclick="switchTab('ruler-sim')" id="tab-ruler-sim" class="tab-btn px-4 py-2.5 border-b-2 border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition">
+        Protocol Ruler Simulator
+      </button>
+      <button onclick="switchTab('swarm-arch')" id="tab-swarm-arch" class="tab-btn px-4 py-2.5 border-b-2 border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition">
+        12-Agent Architecture
+      </button>
+      <button onclick="switchTab('flag-docs')" id="tab-flag-docs" class="tab-btn px-4 py-2.5 border-b-2 border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition">
+        Exhaustive Flag Reference
+      </button>
+    </nav>
+
+    <!-- TAB 1: CLI COMMAND BUILDER -->
+    <section id="view-cli-builder" class="space-y-6">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        
+        <!-- Controls Column -->
+        <div class="md:col-span-1 space-y-4 bg-[var(--card)] border border-[var(--border)] p-5 rounded-xl shadow-sm">
+          <h2 class="text-sm font-bold uppercase tracking-wider text-[var(--muted-foreground)]">Configuration</h2>
+          
+          <div>
+            <label class="block text-xs font-semibold mb-1">Target Engine / Interface</label>
+            <select id="cfg-entrypoint" onchange="updateCommand()" class="w-full text-xs p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">
+              <option value="rfc_hunt_swarm.py">rfc_hunt_swarm.py (LangGraph Swarm)</option>
+              <option value="main.py">main.py (Modular Toolkit)</option>
+              <option value="protocol_ruler.py">protocol_ruler.py (Standalone Ruler)</option>
+            </select>
+          </div>
+
+          <div id="cfg-mode-container">
+            <label class="block text-xs font-semibold mb-1">Research Mode</label>
+            <select id="cfg-mode" onchange="updateCommand()" class="w-full text-xs p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">
+              <option value="ruler">ruler (Protocol Ruler Boundary Measurement)</option>
+              <option value="single">single (Analyze Specific RFC)</option>
+              <option value="corpus">corpus (Kettle 138-RFC HTTP/SMTP Corpus)</option>
+              <option value="pqc">pqc (Post-Quantum & Hybrid TLS Corpus)</option>
+              <option value="all">all (Full IETF Protocol Registry)</option>
+            </select>
+          </div>
+
+          <div id="cfg-rfc-container" class="hidden">
+            <label class="block text-xs font-semibold mb-1">RFC Number</label>
+            <input type="text" id="cfg-rfc" value="9112" oninput="updateCommand()" class="w-full text-xs p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-xs font-semibold mb-1">Host</label>
+              <input type="text" id="cfg-host" value="127.0.0.1" oninput="updateCommand()" class="w-full text-xs p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1">Port</label>
+              <input type="number" id="cfg-port" value="8080" oninput="updateCommand()" class="w-full text-xs p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold mb-1">ModelFusion Security Specialist</label>
+            <select id="cfg-secmodel" onchange="updateCommand()" class="w-full text-xs p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)]">
+              <option value="">Default (Auto / Foundation-Sec)</option>
+              <option value="qwen2.5:7b">qwen2.5:7b (Fast 4.7GB local)</option>
+              <option value="fenkohq/foundation-sec-8b:latest">foundation-sec-8b:latest (High Precision)</option>
+              <option value="deepseek-r1:1.5b">deepseek-r1:1.5b (Ultra Light Reasoning)</option>
+            </select>
+          </div>
+
+          <div class="space-y-2 pt-2 border-t border-[var(--border)]">
+            <label class="flex items-center gap-2 text-xs cursor-pointer">
+              <input type="checkbox" id="cfg-tls" onchange="updateCommand()" class="rounded border-[var(--border)]">
+              <span>Enable TLS / HTTPS (<code class="text-xs">--tls</code>)</span>
+            </label>
+            <label class="flex items-center gap-2 text-xs cursor-pointer">
+              <input type="checkbox" id="cfg-debug" checked onchange="updateCommand()" class="rounded border-[var(--border)]">
+              <span>Kettle Debug Mode (<code class="text-xs">--debug</code>)</span>
+            </label>
+            <label class="flex items-center gap-2 text-xs cursor-pointer">
+              <input type="checkbox" id="cfg-showresp" onchange="updateCommand()" class="rounded border-[var(--border)]">
+              <span>Show Target Responses (<code class="text-xs">--show-response</code>)</span>
+            </label>
+            <label class="flex items-center gap-2 text-xs cursor-pointer">
+              <input type="checkbox" id="cfg-verbose" onchange="updateCommand()" class="rounded border-[var(--border)]">
+              <span>Full Payload Verbose (<code class="text-xs">-v / --verbose</code>)</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Generated Command & Documentation Column -->
+        <div class="md:col-span-2 space-y-4">
+          <div class="bg-[var(--card)] border border-[var(--border)] p-5 rounded-xl shadow-sm space-y-3">
+            <div class="flex items-center justify-between">
+              <h2 class="text-sm font-bold uppercase tracking-wider text-[var(--muted-foreground)]">Generated Terminal Command</h2>
+              <button onclick="copyCommand()" id="btn-copy" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition flex items-center gap-1.5 shadow-sm">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                Copy Command
+              </button>
+            </div>
+            <div class="relative">
+              <pre id="command-output" class="bg-black/80 text-emerald-400 p-4 rounded-lg font-mono text-xs overflow-x-auto whitespace-pre-wrap select-all border border-emerald-900/40 leading-relaxed"></pre>
+            </div>
+            <p id="command-description" class="text-xs text-[var(--muted-foreground)] italic"></p>
+          </div>
+
+          <!-- Quick Presets -->
+          <div class="bg-[var(--card)] border border-[var(--border)] p-5 rounded-xl shadow-sm space-y-3">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-[var(--muted-foreground)]">Quick Preset Scenarios</h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button onclick="applyPreset('ruler-local')" class="p-3 text-left rounded-lg border border-[var(--border)] hover:bg-[var(--content)] transition text-xs space-y-1">
+                <div class="font-semibold text-[var(--foreground)]">📏 Protocol Ruler (Local Lab)</div>
+                <div class="text-[var(--muted-foreground)]">Calibrate 64K header limit and measure c0 8a expansion</div>
+              </button>
+              <button onclick="applyPreset('pqc-remote')" class="p-3 text-left rounded-lg border border-[var(--border)] hover:bg-[var(--content)] transition text-xs space-y-1">
+                <div class="font-semibold text-[var(--foreground)]">🔒 Post-Quantum TLS 1.3</div>
+                <div class="text-[var(--muted-foreground)]">Execute ML-KEM & hybrid TLS desync exploration over HTTPS</div>
+              </button>
+              <button onclick="applyPreset('corpus-kettle')" class="p-3 text-left rounded-lg border border-[var(--border)] hover:bg-[var(--content)] transition text-xs space-y-1">
+                <div class="font-semibold text-[var(--foreground)]">🔬 James Kettle 138-RFC Corpus</div>
+                <div class="text-[var(--muted-foreground)]">Full HTTP/SMTP specification swarm evaluation</div>
+              </button>
+              <button onclick="applyPreset('ruler-custom')" class="p-3 text-left rounded-lg border border-[var(--border)] hover:bg-[var(--content)] transition text-xs space-y-1">
+                <div class="font-semibold text-[var(--foreground)]">🧪 Custom Hex Byte Sequence</div>
+                <div class="text-[var(--muted-foreground)]">Measure front-end transformation of arbitrary raw bytes</div>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: PROTOCOL RULER SIMULATOR -->
+    <section id="view-ruler-sim" class="space-y-6 hidden">
+      <div class="bg-[var(--card)] border border-[var(--border)] p-6 rounded-xl shadow-sm space-y-6">
+        <div>
+          <h2 class="text-lg font-bold text-[var(--foreground)]">James Kettle Protocol Ruler Interactive Simulator</h2>
+          <p class="text-xs text-[var(--muted-foreground)] mt-1">
+            Simulates the exact physical phenomenon described in <em>Can AI Do Novel Security Research?</em>: using the backend's strict 64,040-byte buffer limit as a micrometer to measure front-end transformations without response reflection.
+          </p>
+        </div>
+
+        <!-- Interactive Ruler Controls -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 p-4 rounded-xl bg-[var(--background)] border border-[var(--border)]">
+          <div class="space-y-2">
+            <label class="block text-xs font-semibold">Injected Byte Sequence</label>
+            <select id="sim-seq" onchange="runSim()" class="w-full text-xs p-2 rounded-lg bg-[var(--card)] border border-[var(--border)] text-[var(--foreground)]">
+              <option value="none">Baseline: Pure ASCII 'A' (No Sequence)</option>
+              <option value="c0_8a" selected>Kettle Overlong UTF-8: \xc0\x8a (+10 bytes expansion)</option>
+              <option value="fi_ligature">Unicode Ligature 'fi': \xef\xac\x81 (-1 byte contraction)</option>
+              <option value="line_folding">Obsolete Line Folding: \r\n + space (-2 bytes contraction)</option>
+              <option value="ip_injection">IP Header Injection: X-Forwarded-For (+28 bytes expansion)</option>
+            </select>
+          </div>
+
+          <div class="space-y-2">
+            <div class="flex justify-between items-center">
+              <label class="text-xs font-semibold">Header Length Limit</label>
+              <span id="sim-limit-display" class="font-mono text-xs font-bold text-emerald-500">64,040 bytes</span>
+            </div>
+            <input type="range" id="sim-length" min="64020" max="64050" value="64030" oninput="runSim()" class="w-full accent-emerald-500">
+            <div class="flex justify-between text-[11px] font-mono text-[var(--muted-foreground)]">
+              <span>64,020</span>
+              <span class="font-semibold text-emerald-500">Probe: <span id="sim-curr-len">64030</span></span>
+              <span>64,050</span>
+            </div>
+          </div>
+
+          <div class="flex flex-col justify-center items-center text-center p-3 rounded-lg border border-[var(--border)]" id="sim-status-card">
+            <span class="text-xs font-semibold text-[var(--muted-foreground)]">Server Response</span>
+            <span id="sim-status-code" class="text-xl font-bold font-mono text-emerald-500 mt-1">200 OK</span>
+            <span id="sim-status-desc" class="text-xs text-[var(--muted-foreground)] mt-0.5">Buffer within backend limit</span>
+          </div>
+        </div>
+
+        <!-- Wire Level Comparison Carousel -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="space-y-2">
+            <div class="flex items-center justify-between text-xs font-semibold text-[var(--muted-foreground)]">
+              <span>CLIENT WIRE TRANSMISSION (Step 2 Attacker Probe)</span>
+              <span id="sim-wire-len" class="font-mono text-emerald-500">64,030 bytes</span>
+            </div>
+            <pre id="sim-client-wire" class="bg-black/90 text-cyan-400 p-4 rounded-lg font-mono text-xs overflow-x-auto border border-cyan-950 whitespace-pre-wrap leading-relaxed"></pre>
+          </div>
+          <div class="space-y-2">
+            <div class="flex items-center justify-between text-xs font-semibold text-[var(--muted-foreground)]">
+              <span>BACKEND ARRIVAL & TRANSFORMATION CALCULATION</span>
+              <span id="sim-delta-badge" class="px-2 py-0.5 text-xs font-mono font-bold rounded bg-amber-500/10 text-amber-500 border border-amber-500/20">Delta: +10 Bytes</span>
+            </div>
+            <pre id="sim-backend-calc" class="bg-black/90 text-emerald-400 p-4 rounded-lg font-mono text-xs overflow-x-auto border border-emerald-950 whitespace-pre-wrap leading-relaxed"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: 12-AGENT ARCHITECTURE -->
+    <section id="view-swarm-arch" class="space-y-6 hidden">
+      <div class="bg-[var(--card)] border border-[var(--border)] p-6 rounded-xl shadow-sm space-y-6">
+        <div>
+          <h2 class="text-lg font-bold text-[var(--foreground)]">LangGraph 12-Agent Autonomous Swarm Architecture</h2>
+          <p class="text-xs text-[var(--muted-foreground)] mt-1">
+            Engineered to fulfill the requirements of James Kettle's research paper: de-anchored micro-inspiration, multi-model consensus, stateful TCP canaries, and autonomous discovery cascades.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          
+          <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center font-mono text-xs font-bold">1</span>
+              <h3 class="text-xs font-bold uppercase text-[var(--foreground)]">RFC Fetcher & Chunker</h3>
+            </div>
+            <p class="text-xs text-[var(--muted-foreground)]">
+              Parses IETF RFCs (HTTP/1.1, HTTP/2, SMTP, PQC). Deconstructs texts into 1–3 sentence micro-inspiration fragments to prevent LLM context-contamination.
+            </p>
+            <div class="text-[11px] font-mono text-cyan-500">Modules: rfc_fetcher.py, rfc_chunker.py</div>
+          </div>
+
+          <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center font-mono text-xs font-bold">2</span>
+              <h3 class="text-xs font-bold uppercase text-[var(--foreground)]">ABNF Grammar Compiler</h3>
+            </div>
+            <p class="text-xs text-[var(--muted-foreground)]">
+              Extracts normative ABNF syntax trees (RFC 5234) and compiles grammar boundary constraints to discover syntax inversion vectors.
+            </p>
+            <div class="text-[11px] font-mono text-cyan-500">Module: abnf_engine.py</div>
+          </div>
+
+          <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center font-mono text-xs font-bold">3</span>
+              <h3 class="text-xs font-bold uppercase text-[var(--foreground)]">ModelFusion Panel</h3>
+            </div>
+            <p class="text-xs text-[var(--muted-foreground)]">
+              Zero-cost local Ollama consensus panel combining Gemma 2 (spec), Foundation-Sec (boundary exploitation), and DeepSeek R1 (reasoning arbiter).
+            </p>
+            <div class="text-[11px] font-mono text-cyan-500">Modules: fusion_engine.py, probe_generator.py</div>
+          </div>
+
+          <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-mono text-xs font-bold">4</span>
+              <h3 class="text-xs font-bold uppercase text-[var(--foreground)]">Vector Permutator</h3>
+            </div>
+            <p class="text-xs text-[var(--muted-foreground)]">
+              Permutes candidate probes across line-endings (\r\n, \n, \r), header folding, path null-bytes, and chunked transfer encodings.
+            </p>
+            <div class="text-[11px] font-mono text-emerald-500">Module: permutator.py</div>
+          </div>
+
+          <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-mono text-xs font-bold">5</span>
+              <h3 class="text-xs font-bold uppercase text-[var(--foreground)]">Stateful Sequence Engine</h3>
+            </div>
+            <p class="text-xs text-[var(--muted-foreground)]">
+              Executes the core 3-step canary sequence: Step 1 (Baseline GET) -> Step 2 (Candidate Probe) -> Step 3 (Canary Verification) on persistent TCP sockets.
+            </p>
+            <div class="text-[11px] font-mono text-emerald-500">Module: sequence_engine.py</div>
+          </div>
+
+          <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-mono text-xs font-bold">6</span>
+              <h3 class="text-xs font-bold uppercase text-[var(--foreground)]">Differential Oracle</h3>
+            </div>
+            <p class="text-xs text-[var(--muted-foreground)]">
+              Dispatches identical probes across multiple target web server engines and flags metamorphic status or latency divergences.
+            </p>
+            <div class="text-[11px] font-mono text-emerald-500">Module: differential_oracle.py</div>
+          </div>
+
+          <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center font-mono text-xs font-bold">7</span>
+              <h3 class="text-xs font-bold uppercase text-[var(--foreground)]">Delta-Debugging Triage</h3>
+            </div>
+            <p class="text-xs text-[var(--muted-foreground)]">
+              Recursively minimizes the triggering probe byte-by-byte to isolate the absolute minimum root-cause character sequence.
+            </p>
+            <div class="text-[11px] font-mono text-amber-500">Module: delta_debugger.py</div>
+          </div>
+
+          <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center font-mono text-xs font-bold">8</span>
+              <h3 class="text-xs font-bold uppercase text-[var(--foreground)]">Causal Anomaly Classifier</h3>
+            </div>
+            <p class="text-xs text-[var(--muted-foreground)]">
+              Classifies discovered desynchronizations into discrete taxonomy: CL.0, TE.CL, Response Forking, Dangling-Byte Queue Poisoning, or Inline Leak.
+            </p>
+            <div class="text-[11px] font-mono text-amber-500">Module: causal_classifier.py</div>
+          </div>
+
+          <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center font-mono text-xs font-bold">9</span>
+              <h3 class="text-xs font-bold uppercase text-[var(--foreground)]">Autonomous Discovery Cascade</h3>
+            </div>
+            <p class="text-xs text-[var(--muted-foreground)]">
+              Recursively feeds confirmed anomalies back into the generator as new inspiration seeds to explore adjacent vulnerability branches.
+            </p>
+            <div class="text-[11px] font-mono text-amber-500">Module: cascade.py</div>
+          </div>
+
+          <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center font-mono text-xs font-bold">10</span>
+              <h3 class="text-xs font-bold uppercase text-[var(--foreground)]">Protocol Ruler Engine</h3>
+            </div>
+            <p class="text-xs text-[var(--muted-foreground)]">
+              Calibrates backend header limits down to the single byte and measures front-end byte transformation, Unicode expansion, and IP rewrite deltas.
+            </p>
+            <div class="text-[11px] font-mono text-purple-500">Module: protocol_ruler.py</div>
+          </div>
+
+          <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center font-mono text-xs font-bold">11</span>
+              <h3 class="text-xs font-bold uppercase text-[var(--foreground)]">Defensive Publisher</h3>
+            </div>
+            <p class="text-xs text-[var(--muted-foreground)]">
+              Generates Snort/Suricata network signatures (Arm 106) and pytest regression suites (Arm 107) for reproducible patching.
+            </p>
+            <div class="text-[11px] font-mono text-purple-500">Module: defensive_publisher.py</div>
+          </div>
+
+          <div class="p-4 rounded-xl border border-[var(--border)] bg-[var(--background)] space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center font-mono text-xs font-bold">12</span>
+              <h3 class="text-xs font-bold uppercase text-[var(--foreground)]">Errata & Evolution Tracker</h3>
+            </div>
+            <p class="text-xs text-[var(--muted-foreground)]">
+              Correlates discovered parser failures against official IETF technical errata and historical RFC supersession lifecycles.
+            </p>
+            <div class="text-[11px] font-mono text-purple-500">Module: errata_tracker.py</div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: EXHAUSTIVE FLAG REFERENCE -->
+    <section id="view-flag-docs" class="space-y-6 hidden">
+      <div class="bg-[var(--card)] border border-[var(--border)] p-6 rounded-xl shadow-sm space-y-6">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h2 class="text-lg font-bold text-[var(--foreground)]">Exhaustive CLI Flag & Parameter Reference</h2>
+            <p class="text-xs text-[var(--muted-foreground)] mt-1">
+              Complete, verified documentation for all flags across the swarm CLI, modular toolkit, and standalone ruler.
+            </p>
+          </div>
+          <input type="text" id="flag-search" oninput="filterFlags()" placeholder="Filter flags (e.g. timeout, tls, ruler)..." class="text-xs p-2.5 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--foreground)] w-full md:w-64">
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs border border-[var(--border)] rounded-lg overflow-hidden">
+            <thead class="bg-[var(--background)] text-[var(--muted-foreground)] font-semibold border-b border-[var(--border)] uppercase tracking-wider text-[11px]">
+              <tr>
+                <th class="p-3">CLI Scope</th>
+                <th class="p-3">Flag / Option</th>
+                <th class="p-3">Type</th>
+                <th class="p-3">Default</th>
+                <th class="p-3">Purpose & Engineering Details</th>
+              </tr>
+            </thead>
+            <tbody id="flags-tbody" class="divide-y divide-[var(--border)] font-mono">
+              <!-- Swarm Flags -->
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-cyan-400">rfc_hunt_swarm</td>
+                <td class="p-3 text-emerald-400 font-bold">--mode</td>
+                <td class="p-3 text-[var(--muted-foreground)]">choice</td>
+                <td class="p-3">single</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Selects scan operational mode: <code>single</code> (RFC by number), <code>corpus</code> (Kettle 138 specs), <code>all</code> (IETF registry), <code>pqc</code> (Post-Quantum & TLS 1.3), or <code>ruler</code> (Protocol Ruler).</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-cyan-400">rfc_hunt_swarm</td>
+                <td class="p-3 text-emerald-400 font-bold">--rfc</td>
+                <td class="p-3 text-[var(--muted-foreground)]">string</td>
+                <td class="p-3">9112</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Target RFC specification number when running in <code>--mode single</code> (e.g. <code>9112</code>, <code>7230</code>, <code>8446</code>). The 'RFC' prefix is automatically sanitized.</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-cyan-400">rfc_hunt_swarm</td>
+                <td class="p-3 text-emerald-400 font-bold">--host</td>
+                <td class="p-3 text-[var(--muted-foreground)]">string</td>
+                <td class="p-3">127.0.0.1</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Target IP address or domain. For remote domains, the engine dynamically normalizes raw <code>Host: target.local</code> probes to prevent routing drops.</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-cyan-400">rfc_hunt_swarm</td>
+                <td class="p-3 text-emerald-400 font-bold">--port</td>
+                <td class="p-3 text-[var(--muted-foreground)]">integer</td>
+                <td class="p-3">5006</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Target network port. If set to <code>443</code>, TLS is automatically enabled.</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-cyan-400">rfc_hunt_swarm</td>
+                <td class="p-3 text-emerald-400 font-bold">--tls</td>
+                <td class="p-3 text-[var(--muted-foreground)]">flag</td>
+                <td class="p-3">False</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Wraps client TCP sockets in TLS context with hostname SNI and self-signed certificate tolerance.</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-cyan-400">rfc_hunt_swarm</td>
+                <td class="p-3 text-emerald-400 font-bold">--cycles</td>
+                <td class="p-3 text-[var(--muted-foreground)]">integer</td>
+                <td class="p-3">3</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Maximum probe mutation and combinatorial exploration cycles to run for each scheduled RFC.</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-cyan-400">rfc_hunt_swarm</td>
+                <td class="p-3 text-emerald-400 font-bold">--timeout</td>
+                <td class="p-3 text-[var(--muted-foreground)]">float</td>
+                <td class="p-3">900.0</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Process-scoped Ollama model inference timeout in seconds (900s = 15m). Set to <code>0</code> for unlimited timeout on massive resident models.</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-cyan-400">rfc_hunt_swarm</td>
+                <td class="p-3 text-emerald-400 font-bold">--sec-model</td>
+                <td class="p-3 text-[var(--muted-foreground)]">string</td>
+                <td class="p-3">None</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Selects secondary security specialist model in ModelFusion (e.g. <code>qwen2.5:7b</code>, <code>fenkohq/foundation-sec-8b:latest</code>, <code>deepseek-r1:1.5b</code>).</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-cyan-400">rfc_hunt_swarm</td>
+                <td class="p-3 text-emerald-400 font-bold">--debug</td>
+                <td class="p-3 text-[var(--muted-foreground)]">flag</td>
+                <td class="p-3">False</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Enables James Kettle evaluation trace printing: socket connections, [REQ 1] baseline, [REQ 2] candidate probe, [REQ 3] canary check, and run-length compressed wire dumps.</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-cyan-400">rfc_hunt_swarm</td>
+                <td class="p-3 text-emerald-400 font-bold">--show-response</td>
+                <td class="p-3 text-[var(--muted-foreground)]">flag</td>
+                <td class="p-3">False</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Prints target host response status, latency, and essential protocol headers while stripping minified HTML/CSS/JS noise.</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-cyan-400">rfc_hunt_swarm</td>
+                <td class="p-3 text-emerald-400 font-bold">-v, --verbose</td>
+                <td class="p-3 text-[var(--muted-foreground)]">flag</td>
+                <td class="p-3">False</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Enables complete payload tracing and displays full raw response bodies without summarization.</td>
+              </tr>
+
+              <!-- Protocol Ruler Flags -->
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-purple-400">protocol_ruler</td>
+                <td class="p-3 text-emerald-400 font-bold">--max-size</td>
+                <td class="p-3 text-[var(--muted-foreground)]">integer</td>
+                <td class="p-3">131072</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Upper boundary ceiling in bytes for coarse bracket search when calibrating backend header buffer limits (128 KB).</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-purple-400">protocol_ruler</td>
+                <td class="p-3 text-emerald-400 font-bold">--sequence</td>
+                <td class="p-3 text-[var(--muted-foreground)]">string</td>
+                <td class="p-3">None</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Custom byte sequence to test for front-end expansion/contraction (e.g. <code>\xc0\x8a</code>, hex string <code>c08a</code>, or literal characters).</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-purple-400">protocol_ruler</td>
+                <td class="p-3 text-emerald-400 font-bold">--name</td>
+                <td class="p-3 text-[var(--muted-foreground)]">string</td>
+                <td class="p-3">Custom Probe</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Human-readable label for custom probe sequences tested with <code>--sequence</code>.</td>
+              </tr>
+
+              <!-- main.py Global Flags -->
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-amber-400">main.py</td>
+                <td class="p-3 text-emerald-400 font-bold">--db</td>
+                <td class="p-3 text-[var(--muted-foreground)]">string</td>
+                <td class="p-3">terminator.db</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">SQLite database path for persisting fragments, generated probes, evaluation verdicts, and discovery cascade records.</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-amber-400">main.py</td>
+                <td class="p-3 text-emerald-400 font-bold">--model</td>
+                <td class="p-3 text-[var(--muted-foreground)]">string</td>
+                <td class="p-3">gemma2:2b</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Primary model used for zero-bias micro-inspiration hypothesis generation via Ollama or cloud fallback.</td>
+              </tr>
+              <tr class="flag-row">
+                <td class="p-3 font-semibold text-amber-400">main.py</td>
+                <td class="p-3 text-emerald-400 font-bold">--no-fusion</td>
+                <td class="p-3 text-[var(--muted-foreground)]">flag</td>
+                <td class="p-3">False</td>
+                <td class="p-3 font-sans text-[var(--foreground)]">Disables multi-model consensus panel arbitration, falling back to a single LLM generator agent.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <script>
+    // Tab Switching
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('border-emerald-500', 'text-emerald-500', 'font-semibold');
+        btn.classList.add('border-transparent', 'text-[var(--muted-foreground)]');
+      });
+      document.getElementById('tab-' + tabId).classList.add('border-emerald-500', 'text-emerald-500', 'font-semibold');
+      document.getElementById('tab-' + tabId).classList.remove('border-transparent', 'text-[var(--muted-foreground)]');
+
+      ['cli-builder', 'ruler-sim', 'swarm-arch', 'flag-docs'].forEach(id => {
+        const el = document.getElementById('view-' + id);
+        if (id === tabId) {
+          el.classList.remove('hidden');
+        } else {
+          el.classList.add('hidden');
+        }
+      });
+    }
+
+    // CLI Builder Logic
+    function updateCommand() {
+      const entry = document.getElementById('cfg-entrypoint').value;
+      const mode = document.getElementById('cfg-mode').value;
+      const rfc = document.getElementById('cfg-rfc').value.trim();
+      const host = document.getElementById('cfg-host').value.trim() || '127.0.0.1';
+      const port = document.getElementById('cfg-port').value.trim() || '8080';
+      const secModel = document.getElementById('cfg-secmodel').value;
+      const useTls = document.getElementById('cfg-tls').checked || (port === '443');
+      const isDebug = document.getElementById('cfg-debug').checked;
+      const isShowResp = document.getElementById('cfg-showresp').checked;
+      const isVerbose = document.getElementById('cfg-verbose').checked;
+
+      const rfcContainer = document.getElementById('cfg-rfc-container');
+      const modeContainer = document.getElementById('cfg-mode-container');
+
+      let cmd = 'python -u ';
+      let desc = '';
+
+      if (entry === 'rfc_hunt_swarm.py') {
+        modeContainer.classList.remove('hidden');
+        cmd += `rfc_hunt_swarm.py --mode ${mode} --host ${host} --port ${port}`;
+        if (mode === 'single') {
+          rfcContainer.classList.remove('hidden');
+          cmd += ` --rfc ${rfc || '9112'}`;
+          desc = `Runs a focused 12-agent research swarm cycle against RFC ${rfc || '9112'}.`;
+        } else if (mode === 'ruler') {
+          rfcContainer.classList.add('hidden');
+          desc = `Executes James Kettle's Protocol Ruler engine: calibrates backend header limits and measures 15 byte transformations.`;
+        } else if (mode === 'pqc') {
+          rfcContainer.classList.add('hidden');
+          desc = `Executes the Post-Quantum Cryptography & Hybrid TLS 1.3 specification research corpus.`;
+        } else if (mode === 'corpus') {
+          rfcContainer.classList.add('hidden');
+          desc = `Executes James Kettle's curated 138-RFC HTTP/SMTP specification research corpus.`;
+        } else {
+          rfcContainer.classList.add('hidden');
+          desc = `Indexes and evaluates all active IETF protocol specifications continuously.`;
+        }
+
+        if (useTls) cmd += ' --tls';
+        if (secModel) cmd += ` --sec-model ${secModel}`;
+        if (isDebug) cmd += ' --debug';
+        if (isShowResp) cmd += ' --show-response';
+        if (isVerbose) cmd += ' --verbose';
+
+      } else if (entry === 'main.py') {
+        modeContainer.classList.add('hidden');
+        rfcContainer.classList.add('hidden');
+        if (mode === 'ruler') {
+          cmd += `main.py ruler --target ${host} --port ${port}`;
+          if (useTls) cmd += ' --tls';
+          if (isDebug) cmd += ' --debug';
+          if (isVerbose) cmd += ' -v';
+          desc = 'Executes modular Protocol Ruler audit via main.py subcommands.';
+        } else {
+          cmd += `main.py hunt --target ${host} --port ${port}`;
+          if (useTls) cmd += ' --tls';
+          desc = 'Runs autonomous continuous flaw hunter via main.py.';
+        }
+      } else {
+        modeContainer.classList.add('hidden');
+        rfcContainer.classList.add('hidden');
+        cmd += `protocol_ruler.py --host ${host} --port ${port}`;
+        if (useTls) cmd += ' --tls';
+        if (isDebug) cmd += ' --debug';
+        if (isVerbose) cmd += ' -v';
+        desc = 'Direct standalone invocation of the Protocol Ruler engine.';
+      }
+
+      document.getElementById('command-output').textContent = cmd;
+      document.getElementById('command-description').textContent = desc;
+    }
+
+    function copyCommand() {
+      const text = document.getElementById('command-output').textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('btn-copy');
+        const orig = btn.innerHTML;
+        btn.innerHTML = '✓ Copied!';
+        btn.classList.replace('bg-emerald-600', 'bg-emerald-700');
+        setTimeout(() => {
+          btn.innerHTML = orig;
+          btn.classList.replace('bg-emerald-700', 'bg-emerald-600');
+        }, 2000);
+      });
+    }
+
+    function applyPreset(key) {
+      if (key === 'ruler-local') {
+        document.getElementById('cfg-entrypoint').value = 'rfc_hunt_swarm.py';
+        document.getElementById('cfg-mode').value = 'ruler';
+        document.getElementById('cfg-host').value = '127.0.0.1';
+        document.getElementById('cfg-port').value = '8080';
+        document.getElementById('cfg-tls').checked = false;
+        document.getElementById('cfg-debug').checked = true;
+      } else if (key === 'pqc-remote') {
+        document.getElementById('cfg-entrypoint').value = 'rfc_hunt_swarm.py';
+        document.getElementById('cfg-mode').value = 'pqc';
+        document.getElementById('cfg-host').value = 'target-app.internal';
+        document.getElementById('cfg-port').value = '443';
+        document.getElementById('cfg-tls').checked = true;
+        document.getElementById('cfg-debug').checked = true;
+      } else if (key === 'corpus-kettle') {
+        document.getElementById('cfg-entrypoint').value = 'rfc_hunt_swarm.py';
+        document.getElementById('cfg-mode').value = 'corpus';
+        document.getElementById('cfg-host').value = '127.0.0.1';
+        document.getElementById('cfg-port').value = '8080';
+        document.getElementById('cfg-secmodel').value = 'qwen2.5:7b';
+        document.getElementById('cfg-debug').checked = true;
+      } else if (key === 'ruler-custom') {
+        document.getElementById('cfg-entrypoint').value = 'main.py';
+        document.getElementById('cfg-mode').value = 'ruler';
+        document.getElementById('cfg-host').value = '127.0.0.1';
+        document.getElementById('cfg-port').value = '8080';
+        document.getElementById('cfg-debug').checked = true;
+      }
+      updateCommand();
+    }
+
+    // Protocol Ruler Simulator
+    function runSim() {
+      const BASELINE_LIMIT = 64040;
+      const seqType = document.getElementById('sim-seq').value;
+      const probeLen = parseInt(document.getElementById('sim-length').value, 10);
+      document.getElementById('sim-curr-len').textContent = probeLen.toLocaleString();
+
+      let delta = 0;
+      let seqRepr = '';
+      let seqName = '';
+
+      if (seqType === 'c0_8a') {
+        delta = 10;
+        seqRepr = '\\xc0\\x8a';
+        seqName = 'Kettle Overlong UTF-8';
+      } else if (seqType === 'fi_ligature') {
+        delta = -1;
+        seqRepr = '\\xef\\xac\\x81';
+        seqName = "Unicode Ligature 'fi'";
+      } else if (seqType === 'line_folding') {
+        delta = -2;
+        seqRepr = '\\r\\n ';
+        seqName = 'Obsolete Line Folding';
+      } else if (seqType === 'ip_injection') {
+        delta = 28;
+        seqRepr = 'X-Forwarded-For: 127.0.0.1\\r\\n';
+        seqName = 'IP Header Injection';
+      } else {
+        delta = 0;
+        seqRepr = '';
+        seqName = 'Pure Baseline';
+      }
+
+      const effectiveBackendLen = probeLen + delta;
+      const isRejected = effectiveBackendLen > BASELINE_LIMIT;
+
+      // Status Card
+      const card = document.getElementById('sim-status-card');
+      const codeEl = document.getElementById('sim-status-code');
+      const descEl = document.getElementById('sim-status-desc');
+
+      if (isRejected) {
+        codeEl.textContent = '400 Bad Request';
+        codeEl.className = 'text-xl font-bold font-mono text-rose-500 mt-1';
+        descEl.textContent = `Backend limit exceeded! (${effectiveBackendLen:,} > 64,040)`;
+      } else {
+        codeEl.textContent = '200 OK';
+        codeEl.className = 'text-xl font-bold font-mono text-emerald-500 mt-1';
+        descEl.textContent = `Within backend buffer budget (${effectiveBackendLen:,} <= 64,040)`;
+      }
+
+      // Delta Badge
+      const badge = document.getElementById('sim-delta-badge');
+      if (delta > 0) {
+        badge.textContent = `Delta: +${delta} Bytes (Expansion)`;
+        badge.className = 'px-2 py-0.5 text-xs font-mono font-bold rounded bg-rose-500/10 text-rose-500 border border-rose-500/20';
+      } else if (delta < 0) {
+        badge.textContent = `Delta: ${delta} Bytes (Contraction)`;
+        badge.className = 'px-2 py-0.5 text-xs font-mono font-bold rounded bg-amber-500/10 text-amber-500 border border-amber-500/20';
+      } else {
+        badge.textContent = `Delta: 0 Bytes (Verbatim)`;
+        badge.className = 'px-2 py-0.5 text-xs font-mono font-bold rounded bg-emerald-500/10 text-emerald-500 border border-emerald-500/20';
+      }
+
+      document.getElementById('sim-wire-len').textContent = `${probeLen:,} bytes`;
+
+      // Wire Dump Preview
+      let wire = `GET / HTTP/1.1\r\nHost: target.local\r\nUser-Agent: ProtocolRuler/1.0\r\nA: `;
+      if (seqRepr) {
+        wire += `${seqRepr} AAA...{${probeLen - 2}}\r\nConnection: close\r\n\r\n`;
+      } else {
+        wire += `AAA...{${probeLen}}\r\nConnection: close\r\n\r\n`;
+      }
+      document.getElementById('sim-client-wire').textContent = wire;
+
+      // Backend Calc
+      let calc = `[*] Backend Buffer Capacity : 64,040 bytes\n`;
+      calc += `[*] Client Sent Length      : ${probeLen:,} bytes\n`;
+      calc += `[*] Front-End Mutation     : ${seqName}\n`;
+      calc += `[*] Sequence Delta         : ${delta > 0 ? '+' : ''}${delta} bytes\n`;
+      calc += `[*] Effective Backend Size : ${effectiveBackendLen:,} bytes\n`;
+      calc += `[*] Verdict                : ${isRejected ? 'LIMIT EXCEEDED (400 Bad Request)' : 'SAFE TRANSMISSION (200 OK)'}\n`;
+      calc += `--------------------------------------------------------\n`;
+      if (seqType === 'c0_8a') {
+        calc += `(!) Notice: Swapping 2 ASCII bytes for \\xc0\\x8a causes the\n`;
+        calc += `    400 Bad Request cliff to shift from 64,040 down to 64,030,\n`;
+        calc += `    proving the front-end expanded \\xc0\\x8a by exactly 10 bytes!`;
+      } else {
+        calc += `Physical ruler equation: Delta = Baseline_Limit - Mutated_Limit`;
+      }
+      document.getElementById('sim-backend-calc').textContent = calc;
+    }
+
+    // Flag Search Filter
+    function filterFlags() {
+      const q = document.getElementById('flag-search').value.toLowerCase();
+      document.querySelectorAll('#flags-tbody tr').forEach(row => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(q) ? '' : 'none';
+      });
+    }
+
+    // Init
+    updateCommand();
+    runSim();
+  </script>
+</body>
+</html>

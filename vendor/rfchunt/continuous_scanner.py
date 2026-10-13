@@ -20,6 +20,7 @@ from rfc_fetcher import RFCFetcher
 from weaponizer import RQPWeaponizer
 from engine.orchestrator import ProtocolResearchOrchestrator
 from engine.taxonomy import ImplementationAnomaly, AnomalyCategory
+from engine.terminator_rfc_selector import TerminatorRFCSelector
 
 
 class ContinuousFlawHunter:
@@ -111,18 +112,26 @@ class ContinuousFlawHunter:
                 rfc_queue = [num_part]
             self.on_progress(f"[*] Single RFC target selected: RFC {rfc_queue[0]}")
         else:
-            # The RFC Queue explicitly starts with RFC-MCP (num 0: Model Context Protocol Specification)
-            rfc_queue = [0]
+            # Prioritize the Terminator Core RFC suite (Starting with RFC 9112: HTTP/1.1 Framing & Line Terminators)
+            terminator_suite = TerminatorRFCSelector.get_terminator_corpus()
+            rfc_queue = list(terminator_suite)
+            self.on_progress(f"[*] Initialized Terminator Core RFC Suite: {len(rfc_queue)} specifications (Starting with RFC {rfc_queue[0]}).")
 
             if keywords:
                 self.on_progress(f"[*] Querying RFC Editor index for active RFCs matching: {keywords}...")
                 discovered = self.fetcher.get_all_active_rfcs(keywords=keywords, max_rfcs=max_rfcs, reverse=True)
                 self.on_progress(f"[+] Discovered {len(discovered)} active RFCs matching keywords.")
+                for c in discovered:
+                    if c not in rfc_queue:
+                        rfc_queue.append(c)
             elif kettle and not all_active:
                 self.on_progress("[*] Loading James Kettle Curated Corpus: 138 HTTP & SMTP Protocol Specifications...")
                 discovered = self.fetcher.get_kettle_corpus(max_rfcs=max_rfcs or 138)
                 self.on_progress(f"[+] Total Kettle Corpus RFCs queued: {len(discovered)}")
-            else:
+                for c in discovered:
+                    if c not in rfc_queue:
+                        rfc_queue.append(c)
+            elif all_active:
                 self.on_progress("[*] Indexing active (non-obsoleted) protocol RFCs from RFC Editor repository...")
                 discovered = self.fetcher.discover_active_protocol_rfcs(
                     include_tier2=True,
@@ -130,17 +139,16 @@ class ContinuousFlawHunter:
                     unrestricted=unrestricted,
                 )
                 self.on_progress(f"[+] Total Active Protocol RFCs queued: {len(discovered)}")
-
-            for c in discovered:
-                if c not in rfc_queue:
-                    rfc_queue.append(c)
+                for c in discovered:
+                    if c not in rfc_queue:
+                        rfc_queue.append(c)
 
         if resume:
             already_scanned = set(self.db.get_scanned_rfc_nums())
             unscanned_queue = [num for num in rfc_queue if num not in already_scanned]
-            # Always ensure RFC-MCP is preserved if not yet scanned
-            if 0 not in already_scanned and 0 not in unscanned_queue:
-                unscanned_queue.insert(0, 0)
+            # If all core RFCs have been scanned, re-evaluate RFC 9112 to ensure continuous fuzzing coverage
+            if not unscanned_queue and rfc_queue:
+                unscanned_queue = [rfc_queue[0]]
             self.on_progress(f"[*] Resume status: {len(already_scanned)} RFCs already in database; {len(unscanned_queue)} RFCs queued to evaluate.")
             rfc_queue = unscanned_queue
 

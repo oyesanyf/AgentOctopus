@@ -55,11 +55,6 @@ def main():
     parser.add_argument("--no-lab", action="store_true", help="Do not spawn the built-in mock lab server; target an existing server instead")
     parser.add_argument("--comb-only", "--offline", dest="comb_only", action="store_true", help="Comb through RFCs, chunk fragments, and generate probes into database without testing hosts")
     parser.add_argument("--mcp", action="store_true", help="Launch the MCP server instead of the continuous hunter")
-    parser.add_argument("--swarm", action="store_true", help="Launch the Multi-Agent LangGraph Swarm (rfc_hunt_swarm.py)")
-    parser.add_argument("--mode", choices=["single", "corpus", "all"], default="all", help="Swarm mode: single RFC, Kettle corpus, or all protocol RFCs")
-    parser.add_argument("--cycles", type=int, default=3, help="Max mutation cycles to run per RFC in Swarm mode")
-    parser.add_argument("--timeout", type=float, default=900.0, help="Ollama LLM inference timeout in seconds (default: 900.0)")
-    parser.add_argument("--sec-model", type=str, default=None, help="Secondary security specialist model (e.g. fenkohq/foundation-sec-8b:latest)")
     args = parser.parse_args()
 
     # Determine TLS requirement (automatic for port 443)
@@ -70,7 +65,7 @@ def main():
     print("  HTTP TERMINATOR: AUTONOMOUS RESEARCH FACTORY")
     print("  Architecture: PortSwigger DEF CON 34 / Black Hat USA 2026")
     print("  Engine: Google Gemma 2 + ModelFusion via Ollama (Zero Cost 24/7)")
-    print("  Starting Spec: RFC-MCP (Model Context Protocol Architecture)")
+    print("  Starting Spec: RFC 9112 (HTTP/1.1 Message Syntax & Framing - Primary Terminator Spec)")
     print("=" * 70)
 
     # 1. Start the Local Protocol Test Lab Server (Only when targeting default local port 8080 and not explicitly disabled)
@@ -105,63 +100,14 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    # 2. Launch Swarm, MCP Server, or Continuous Hunter
+    # 2. Launch Hunter or MCP Server
     try:
-        if args.swarm:
-            print(f"\n[+] Step 2: Launching LangGraph Protocol Research Swarm (mode={args.mode}, timeout={args.timeout}s)...")
-            from rfc_hunt_swarm import ProtocolResearchSwarm
-            os.environ["OLLAMA_TIMEOUT"] = str(args.timeout)
-            sec_model = args.sec_model or ("fenkohq/foundation-sec-8b:latest" if args.cisco else None)
-            swarm = ProtocolResearchSwarm(host=args.host, port=args.port, db_path="terminator.db", sec_model=sec_model)
-            graph = swarm.build_graph()
-            if args.mode == "single":
-                rfcs_to_scan = [(args.rfc or "9112").replace("RFC", "")]
-            elif args.mode == "corpus":
-                print("[*] Resolving James Kettle Research Corpus...")
-                rfcs_to_scan = swarm.fetcher.get_kettle_corpus()
-            elif args.mode == "all":
-                print("[*] Discovering all active protocol RFCs from IETF registry...")
-                rfcs_to_scan = swarm.fetcher.discover_active_protocol_rfcs(unrestricted=args.unrestricted)
-            else:
-                rfcs_to_scan = [(args.rfc or "9112").replace("RFC", "")]
-
-            print(f"\n[*] Queue ready: {len(rfcs_to_scan)} RFC(s) scheduled for Swarm processing.\n" + "="*60)
-            for rfc_item in rfcs_to_scan:
-                rfc_num_str = str(rfc_item)
-                print(f"\n[*] --- Initiating Swarm Cycle for RFC {rfc_num_str} ---")
-                initial_state = {
-                    "rfc_num": rfc_num_str,
-                    "rfc_text": "",
-                    "fragments": [],
-                    "current_fragment": "",
-                    "generated_candidates": [],
-                    "current_probe": b"",
-                    "reward": 0.0,
-                    "current_anomaly": None,
-                    "current_vuln": None,
-                    "novel_technique_found": None,
-                    "cascade_results": None,
-                    "cycle_count": 0,
-                    "max_cycles": args.cycles,
-                    "history": []
-                }
-                try:
-                    for event in graph.stream(initial_state, {"recursion_limit": 5000}):
-                        for node_name, state_update in event.items():
-                            last_hist = state_update.get('history', [])[-1] if state_update.get('history') else ''
-                            print(f"[{node_name}] -> {last_hist}")
-                            if "current_vuln" in state_update and state_update["current_vuln"]:
-                                print(f"    !!! VULNERABILITY CONFIRMED: {state_update['current_vuln'].vuln_id}")
-                except Exception as e:
-                    print(f"[!] Swarm encountered a fault on RFC {rfc_num_str}: {e}")
-                    continue
-            print("\n[*] Swarm Execution Completed.")
-        elif args.mcp:
+        if args.mcp:
             print(f"\n[+] Step 2: Launching Model Context Protocol (MCP) Server over stdio...")
             mcp_server = TerminatorMCPServer()
             mcp_server.run_stdio()
         else:
-            print(f"\n[+] Step 2: Launching Continuous Flaw Hunter (Starting with RFC-MCP)...")
+            print(f"\n[+] Step 2: Launching Continuous Flaw Hunter (Starting with RFC 9112 - HTTP/1.1 Message Framing)...")
             sec_model = "fenkohq/foundation-sec-8b:latest" if args.cisco else None
             hunter = ContinuousFlawHunter(
                 target_host=args.host,

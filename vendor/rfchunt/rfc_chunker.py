@@ -15,7 +15,12 @@ OPERATIVE_KEYWORDS = [
     "upgrade", "connect", "tunnel", "chunked", "boundary",
     "status line", "request line", "whitespace", "delimit",
     "response", "status code", "pipelining", "bdat",
-    "folding", "dot-stuffing", "bare lf", "mail from", "rcpt to"
+    "folding", "dot-stuffing", "bare lf", "mail from", "rcpt to",
+    # Terminator, Intermediary, and Message Boundary Keywords
+    "terminator", "line terminator", "crlf", "bare cr",
+    "intermediary", "gateway", "reverse proxy", "proxy",
+    "recipient", "sender", "delimiter", "chunk extension",
+    "obs-fold", "line folding"
 ]
 
 
@@ -50,7 +55,6 @@ class RFCChunker:
         cleaned_text = cls.clean_text(rfc_text)
 
         # Split into sentences using punctuation boundaries
-        # Lookbehind for punctuation, lookahead for Capital letter or number
         sentence_end = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'])")
         raw_sentences = [
             s.strip() for s in sentence_end.split(cleaned_text) if len(s.strip()) >= min_sentence_len
@@ -70,3 +74,30 @@ class RFCChunker:
                 chunks.append((sanitized_chunk, ",".join(matched[:5])))
 
         return chunks
+
+    @classmethod
+    def chunk_document_for_terminator(
+        cls, rfc_text: str, sentences_per_chunk: int = 2, min_sentence_len: int = 25
+    ) -> List[Tuple[str, str, float]]:
+        """
+        Chunks the document and ranks fragments by their Terminator Discrepancy Score.
+        Returns a list of tuples: (fragment_text, matched_keywords_csv, terminator_score).
+        """
+        try:
+            from engine.terminator_rfc_selector import TerminatorRFCSelector
+        except ImportError:
+            TerminatorRFCSelector = None
+
+        base_chunks = cls.chunk_document(rfc_text, sentences_per_chunk=sentences_per_chunk, min_sentence_len=min_sentence_len)
+        scored_chunks: List[Tuple[str, str, float]] = []
+
+        for frag_text, kw_csv in base_chunks:
+            if TerminatorRFCSelector:
+                score, _ = TerminatorRFCSelector.score_text_for_terminator(frag_text)
+            else:
+                score = 1.0
+            scored_chunks.append((frag_text, kw_csv, score))
+
+        # Sort highest terminator relevance first
+        scored_chunks.sort(key=lambda x: x[2], reverse=True)
+        return scored_chunks

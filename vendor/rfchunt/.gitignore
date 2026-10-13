@@ -1,0 +1,36 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local Databases and Evidence Telemetry
+*.db
+*.sqlite
+*.sqlite3
+logs/
+forensics/
+caldera_export/
+plugins/
+
+# Compressed Archives
+*.zip
+*.tar.gz
+*.tgz
+
+# Environment & Virtual Environments
+.env
+.venv/
+env/
+venv/
+ENV/
+
+# IDE & Editor Settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS Artifacts
+Thumbs.db
+Desktop.ini
+.DS_Store

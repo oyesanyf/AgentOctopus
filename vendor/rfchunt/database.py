@@ -6,6 +6,7 @@ evaluations, anomalies, and discovery cascade hypotheses.
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -13,13 +14,15 @@ from typing import Any, Dict, List, Optional, Tuple
 class Database:
     def __init__(self, db_path: str = "terminator.db"):
         self.db_path = Path(db_path)
+        self._lock = threading.Lock()
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
     def _init_schema(self) -> None:
-        with self.conn:
-            self.conn.executescript("""
+        with self._lock:
+            with self.conn:
+                self.conn.executescript("""
                 CREATE TABLE IF NOT EXISTS rfcs (
                     rfc_id TEXT PRIMARY KEY,
                     title TEXT,
@@ -157,27 +160,29 @@ class Database:
             """)
 
     def save_rfc(self, rfc_id: str, title: str, source_url: str, doc_path: str) -> None:
-        with self.conn:
-            self.conn.execute(
-                """
-                INSERT OR REPLACE INTO rfcs (rfc_id, title, source_url, doc_path)
-                VALUES (?, ?, ?, ?)
-                """,
-                (rfc_id, title, source_url, doc_path),
-            )
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO rfcs (rfc_id, title, source_url, doc_path)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (rfc_id, title, source_url, doc_path),
+                )
 
     def save_fragments(self, rfc_id: str, fragments: List[Tuple[str, str]]) -> int:
         count = 0
-        with self.conn:
-            for content, keywords in fragments:
-                self.conn.execute(
-                    """
-                    INSERT INTO fragments (rfc_id, content, keywords)
-                    VALUES (?, ?, ?)
-                    """,
-                    (rfc_id, content, keywords),
-                )
-                count += 1
+        with self._lock:
+            with self.conn:
+                for content, keywords in fragments:
+                    self.conn.execute(
+                        """
+                        INSERT INTO fragments (rfc_id, content, keywords)
+                        VALUES (?, ?, ?)
+                        """,
+                        (rfc_id, content, keywords),
+                    )
+                    count += 1
         return count
 
     def get_ingested_rfc_ids(self) -> List[str]:
@@ -221,15 +226,16 @@ class Database:
         source_type: str = "llm",
         parent_probe_id: Optional[int] = None,
     ) -> int:
-        with self.conn:
-            cursor = self.conn.execute(
-                """
-                INSERT INTO probes (fragment_id, rationale, raw_request, is_clean, source_type, parent_probe_id)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (fragment_id, rationale, raw_request, 1 if is_clean else 0, source_type, parent_probe_id),
-            )
-            return cursor.lastrowid
+        with self._lock:
+            with self.conn:
+                cursor = self.conn.execute(
+                    """
+                    INSERT INTO probes (fragment_id, rationale, raw_request, is_clean, source_type, parent_probe_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (fragment_id, rationale, raw_request, 1 if is_clean else 0, source_type, parent_probe_id),
+                )
+                return cursor.lastrowid
 
     def get_pending_probes(self, target_host: str, limit: int = 50) -> List[sqlite3.Row]:
         cursor = self.conn.cursor()
@@ -255,15 +261,16 @@ class Database:
         details: str,
         raw_evidence: str,
     ) -> int:
-        with self.conn:
-            cursor = self.conn.execute(
-                """
-                INSERT INTO evaluations (probe_id, target_host, target_port, is_vulnerable, desync_class, details, raw_evidence)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (probe_id, target_host, target_port, 1 if is_vulnerable else 0, desync_class, details, raw_evidence),
-            )
-            return cursor.lastrowid
+        with self._lock:
+            with self.conn:
+                cursor = self.conn.execute(
+                    """
+                    INSERT INTO evaluations (probe_id, target_host, target_port, is_vulnerable, desync_class, details, raw_evidence)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (probe_id, target_host, target_port, 1 if is_vulnerable else 0, desync_class, details, raw_evidence),
+                )
+                return cursor.lastrowid
 
     def record_anomaly(
         self,
@@ -272,15 +279,16 @@ class Database:
         description: str,
         raw_response: bytes,
     ) -> int:
-        with self.conn:
-            cursor = self.conn.execute(
-                """
-                INSERT INTO anomalies (eval_id, anomaly_type, description, raw_response)
-                VALUES (?, ?, ?, ?)
-                """,
-                (eval_id, anomaly_type, description, raw_response),
-            )
-            return cursor.lastrowid
+        with self._lock:
+            with self.conn:
+                cursor = self.conn.execute(
+                    """
+                    INSERT INTO anomalies (eval_id, anomaly_type, description, raw_response)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (eval_id, anomaly_type, description, raw_response),
+                )
+                return cursor.lastrowid
 
     def save_cascade_hypothesis(
         self,
@@ -289,15 +297,16 @@ class Database:
         hypothesis_text: str,
         suggested_probes: List[Dict[str, Any]],
     ) -> int:
-        with self.conn:
-            cursor = self.conn.execute(
-                """
-                INSERT INTO cascade_hypotheses (trigger_eval_id, category, hypothesis_text, suggested_probes_json)
-                VALUES (?, ?, ?, ?)
-                """,
-                (trigger_eval_id, category, hypothesis_text, json.dumps(suggested_probes)),
-            )
-            return cursor.lastrowid
+        with self._lock:
+            with self.conn:
+                cursor = self.conn.execute(
+                    """
+                    INSERT INTO cascade_hypotheses (trigger_eval_id, category, hypothesis_text, suggested_probes_json)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (trigger_eval_id, category, hypothesis_text, json.dumps(suggested_probes)),
+                )
+                return cursor.lastrowid
 
     def get_confirmed_findings(self) -> List[sqlite3.Row]:
         cursor = self.conn.cursor()
@@ -325,15 +334,16 @@ class Database:
         is_obsolete: bool = False,
         superseded_by: Optional[str] = None,
     ) -> None:
-        with self.conn:
-            self.conn.execute(
-                """
-                INSERT OR REPLACE INTO rfc_requirements
-                (requirement_id, rfc_id, section, req_type, raw_statement, formal_expression, normative_keyword, is_obsolete, superseded_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (req_id, rfc_id, section, req_type, raw_statement, formal_expression, normative_keyword, 1 if is_obsolete else 0, superseded_by),
-            )
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO rfc_requirements
+                    (requirement_id, rfc_id, section, req_type, raw_statement, formal_expression, normative_keyword, is_obsolete, superseded_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (req_id, rfc_id, section, req_type, raw_statement, formal_expression, normative_keyword, 1 if is_obsolete else 0, superseded_by),
+                )
 
     def save_implementation_anomaly(
         self,
@@ -348,26 +358,27 @@ class Database:
         divergence_matrix: Optional[Dict[str, Any]] = None,
         is_environmental_noise: bool = False,
     ) -> None:
-        with self.conn:
-            self.conn.execute(
-                """
-                INSERT OR REPLACE INTO implementation_anomalies
-                (anomaly_id, target_engine, category, observed_behavior, expected_behavior, raw_probe, raw_response, triggering_rule_id, divergence_matrix, is_environmental_noise)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    anomaly_id,
-                    target_engine,
-                    category,
-                    observed_behavior,
-                    expected_behavior,
-                    raw_probe,
-                    raw_response,
-                    triggering_rule_id,
-                    json.dumps(divergence_matrix) if divergence_matrix else None,
-                    1 if is_environmental_noise else 0,
-                ),
-            )
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO implementation_anomalies
+                    (anomaly_id, target_engine, category, observed_behavior, expected_behavior, raw_probe, raw_response, triggering_rule_id, divergence_matrix, is_environmental_noise)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        anomaly_id,
+                        target_engine,
+                        category,
+                        observed_behavior,
+                        expected_behavior,
+                        raw_probe,
+                        raw_response,
+                        triggering_rule_id,
+                        json.dumps(divergence_matrix) if divergence_matrix else None,
+                        1 if is_environmental_noise else 0,
+                    ),
+                )
 
     def save_reproducible_vulnerability(
         self,
@@ -381,25 +392,26 @@ class Database:
         delta_debug_steps: int,
         provenance_chain: List[str],
     ) -> None:
-        with self.conn:
-            self.conn.execute(
-                """
-                INSERT OR REPLACE INTO reproducible_vulnerabilities
-                (vuln_id, anomaly_id, impact, minimized_probe, reproducibility_rate, verification_attempts, successful_reproductions, delta_debug_steps, provenance_chain)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    vuln_id,
-                    anomaly_id,
-                    impact,
-                    minimized_probe,
-                    reproducibility_rate,
-                    verification_attempts,
-                    successful_reproductions,
-                    delta_debug_steps,
-                    json.dumps(provenance_chain),
-                ),
-            )
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO reproducible_vulnerabilities
+                    (vuln_id, anomaly_id, impact, minimized_probe, reproducibility_rate, verification_attempts, successful_reproductions, delta_debug_steps, provenance_chain)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        vuln_id,
+                        anomaly_id,
+                        impact,
+                        minimized_probe,
+                        reproducibility_rate,
+                        verification_attempts,
+                        successful_reproductions,
+                        delta_debug_steps,
+                        json.dumps(provenance_chain),
+                    ),
+                )
 
     def save_novel_technique(
         self,
@@ -411,14 +423,15 @@ class Database:
         supporting_vulnerabilities: List[str],
         recommended_mitigation: str,
     ) -> None:
-        with self.conn:
-            self.conn.execute(
-                """
-                INSERT OR REPLACE INTO novel_techniques
-                (technique_id, title, conceptual_model, inversion_pattern, affected_architectures, supporting_vulnerabilities, recommended_mitigation)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
+        with self._lock:
+            with self.conn:
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO novel_techniques
+                    (technique_id, title, conceptual_model, inversion_pattern, affected_architectures, supporting_vulnerabilities, recommended_mitigation)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
                     technique_id,
                     title,
                     conceptual_model,

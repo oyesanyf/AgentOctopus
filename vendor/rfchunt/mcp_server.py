@@ -17,13 +17,40 @@ class TargetAuthorizationGate:
     ALLOWED_TARGETS: Set[str] = {"127.0.0.1", "localhost", "::1", "[::1]"}
     MAX_PAYLOAD_KB = 64
     RATE_LIMIT_MIN = 60
+    UNRESTRICTED: bool = False
     
     _requests = []
+
+    @classmethod
+    def allow_any_target(cls) -> None:
+        cls.UNRESTRICTED = True
+        cls.ALLOWED_TARGETS.add("*")
+
+    @classmethod
+    def get_allowed_targets(cls) -> Set[str]:
+        targets = set(cls.ALLOWED_TARGETS)
+        extra = os.environ.get("RFCHUNT_AUTHORIZED_TARGETS", "")
+        if extra:
+            for t in extra.split(","):
+                if t.strip():
+                    targets.add(t.strip())
+        return targets
+
+    @classmethod
+    def authorize_target(cls, host: str) -> None:
+        cls.ALLOWED_TARGETS.add(host)
     
     @classmethod
     def check_auth(cls, host: str, payload_len: int = 0, is_weaponization: bool = False, is_heavy_hunt: bool = False) -> None:
-        if host not in cls.ALLOWED_TARGETS:
-            raise PermissionError(f"Target {host} not in allowed targets: {cls.ALLOWED_TARGETS}")
+        if cls.UNRESTRICTED:
+            return
+        allowed = cls.get_allowed_targets()
+        if "*" not in allowed and "all" not in allowed and host not in allowed:
+            raise PermissionError(
+                f"Target {host} not in allowed targets: {allowed}. "
+                f"Active security testing against public/external services requires explicit authorization "
+                f"(pass --authorized, or set RFCHUNT_AUTHORIZED_TARGETS={host} or RFCHUNT_AUTHORIZED_TARGETS=*)."
+            )
         if payload_len > cls.MAX_PAYLOAD_KB * 1024:
             raise ValueError(f"Payload too large: {payload_len} bytes")
             
@@ -219,65 +246,9 @@ class TerminatorMCPServer:
                 "description": "Retrieves real-time counts of ingested RFCs, micro-fragments, generated probes, confirmed vulnerabilities, and anomaly detections.",
                 "inputSchema": {"type": "object"},
             },
-            {
-                "name": "run_swarm_hunt",
-                "description": "Executes the 12-module LangGraph Protocol Research Swarm (rfc_hunt_swarm.py) against the target host, exploring ABNF inversions, causal anomalies, and metamorphic testing across RFCs.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "mode": {"type": "string", "enum": ["single", "corpus", "all"], "default": "single"},
-                        "rfc": {"type": "string", "default": "9112"},
-                        "target_host": {"type": "string", "default": "127.0.0.1"},
-                        "target_port": {"type": "integer", "default": 8080},
-                        "cycles": {"type": "integer", "default": 3},
-                        "timeout": {"type": "number", "default": 900.0},
-                    },
-                },
-            },
         ]
 
     def _execute_tool(self, name: str, args: Dict[str, Any]) -> Any:
-        if name == "run_swarm_hunt":
-            TargetAuthorizationGate.check_auth(args.get("target_host", "127.0.0.1"), is_heavy_hunt=True)
-            from rfc_hunt_swarm import ProtocolResearchSwarm
-            os.environ["OLLAMA_TIMEOUT"] = str(args.get("timeout", 900.0))
-            swarm = ProtocolResearchSwarm(
-                host=args.get("target_host", "127.0.0.1"),
-                port=args.get("target_port", 8080),
-                db_path=self.db_path,
-            )
-            graph = swarm.build_graph()
-            mode = args.get("mode", "single")
-            if mode == "single":
-                rfcs = [(args.get("rfc") or "9112").replace("RFC", "")]
-            elif mode == "corpus":
-                rfcs = swarm.fetcher.get_kettle_corpus()[:5]
-            else:
-                rfcs = swarm.fetcher.discover_active_protocol_rfcs()[:5]
-            confirmed = []
-            for rfc_num_str in rfcs:
-                initial_state = {
-                    "rfc_num": str(rfc_num_str),
-                    "rfc_text": "",
-                    "fragments": [],
-                    "current_fragment": "",
-                    "generated_candidates": [],
-                    "current_probe": b"",
-                    "reward": 0.0,
-                    "current_anomaly": None,
-                    "current_vuln": None,
-                    "novel_technique_found": None,
-                    "cascade_results": None,
-                    "cycle_count": 0,
-                    "max_cycles": args.get("cycles", 1),
-                    "history": [],
-                }
-                for event in graph.stream(initial_state, {"recursion_limit": 500}):
-                    for node_name, state_update in event.items():
-                        if "current_vuln" in state_update and state_update["current_vuln"]:
-                            confirmed.append(state_update["current_vuln"].vuln_id)
-            return {"status": "success", "mode": mode, "rfcs_scanned": rfcs, "confirmed_vulnerabilities": confirmed}
-
         if name == "run_continuous_hunt":
             TargetAuthorizationGate.check_auth(args.get('target_host', '127.0.0.1'), is_heavy_hunt=True)
             hunter = ContinuousFlawHunter(

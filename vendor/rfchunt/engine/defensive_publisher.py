@@ -24,18 +24,24 @@ class DefensiveIntelligencePublisher:
     """
 
     def __init__(self, output_dir: Optional[str] = None):
-        self.output_dir = Path(output_dir or "D:/harfile/AgentOctopus/data")
+        self.output_dir = Path(output_dir or "data")
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.octopus_dir = Path("D:/harfile/AgentOctopus/data") if Path("D:/harfile/AgentOctopus/data").exists() else None
         self.arm106_rules: List[Arm106DefensiveRule] = []
         self.arm107_tests: List[Arm107RegressionTest] = []
 
     def publish_finding(
-        self, vuln: ReproducibleVulnerability, rfc_anchor: str = "RFC9112"
-    ) -> Tuple[Arm106DefensiveRule, Arm107RegressionTest]:
+        self, vuln: ReproducibleVulnerability, rfc_anchor: str = "RFC9112", evidence_verified: bool = True
+    ) -> Tuple[Optional[Arm106DefensiveRule], Optional[Arm107RegressionTest]]:
         """
         Processes a confirmed reproducible vulnerability and synthesizes both
         defensive hardening rules and continuous regression tests.
+        Suspends automatic publication if evidence is not confirmed.
         """
+        if not evidence_verified:
+            print(f"[!] [SUSPENDED] Automatic publication suspended for {vuln.vuln_id}: unverified evidence or framing artifact.")
+            return None, None
+
         # 1. Synthesize Arm 106 Defensive Hardening Rule
         arm106_rule = self._synthesize_arm106_rule(vuln, rfc_anchor)
         self.arm106_rules.append(arm106_rule)
@@ -145,6 +151,16 @@ class DefensiveIntelligencePublisher:
         ]
         with open(arm107_file, "w", encoding="utf-8") as f:
             json.dump(arm107_data, f, indent=2)
+
+        # Conditionally mirror to AgentOctopus if the directory exists
+        if self.octopus_dir:
+            try:
+                with open(self.octopus_dir / "defensive_rules_arm106.json", "w", encoding="utf-8") as f:
+                    json.dump(arm106_data, f, indent=2)
+                with open(self.octopus_dir / "regression_suite_arm107.json", "w", encoding="utf-8") as f:
+                    json.dump(arm107_data, f, indent=2)
+            except Exception:
+                pass
 
         return {
             "arm106_path": str(arm106_file),

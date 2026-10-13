@@ -138,24 +138,39 @@ def cmd_evaluate(args):
     print(f"[+] Starting deterministic evaluation of {len(pending)} probes against {args.target}:{args.port} (TLS={args.tls})...")
 
     vulnerable_count = 0
-    for row in pending:
-        probe_dict = dict(row)
-        p_id = probe_dict["probe_id"]
-        print(f"\n[*] Evaluating Probe #{p_id}: {probe_dict['rationale'][:70]}...")
+    concurrency = getattr(args, "concurrency", 4)
+    if concurrency > 1 and len(pending) > 1:
+        print(f"[*] Multithreaded evaluation active: {concurrency} threads (bounded by semaphore)")
+        probes_list = [dict(r) for r in pending]
+        results = harness.evaluate_batch_concurrent(probes_list, max_concurrency=concurrency)
+        for (is_vuln, desync_class, details, meta) in results:
+            if is_vuln:
+                vulnerable_count += 1
+                print(f"    [!] BREAKTHROUGH FINDING: {details} ({desync_class})")
+            else:
+                if meta.get("anomalies"):
+                    for anom in meta["anomalies"]:
+                        print(f"    [~] ANOMALY DETECTED: {anom['type']} - {anom['description']}")
+    else:
+        for row in pending:
+            probe_dict = dict(row)
+            p_id = probe_dict["probe_id"]
+            print(f"\n[*] Evaluating Probe #{p_id}: {probe_dict['rationale'][:70]}...")
 
-        is_vuln, desync_class, details, meta = harness.run_evaluation(probe_dict)
-        if is_vuln:
-            print(f"    [!] BREAKTHROUGH FINDING: {details}")
-            print(f"    [!] Attack Class: {desync_class}")
-            vulnerable_count += 1
-        else:
-            print(f"    [-] Result: {details}")
+            is_vuln, desync_class, details, meta = harness.run_evaluation(probe_dict)
+            if is_vuln:
+                print(f"    [!] BREAKTHROUGH FINDING: {details}")
+                print(f"    [!] Attack Class: {desync_class}")
+                vulnerable_count += 1
+            else:
+                print(f"    [-] Result: {details}")
 
-        if meta.get("anomalies"):
-            for anom in meta["anomalies"]:
-                print(f"    [~] ANOMALY DETECTED: {anom['type']} - {anom['description']}")
+            if meta.get("anomalies"):
+                for anom in meta["anomalies"]:
+                    print(f"    [~] ANOMALY DETECTED: {anom['type']} - {anom['description']}")
 
     print(f"\n[*] Evaluation complete: {vulnerable_count} breakthroughs out of {len(pending)} evaluated.")
+
 
 
 def cmd_weaponize(args):
@@ -261,6 +276,24 @@ def cmd_auto(args):
         # 8. Cascade
         cmd_cascade(args)
 
+        # 9. Caldera Auto-Sync (Default)
+        try:
+            from engine.caldera_bridge import CalderaBridge
+            bridge = CalderaBridge(db_path=args.db)
+            c_res = bridge.export_plugin(output_dir="caldera_export")
+            bridge.export_plugin(output_dir=".")
+            print(f"\n[+] Caldera Auto-Sync [Default]: {c_res['abilities_count']} abilities and {c_res['adversaries_count']} adversaries updated.")
+        except Exception as e:
+            print(f"[-] Caldera Auto-Sync notice: {e}")
+
+        # 10. Dream-RSI Auto-Optimization (Default)
+        if not getattr(args, "no_dream_rsi", False):
+            try:
+                print(f"\n[*] Dream-RSI Auto-Optimization [Default]: Evolving off-policy exploration trajectories...")
+                cmd_dream(args)
+            except Exception as e:
+                print(f"[-] Dream-RSI Auto-Optimization notice: {e}")
+
     finally:
         if lab_server:
             lab_server.stop()
@@ -284,12 +317,130 @@ def cmd_hunt(args):
     )
     print(f"\n[*] Hunt complete. Total flaws/anomalies found: {len(flaws)}")
 
+    # Caldera Auto-Sync (Default)
+    try:
+        from engine.caldera_bridge import CalderaBridge
+        bridge = CalderaBridge(db_path=args.db)
+        c_res = bridge.export_plugin(output_dir="caldera_export")
+        bridge.export_plugin(output_dir=".")
+        print(f"[+] Caldera Auto-Sync [Default]: {c_res['abilities_count']} abilities and {c_res['adversaries_count']} adversaries updated.")
+    except Exception as e:
+        pass
+
+    # Dream-RSI Auto-Optimization (Default)
+    if not getattr(args, "no_dream_rsi", False):
+        try:
+            print(f"\n[*] Dream-RSI Auto-Optimization [Default]: Evolving off-policy exploration trajectories...")
+            cmd_dream(args)
+        except Exception:
+            pass
+
 
 def cmd_mcp(args):
     """Runs the HTTP Terminator MCP Server over stdio."""
     from mcp_server import TerminatorMCPServer
     server = TerminatorMCPServer(db_path=args.db)
     server.run_stdio()
+
+
+def cmd_ruler(args):
+    """Measures front-end transformations using backend header length limits (James Kettle technique)."""
+    from protocol_ruler import ProtocolRuler
+    use_tls = bool(args.tls or (args.port == 443))
+    ruler = ProtocolRuler(
+        host=args.target,
+        port=args.port,
+        use_tls=use_tls,
+        timeout=args.timeout,
+        verbose=args.verbose,
+        debug=args.debug,
+    )
+    custom = []
+    if getattr(args, "sequence", None):
+        seq_str = args.sequence
+        if seq_str.startswith("\\x"):
+            seq_bytes = bytes.fromhex(seq_str.replace("\\x", ""))
+        else:
+            try:
+                seq_bytes = bytes.fromhex(seq_str)
+            except ValueError:
+                seq_bytes = seq_str.encode("latin-1")
+        custom.append((getattr(args, "name", "Custom Probe"), seq_bytes, f"User-supplied test sequence: {seq_str}"))
+
+    ruler.run_comprehensive_audit(custom_sequences=custom, max_size=args.max_size)
+
+
+def cmd_dream(args):
+    """Executes offline Dream-RSI policy evolution over accumulated database trajectories."""
+    from engine.dream_world_model import ProtocolWorldModel
+    from engine.dream_rsi_optimizer import DreamRSIOptimizer
+    from engine.dream_policy_store import DreamPolicyStore
+
+    db_path = getattr(args, "db", "terminator.db")
+    target_host = getattr(args, "target", "127.0.0.1")
+    target_port = getattr(args, "port", 5006)
+    export_path = getattr(args, "export", "data/dream_policies.json")
+    generations = getattr(args, "generations", 2)
+    rollouts = getattr(args, "rollouts", 200)
+
+    print(f"[*] Initializing Dream-RSI World Model from {db_path}...")
+    model = ProtocolWorldModel(target_host=target_host, target_port=target_port)
+    loaded = model.ingest_history_from_db(db_path)
+    print(f"[+] Loaded {loaded} execution trajectories into offline World Model.")
+
+    optimizer = DreamRSIOptimizer(model)
+    store = DreamPolicyStore(storage_path=export_path)
+
+    print(f"[*] Executing {generations} generations of off-policy dreaming ({rollouts} rollouts each)...")
+    for g in range(generations):
+        evolved = optimizer.evolve_policy_generation(rollouts_per_candidate=rollouts)
+        store.save_policy(evolved)
+        gain_str = f"+{evolved.rsi_gain * 100:.1f}%" if evolved.rsi_gain > 0 else "0.0%"
+        print(f"  [Gen {evolved.generation}] Fitness: {evolved.fitness_score:.2f} | RSI Gain: {gain_str} | Yield: {evolved.simulated_yield:.1%}")
+
+    summary = store.export_summary()
+    print(f"\n[+] Dream-RSI Optimization Complete. Policies saved to {export_path}.")
+    print(f"    Total Cumulative Gain: {summary.get('cumulative_rsi_gain_pct', 0.0)}%")
+    print(f"    Dominant Mutators: {summary.get('dominant_mutators', [])}")
+
+
+def cmd_caldera(args):
+    """Exports or pushes findings to Caldera adversary emulation platform."""
+    from engine.caldera_bridge import CalderaBridge
+
+    bridge = CalderaBridge(db_path=args.db)
+    if args.export:
+        print(f"[*] Exporting Caldera plugin to {args.export}...")
+        res = bridge.export_plugin(output_dir=args.export)
+        print(f"[+] Caldera plugin successfully exported to {res['plugin_path']}:")
+        print(f"    Abilities generated: {res['abilities_count']}")
+        print(f"    Adversaries generated: {res['adversaries_count']}")
+        print(f"    Custom non-MITRE tactics: {', '.join(res['tactics'])}")
+    elif args.push:
+        if not args.api_key:
+            print("[!] Error: --api-key is required when using --push")
+            sys.exit(1)
+        print(f"[*] Pushing abilities to Caldera at {args.push}...")
+        findings = bridge.fetch_confirmed_findings_from_db()
+        abilities = [bridge.generate_ability(f) for f in findings]
+        adversary = bridge.generate_adversary(abilities) if abilities else None
+        res = bridge.push_to_caldera(args.push, args.api_key, abilities=abilities, adversary=adversary)
+        print(f"[+] Caldera API Push Result: {res['pushed_abilities']} abilities, {res['pushed_adversaries']} adversaries pushed.")
+        if res["errors"]:
+            print(f"[!] Warnings/Errors encountered during API push: {res['errors']}")
+    else:
+        # Default: export to ./caldera_export
+        print("[*] No action specified. Exporting to default directory: ./caldera_export...")
+        res = bridge.export_plugin(output_dir="caldera_export")
+        print(f"[+] Caldera plugin successfully exported to {res['plugin_path']} ({res['abilities_count']} abilities).")
+
+
+def cmd_build(args):
+    """Executes the unified 'Build All' pipeline."""
+    from build_all import run_full_build
+    success = run_full_build(skip_tests=args.skip_tests, skip_zips=args.skip_zips)
+    if not success:
+        sys.exit(1)
 
 
 def main():
@@ -300,6 +451,18 @@ def main():
     parser.set_defaults(fusion=True)
 
     subparsers = parser.add_subparsers(dest="command")
+
+    # Protocol Ruler (James Kettle benchmark technique)
+    p_ruler = subparsers.add_parser("ruler", help="Execute Protocol Ruler byte-transformation measurement (James Kettle technique)")
+    p_ruler.add_argument("--target", default="127.0.0.1", help="Target host")
+    p_ruler.add_argument("--port", type=int, default=8080, help="Target port")
+    p_ruler.add_argument("--tls", action="store_true", help="Use TLS")
+    p_ruler.add_argument("--timeout", type=float, default=3.5, help="Socket timeout")
+    p_ruler.add_argument("--max-size", type=int, default=131072, help="Max header length to test in bytes")
+    p_ruler.add_argument("--sequence", type=str, default=None, help="Custom byte sequence to test")
+    p_ruler.add_argument("--name", type=str, default="Custom Probe", help="Name for custom sequence")
+    p_ruler.add_argument("--debug", action="store_true", help="Enable deep bracket and binary search tracing")
+    p_ruler.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
 
     # Hunt (Continuous until flaws found)
     p_hunt = subparsers.add_parser("hunt", help="Continuously fetch RFCs and hunt for flaws")
@@ -340,6 +503,7 @@ def main():
     p_eval.add_argument("--tls", action="store_true", help="Use TLS")
     p_eval.add_argument("--timeout", type=float, default=3.0, help="Socket timeout")
     p_eval.add_argument("--limit", type=int, default=20, help="Probes to evaluate")
+    p_eval.add_argument("--concurrency", "--threads", type=int, default=4, help="Maximum concurrent probe evaluation threads (default: 4)")
 
     # Weaponize
     p_weap = subparsers.add_parser("weaponize", help="Execute dangling-byte RQP")
@@ -368,7 +532,30 @@ def main():
     p_auto.add_argument("--port", type=int, default=8080, help="Target port")
     p_auto.add_argument("--tls", action="store_true", help="Use TLS")
     p_auto.add_argument("--timeout", type=float, default=3.0, help="Socket timeout")
-    p_auto.add_argument("--demo", action="store_true", help="Enable cascade demo if needed")
+    p_auto.add_argument("--concurrency", "--threads", type=int, default=4, help="Maximum concurrent probe evaluation threads (default: 4)")
+    p_auto.add_argument("--no-dream-rsi", action="store_true", help="Disable default Dream-RSI evolution cycle")
+    p_auto.add_argument("--rollouts", type=int, default=200, help="Rollouts per candidate policy (default: 200)")
+    p_auto.add_argument("--generations", type=int, default=2, help="Evolutionary dream generations (default: 2)")
+    p_auto.add_argument("--export", default="data/dream_policies.json", help="Path to export evolved policies")
+    # Dream (Open Dream-RSI: Off-Policy Recursive Self-Improvement)
+    p_dream = subparsers.add_parser("dream", help="Run offline Dream-RSI policy evolution")
+    p_dream.add_argument("--db", default="terminator.db", help="Path to database with exploration history")
+    p_dream.add_argument("--target", default="127.0.0.1", help="Target host")
+    p_dream.add_argument("--port", type=int, default=5006, help="Target port")
+    p_dream.add_argument("--rollouts", type=int, default=300, help="Rollouts per candidate policy")
+    p_dream.add_argument("--generations", type=int, default=3, help="Evolutionary dream generations")
+    p_dream.add_argument("--export", default="data/dream_policies.json", help="Path to export evolved policies")
+
+    # Caldera (Adversary Emulation Integration)
+    p_caldera = subparsers.add_parser("caldera", help="Export or push findings to Caldera adversary emulation")
+    p_caldera.add_argument("--export", type=str, default=None, help="Directory to export Caldera plugin structure")
+    p_caldera.add_argument("--push", type=str, default=None, help="Caldera server URL to push abilities live")
+    p_caldera.add_argument("--api-key", type=str, default=None, help="Caldera API key for REST authentication")
+
+    # Build All Pipeline
+    p_build = subparsers.add_parser("build", help="Build all components, verify database, pre-cache RFCs, and package releases")
+    p_build.add_argument("--skip-tests", action="store_true", help="Skip running the pytest verification suite")
+    p_build.add_argument("--skip-zips", action="store_true", help="Skip creating release zip packages")
 
     args = parser.parse_args()
 
@@ -377,6 +564,8 @@ def main():
         sys.exit(0)
 
     dispatch = {
+        "build": cmd_build,
+        "ruler": cmd_ruler,
         "hunt": cmd_hunt,
         "mcp": cmd_mcp,
         "fetch": cmd_fetch,
@@ -388,6 +577,8 @@ def main():
         "cascade": cmd_cascade,
         "lab": cmd_lab,
         "auto": cmd_auto,
+        "dream": cmd_dream,
+        "caldera": cmd_caldera,
     }
 
     dispatch[args.command](args)

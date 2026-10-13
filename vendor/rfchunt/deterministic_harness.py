@@ -7,14 +7,17 @@ Implements PortSwigger's core evaluation primitive for desync verification:
 4. Follow-up classification phase (HTTP/777, TRACE, CL.0) to categorize the attack class.
 """
 
+import concurrent.futures
 import re
 import socket
 import ssl
+import threading
 import time
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from anomaly_detector import AnomalyDetector
 from database import Database
+from engine.http_framing import HTTPFramingReader
 
 
 class DeterministicHarness:
@@ -52,29 +55,21 @@ class DeterministicHarness:
 
     def _send_and_receive(self, sock: socket.socket, data: bytes, read_until_close: bool = False) -> bytes:
         sock.sendall(data)
-        buffer = bytearray()
-        sock.settimeout(self.timeout)
-        try:
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                buffer.extend(chunk)
-                if not read_until_close:
-                    if b"\r\n\r\n" in buffer:
-                        header_part, body_part = bytes(buffer).split(b"\r\n\r\n", 1)
-                        lower_h = header_part.lower()
-                        if b"content-length:" in lower_h:
-                            m = re.search(rb"content-length:\s*(\d+)", lower_h)
-                            if m and len(body_part) >= int(m.group(1)):
-                                break
-                        elif b"transfer-encoding: chunked" in lower_h and b"0\r\n\r\n" in body_part:
-                            break
-        except socket.timeout:
-            pass
-        except (ConnectionResetError, ConnectionAbortedError):
-            pass
-        return bytes(buffer)
+        if read_until_close:
+            buffer = bytearray()
+            sock.settimeout(self.timeout)
+            try:
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    buffer.extend(chunk)
+            except (socket.timeout, ConnectionResetError, ConnectionAbortedError):
+                pass
+            return bytes(buffer)
+
+        framed = HTTPFramingReader.read_response(sock, timeout=self.timeout)
+        return framed.raw_response
 
     def run_evaluation(self, probe_dict: Dict[str, Any]) -> Tuple[bool, Optional[str], str, Dict[str, Any]]:
         """
@@ -248,3 +243,29 @@ class DeterministicHarness:
                 pass
 
         return "Unclassified Novel Desync Trigger"
+
+    def evaluate_batch_concurrent(
+        self,
+        probes: List[Dict[str, Any]],
+        max_concurrency: int = 4,
+    ) -> List[Tuple[bool, Optional[str], str, Dict[str, Any]]]:
+        """
+        Evaluates a batch of candidate probes concurrently using a bounded thread pool and semaphore.
+        Guarantees that socket I/O is parallelized while strictly enforcing a maximum in-flight socket limit.
+        """
+        sem = threading.BoundedSemaphore(max(1, max_concurrency))
+
+        def _worker(p):
+            with sem:
+                return self.evaluate_probe(p)
+
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, max_concurrency)) as executor:
+            futures = [executor.submit(_worker, p) for p in probes]
+            for f in concurrent.futures.as_completed(futures):
+                try:
+                    results.append(f.result())
+                except Exception as e:
+                    results.append((False, None, f"Execution exception: {e}", {}))
+        return results
+

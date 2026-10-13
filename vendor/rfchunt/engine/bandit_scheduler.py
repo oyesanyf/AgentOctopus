@@ -177,3 +177,21 @@ class AdaptiveBanditScheduler:
             }
             for name, arm in self.arms.items()
         }
+
+    def apply_dream_policy(self, policy: Any) -> None:
+        """
+        Hot-reloads mutator weights evolved by Dream-RSI into the active scheduler.
+        Prioritizes arms discovered to yield higher simulated rewards.
+        """
+        weights = getattr(policy, "mutator_weights", None)
+        if not weights or not isinstance(weights, dict):
+            return
+
+        for arm_name, weight in weights.items():
+            if arm_name not in self.arms:
+                self.arms[arm_name] = BanditArmStats(name=arm_name)
+            # Inject dream prior into arm statistics
+            self.arms[arm_name].total_reward += weight * 10.0
+            self.arms[arm_name].pulls += 2
+        self.total_pulls += len(weights) * 2
+
