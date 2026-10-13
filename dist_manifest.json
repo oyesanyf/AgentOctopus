@@ -1,9 +1,9 @@
 {
   "package": "AgentOctopus",
   "archive": "agent_octopus_source_code.zip",
-  "timestamp": "2026-10-13T16:49:11Z",
-  "file_count": 1815,
-  "uncompressed_bytes": 818452322,
-  "compressed_bytes": 98240379,
-  "sha256": "6787d90030bf496499ab3344c10a1f166f17c7a352b3dd511e2fe8d2dcf8f347"
+  "timestamp": "2026-10-13T16:54:41Z",
+  "file_count": 1818,
+  "uncompressed_bytes": 819326630,
+  "compressed_bytes": 98316264,
+  "sha256": "5d04001acb9d8a19d7ffea0d098ef3865f76a5e311f6c696114a03ff344820e3"
 }
