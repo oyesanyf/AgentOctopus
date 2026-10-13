@@ -62,6 +62,8 @@ ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 cedar-policy = "4.13"
 tracing = "0.1"
 libc = "0.2"
+ml-kem = { version = "0.3.2", features = ["getrandom"] }
+ml-dsa = "0.1.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

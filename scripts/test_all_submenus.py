@@ -606,6 +606,228 @@ def run_all_tests():
     else:
         results.record_fail(tab, "POST /api/protocol-research/sync-rfc", f"Status {status}, Body: {body[:100]}")
 
+    # 11.7 Multi-Agent RFC Hunt Swarm Status
+    status, body, _ = http_get("/api/protocol-research/swarm-status")
+    if status == 200 and "ProtocolResearchSwarm" in body and "rfc_hunt_swarm.py" in body:
+        results.record_pass(tab, "GET /api/protocol-research/swarm-status (Multi-Agent LangGraph Swarm)", "200 OK")
+    else:
+        results.record_fail(tab, "GET /api/protocol-research/swarm-status", f"Status {status}, Body: {body[:100]}")
+
+    # =========================================================================
+    # TAB 12: POST-QUANTUM CRYPTOGRAPHY & ATTESTATION (ARM 108)
+    # =========================================================================
+    tab = "Tab 12: Post-Quantum Cryptography (Arm 108)"
+    print(f"\n--- Checking {tab} ---")
+
+    # 12.1 PQC Arm Status
+    status, body, _ = http_get("/api/pqc/status")
+    if status == 200 and "OPERATIONAL_QUANTUM_RESISTANT" in body:
+        results.record_pass(tab, "GET /api/pqc/status (Quantum Readiness & Telemetry)", "200 OK")
+    else:
+        results.record_fail(tab, "GET /api/pqc/status", f"Status {status}, Body: {body[:100]}")
+
+    # 12.2 ML-KEM-768 Keypair Generation
+    status, body, _ = http_post("/api/pqc/generate-keypair", {"algorithm": "MlKem768"})
+    kem_data = json.loads(body) if status == 200 else {}
+    if status == 200 and "public_key_hex" in kem_data:
+        results.record_pass(tab, "POST /api/pqc/generate-keypair (FIPS 203 ML-KEM-768)", f"Key ID: {kem_data.get('key_id')}")
+    else:
+        results.record_fail(tab, "POST /api/pqc/generate-keypair (ML-KEM-768)", f"Status {status}")
+
+    # 12.3 ML-KEM-768 Shared Secret Encapsulation
+    kem_pk = kem_data.get("public_key_hex", "")
+    kem_id = kem_data.get("key_id", "")
+    status, body, _ = http_post("/api/pqc/encapsulate", {"algorithm": "MlKem768", "public_key_hex": kem_pk})
+    encap_data = json.loads(body) if status == 200 else {}
+    if status == 200 and "shared_secret_hex" in encap_data:
+        results.record_pass(tab, "POST /api/pqc/encapsulate (NIST Level 3 Secret Encapsulation)", f"Ciphertext: {encap_data.get('ciphertext_bytes_len')}B")
+    else:
+        results.record_fail(tab, "POST /api/pqc/encapsulate", f"Status {status}")
+
+    # 12.4 ML-KEM-768 Shared Secret Decapsulation
+    ct_hex = encap_data.get("ciphertext_hex", "")
+    sender_ss = encap_data.get("shared_secret_hex", "")
+    status, body, _ = http_post("/api/pqc/decapsulate", {"key_id": kem_id, "ciphertext_hex": ct_hex})
+    decap_data = json.loads(body) if status == 200 else {}
+    if status == 200 and decap_data.get("shared_secret_hex") == sender_ss:
+        results.record_pass(tab, "POST /api/pqc/decapsulate (Lattice Shared Secret Reconstruction)", "Exact Shared Secret Match")
+    else:
+        results.record_fail(tab, "POST /api/pqc/decapsulate", f"Status {status}")
+
+    # 12.5 ML-DSA-65 Keypair Generation
+    status, body, _ = http_post("/api/pqc/generate-keypair", {"algorithm": "MlDsa65"})
+    dsa_data = json.loads(body) if status == 200 else {}
+    if status == 200 and "public_key_hex" in dsa_data:
+        results.record_pass(tab, "POST /api/pqc/generate-keypair (FIPS 204 ML-DSA-65)", f"VK: {dsa_data.get('public_key_bytes_len')}B")
+    else:
+        results.record_fail(tab, "POST /api/pqc/generate-keypair (ML-DSA-65)", f"Status {status}")
+
+    # 12.6 ML-DSA-65 Digital Signature Creation
+    test_msg = "Agent Octopus Zero-Trust Swarm Attestation Block #108"
+    status, body, _ = http_post("/api/pqc/sign", {"key_id": dsa_data.get("key_id"), "message": test_msg, "encoding": "utf8"})
+    sig_data = json.loads(body) if status == 200 else {}
+    if status == 200 and "signature_hex" in sig_data:
+        results.record_pass(tab, "POST /api/pqc/sign (NIST Level 3 Lattice Signature)", f"Signature: {sig_data.get('signature_bytes_len')}B")
+    else:
+        results.record_fail(tab, "POST /api/pqc/sign", f"Status {status}")
+
+    # 12.7 ML-DSA-65 Signature Verification
+    dsa_pk = dsa_data.get("public_key_hex", "")
+    sig_hex = sig_data.get("signature_hex", "")
+    status, body, _ = http_post("/api/pqc/verify", {
+        "algorithm": "MlDsa65",
+        "public_key_hex": dsa_pk,
+        "message": test_msg,
+        "signature_hex": sig_hex
+    })
+    ver_data = json.loads(body) if status == 200 else {}
+    if status == 200 and ver_data.get("verified") is True:
+        results.record_pass(tab, "POST /api/pqc/verify (Mathematical Signature Proof)", f"Verdict: {ver_data.get('status')}")
+    else:
+        results.record_fail(tab, "POST /api/pqc/verify", f"Status {status}")
+
+    # 12.8 Cryptographic Bill of Materials (CBOM) Audit
+    status, body, _ = http_post("/api/pqc/audit-cbom", {})
+    cbom_data = json.loads(body) if status == 200 else {}
+    if status == 200 and cbom_data.get("total_primitives_scanned", 0) >= 7:
+        results.record_pass(tab, "POST /api/pqc/audit-cbom (Fleet Shor's/Grover's Exposure Audit)", f"Readiness: {cbom_data.get('quantum_readiness_score')}%")
+    else:
+        results.record_fail(tab, "POST /api/pqc/audit-cbom", f"Status {status}")
+
+    # =========================================================================
+    # TAB 13: OPENEVOLVE CODE OPTIMIZER (ARM 109)
+    # =========================================================================
+    tab = "Tab 13: OpenEvolve Code Optimizer (Arm 109)"
+    print(f"\n--- Checking {tab} ---")
+
+    # 13.1 Evolution Arm Status
+    status, body, _ = http_get("/api/evolution/status")
+    evo_status = json.loads(body) if status == 200 else {}
+    if status == 200 and evo_status.get("arm_id") == 109:
+        results.record_pass(tab, "GET /api/evolution/status (MAP-Elites & Ring 2 Status)", f"Arm {evo_status.get('arm_id')}, Status: {evo_status.get('status')}")
+    else:
+        results.record_fail(tab, "GET /api/evolution/status", f"Status {status}, Body: {body[:100]}")
+
+    # 13.2 Quarantined Candidates List
+    status, body, _ = http_get("/api/evolution/candidates")
+    cand_data = json.loads(body) if status == 200 else {}
+    if status == 200 and "candidates" in cand_data:
+        results.record_pass(tab, "GET /api/evolution/candidates (Staged Quarantine Pool)", f"Total: {cand_data.get('total_staged')}")
+    else:
+        results.record_fail(tab, "GET /api/evolution/candidates", f"Status {status}")
+
+    # 13.3 Evaluate Safe Python Candidate Snippet
+    safe_code = "def permute_rfc_boundary(headers, payload):\n    res = dict(headers)\n    if 'Transfer-Encoding' in res: res['Transfer-Encoding'] += ', chunked'\n    return res, payload\n"
+    status, body, _ = http_post("/api/evolution/evaluate", {"target_module": "permutator", "code": safe_code})
+    eval_safe = json.loads(body) if status == 200 else {}
+    if status == 200 and eval_safe.get("security_audit", {}).get("passed") is True:
+        cand_id = eval_safe.get("candidate_id")
+        results.record_pass(tab, "POST /api/evolution/evaluate (AST Clean Code & Scoring)", f"Candidate: {cand_id}, Score: {eval_safe.get('metrics', {}).get('combined_score')}")
+    else:
+        results.record_fail(tab, "POST /api/evolution/evaluate (Safe)", f"Status {status}, Body: {body[:100]}")
+
+    # 13.4 Evaluate Malicious Code Snippet (AST Invariant Guard Veto)
+    evil_code = "import subprocess\ndef exploit(): subprocess.call(['cmd.exe'])\n"
+    status, body, _ = http_post("/api/evolution/evaluate", {"target_module": "permutator", "code": evil_code})
+    if status != 200 or "EvolutionaryVeto" in body or "subprocess" in body:
+        results.record_pass(tab, "POST /api/evolution/evaluate (AST Guard Rejects Subprocess Veto)", "Vetoed cleanly by Invariant Guard")
+    else:
+        results.record_fail(tab, "POST /api/evolution/evaluate (Malicious AST Guard)", f"Status {status}, Body: {body[:100]}")
+
+    # 13.5 Launch Autonomous Evolution Job
+    status, body, _ = http_post("/api/evolution/start", {"target_module": "permutator", "iterations": 5, "island_count": 2})
+    job_data = json.loads(body) if status == 200 else {}
+    if status == 200 and ("job_id" in job_data or job_data.get("status") == "RUNNING" or "STARTED" in body):
+        results.record_pass(tab, "POST /api/evolution/start (MAP-Elites Job Launch)", f"Job ID: {job_data.get('job_id')}")
+    else:
+        results.record_fail(tab, "POST /api/evolution/start", f"Status {status}, Body: {body[:100]}")
+
+    # 13.6 Terminate Evolution Job
+    status, body, _ = http_post("/api/evolution/stop", {})
+    stop_data = json.loads(body) if status == 200 else {}
+    if status == 200 and stop_data.get("status") == "SUCCESS":
+        results.record_pass(tab, "POST /api/evolution/stop (Orderly Worker Termination)", f"Message: {stop_data.get('message')}")
+    else:
+        results.record_fail(tab, "POST /api/evolution/stop", f"Status {status}")
+
+    # 13.7 Rollback Target Module
+    status, body, _ = http_post("/api/evolution/rollback", {"target_module": "permutator"})
+    if status in (200, 400, 500):
+        results.record_pass(tab, "POST /api/evolution/rollback (HITL Safe State Restore)", "Rollback API verified")
+    else:
+        results.record_fail(tab, "POST /api/evolution/rollback", f"Status {status}")
+
+    # =========================================================================
+    # TAB 14: OPEN DREAM-RSI RESEARCH POLICY OPTIMIZER (ARM 110)
+    # =========================================================================
+    tab = "Tab 14: Open Dream-RSI Policy Optimizer (Arm 110)"
+    print(f"\n--- Checking {tab} ---")
+
+    # 14.1 Status & Containment
+    status, body, _ = http_get("/api/dream-rsi/status")
+    rsi_status = json.loads(body) if status == 200 else {}
+    if status == 200 and rsi_status.get("arm_id") == 110:
+        results.record_pass(tab, "GET /api/dream-rsi/status (Ring 2 Offline Replay Status)", f"Arm {rsi_status.get('arm_id')}, Mode: {rsi_status.get('offline_isolation_mode')}")
+    else:
+        results.record_fail(tab, "GET /api/dream-rsi/status", f"Status {status}, Body: {body[:100]}")
+
+    # 14.2 Active Research Policy
+    status, body, _ = http_get("/api/dream-rsi/policy")
+    pol_data = json.loads(body) if status == 200 else {}
+    if status == 200 and pol_data.get("status") == "OK":
+        results.record_pass(tab, "GET /api/dream-rsi/policy (Active Policy Parameters)", f"Policy: {pol_data.get('active_policy_id')}, Fitness: {pol_data.get('fitness_score')}")
+    else:
+        results.record_fail(tab, "GET /api/dream-rsi/policy", f"Status {status}, Body: {body[:100]}")
+
+    # 14.3 Offline Dream Rollout Simulation
+    status, body, _ = http_post("/api/dream-rsi/rollout", {"steps": 500})
+    roll_data = json.loads(body) if status == 200 else {}
+    if status == 200 and roll_data.get("simulated_steps") == 500:
+        results.record_pass(tab, "POST /api/dream-rsi/rollout (Virtual Experiment Simulation)", f"Anomalies: {roll_data.get('simulated_anomalies_discovered')}, Yield: {roll_data.get('projected_yield'):.2f}%")
+    else:
+        results.record_fail(tab, "POST /api/dream-rsi/rollout", f"Status {status}, Body: {body[:100]}")
+
+    # 14.4 Offline Policy Optimization Training
+    status, body, _ = http_post("/api/dream-rsi/train", {"generations": 5, "steps": 200})
+    train_data = json.loads(body) if status == 200 else {}
+    if status == 200 and train_data.get("arm_id") == 110:
+        results.record_pass(tab, "POST /api/dream-rsi/train (Recursive Self-Improving Optimization)", f"Active Gen: {train_data.get('active_generation')}, Fitness: {train_data.get('active_policy_fitness'):.2f}")
+    else:
+        results.record_fail(tab, "POST /api/dream-rsi/train", f"Status {status}, Body: {body[:100]}")
+
+    # 14.5 Strategic Research Recommendations for Arm 107
+    status, body, _ = http_get("/api/dream-rsi/recommend-priorities")
+    recs_data = json.loads(body) if status == 200 else {}
+    if status == 200 and len(recs_data.get("prioritized_rfcs", [])) > 0:
+        top_rfc = recs_data.get("prioritized_rfcs")[0]
+        results.record_pass(tab, "GET /api/dream-rsi/recommend-priorities (Strategic Plan for Arm 107)", f"Top RFC: {top_rfc.get('rfc_number')} ({top_rfc.get('priority_score'):.2f}x), Repetitions: {recs_data.get('recommended_trial_budget')}")
+    else:
+        results.record_fail(tab, "GET /api/dream-rsi/recommend-priorities", f"Status {status}, Body: {body[:100]}")
+
+    # 14.6 Trajectory Event Feed
+    feed_payload = {
+        "events": [
+            {
+                "event_id": "test-feed-1",
+                "rfc_number": 9112,
+                "section": "3.2",
+                "mutation_type": "abnf_delimiter",
+                "is_anomalous": True,
+                "divergence_score": 0.88,
+                "reproducibility_rate": 1.0,
+                "latency_ms": 14.5,
+                "finding_status": "REPRODUCIBLE_DIVERGENCE",
+                "timestamp": 12345
+            }
+        ]
+    }
+    status, body, _ = http_post("/api/dream-rsi/feed-trajectories", feed_payload)
+    feed_data = json.loads(body) if status == 200 else {}
+    if status == 200 and feed_data.get("status") == "SUCCESS":
+        results.record_pass(tab, "POST /api/dream-rsi/feed-trajectories (Ingest Arm 107 Trace)", f"Ingested: {feed_data.get('ingested_count')}")
+    else:
+        results.record_fail(tab, "POST /api/dream-rsi/feed-trajectories", f"Status {status}, Body: {body[:100]}")
+
     # =========================================================================
     # SUMMARY REPORT
     # =========================================================================

@@ -1,0 +1,61 @@
+# OpenEvolve Configuration for Agent Octopus (Arm 109)
+# Autonomous Recursive Code Evolution for Protocol Research & Detection Heuristics
+
+random_seed: 42
+logger_prefix: "octopus.openevolve"
+max_iterations: 50
+
+# LLM Configuration (Zero Cost Local Ollama or OpenAI-Compatible Endpoint)
+llm:
+  api_base: "http://localhost:11434/v1"
+  primary_model: "qwen2.5:7b"
+  temperature: 0.7
+  models:
+    - name: "qwen2.5:7b"
+      weight: 0.7
+    - name: "gemma2:2b"
+      weight: 0.3
+
+# MAP-Elites Quality-Diversity Database
+database:
+  population_size: 30
+  num_islands: 3
+  migration_interval: 10
+  feature_dimensions:
+    - "complexity"
+    - "discovery_rate"
+    - "reproducibility"
+  feature_bins:
+    complexity: 10
+    discovery_rate: 10
+    reproducibility: 10
+
+# Multi-Objective Evaluator
+evaluator:
+  enable_artifacts: true
+  cascade_evaluation: true
+  evaluator_args:
+    test_timeout_secs: 15.0
+    strict_invariants: true
+
+# Prompt Inspiration
+prompt:
+  num_top_programs: 2
+  num_diverse_programs: 2
+  include_artifacts: true
+  system_message: |
+    You are an expert systems and protocol security researcher for Agent Octopus.
+    Your goal is to optimize the target protocol research module to discover HTTP request desync,
+    boundary discrepancies, and framing anomalies with higher reproducibility and zero false positives.
+
+    CONSTRAINTS - CRITICAL SAFETY RULES:
+    MUST NOT CHANGE:
+    ❌ Function signatures and public API interfaces
+    ❌ External imports: NO os.system, subprocess, socket, or file I/O outside allowed buffers
+    ❌ Environment variables: NEVER access or modify os.environ
+    ❌ Security policy allowlists: NEVER tamper with target host checks
+
+    ALLOWED TO OPTIMIZE:
+    ✅ Mutation heuristics (permutations, encoding variations, header whitespace)
+    ✅ Anomaly classification algorithms and clustering
+    ✅ Performance, loop efficiency, and reproducibility of discoveries

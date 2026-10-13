@@ -449,6 +449,30 @@ impl ProtocolResearchSupervisor {
             request.baseline_request.is_some(),
         );
 
+        // Step 7: Record trajectory event for Arm 110 (Open Dream-RSI) offline learning
+        let traj_ev = crate::security::dream_rsi::TrajectoryEvent {
+            event_id: format!("traj-{}", finding_id),
+            rfc_number: request.rfc_number.unwrap_or(9112),
+            section: request.section.clone().unwrap_or_else(|| "normative_syntax".to_string()),
+            mutation_type: request.mutation_type.clone().unwrap_or_else(|| "abnf_delimiter".to_string()),
+            is_anomalous: is_reproducible,
+            divergence_score: if is_reproducible { 0.85 } else { 0.05 },
+            reproducibility_rate,
+            latency_ms: 12.0,
+            finding_status: finding_status.clone(),
+            timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+        };
+        let history_file = std::path::Path::new("data").join("protocol_research").join("evaluation_history.jsonl");
+        if let Some(p) = history_file.parent() {
+            let _ = std::fs::create_dir_all(p);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&history_file) {
+            use std::io::Write;
+            if let Ok(line) = serde_json::to_string(&traj_ev) {
+                let _ = writeln!(f, "{}", line);
+            }
+        }
+
         Ok(ResearchFinding {
             finding_id,
             probe_id,

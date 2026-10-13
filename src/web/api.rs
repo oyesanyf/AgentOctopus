@@ -76,6 +76,9 @@ pub struct WebState {
     pub simulation_temporal_engine: Arc<DogwoodTemporalEngine>,
     pub dogwood_engine: Arc<DogwoodTemporalEngine>,
     pub protocol_research: Arc<crate::security::protocol_research::ProtocolResearchSupervisor>,
+    pub pqc_arm: Arc<crate::security::pqc_arm::PostQuantumArm>,
+    pub evolution_arm: Arc<crate::security::evolution::EvolutionaryOptimizerArm>,
+    pub dream_rsi_arm: Arc<crate::security::dream_rsi::DreamRsiOptimizerArm>,
 }
 
 fn load_or_init_egress_domains() -> Vec<String> {
@@ -244,6 +247,18 @@ impl Default for WebState {
             ),
         );
 
+        let pqc_arm = Arc::new(crate::security::pqc_arm::PostQuantumArm::with_registry(
+            Arc::clone(&arm_rings),
+        ));
+
+        let evolution_arm = Arc::new(crate::security::evolution::EvolutionaryOptimizerArm::with_registry(
+            &arm_rings,
+        ));
+
+        let dream_rsi_arm = Arc::new(crate::security::dream_rsi::DreamRsiOptimizerArm::with_registry(
+            &arm_rings,
+        ));
+
         Self {
             gateway,
             audit_log,
@@ -267,6 +282,9 @@ impl Default for WebState {
             simulation_temporal_engine,
             dogwood_engine,
             protocol_research,
+            pqc_arm,
+            evolution_arm,
+            dream_rsi_arm,
         }
     }
 }
@@ -2271,6 +2289,337 @@ pub async fn handle_protocol_research_sync_rfc(state: &WebState) -> Result<Strin
         Ok(report) => Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string())),
         Err(e) => Err(json_error_payload("RFC_SYNC_FAILED", &format!("{}", e))),
     }
+}
+
+pub async fn handle_protocol_research_swarm_status(state: &WebState) -> String {
+    let status = state.protocol_research.get_status().await;
+    serde_json::json!({
+        "status": "OPERATIONAL",
+        "swarm_name": "ProtocolResearchSwarm (Multi-Agent LangGraph Factory)",
+        "arm_id": 107,
+        "entrypoint": "vendor/rfchunt/rfc_hunt_swarm.py",
+        "supported_modes": ["single", "corpus", "all"],
+        "default_timeout_seconds": 900.0,
+        "execution_command": "python -u rfc_hunt_swarm.py --mode all --timeout 900",
+        "one_click_launcher": "vendor/rfchunt/rfc_hunt_swarm.bat",
+        "modules_active": 12,
+        "database_isolated": status.is_database_isolated,
+        "database_path": status.database_path,
+        "active_worker_sandboxed": status.active_worker_sandboxed,
+        "rfc_count": status.rfc_count,
+        "fragment_count": status.fragment_count,
+        "probe_count": status.probe_count,
+        "evaluations_recorded": status.evaluations_recorded
+    }).to_string()
+}
+
+// ==========================================
+// Post-Quantum Cryptography & Attestation (Arm 108) Handlers
+// ==========================================
+
+#[derive(Debug, Deserialize)]
+pub struct PqcGenerateKeypairRequest {
+    pub algorithm: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PqcEncapsulateRequest {
+    pub algorithm: Option<String>,
+    pub public_key_hex: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PqcDecapsulateRequest {
+    pub key_id: String,
+    pub ciphertext_hex: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PqcSignRequest {
+    pub key_id: Option<String>,
+    pub message: String,
+    pub encoding: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PqcVerifyRequest {
+    pub algorithm: Option<String>,
+    pub public_key_hex: String,
+    pub message: String,
+    pub signature_hex: String,
+    pub encoding: Option<String>,
+}
+
+pub async fn handle_pqc_status(state: &WebState) -> String {
+    let status = state.pqc_arm.get_status().await;
+    serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub async fn handle_pqc_generate_keypair(state: &WebState, body: &str) -> Result<String, String> {
+    let req: PqcGenerateKeypairRequest = if body.trim().is_empty() {
+        PqcGenerateKeypairRequest { algorithm: None }
+    } else {
+        serde_json::from_str(body)
+            .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid keypair request: {}", e)))?
+    };
+
+    let algo = match req.algorithm.as_deref().unwrap_or("MlKem768") {
+        "MlKem512" | "ml-kem-512" => crate::security::pqc_arm::types::PqcAlgorithm::MlKem512,
+        "MlKem768" | "ml-kem-768" => crate::security::pqc_arm::types::PqcAlgorithm::MlKem768,
+        "MlKem1024" | "ml-kem-1024" => crate::security::pqc_arm::types::PqcAlgorithm::MlKem1024,
+        "MlDsa44" | "ml-dsa-44" => crate::security::pqc_arm::types::PqcAlgorithm::MlDsa44,
+        "MlDsa65" | "ml-dsa-65" => crate::security::pqc_arm::types::PqcAlgorithm::MlDsa65,
+        "MlDsa87" | "ml-dsa-87" => crate::security::pqc_arm::types::PqcAlgorithm::MlDsa87,
+        "HybridX25519MlKem768" | "hybrid" => crate::security::pqc_arm::types::PqcAlgorithm::HybridX25519MlKem768,
+        other => return Err(json_error_payload("UNSUPPORTED_ALGORITHM", &format!("Unsupported PQC algorithm: {}", other))),
+    };
+
+    match state.pqc_arm.generate_keypair(algo).await {
+        Ok(info) => Ok(serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => Err(json_error_payload("PQC_KEYGEN_ERROR", &format!("{}", e))),
+    }
+}
+
+pub async fn handle_pqc_encapsulate(state: &WebState, body: &str) -> Result<String, String> {
+    let req: PqcEncapsulateRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid encapsulate request: {}", e)))?;
+
+    let algo = match req.algorithm.as_deref().unwrap_or("MlKem768") {
+        "MlKem512" | "ml-kem-512" => crate::security::pqc_arm::types::PqcAlgorithm::MlKem512,
+        "MlKem768" | "ml-kem-768" => crate::security::pqc_arm::types::PqcAlgorithm::MlKem768,
+        "MlKem1024" | "ml-kem-1024" => crate::security::pqc_arm::types::PqcAlgorithm::MlKem1024,
+        "HybridX25519MlKem768" | "hybrid" => crate::security::pqc_arm::types::PqcAlgorithm::HybridX25519MlKem768,
+        other => return Err(json_error_payload("UNSUPPORTED_ALGORITHM", &format!("Unsupported KEM algorithm: {}", other))),
+    };
+
+    match state.pqc_arm.encapsulate(algo, &req.public_key_hex).await {
+        Ok(res) => Ok(serde_json::to_string_pretty(&res).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => Err(json_error_payload("PQC_ENCAPSULATE_ERROR", &format!("{}", e))),
+    }
+}
+
+pub async fn handle_pqc_decapsulate(state: &WebState, body: &str) -> Result<String, String> {
+    let req: PqcDecapsulateRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid decapsulate request: {}", e)))?;
+
+    match state.pqc_arm.decapsulate(&req.key_id, &req.ciphertext_hex).await {
+        Ok(res) => Ok(serde_json::to_string_pretty(&res).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => Err(json_error_payload("PQC_DECAPSULATE_ERROR", &format!("{}", e))),
+    }
+}
+
+pub async fn handle_pqc_sign(state: &WebState, body: &str) -> Result<String, String> {
+    let req: PqcSignRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid sign request: {}", e)))?;
+
+    let bytes = if req.encoding.as_deref() == Some("hex") {
+        hex::decode(&req.message).map_err(|e| json_error_payload("INVALID_HEX", &format!("Invalid hex string: {}", e)))?
+    } else {
+        req.message.as_bytes().to_vec()
+    };
+
+    match state.pqc_arm.sign_audit_block_with_key(req.key_id.as_deref(), &bytes).await {
+        Ok(res) => Ok(serde_json::to_string_pretty(&res).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => Err(json_error_payload("PQC_SIGN_ERROR", &format!("{}", e))),
+    }
+}
+
+pub async fn handle_pqc_verify(state: &WebState, body: &str) -> Result<String, String> {
+    let req: PqcVerifyRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid verify request: {}", e)))?;
+
+    let algo = match req.algorithm.as_deref().unwrap_or("MlDsa65") {
+        "MlDsa44" | "ml-dsa-44" => crate::security::pqc_arm::types::PqcAlgorithm::MlDsa44,
+        "MlDsa65" | "ml-dsa-65" => crate::security::pqc_arm::types::PqcAlgorithm::MlDsa65,
+        "MlDsa87" | "ml-dsa-87" => crate::security::pqc_arm::types::PqcAlgorithm::MlDsa87,
+        other => return Err(json_error_payload("UNSUPPORTED_ALGORITHM", &format!("Unsupported DSA algorithm: {}", other))),
+    };
+
+    let bytes = if req.encoding.as_deref() == Some("hex") {
+        hex::decode(&req.message).map_err(|e| json_error_payload("INVALID_HEX", &format!("Invalid hex string: {}", e)))?
+    } else {
+        req.message.as_bytes().to_vec()
+    };
+
+    match state.pqc_arm.verify_signature(algo, &req.public_key_hex, &bytes, &req.signature_hex) {
+        Ok(valid) => Ok(json!({
+            "verified": valid,
+            "algorithm": algo.name(),
+            "status": if valid { "SIGNATURE_VALID" } else { "SIGNATURE_INVALID" },
+        }).to_string()),
+        Err(e) => Err(json_error_payload("PQC_VERIFY_ERROR", &format!("{}", e))),
+    }
+}
+
+pub fn handle_pqc_audit_cbom(state: &WebState, _body: &str) -> Result<String, String> {
+    let report = state.pqc_arm.run_cbom_audit();
+    Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
+}
+
+// ==========================================
+// OpenEvolve Code Optimizer (Arm 109) Handlers
+// ==========================================
+
+#[derive(Debug, Deserialize)]
+pub struct EvolutionStartRequest {
+    pub target_module: Option<String>,
+    pub iterations: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EvolutionEvaluateRequest {
+    pub target_module: Option<String>,
+    pub code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EvolutionApproveRequest {
+    pub candidate_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EvolutionRollbackRequest {
+    pub target_module: Option<String>,
+}
+
+pub async fn handle_evolution_status(state: &WebState) -> String {
+    let status = state.evolution_arm.get_status().await;
+    serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub async fn handle_evolution_start(state: &WebState, body: &str) -> Result<String, String> {
+    let req: EvolutionStartRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid start request: {}", e)))?;
+    let target = req.target_module.unwrap_or_else(|| "permutator".to_string());
+    let iterations = req.iterations.unwrap_or(20);
+
+    match state.evolution_arm.start_evolution_job(&target, iterations).await {
+        Ok(job) => Ok(serde_json::to_string_pretty(&job).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => Err(json_error_payload("EVOLUTION_START_FAILED", &format!("{}", e))),
+    }
+}
+
+pub async fn handle_evolution_stop(state: &WebState) -> Result<String, String> {
+    match state.evolution_arm.stop_evolution_job().await {
+        Ok(msg) => Ok(serde_json::json!({ "status": "SUCCESS", "message": msg }).to_string()),
+        Err(e) => Err(json_error_payload("EVOLUTION_STOP_FAILED", &format!("{}", e))),
+    }
+}
+
+pub async fn handle_evolution_candidates(state: &WebState) -> String {
+    let candidates = state.evolution_arm.list_candidates().await;
+    serde_json::json!({
+        "status": "OK",
+        "total_staged": candidates.len(),
+        "candidates": candidates
+    }).to_string()
+}
+
+pub async fn handle_evolution_evaluate(state: &WebState, body: &str) -> Result<String, String> {
+    let req: EvolutionEvaluateRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid evaluate request: {}", e)))?;
+    let target = req.target_module.unwrap_or_else(|| "permutator".to_string());
+    let code = req.code.unwrap_or_default();
+    if code.trim().is_empty() {
+        return Err(json_error_payload("EMPTY_CODE", "Candidate code cannot be empty."));
+    }
+
+    match state.evolution_arm.evaluate_code_snippet(&code, &target).await {
+        Ok(candidate) => Ok(serde_json::to_string_pretty(&candidate).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => Err(json_error_payload("EVALUATION_FAILED", &format!("{}", e))),
+    }
+}
+
+pub async fn handle_evolution_approve(state: &WebState, body: &str) -> Result<String, String> {
+    let req: EvolutionApproveRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid approve request: {}", e)))?;
+    let candidate_id = req.candidate_id.ok_or_else(|| {
+        json_error_payload("MISSING_PARAMETER", "Missing required candidate_id")
+    })?;
+
+    match state.evolution_arm.approve_promotion(&candidate_id).await {
+        Ok(promoted) => Ok(serde_json::to_string_pretty(&promoted).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => Err(json_error_payload("PROMOTION_FAILED", &format!("{}", e))),
+    }
+}
+
+pub async fn handle_evolution_rollback(state: &WebState, body: &str) -> Result<String, String> {
+    let req: EvolutionRollbackRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid rollback request: {}", e)))?;
+    let target = req.target_module.unwrap_or_else(|| "permutator".to_string());
+
+    match state.evolution_arm.rollback(&target).await {
+        Ok(msg) => Ok(serde_json::json!({ "status": "SUCCESS", "message": msg }).to_string()),
+        Err(e) => Err(json_error_payload("ROLLBACK_FAILED", &format!("{}", e))),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DreamRsiTrainRequest {
+    pub generations: Option<usize>,
+    pub steps: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DreamRsiRolloutRequest {
+    pub steps: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DreamRsiFeedRequest {
+    pub events: Option<Vec<crate::security::dream_rsi::TrajectoryEvent>>,
+}
+
+pub async fn handle_dream_rsi_status(state: &WebState) -> String {
+    let status = state.dream_rsi_arm.get_status().await;
+    serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub async fn handle_dream_rsi_policy(state: &WebState) -> String {
+    let status = state.dream_rsi_arm.get_status().await;
+    serde_json::json!({
+        "status": "OK",
+        "active_policy_id": status.active_policy_id,
+        "fitness_score": status.active_policy_fitness,
+        "generation": status.active_generation,
+        "latest_experiment_plan": status.latest_experiment_plan
+    }).to_string()
+}
+
+pub async fn handle_dream_rsi_train(state: &WebState, body: &str) -> Result<String, String> {
+    let req: DreamRsiTrainRequest = serde_json::from_str(body).unwrap_or(DreamRsiTrainRequest {
+        generations: Some(10),
+        steps: Some(1000),
+    });
+    let generations = req.generations.unwrap_or(10);
+    let steps = req.steps.unwrap_or(1000);
+
+    match state.dream_rsi_arm.train_offline(generations, steps).await {
+        Ok(status) => Ok(serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => Err(json_error_payload("TRAINING_FAILED", &format!("{}", e))),
+    }
+}
+
+pub async fn handle_dream_rsi_rollout(state: &WebState, body: &str) -> Result<String, String> {
+    let req: DreamRsiRolloutRequest = serde_json::from_str(body).unwrap_or(DreamRsiRolloutRequest {
+        steps: Some(1000),
+    });
+    let steps = req.steps.unwrap_or(1000);
+    let report = state.dream_rsi_arm.run_rollout(steps).await;
+    Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
+}
+
+pub async fn handle_dream_rsi_recommend_priorities(state: &WebState) -> String {
+    let plan = state.dream_rsi_arm.get_recommendations().await;
+    serde_json::to_string_pretty(&plan).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub async fn handle_dream_rsi_feed_trajectories(state: &WebState, body: &str) -> Result<String, String> {
+    let req: DreamRsiFeedRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid feed request: {}", e)))?;
+    let events = req.events.unwrap_or_default();
+    let count = state.dream_rsi_arm.feed_trajectories(events).await;
+    Ok(serde_json::json!({ "status": "SUCCESS", "ingested_count": count }).to_string())
 }
 
 #[cfg(test)]

@@ -146,6 +146,7 @@ pub fn validate_header(raw: &[u8]) -> Result<Frame, Reject> {
     let method = fields[0];
 
     if method != b"GET"
+        && method != b"HEAD"
         && method != b"POST"
         && method != b"OPTIONS"
     {

@@ -50,6 +50,12 @@ pub enum OctopusSecurityError {
 
     #[error("Zero-capacity swarm: cannot dispatch tasks to an empty swarm")]
     ZeroSwarmCapacity,
+
+    #[error("Evolutionary invariant guard vetoed candidate: {0}")]
+    EvolutionaryVeto(String),
+
+    #[error("Human-in-the-loop promotion rejected: {0}")]
+    PromotionRejected(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -68,6 +74,9 @@ pub enum ArmRole {
     ContinuousOsvScanner,
     DifferentialProtocolAnalyzer,
     AutonomousProtocolResearch,
+    PostQuantumAttestation,
+    EvolutionaryOptimizer,
+    DreamRsiOptimizer,
 }
 
 /// High-level strategic intent sent downward from Central Brain to Arm.

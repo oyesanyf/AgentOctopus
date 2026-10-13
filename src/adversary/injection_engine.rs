@@ -321,6 +321,12 @@ impl PromptInjectionEngine {
             OctopusSecurityError::ChannelSevered => {
                 "Hardware/Process Communication Channel Severance"
             }
+            OctopusSecurityError::EvolutionaryVeto(_) => {
+                "OpenEvolve AST Invariant Guard (Forbidden System Primitive Vetoed)"
+            }
+            OctopusSecurityError::PromotionRejected(_) => {
+                "OpenEvolve Human-in-the-Loop Gate (Candidate Promotion Rejected)"
+            }
         }
     }
 

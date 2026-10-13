@@ -140,4 +140,10 @@ pub struct EvaluationRequest {
     pub baseline_request: Option<String>,
     #[serde(default)]
     pub repetition_count: Option<usize>,
+    #[serde(default)]
+    pub rfc_number: Option<u32>,
+    #[serde(default)]
+    pub section: Option<String>,
+    #[serde(default)]
+    pub mutation_type: Option<String>,
 }

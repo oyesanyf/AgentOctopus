@@ -76,7 +76,7 @@ impl PythonWorkerBridge {
         }
 
         // Verify key modular dependencies are packaged
-        for dep in &["database.py", "rfc_chunker.py", "rfc_fetcher.py"] {
+        for dep in &["database.py", "rfc_chunker.py", "rfc_fetcher.py", "rfc_hunt_swarm.py"] {
             let dep_path = worker_dir.join(dep);
             if !dep_path.exists() {
                 return Err(OctopusSecurityError::IsolationViolation(format!(

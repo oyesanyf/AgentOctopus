@@ -18,6 +18,15 @@ use super::api::{
     handle_protocol_research_status, handle_protocol_research_knowledge_base,
     handle_protocol_research_evaluate, handle_protocol_research_validate_arm106,
     handle_protocol_research_hypotheses, handle_protocol_research_sync_rfc,
+    handle_protocol_research_swarm_status,
+    handle_pqc_status, handle_pqc_generate_keypair, handle_pqc_encapsulate,
+    handle_pqc_decapsulate, handle_pqc_sign, handle_pqc_verify, handle_pqc_audit_cbom,
+    handle_evolution_status, handle_evolution_start, handle_evolution_stop,
+    handle_evolution_candidates, handle_evolution_evaluate, handle_evolution_approve,
+    handle_evolution_rollback,
+    handle_dream_rsi_status, handle_dream_rsi_policy, handle_dream_rsi_train,
+    handle_dream_rsi_rollout, handle_dream_rsi_recommend_priorities,
+    handle_dream_rsi_feed_trajectories,
     WebState,
 };
 use super::static_files::INDEX_HTML;
@@ -402,11 +411,12 @@ async fn handle_connection(
     };
 
     match (method, path) {
-        ("GET", "/") | ("GET", "/index.html") => {
+        ("GET", "/") | ("GET", "/index.html") | ("HEAD", "/") | ("HEAD", "/index.html") => {
+            let body = if method == "HEAD" { "" } else { INDEX_HTML };
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 INDEX_HTML.len(),
-                INDEX_HTML
+                body
             );
             stream.write_all(response.as_bytes()).await?;
         }
@@ -822,6 +832,272 @@ async fn handle_connection(
             let (status_code, json_body) = match handle_protocol_research_sync_rfc(&state).await {
                 Ok(body) => ("200 OK", body),
                 Err(err) => ("500 Internal Server Error", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/protocol-research/swarm-status") => {
+            let json_body = handle_protocol_research_swarm_status(&state).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/pqc/status") => {
+            let json_body = handle_pqc_status(&state).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/pqc/generate-keypair") => {
+            let (status_code, json_body) = match handle_pqc_generate_keypair(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/pqc/encapsulate") => {
+            let (status_code, json_body) = match handle_pqc_encapsulate(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/pqc/decapsulate") => {
+            let (status_code, json_body) = match handle_pqc_decapsulate(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/pqc/sign") => {
+            let (status_code, json_body) = match handle_pqc_sign(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/pqc/verify") => {
+            let (status_code, json_body) = match handle_pqc_verify(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/pqc/cbom") | ("POST", "/api/pqc/audit-cbom") => {
+            let (status_code, json_body) = match handle_pqc_audit_cbom(&state, body) {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/evolution/status") => {
+            let json_body = handle_evolution_status(&state).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/evolution/start") => {
+            let (status_code, json_body) = match handle_evolution_start(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/evolution/stop") => {
+            let (status_code, json_body) = match handle_evolution_stop(&state).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("500 Internal Server Error", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/evolution/candidates") => {
+            let json_body = handle_evolution_candidates(&state).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/evolution/evaluate") => {
+            let (status_code, json_body) = match handle_evolution_evaluate(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/evolution/approve") => {
+            let (status_code, json_body) = match handle_evolution_approve(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/evolution/rollback") => {
+            let (status_code, json_body) = match handle_evolution_rollback(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/dream-rsi/status") => {
+            let json_body = handle_dream_rsi_status(&state).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/dream-rsi/policy") => {
+            let json_body = handle_dream_rsi_policy(&state).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/dream-rsi/train") => {
+            let (status_code, json_body) = match handle_dream_rsi_train(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/dream-rsi/rollout") => {
+            let (status_code, json_body) = match handle_dream_rsi_rollout(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/dream-rsi/recommend-priorities") | ("POST", "/api/dream-rsi/recommend-priorities") => {
+            let json_body = handle_dream_rsi_recommend_priorities(&state).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/dream-rsi/feed-trajectories") => {
+            let (status_code, json_body) = match handle_dream_rsi_feed_trajectories(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

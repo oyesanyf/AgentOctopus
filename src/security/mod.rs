@@ -69,3 +69,9 @@ pub use windows_sandbox::{
 };
 
 pub mod protocol_research;
+pub mod pqc_arm;
+pub use pqc_arm::{CbomScanner, PostQuantumArm, PqcAlgorithm, PqcArmStatus, PqcDsaEngine, PqcKemEngine};
+pub mod evolution;
+pub use evolution::{EvolutionArmStatus, EvolutionCandidate, EvolutionMetrics, EvolutionaryOptimizerArm, PromotionState, SecurityInvariantGuard};
+pub mod dream_rsi;
+pub use dream_rsi::{DreamRsiOptimizerArm, DreamRsiPolicyOptimizer, DreamRsiStatus, DreamRolloutReport, ResearchPolicy, RsiExperimentPlan, TrajectoryEvent, WorldModelTransition};

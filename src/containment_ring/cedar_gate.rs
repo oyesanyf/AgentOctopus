@@ -318,6 +318,9 @@ impl CedarGate {
                 ArmRole::ContinuousOsvScanner => "osv_scanner_arm",
                 ArmRole::DifferentialProtocolAnalyzer => "protocol_analyzer_arm",
                 ArmRole::AutonomousProtocolResearch => "protocol_research_arm",
+                ArmRole::PostQuantumAttestation => "pqc_arm",
+                ArmRole::EvolutionaryOptimizer => "evolution_arm",
+                ArmRole::DreamRsiOptimizer => "dream_rsi_arm",
             }
         };
 

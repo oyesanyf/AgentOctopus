@@ -45,7 +45,9 @@ class ModelFusionAdapter:
         self.sec_model = sec_model
         self.available_tags = self._fetch_available_tags()
         self.active_model = self._resolve_model(self.preferred_model)
-        self.client = httpx.Client(timeout=60.0)
+        timeout_env = os.environ.get("OLLAMA_TIMEOUT", "900.0")
+        self.timeout = float(timeout_env) if float(timeout_env) > 0 else None
+        self.client = httpx.Client(timeout=httpx.Timeout(self.timeout, connect=60.0))
 
         # Gemini Cloud client fallback
         self.gemini_client = None
@@ -127,20 +129,33 @@ class ModelFusionAdapter:
             "prompt": full_prompt,
             "stream": False,
             "format": "json",
-            "keep_alive": "30m",
+            "keep_alive": "60m",
             "options": {
                 "temperature": 0.7,
                 "num_predict": 1024,
             },
         }
 
-        try:
-            resp = self.client.post(f"{self.endpoint}/api/generate", json=payload, timeout=180.0)
-            if resp.status_code == 200:
-                raw_text = resp.json().get("response", "").strip()
-                return self._parse_json_array(raw_text)
-        except Exception as e:
-            logger.warning("Ollama query failed on %s: %s", model, e)
+        for attempt in range(2):
+            try:
+                resp = self.client.post(
+                    f"{self.endpoint}/api/generate",
+                    json=payload,
+                    timeout=httpx.Timeout(self.timeout, connect=60.0),
+                )
+                if resp.status_code == 200:
+                    raw_text = resp.json().get("response", "").strip()
+                    return self._parse_json_array(raw_text)
+            except Exception as e:
+                if attempt == 0 and "timed out" in str(e).lower():
+                    logger.warning(
+                        "Ollama query timed out on %s on initial attempt (likely loading model into VRAM/RAM). Retrying with model now resident...",
+                        model,
+                    )
+                    time.sleep(2.0)
+                    continue
+                logger.warning("Ollama query failed on %s: %s", model, e)
+                break
         return []
 
     def _run_panel_fusion(self, system_instruction: str, user_prompt: str) -> List[Dict[str, Any]]:

@@ -173,24 +173,39 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
       background: #0f172a;
       border-bottom: 1px solid var(--card-border);
       display: flex;
-      padding: 0 2rem;
-      gap: 1.5rem;
+      padding: 0 1.5rem;
+      gap: 0.5rem;
+      overflow-x: auto;
+      white-space: nowrap;
+      scrollbar-width: thin;
+      -webkit-overflow-scrolling: touch;
+      align-items: center;
     }
 
     .nav-tab {
-      padding: 0.85rem 0.5rem;
+      padding: 0.75rem 0.85rem;
       color: var(--text-muted);
       cursor: pointer;
-      font-size: 0.9rem;
+      font-size: 0.85rem;
       font-weight: 500;
+      border-radius: 6px;
       border-bottom: 2px solid transparent;
-      transition: all 0.2s;
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
     }
 
-    .nav-tab:hover { color: var(--text-main); }
+    .nav-tab:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.04);
+    }
     .nav-tab.active {
       color: var(--accent-cyan);
+      background: rgba(6, 182, 212, 0.1);
       border-bottom: 2px solid var(--accent-cyan);
+      font-weight: 600;
     }
 
     main {
@@ -680,6 +695,10 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
   <div class="nav-tab" onclick="switchTab('rl-continuous')">🧠 Continuous Security &amp; RL Active Defense</div>
   <div class="nav-tab" onclick="switchTab('rasp-shield')">⚡ Real-Time ASP (RT-ASP)</div>
   <div class="nav-tab" onclick="switchTab('fuzz-supply-chain')">🔍 Continuous OSS-Fuzz &amp; OSV Scanner</div>
+  <div class="nav-tab" onclick="switchTab('protocol-research')">🌐 Protocol Research (Arm 107)</div>
+  <div class="nav-tab" onclick="switchTab('pqc-attestation')">🔐 Post-Quantum (Arm 108)</div>
+  <div class="nav-tab" onclick="switchTab('openevolve-view')">🧬 OpenEvolve (Arm 109)</div>
+  <div class="nav-tab" onclick="switchTab('dream-rsi-view')">💭 Open Dream-RSI (Arm 110)</div>
   <div class="nav-tab" onclick="switchTab('user-guide')">📖 Docs &amp; Integration Guide</div>
 </nav>
 
@@ -1505,6 +1524,115 @@ forbid (
             🔄 Refresh Telemetry
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- INTERACTIVE CONCENTRIC RINGS VISUAL TOPOLOGY DIAGRAM -->
+    <div class="card" style="background: rgba(15, 23, 42, 0.75); border: 1.5px solid rgba(56, 189, 248, 0.3); margin-bottom: 1.5rem; padding: 1.25rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+        <div>
+          <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #f8fafc;">⭕ Interactive Concentric Ring Topology Diagram</h3>
+          <p style="margin: 0.2rem 0 0 0; font-size: 0.8rem; color: #94a3b8;">
+            High-precision vector topology with calculated, non-overlapping geometric radial boundaries.
+          </p>
+        </div>
+        <div style="display: flex; gap: 0.75rem; font-size: 0.78rem; flex-wrap: wrap;">
+          <span style="color: #c084fc;">● Ring 4 (OSR)</span>
+          <span style="color: #38bdf8;">● Ring 3 (OCR)</span>
+          <span style="color: #34d399;">● Ring 2 (NMR)</span>
+          <span style="color: #818cf8;">● Ring 1 (ACR)</span>
+          <span style="color: #22d3ee;">● Central Brain</span>
+        </div>
+      </div>
+      <div style="width: 100%; display: flex; justify-content: center; background: #070b14; border-radius: 0.5rem; padding: 0.75rem; border: 1px solid #1e293b; overflow-x: auto;">
+        <svg viewBox="0 0 920 460" style="width: 100%; max-width: 900px; height: auto; user-select: none;">
+          <defs>
+            <radialGradient id="tab6-r4" cx="50%" cy="50%" r="50%">
+              <stop offset="65%" stop-color="#a855f7" stop-opacity="0.04"/>
+              <stop offset="100%" stop-color="#a855f7" stop-opacity="0.2"/>
+            </radialGradient>
+            <radialGradient id="tab6-r3" cx="50%" cy="50%" r="50%">
+              <stop offset="65%" stop-color="#38bdf8" stop-opacity="0.06"/>
+              <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.22"/>
+            </radialGradient>
+            <radialGradient id="tab6-r2" cx="50%" cy="50%" r="50%">
+              <stop offset="65%" stop-color="#34d399" stop-opacity="0.08"/>
+              <stop offset="100%" stop-color="#34d399" stop-opacity="0.28"/>
+            </radialGradient>
+            <radialGradient id="tab6-r1" cx="50%" cy="50%" r="50%">
+              <stop offset="65%" stop-color="#818cf8" stop-opacity="0.12"/>
+              <stop offset="100%" stop-color="#818cf8" stop-opacity="0.35"/>
+            </radialGradient>
+            <radialGradient id="tab6-brain" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#22d3ee"/>
+              <stop offset="100%" stop-color="#0284c7"/>
+            </radialGradient>
+          </defs>
+
+          <!-- RING 4 (Radius 215) -->
+          <circle cx="460" cy="230" r="215" fill="url(#tab6-r4)" stroke="#a855f7" stroke-width="2" stroke-dasharray="6 4" />
+          <rect x="330" y="24" width="260" height="24" rx="12" fill="#3b0764" stroke="#c084fc" stroke-width="1.2" />
+          <text x="460" y="40" fill="#f3e8ff" font-size="11" font-weight="700" text-anchor="middle" font-family="sans-serif">👁️ RING 4: INVISIBLE SENTINEL RING</text>
+
+          <!-- RING 3 (Radius 165) -->
+          <circle cx="460" cy="230" r="165" fill="url(#tab6-r3)" stroke="#38bdf8" stroke-width="2" />
+          <rect x="345" y="74" width="230" height="22" rx="11" fill="#082f49" stroke="#38bdf8" stroke-width="1.2" />
+          <text x="460" y="89" fill="#e0f2fe" font-size="10.5" font-weight="700" text-anchor="middle" font-family="sans-serif">🛡️ RING 3: GLOBAL BOUNDARY (64MB)</text>
+
+          <!-- RING 2 (Radius 115) -->
+          <circle cx="460" cy="230" r="115" fill="url(#tab6-r2)" stroke="#34d399" stroke-width="2" />
+          <rect x="355" y="124" width="210" height="22" rx="11" fill="#064e3b" stroke="#34d399" stroke-width="1.2" />
+          <text x="460" y="139" fill="#ecfdf5" font-size="10" font-weight="700" text-anchor="middle" font-family="sans-serif">🕸️ RING 2: NEURAL MESH (ZERO AMBIENT)</text>
+
+          <!-- RING 1 (Radius 70) -->
+          <circle cx="460" cy="230" r="70" fill="url(#tab6-r1)" stroke="#818cf8" stroke-width="2" />
+          <rect x="365" y="169" width="190" height="20" rx="10" fill="#1e1b4b" stroke="#818cf8" stroke-width="1.2" />
+          <text x="460" y="183" fill="#e0e7ff" font-size="9.5" font-weight="700" text-anchor="middle" font-family="sans-serif">🦾 RING 1: ARM ENCLAVES</text>
+
+          <!-- CENTRAL BRAIN -->
+          <circle cx="460" cy="230" r="36" fill="url(#tab6-brain)" stroke="#ffffff" stroke-width="2" />
+          <text x="460" y="228" fill="#042f2e" font-size="16" text-anchor="middle" font-family="sans-serif">🐙</text>
+          <text x="460" y="242" fill="#ffffff" font-size="8.5" font-weight="800" text-anchor="middle" font-family="sans-serif">BRAIN</text>
+
+          <!-- SATELLITE ARM BOXES (Cleanly spaced, absolutely no text collision) -->
+          <!-- Arm 107 -->
+          <g transform="translate(140, 120)">
+            <rect width="160" height="38" rx="6" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5" />
+            <text x="10" y="17" fill="#38bdf8" font-size="10" font-weight="700" font-family="sans-serif">Arm #107 Protocol</text>
+            <text x="10" y="29" fill="#94a3b8" font-size="8.5" font-family="sans-serif">RFC Swarm &amp; Probes</text>
+            <line x1="160" y1="19" x2="345" y2="230" stroke="#38bdf8" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>
+          </g>
+
+          <!-- Arm 108 -->
+          <g transform="translate(140, 300)">
+            <rect width="160" height="38" rx="6" fill="#0f172a" stroke="#c084fc" stroke-width="1.5" />
+            <text x="10" y="17" fill="#c084fc" font-size="10" font-weight="700" font-family="sans-serif">Arm #108 Post-Quantum</text>
+            <text x="10" y="29" fill="#94a3b8" font-size="8.5" font-family="sans-serif">ML-KEM / ML-DSA Attest</text>
+            <line x1="160" y1="19" x2="345" y2="230" stroke="#c084fc" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>
+          </g>
+
+          <!-- Arm 109 -->
+          <g transform="translate(620, 120)">
+            <rect width="160" height="38" rx="6" fill="#0f172a" stroke="#34d399" stroke-width="1.5" />
+            <text x="10" y="17" fill="#34d399" font-size="10" font-weight="700" font-family="sans-serif">Arm #109 OpenEvolve</text>
+            <text x="10" y="29" fill="#94a3b8" font-size="8.5" font-family="sans-serif">MAP-Elites Code Evolve</text>
+            <line x1="0" y1="19" x2="-160" y2="110" stroke="#34d399" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>
+          </g>
+
+          <!-- Arm 110 -->
+          <g transform="translate(620, 300)">
+            <rect width="160" height="38" rx="6" fill="#0f172a" stroke="#818cf8" stroke-width="1.5" />
+            <text x="10" y="17" fill="#818cf8" font-size="10" font-weight="700" font-family="sans-serif">Arm #110 Open Dream-RSI</text>
+            <text x="10" y="29" fill="#94a3b8" font-size="8.5" font-family="sans-serif">World Model Policy Replay</text>
+            <line x1="0" y1="19" x2="-160" y2="-70" stroke="#818cf8" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>
+          </g>
+
+          <!-- Bottom Footer Invariant -->
+          <rect x="330" y="420" width="260" height="24" rx="6" fill="#090d16" stroke="#334155" stroke-width="1" />
+          <text x="460" y="436" fill="#94a3b8" font-size="9.5" text-anchor="middle" font-family="sans-serif">
+            ⚡ NON-COOPERATIVE AUTOTOMY &bull; 64MB HARD CLAMP
+          </text>
+        </svg>
       </div>
     </div>
 
@@ -2922,6 +3050,691 @@ with urllib.request.urlopen(req) as resp:
     </div>
   </div>
 
+  <!-- TAB: PROTOCOL RESEARCH & MULTI-AGENT SWARM (ARM 107) -->
+  <div id="protocol-research" class="tab-content">
+    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+      <div class="breadcrumb-trail">
+        <a class="breadcrumb-link" href="javascript:void(0)" onclick="switchTab('test-runner')"><span>🏠</span> Dashboard</a>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-link" style="cursor: default; pointer-events: none;">Active Protocol Defense</span>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-current"><span>🌐</span> Autonomous Protocol Research &amp; LangGraph Swarm (Arm #107)</span>
+      </div>
+      <div class="breadcrumb-meta">
+        <span class="breadcrumb-badge">📜 12-Module Research Engine</span>
+        <span class="breadcrumb-badge purple">🐙 Multi-Agent LangGraph Swarm</span>
+        <span class="breadcrumb-badge green">🔒 Windows AppContainer Sandboxed</span>
+      </div>
+    </nav>
+
+    <!-- Top Telemetry Cards -->
+    <div class="card" style="margin-bottom: 1.5rem; background: linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 27, 75, 0.4)); border: 1px solid rgba(99, 102, 241, 0.3);">
+      <div class="card-header" style="border-bottom: 1px solid rgba(99, 102, 241, 0.2); padding-bottom: 0.75rem; margin-bottom: 1rem;">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+          <span style="font-size: 1.4rem;">🌐</span>
+          <div>
+            <h2 style="margin: 0; font-size: 1.15rem; color: #f8fafc;">Autonomous Protocol Research Arm #107 &amp; RFC Hunt Swarm</h2>
+            <div style="font-size: 0.75rem; color: #94a3b8;">Continuous RFC normative extraction, ABNF mutation, LangGraph swarm orchestration, and Cedar Policy 8 containment</div>
+          </div>
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <span class="badge" id="pr-status-badge" style="background: rgba(99, 102, 241, 0.3); color: #a5b4fc; border: 1px solid #6366f1; font-weight: 800; font-size: 0.78rem; padding: 0.25rem 0.65rem;">
+            ● OPERATIONAL (ARM 107)
+          </span>
+          <button class="btn btn-secondary" onclick="fetchProtocolResearchData(false)" style="font-size: 0.78rem; padding: 0.35rem 0.75rem;">
+            🔄 Refresh Status
+          </button>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem;">
+        <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(148, 163, 184, 0.15); border-radius: 8px; padding: 0.85rem; text-align: center;">
+          <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; font-weight: 600;">Ingested RFCs</div>
+          <div class="stat-value" id="pr-stat-rfcs" style="color: #38bdf8;">--</div>
+          <div style="font-size: 0.7rem; color: #64748b;">Active IETF Corpus</div>
+        </div>
+        <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(148, 163, 184, 0.15); border-radius: 8px; padding: 0.85rem; text-align: center;">
+          <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; font-weight: 600;">Micro-Fragments</div>
+          <div class="stat-value" id="pr-stat-fragments" style="color: #a855f7;">--</div>
+          <div style="font-size: 0.7rem; color: #64748b;">Normative Constraints</div>
+        </div>
+        <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(148, 163, 184, 0.15); border-radius: 8px; padding: 0.85rem; text-align: center;">
+          <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; font-weight: 600;">Candidate Probes</div>
+          <div class="stat-value" id="pr-stat-probes" style="color: #34d399;">--</div>
+          <div style="font-size: 0.7rem; color: #64748b;">Generated Triggers</div>
+        </div>
+        <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(148, 163, 184, 0.15); border-radius: 8px; padding: 0.85rem; text-align: center;">
+          <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; font-weight: 600;">Evaluations Tested</div>
+          <div class="stat-value" id="pr-stat-evals" style="color: #f59e0b;">--</div>
+          <div style="font-size: 0.7rem; color: #64748b;">Wire Executions</div>
+        </div>
+        <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(148, 163, 184, 0.15); border-radius: 8px; padding: 0.85rem; text-align: center;">
+          <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase; font-weight: 600;">Isolation Profile</div>
+          <div style="font-size: 0.95rem; font-weight: 700; color: #10b981; margin-top: 0.35rem;">AppContainer + Job</div>
+          <div style="font-size: 0.7rem; color: #64748b;">64 MB Strict Clamp</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Grid: Swarm Controller + Probe Evaluator -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
+      
+      <!-- Card 1: Multi-Agent RFC Hunt Swarm -->
+      <div class="card" style="margin-bottom: 0;">
+        <div class="card-header">
+          <h2><span>🐙</span> Multi-Agent LangGraph Swarm (rfc_hunt_swarm.py)</h2>
+          <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid #0284c7; font-size: 0.75rem;">12 Engine Modules</span>
+        </div>
+        <p style="font-size: 0.82rem; color: #94a3b8; margin-top: 0;">
+          The multi-agent swarm decomposes continuous flaw hunting into specialized LangGraph agents: ABNF grammar extraction, bandit mutation scheduling, semantic constraint compilation, differential oracle verification, and causal classification.
+        </p>
+
+        <div style="background: #090d16; border: 1px solid #1e293b; border-radius: 6px; padding: 0.85rem; margin-bottom: 1rem; font-size: 0.8rem;">
+          <div style="color: #cbd5e1; font-weight: 600; margin-bottom: 0.4rem;">One-Click Terminal Launch Command:</div>
+          <code style="display: block; background: #030712; padding: 0.5rem; border-radius: 4px; color: #34d399; font-family: monospace; word-break: break-all;">
+            python -u rfc_hunt_swarm.py --mode all --timeout 900
+          </code>
+          <div style="color: #64748b; font-size: 0.72rem; margin-top: 0.35rem;">
+            Alternative: <code style="color: #94a3b8;">python start.py --swarm --mode all --timeout 900</code> or run <code style="color: #94a3b8;">vendor\rfchunt\rfc_hunt_swarm.bat</code>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+          <button class="btn btn-primary" onclick="syncRfcIndexNow()" id="pr-sync-rfc-btn" style="flex: 1; font-size: 0.8rem; padding: 0.5rem;">
+            🔄 Sync IETF RFC Index Now
+          </button>
+          <button class="btn btn-secondary" onclick="loadSwarmStatusInfo()" style="font-size: 0.8rem; padding: 0.5rem;">
+            📋 Swarm Telemetry
+          </button>
+        </div>
+
+        <div id="pr-swarm-log-box" style="background: #020617; border: 1px solid #1e293b; border-radius: 6px; padding: 0.75rem; font-family: monospace; font-size: 0.75rem; color: #94a3b8; height: 160px; overflow-y: auto;">
+          [System Ready]: RFC Hunt Swarm operational. 12 engines loaded in vendor/rfchunt/.
+        </div>
+      </div>
+
+      <!-- Card 2: Interactive Wire Probe Evaluator -->
+      <div class="card" style="margin-bottom: 0;">
+        <div class="card-header">
+          <h2><span>⚡</span> Probe Evaluator &amp; Cedar Policy 8 Guard</h2>
+          <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid #059669; font-size: 0.75rem;">Negative Control</span>
+        </div>
+        <p style="font-size: 0.82rem; color: #94a3b8; margin-top: 0;">
+          Strictly authorized through AWS Cedar Policy 8 (Allowlist: 127.0.0.1, localhost, ::1) and Dogwood temporal velocity limiter (max 30 evals per 300s).
+        </p>
+
+        <div style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;">
+          <select id="pr-probe-preset" onchange="applyProbePreset()" style="flex: 1; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px; padding: 0.35rem 0.6rem; font-size: 0.78rem;">
+            <option value="te_desync">Preset 1: Chunked Transfer-Encoding Desync</option>
+            <option value="dangling_byte">Preset 2: Dangling-Byte RQP Race Nullification</option>
+            <option value="double_cl">Preset 3: Conflicting Dual Content-Length</option>
+          </select>
+          <input type="text" id="pr-probe-host" value="127.0.0.1" style="width: 90px; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px; padding: 0.35rem 0.5rem; font-size: 0.78rem;">
+          <input type="number" id="pr-probe-port" value="5006" style="width: 70px; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px; padding: 0.35rem 0.5rem; font-size: 0.78rem;">
+        </div>
+
+        <textarea id="pr-probe-raw" rows="5" style="width: 100%; background: #020617; border: 1px solid #1e293b; border-radius: 6px; font-family: monospace; font-size: 0.75rem; color: #38bdf8; padding: 0.5rem; margin-bottom: 0.75rem; resize: vertical; box-sizing: border-box;">POST / HTTP/1.1&#13;&#10;Host: localhost&#13;&#10;Transfer-Encoding: chunked&#13;&#10;Transfer-Encoding: gzip&#13;&#10;&#13;&#10;0&#13;&#10;&#13;&#10;G</textarea>
+
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <button class="btn btn-primary" onclick="evaluateProbeNow()" id="pr-eval-btn" style="flex: 1; font-size: 0.8rem; padding: 0.5rem;">
+            🚀 Evaluate Wire Probe Under Policy 8
+          </button>
+          <button class="btn btn-secondary" onclick="handoffToArm106Now()" id="pr-handoff-btn" style="font-size: 0.8rem; padding: 0.5rem;">
+            🛡️ Arm 106 Validate
+          </button>
+        </div>
+
+        <div id="pr-eval-result-box" style="margin-top: 0.75rem; background: #020617; border: 1px solid #1e293b; border-radius: 6px; padding: 0.75rem; font-family: monospace; font-size: 0.75rem; color: #cbd5e1; min-height: 80px; max-height: 140px; overflow-y: auto;">
+          Ready to evaluate probe against authorized boundary.
+        </div>
+      </div>
+    </div>
+
+    <!-- Active RFC Hypotheses & Knowledge Base Explorer -->
+    <div class="card">
+      <div class="card-header">
+        <h2><span>📚</span> Active Protocol Hypotheses &amp; ABNF Intelligence Ledger</h2>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <input type="text" id="pr-search-keyword" placeholder="Filter by keyword (e.g. Transfer-Encoding, Trailer)..." style="background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px; padding: 0.35rem 0.6rem; font-size: 0.78rem; width: 260px;" onkeyup="if(event.key==='Enter') searchRfcFragments()">
+          <button class="btn btn-secondary" onclick="searchRfcFragments()" style="font-size: 0.78rem; padding: 0.35rem 0.65rem;">
+            🔍 Search
+          </button>
+        </div>
+      </div>
+      <div style="overflow-x: auto;">
+        <table class="test-table" style="width: 100%;">
+          <thead>
+            <tr>
+              <th style="width: 120px;">Probe ID</th>
+              <th style="width: 100px;">RFC Ref</th>
+              <th style="width: 180px;">Mutation Vector</th>
+              <th>Working Hypothesis &amp; Discrepancy Theory</th>
+              <th style="width: 160px;">Target Containment</th>
+            </tr>
+          </thead>
+          <tbody id="pr-hypotheses-table-body">
+            <tr><td colspan="5" style="text-align: center; color: #64748b; padding: 1.5rem;">Loading active hypotheses from dedicated RFC knowledge base...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB: POST-QUANTUM CRYPTOGRAPHY & ATTESTATION (ARM 108) -->
+  <div id="pqc-attestation" class="tab-content">
+    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+      <div class="breadcrumb-trail">
+        <a class="breadcrumb-link" href="javascript:void(0)" onclick="switchTab('test-runner')"><span>🏠</span> Dashboard</a>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-link" style="cursor: default; pointer-events: none;">Cryptography &amp; Zero-Trust</span>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-current"><span>🔐</span> Post-Quantum Cryptography &amp; Attestation Arm #108</span>
+      </div>
+      <div class="breadcrumb-meta">
+        <span class="breadcrumb-badge">🏛️ NIST FIPS 203 (ML-KEM)</span>
+        <span class="breadcrumb-badge purple">📜 NIST FIPS 204 (ML-DSA)</span>
+        <span class="breadcrumb-badge green">🛡️ CNSA 2.0 Compliant</span>
+      </div>
+    </nav>
+
+    <!-- HEADER CARD -->
+    <div class="card" style="background: linear-gradient(135deg, rgba(88, 28, 135, 0.4), rgba(15, 23, 42, 0.95)); border: 2px solid #a855f7; margin-bottom: 1.25rem;">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div style="display: flex; align-items: center; gap: 0.85rem;">
+          <div class="pulse-beacon" style="background: #a855f7; box-shadow: 0 0 10px #a855f7;"></div>
+          <div>
+            <h2 style="margin: 0; font-size: 1.15rem; font-weight: 800; color: #c084fc; letter-spacing: 0.5px;">🔐 POST-QUANTUM CRYPTOGRAPHY &amp; ATTESTATION ARM (ARM #108)</h2>
+            <div style="font-size: 0.8rem; color: #cbd5e1; margin-top: 0.2rem;">
+              Enforces NIST FIPS 203 (ML-KEM-512/768/1024), NIST FIPS 204 (ML-DSA-44/65/87), Hybrid X25519/ML-KEM-768, and Continuous CBOM Readiness Audit.
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <span class="badge" id="pqc-status-badge" style="background: rgba(168, 85, 247, 0.3); color: #c084fc; border: 1px solid #a855f7; font-weight: 800; font-size: 0.78rem; padding: 0.25rem 0.65rem;">
+            ● QUANTUM-RESISTANT ACTIVE
+          </span>
+          <button class="btn btn-secondary" onclick="loadPqcStatus()" style="font-size: 0.78rem; padding: 0.35rem 0.75rem;">
+            🔄 Refresh Status
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATS GRID -->
+    <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr); margin-bottom: 1.25rem;">
+      <div class="stat-box">
+        <div class="stat-value" id="pqc-readiness-score" style="color: #34d399;">92%</div>
+        <div class="stat-label">Quantum Readiness Score</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="pqc-total-keypairs" style="color: #38bdf8;">0</div>
+        <div class="stat-label">Keypairs Generated</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="pqc-total-encaps" style="color: #c084fc;">0</div>
+        <div class="stat-label">KEM Encapsulations</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="pqc-total-decaps" style="color: #f59e0b;">0</div>
+        <div class="stat-label">KEM Decapsulations</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="pqc-total-sigs" style="color: #10b981;">0</div>
+        <div class="stat-label">Signatures Verified</div>
+      </div>
+    </div>
+
+    <!-- TWO-COLUMN WORKBENCH: KEYGEN/ENCAPSULATION SIMULATOR & DIGITAL SIGNATURES -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem;">
+      <!-- CARD 1: NIST FIPS 203 ML-KEM WORKBENCH -->
+      <div class="card">
+        <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 0.75rem; margin-bottom: 1rem;">
+          <h3 style="margin: 0; font-size: 1rem; color: #38bdf8;">🔑 FIPS 203 ML-KEM Key Exchange</h3>
+          <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid #0284c7;">Module-Lattice KEM</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.85rem;">
+          <div>
+            <label style="font-size: 0.78rem; color: #94a3b8; display: block; margin-bottom: 0.3rem;">Algorithm Tier:</label>
+            <select id="pqc-kem-algo-select" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 0.45rem 0.65rem; border-radius: 4px; font-size: 0.85rem;">
+              <option value="MlKem768">ML-KEM-768 (NIST Level 3 - Swarm Standard)</option>
+              <option value="MlKem512">ML-KEM-512 (NIST Level 1)</option>
+              <option value="MlKem1024">ML-KEM-1024 (NIST Level 5 - Ultra Secure)</option>
+              <option value="HybridX25519MlKem768">Hybrid X25519 + ML-KEM-768 (Dual Defense)</option>
+            </select>
+          </div>
+          <div style="display: flex; gap: 0.5rem;">
+            <button class="btn btn-primary" onclick="executePqcKeygen()" style="flex: 1; font-size: 0.8rem; padding: 0.45rem;">⚡ Generate PQC Keypair</button>
+            <button class="btn btn-secondary" onclick="executePqcEncapsulate()" style="flex: 1; font-size: 0.8rem; padding: 0.45rem;">📦 Encapsulate Secret</button>
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; color: #94a3b8; display: block; margin-bottom: 0.3rem;">Last Generated Key ID / Target:</label>
+            <input type="text" id="pqc-kem-key-id" placeholder="pqc-ml-kem-768-..." readonly style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #38bdf8; padding: 0.4rem 0.6rem; border-radius: 4px; font-family: monospace; font-size: 0.78rem;">
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; color: #94a3b8; display: block; margin-bottom: 0.3rem;">KEM Ciphertext (Hex):</label>
+            <textarea id="pqc-kem-ciphertext" rows="2" placeholder="Encapsulated ciphertext will appear here..." style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 0.4rem 0.6rem; border-radius: 4px; font-family: monospace; font-size: 0.75rem; resize: vertical;"></textarea>
+          </div>
+          <div>
+            <button class="btn btn-secondary" onclick="executePqcDecapsulate()" style="width: 100%; font-size: 0.8rem; padding: 0.45rem; margin-bottom: 0.5rem;">🔓 Decapsulate &amp; Verify Shared Secret</button>
+            <div id="pqc-kem-result" style="background: #020617; border: 1px solid #1e293b; border-radius: 4px; padding: 0.5rem; font-family: monospace; font-size: 0.75rem; color: #34d399; min-height: 2.2rem; display: flex; align-items: center;">Shared secret ready for key derivation.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CARD 2: NIST FIPS 204 ML-DSA WORKBENCH -->
+      <div class="card">
+        <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 0.75rem; margin-bottom: 1rem;">
+          <h3 style="margin: 0; font-size: 1rem; color: #c084fc;">✍️ FIPS 204 ML-DSA Digital Signatures</h3>
+          <span class="badge" style="background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid #7e22ce;">Module-Lattice DSA</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.85rem;">
+          <div>
+            <label style="font-size: 0.78rem; color: #94a3b8; display: block; margin-bottom: 0.3rem;">Signing Algorithm:</label>
+            <select id="pqc-dsa-algo-select" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 0.45rem 0.65rem; border-radius: 4px; font-size: 0.85rem;">
+              <option value="MlDsa65">ML-DSA-65 (NIST Level 3 - Swarm Standard)</option>
+              <option value="MlDsa44">ML-DSA-44 (NIST Level 2)</option>
+              <option value="MlDsa87">ML-DSA-87 (NIST Level 5)</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; color: #94a3b8; display: block; margin-bottom: 0.3rem;">Message Payload to Attest / Sign:</label>
+            <input type="text" id="pqc-dsa-message" value="Agent Octopus Swarm Attestation Block #108 - Verified Non-Tampered" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 0.45rem 0.65rem; border-radius: 4px; font-size: 0.82rem;">
+          </div>
+          <div style="display: flex; gap: 0.5rem;">
+            <button class="btn btn-primary" onclick="executePqcSign()" style="flex: 1; font-size: 0.8rem; padding: 0.45rem; background: #9333ea; border-color: #a855f7;">✍️ Sign with Arm 108 Key</button>
+            <button class="btn btn-secondary" onclick="executePqcVerify()" style="flex: 1; font-size: 0.8rem; padding: 0.45rem;">🛡️ Verify Signature</button>
+          </div>
+          <div>
+            <label style="font-size: 0.78rem; color: #94a3b8; display: block; margin-bottom: 0.3rem;">ML-DSA Signature Proof (Hex):</label>
+            <textarea id="pqc-dsa-sig-output" rows="2" placeholder="Generated digital signature proof will appear here..." style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 0.4rem 0.6rem; border-radius: 4px; font-family: monospace; font-size: 0.75rem; resize: vertical;"></textarea>
+          </div>
+          <div>
+            <div id="pqc-dsa-result" style="background: #020617; border: 1px solid #1e293b; border-radius: 4px; padding: 0.5rem; font-family: monospace; font-size: 0.75rem; color: #c084fc; min-height: 2.2rem; display: flex; align-items: center;">Attestation engine ready.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CARD 3: CRYPTOGRAPHIC BILL OF MATERIALS (CBOM) AUDIT -->
+    <div class="card" style="margin-bottom: 1.5rem;">
+      <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 0.75rem; margin-bottom: 1rem;">
+        <div>
+          <h3 style="margin: 0; font-size: 1.05rem; color: #f8fafc;">📊 Cryptographic Bill of Materials (CBOM) &amp; Shor's Exposure Audit</h3>
+          <div style="font-size: 0.78rem; color: #94a3b8; margin-top: 0.2rem;">Live audit of all cryptographic primitives across Agent Octopus against Shor's and Grover's quantum threat vectors.</div>
+        </div>
+        <button class="btn btn-secondary" onclick="executePqcAuditCbom()" style="font-size: 0.78rem; padding: 0.35rem 0.75rem;">
+          🔍 Audit Fleet CBOM
+        </button>
+      </div>
+      <div class="table-container">
+        <table class="data-table" style="width: 100%; font-size: 0.8rem;">
+          <thead>
+            <tr>
+              <th>Subsystem / Asset</th>
+              <th>Algorithm</th>
+              <th>Key / Digest Size</th>
+              <th>Quantum Resistance</th>
+              <th>Shor's Algorithm Status</th>
+              <th>CNSA 2.0 Advisory</th>
+            </tr>
+          </thead>
+          <tbody id="pqc-cbom-table-body">
+            <tr><td colspan="6" style="text-align: center; color: #94a3b8; padding: 1.5rem;">Click "Audit Fleet CBOM" or wait for automatic audit ingestion...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  <!-- TAB 13: OPENEVOLVE CODE OPTIMIZER (ARM 109) -->
+  <div id="openevolve-view" class="tab-content">
+    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+      <div class="breadcrumb-trail">
+        <a class="breadcrumb-link" href="javascript:void(0)" onclick="switchTab('test-runner')"><span>🏠</span> Dashboard</a>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-link" style="cursor: default; pointer-events: none;">Evolutionary Intelligence</span>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-current"><span>🧬</span> OpenEvolve Code Optimizer Arm #109</span>
+      </div>
+      <div class="breadcrumb-meta">
+        <span class="breadcrumb-badge">🏝️ MAP-Elites Islands</span>
+        <span class="breadcrumb-badge green">🐍 Zero-Docker Native Python</span>
+        <span class="breadcrumb-badge purple">🛡️ Invariant AST Guard</span>
+        <span class="breadcrumb-badge blue">👤 Human-in-the-Loop Gate</span>
+      </div>
+    </nav>
+
+    <!-- HEADER CARD -->
+    <div class="card" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(15, 23, 42, 0.95)); border: 2px solid #10b981; margin-bottom: 1.25rem;">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div style="display: flex; align-items: center; gap: 0.85rem;">
+          <div class="pulse-beacon" style="background: #10b981; box-shadow: 0 0 10px #10b981;"></div>
+          <div>
+            <h2 style="margin: 0; font-size: 1.15rem; font-weight: 800; color: #6ee7b7; letter-spacing: 0.5px;">🧬 OPENEVOLVE CODE OPTIMIZER (ARM #109)</h2>
+            <div style="font-size: 0.8rem; color: #cbd5e1; margin-top: 0.2rem;">
+              Autonomous MAP-Elites evolutionary optimization of RFC Hunt heuristics (<code>permutator.py</code>, <code>anomaly_detector.py</code>, <code>abnf_engine.py</code>) with fail-closed security invariant guards and mandatory human-in-the-loop promotion.
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <span class="badge" id="evolution-status-badge" style="background: rgba(16, 185, 129, 0.25); color: #6ee7b7; border: 1px solid #10b981; font-weight: 800; font-size: 0.78rem; padding: 0.25rem 0.65rem;">
+            ● STANDBY / READY
+          </span>
+          <button class="btn btn-secondary" onclick="fetchEvolutionData()" style="font-size: 0.78rem; padding: 0.35rem 0.75rem;">
+            🔄 Refresh Status
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATS GRID -->
+    <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr); margin-bottom: 1.25rem;">
+      <div class="stat-box">
+        <div class="stat-value" id="evolution-target-stat" style="color: #38bdf8; font-size: 1.1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">permutator</div>
+        <div class="stat-label">Active Target Module</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="evolution-staged-stat" style="color: #fbbf24;">0</div>
+        <div class="stat-label">Staged Candidates</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="evolution-generations-stat" style="color: #a855f7;">0</div>
+        <div class="stat-label">Total Generations Run</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="evolution-score-stat" style="color: #34d399;">0.000</div>
+        <div class="stat-label">Best Pareto Fitness</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="evolution-promotions-stat" style="color: #f43f5e;">0</div>
+        <div class="stat-label">Production Promotions</div>
+      </div>
+    </div>
+
+    <!-- TWO COLUMN OPERATIONAL CONTROL GRID -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem;">
+      <!-- PANEL 1: EVOLUTION RUNNER CONTROLS -->
+      <div class="card">
+        <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 0.75rem; margin-bottom: 1rem;">
+          <h3 style="margin: 0; font-size: 1rem; color: #6ee7b7;">🚀 MAP-Elites Evolution Supervisor</h3>
+          <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #6ee7b7; border: 1px solid #059669;">Ring 2 Negative Control</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.85rem;">
+          <div>
+            <label style="font-size: 0.78rem; color: #94a3b8; display: block; margin-bottom: 0.3rem;">Whitelisted Target Module:</label>
+            <select id="evolution-target-select" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 0.45rem 0.65rem; border-radius: 4px; font-size: 0.85rem;">
+              <option value="permutator">vendor/rfchunt/permutator.py (RFC Mutation Strategies)</option>
+              <option value="anomaly_detector">vendor/rfchunt/anomaly_detector.py (Response Divergence)</option>
+              <option value="abnf_engine">vendor/rfchunt/engine/abnf_engine.py (ABNF Permutations)</option>
+            </select>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.6rem;">
+            <div>
+              <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.2rem;">Iterations:</label>
+              <input type="number" id="evolution-iterations" value="20" min="1" max="500" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 0.35rem 0.5rem; border-radius: 4px; font-size: 0.8rem;">
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.2rem;">Islands:</label>
+              <input type="number" id="evolution-islands" value="3" min="1" max="8" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 0.35rem 0.5rem; border-radius: 4px; font-size: 0.8rem;">
+            </div>
+            <div>
+              <label style="font-size: 0.75rem; color: #94a3b8; display: block; margin-bottom: 0.2rem;">Pop / Island:</label>
+              <input type="number" id="evolution-population" value="30" min="5" max="100" style="width: 100%; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 0.35rem 0.5rem; border-radius: 4px; font-size: 0.8rem;">
+            </div>
+          </div>
+          <div style="display: flex; gap: 0.5rem; margin-top: 0.25rem;">
+            <button class="btn btn-primary" onclick="startEvolutionJob()" style="flex: 2; font-size: 0.8rem; padding: 0.45rem; background: #059669; border-color: #10b981;">
+              ⚡ Launch Evolution Job
+            </button>
+            <button class="btn btn-secondary" onclick="stopEvolutionJob()" style="flex: 1; font-size: 0.8rem; padding: 0.45rem; border-color: #ef4444; color: #f87171;">
+              ⏹️ Stop
+            </button>
+            <button class="btn btn-secondary" onclick="rollbackPromotion()" style="flex: 1; font-size: 0.8rem; padding: 0.45rem; border-color: #f59e0b; color: #fbbf24;" title="Rollback to previous production .bak file">
+              🔄 Rollback
+            </button>
+          </div>
+          <div>
+            <div id="evolution-job-result" style="background: #020617; border: 1px solid #1e293b; border-radius: 4px; padding: 0.6rem; font-family: monospace; font-size: 0.75rem; color: #6ee7b7; min-height: 3rem; display: flex; align-items: center;">
+              Evolution engine standing by. Select target and click 'Launch Evolution Job'.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PANEL 2: SECURITY INVARIANT GUARD & INSTANT EVALUATOR -->
+      <div class="card">
+        <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 0.75rem; margin-bottom: 1rem;">
+          <h3 style="margin: 0; font-size: 1rem; color: #38bdf8;">🛡️ Security Invariant Guard &amp; Evaluator</h3>
+          <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid #0284c7;">AST Static Verifier</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.65rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;">
+            <label style="font-size: 0.78rem; color: #94a3b8;">Preset Vectors:</label>
+            <select id="evolution-preset-select" onchange="applyEvolutionPreset(this.value)" style="flex: 1; background: #0f172a; border: 1px solid #334155; color: #f8fafc; padding: 0.3rem 0.5rem; border-radius: 4px; font-size: 0.75rem;">
+              <option value="safe_permutator">Safe: Advanced RFC Boundary Permutator</option>
+              <option value="safe_anomaly">Safe: Response Divergence Scorer</option>
+              <option value="malicious_cmd">Malicious: OS Subprocess Command Injection (AST Veto)</option>
+              <option value="malicious_env">Malicious: Zero-Touch PATH Mutation Attempt (Safety Law Veto)</option>
+              <option value="malicious_net">Malicious: Socket Outbound Exfiltration (Ring Veto)</option>
+            </select>
+          </div>
+          <div>
+            <textarea id="evolution-candidate-snippet" rows="5" style="width: 100%; background: #020617; border: 1px solid #1e293b; color: #38bdf8; padding: 0.5rem; border-radius: 4px; font-family: monospace; font-size: 0.73rem; resize: vertical;"></textarea>
+          </div>
+          <div style="display: flex; gap: 0.5rem;">
+            <button class="btn btn-primary" onclick="evaluateCandidateSnippet()" style="flex: 1; font-size: 0.8rem; padding: 0.45rem; background: #0284c7; border-color: #38bdf8;">
+              🔍 Audit Invariants &amp; Score Fitness
+            </button>
+          </div>
+          <div>
+            <div id="evolution-eval-result" style="background: #020617; border: 1px solid #1e293b; border-radius: 4px; padding: 0.5rem; font-family: monospace; font-size: 0.73rem; color: #94a3b8; min-height: 2.5rem; display: flex; align-items: center;">
+              Ready to evaluate candidate code.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CARD 3: STAGED CANDIDATES & HUMAN-IN-THE-LOOP PROMOTION QUEUE -->
+    <div class="card" style="margin-bottom: 1.5rem;">
+      <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 0.75rem; margin-bottom: 1rem;">
+        <div>
+          <h3 style="margin: 0; font-size: 1.05rem; color: #f8fafc;">🧬 Quarantined Candidates &amp; Human-in-the-Loop Promotion Queue</h3>
+          <div style="font-size: 0.78rem; color: #94a3b8; margin-top: 0.2rem;">
+            Candidates generated by OpenEvolve MAP-Elites islands are placed in quarantine. Only candidates that fully satisfy all Invariant Guards can be promoted into production.
+          </div>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="btn btn-secondary" onclick="fetchEvolutionData()" style="font-size: 0.78rem; padding: 0.35rem 0.75rem;">
+            🔄 Refresh Queue
+          </button>
+        </div>
+      </div>
+      <div class="table-container">
+        <table class="data-table" style="width: 100%; font-size: 0.8rem;">
+          <thead>
+            <tr>
+              <th>Candidate ID</th>
+              <th>Target Module</th>
+              <th>Gen / Island</th>
+              <th>SHA-256</th>
+              <th>Security Guard</th>
+              <th>Metrics (Cov / FP / Repro / Eff)</th>
+              <th>Fitness Score</th>
+              <th>Status</th>
+              <th>HITL Action</th>
+            </tr>
+          </thead>
+          <tbody id="evolution-candidates-tbody">
+            <tr><td colspan="9" style="text-align: center; color: #94a3b8; padding: 1.5rem;">No candidates currently staged in quarantine. Launch an evolution run or evaluate a candidate.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 14: OPEN DREAM-RSI RESEARCH POLICY OPTIMIZER (ARM 110) -->
+  <div id="dream-rsi-view" class="tab-content">
+    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+      <div class="breadcrumb-trail">
+        <a class="breadcrumb-link" href="javascript:void(0)" onclick="switchTab('test-runner')"><span>🏠</span> Dashboard</a>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-link" style="cursor: default; pointer-events: none;">Protocol Research &amp; Strategy</span>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-current"><span>💭</span> Open Dream-RSI Policy Optimizer Arm #110</span>
+      </div>
+      <div class="breadcrumb-meta">
+        <span class="breadcrumb-badge">💭 Offline Replay World Model</span>
+        <span class="breadcrumb-badge green">🛡️ Zero Socket Egress (Ring 2)</span>
+        <span class="breadcrumb-badge purple">🎲 Monte-Carlo Dream Rollouts</span>
+        <span class="breadcrumb-badge blue">🎯 Strategic RFC Prioritization</span>
+      </div>
+    </nav>
+
+    <!-- HEADER CARD -->
+    <div class="card" style="background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(15, 23, 42, 0.95)); border: 2px solid #6366f1; margin-bottom: 1.25rem;">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div style="display: flex; align-items: center; gap: 0.85rem;">
+          <div class="pulse-beacon" style="background: #818cf8; box-shadow: 0 0 10px #818cf8;"></div>
+          <div>
+            <h2 style="margin: 0; font-size: 1.15rem; font-weight: 800; color: #a5b4fc; letter-spacing: 0.5px;">💭 OPEN DREAM-RSI RESEARCH POLICY OPTIMIZER (ARM #110)</h2>
+            <div style="font-size: 0.8rem; color: #cbd5e1; margin-top: 0.2rem;">
+              Offline model-based recursive self-improvement over historical protocol evaluation replays. Optimizes <em>which experiments Octopus investigates next</em> (RFC sections, mutation families, and trial budgets) in virtual dream rollouts with zero live socket exposure.
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <span class="badge" id="dream-rsi-status-badge" style="background: rgba(99, 102, 241, 0.25); color: #c7d2fe; border: 1px solid #818cf8; font-weight: 800; font-size: 0.78rem; padding: 0.25rem 0.65rem;">
+            ● OFFLINE REPLAY ACTIVE
+          </span>
+          <button class="btn btn-secondary" onclick="fetchDreamRsiData(true)" style="font-size: 0.78rem; padding: 0.35rem 0.75rem;">
+            🔄 Refresh Status
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATS GRID -->
+    <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr); margin-bottom: 1.25rem;">
+      <div class="stat-box">
+        <div class="stat-value" id="dream-rsi-trajectories-stat" style="color: #38bdf8;">0</div>
+        <div class="stat-label">Historical Trajectory Traces</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="dream-rsi-states-stat" style="color: #a855f7;">0</div>
+        <div class="stat-label">World Model States</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="dream-rsi-gen-stat" style="color: #fbbf24;">0</div>
+        <div class="stat-label">Active Policy Generation</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="dream-rsi-fitness-stat" style="color: #34d399;">0.00</div>
+        <div class="stat-label">Policy Fitness / Expected Yield</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="dream-rsi-isolation-stat" style="color: #f43f5e; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">RING 2 OFFLINE</div>
+        <div class="stat-label">Containment Isolation</div>
+      </div>
+    </div>
+
+    <!-- TWO COLUMN OPERATIONAL CONTROL GRID -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem;">
+      <!-- PANEL 1: EVOLVED RESEARCH PLAN -->
+      <div class="card">
+        <div class="card-header" style="border-bottom: 1px solid #334155; padding-bottom: 0.5rem; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center;">
+          <h3 style="margin: 0; font-size: 1rem; color: #a5b4fc;">🎯 Evolved Strategic Research Plan</h3>
+          <button class="btn btn-primary" onclick="recommendDreamRsiPriorities()" style="font-size: 0.75rem; padding: 0.25rem 0.6rem;">
+            📋 Refresh Recommendations
+          </button>
+        </div>
+        <p style="font-size: 0.82rem; color: #94a3b8; margin-top: 0;">
+          Optimal experiment allocation discovered by Dream-RSI policy rollouts. Prioritizes RFC sections with maximum projected anomaly yield and informational entropy drop.
+        </p>
+
+        <div id="dream-rsi-rationale-box" style="background: rgba(30, 41, 59, 0.7); border-left: 3px solid #6366f1; padding: 0.75rem; border-radius: 4px; font-size: 0.8rem; color: #cbd5e1; margin-bottom: 1rem;">
+          Dream-RSI Rollout Gen 0: Initializing baseline research priors.
+        </div>
+
+        <h4 style="margin: 0 0 0.5rem 0; font-size: 0.85rem; color: #38bdf8;">Prioritized RFC Sections:</h4>
+        <div style="overflow-x: auto; max-height: 180px; margin-bottom: 1rem;">
+          <table class="test-table" style="font-size: 0.8rem; margin: 0;">
+            <thead>
+              <tr>
+                <th>RFC #</th>
+                <th>Specification Title</th>
+                <th>Priority Score</th>
+                <th>Target Sections</th>
+              </tr>
+            </thead>
+            <tbody id="dream-rsi-rfcs-tbody">
+              <tr><td colspan="4" style="text-align: center; color: #94a3b8;">Loading RFC priorities...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h4 style="margin: 0 0 0.5rem 0; font-size: 0.85rem; color: #34d399;">Prioritized Mutation Families:</h4>
+        <div style="overflow-x: auto; max-height: 160px; margin-bottom: 1rem;">
+          <table class="test-table" style="font-size: 0.8rem; margin: 0;">
+            <thead>
+              <tr>
+                <th>Mutation Family</th>
+                <th>Weight Multiplier</th>
+                <th>World-Model Divergence Probability</th>
+              </tr>
+            </thead>
+            <tbody id="dream-rsi-mutations-tbody">
+              <tr><td colspan="3" style="text-align: center; color: #94a3b8;">Loading mutation priorities...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style="display: flex; gap: 0.75rem; align-items: center; justify-content: space-between; border-top: 1px solid #334155; padding-top: 0.75rem;">
+          <div style="font-size: 0.8rem; color: #cbd5e1;">
+            Recommended Repetition Budget: <strong id="dream-rsi-trial-budget-display" style="color: #fbbf24;">3 trials</strong>
+          </div>
+          <button class="btn btn-secondary" onclick="switchTab('protocol-research')" style="font-size: 0.75rem; padding: 0.3rem 0.75rem;">
+            🌐 View Protocol Research (Arm 107)
+          </button>
+        </div>
+      </div>
+
+      <!-- PANEL 2: OFFLINE WORLD MODEL & DREAM ROLLOUT SIMULATOR -->
+      <div class="card">
+        <div class="card-header" style="border-bottom: 1px solid #334155; padding-bottom: 0.5rem; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center;">
+          <h3 style="margin: 0; font-size: 1rem; color: #818cf8;">🎲 Offline World Model Simulation &amp; Rollouts</h3>
+          <span style="font-size: 0.75rem; color: #94a3b8;">Ring 2 Strict Containment</span>
+        </div>
+        <p style="font-size: 0.82rem; color: #94a3b8; margin-top: 0;">
+          Execute offline Monte-Carlo policy simulations ("dreaming"). Tests thousands of candidate exploration trajectories against the Bayesian transition model without live network egress.
+        </p>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1rem;">
+          <div>
+            <label style="display: block; font-size: 0.75rem; color: #cbd5e1; margin-bottom: 0.25rem;">Policy Generations:</label>
+            <input type="number" id="dream-rsi-train-gens" value="10" min="1" max="100" class="input-control" style="width: 100%; font-size: 0.8rem; padding: 0.35rem 0.5rem; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px;" />
+          </div>
+          <div>
+            <label style="display: block; font-size: 0.75rem; color: #cbd5e1; margin-bottom: 0.25rem;">Steps Per Candidate:</label>
+            <input type="number" id="dream-rsi-train-steps" value="1000" min="100" max="20000" class="input-control" style="width: 100%; font-size: 0.8rem; padding: 0.35rem 0.5rem; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px;" />
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
+          <button class="btn btn-primary" onclick="trainDreamRsi()" style="font-size: 0.8rem; padding: 0.45rem 1rem;">
+            🧠 Train Policy (Offline Replay)
+          </button>
+          <button class="btn btn-secondary" onclick="runDreamRsiRollout()" style="font-size: 0.8rem; padding: 0.45rem 1rem;">
+            🎲 Run Single Rollout (1,000 steps)
+          </button>
+        </div>
+
+        <div id="dream-rsi-job-result" style="font-size: 0.8rem; font-family: var(--font-mono); margin-bottom: 0.75rem; min-height: 1.2rem; color: #38bdf8;"></div>
+
+        <h4 style="margin: 0 0 0.5rem 0; font-size: 0.85rem; color: #cbd5e1;">Rollout Simulation Telemetry:</h4>
+        <pre id="dream-rsi-output-log" style="background: #090d16; border: 1px solid #1e293b; border-radius: 4px; padding: 0.75rem; font-size: 0.75rem; color: #a5b4fc; max-height: 200px; overflow-y: auto; margin: 0; font-family: var(--font-mono);">Awaiting simulation run...</pre>
+      </div>
+    </div>
+  </div>
+
 </main>
 
 <script>
@@ -3102,6 +3915,14 @@ with urllib.request.urlopen(req) as resp:
       } else if (tabId === 'cedar-sandbox') {
         fetchDogwoodTrace();
         loadEgressDomains();
+      } else if (tabId === 'protocol-research') {
+        fetchProtocolResearchData(true);
+      } else if (tabId === 'pqc-attestation') {
+        loadPqcStatus();
+      } else if (tabId === 'openevolve-view') {
+        fetchEvolutionData(true);
+      } else if (tabId === 'dream-rsi-view') {
+        fetchDreamRsiData(true);
       }
     } catch (err) {
       showDiagnosticToast({
@@ -5909,6 +6730,958 @@ with urllib.request.urlopen(req) as resp:
     }
   }
 
+  // ========================================================
+  // Arm #107: Autonomous Protocol Research & RFC Hunt Swarm
+  // ========================================================
+  const probePresets = {
+    te_desync: "POST / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: gzip\r\n\r\n0\r\n\r\nG",
+    dangling_byte: "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 15\r\n\r\nPOST / HTTP/1.1",
+    double_cl: "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\nContent-Length: 20\r\n\r\n01234567890123456789"
+  };
+
+  function applyProbePreset() {
+    const sel = document.getElementById('pr-probe-preset');
+    const raw = document.getElementById('pr-probe-raw');
+    if (sel && raw && probePresets[sel.value]) {
+      raw.value = probePresets[sel.value];
+    }
+  }
+
+  async function fetchProtocolResearchData(silent = false) {
+    try {
+      const [statusRes, kbRes, hypRes] = await Promise.all([
+        fetchWithTimeout('/api/protocol-research/status', {}, 2000),
+        fetchWithTimeout('/api/protocol-research/knowledge-base?limit=10', {}, 2000),
+        fetchWithTimeout('/api/protocol-research/hypotheses', {}, 2000)
+      ]);
+
+      if (statusRes.ok) {
+        const status = await statusRes.json();
+        const rfcsEl = document.getElementById('pr-stat-rfcs');
+        if (rfcsEl) rfcsEl.textContent = status.rfc_count ?? 0;
+        const fragsEl = document.getElementById('pr-stat-fragments');
+        if (fragsEl) fragsEl.textContent = status.fragment_count ?? 0;
+        const probesEl = document.getElementById('pr-stat-probes');
+        if (probesEl) probesEl.textContent = status.probe_count ?? 0;
+        const evalsEl = document.getElementById('pr-stat-evals');
+        if (evalsEl) evalsEl.textContent = status.evaluations_recorded ?? 0;
+        const badge = document.getElementById('pr-status-badge');
+        if (badge) {
+          badge.textContent = status.active_worker_sandboxed ? '● OPERATIONAL (APPCONTAINER SANDBOXED)' : '● OPERATIONAL (ARM 107)';
+        }
+      }
+
+      if (hypRes.ok) {
+        const hypData = await hypRes.json();
+        renderHypothesesTable(hypData.active_hypotheses || []);
+      }
+    } catch (err) {
+      if (!silent) {
+        showDiagnosticToast({ status: 'PROTOCOL_RESEARCH_ERR', message: err.message });
+      }
+    }
+  }
+
+  function renderHypothesesTable(hypotheses) {
+    const tbody = document.getElementById('pr-hypotheses-table-body');
+    if (!tbody) return;
+    if (!hypotheses || hypotheses.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 1rem;">No candidate hypotheses currently staged in memory.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = hypotheses.map(h => `
+      <tr>
+        <td style="font-family: monospace; color: #38bdf8; font-size: 0.78rem;">${escapeHtml(h.probe_id || '--')}</td>
+        <td style="font-weight: 600; color: #a5b4fc;">RFC ${escapeHtml(String(h.rfc_number || ''))}</td>
+        <td><span class="badge" style="background: rgba(14, 165, 233, 0.15); color: #38bdf8; border: 1px solid #0284c7; font-size: 0.72rem;">${escapeHtml(h.mutation || 'ABNF_INVERSION')}</span></td>
+        <td style="font-size: 0.78rem; color: #cbd5e1;">${escapeHtml(h.hypothesis || '--')}</td>
+        <td style="font-size: 0.72rem; color: #34d399; font-family: monospace;">${escapeHtml(h.target_gate || 'Cedar Policy 8')}</td>
+      </tr>
+    `).join('');
+  }
+
+  async function syncRfcIndexNow() {
+    const btn = document.getElementById('pr-sync-rfc-btn');
+    const logBox = document.getElementById('pr-swarm-log-box');
+    try {
+      if (btn) btn.disabled = true;
+      if (logBox) logBox.textContent = '[Syncing]: Querying IETF RFC Editor Index & Managed Knowledge Base...';
+      const res = await fetchWithTimeout('/api/protocol-research/sync-rfc', { method: 'POST' }, 10000);
+      const data = await res.json();
+      if (res.ok) {
+        if (logBox) {
+          logBox.textContent = `[RFC Index Sync Completed]: Status=${data.status}, Source=${data.source}, Total Synced=${data.total_discovered_rfcs}, Micro-Fragments Stored=${data.fragments_stored}.`;
+        }
+        showDiagnosticToast({ status: 'RFC_SYNC_SUCCESS', message: `RFC Knowledge Base synced (${data.total_discovered_rfcs} RFCs discovered).` });
+        fetchProtocolResearchData(false);
+      } else {
+        throw new Error(data.message || JSON.stringify(data));
+      }
+    } catch (err) {
+      if (logBox) logBox.textContent = `[Sync Failed]: ${err.message}`;
+      showDiagnosticToast({ status: 'RFC_SYNC_ERROR', message: err.message });
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function evaluateProbeNow() {
+    const btn = document.getElementById('pr-eval-btn');
+    const resultBox = document.getElementById('pr-eval-result-box');
+    const host = document.getElementById('pr-probe-host')?.value || '127.0.0.1';
+    const port = parseInt(document.getElementById('pr-probe-port')?.value || '5006', 10);
+    const raw = document.getElementById('pr-probe-raw')?.value || '';
+
+    try {
+      if (btn) btn.disabled = true;
+      if (resultBox) resultBox.textContent = `[Evaluating]: Transmitting wire probe through Cedar Policy 8 to ${host}:${port}...`;
+      const payload = {
+        probe_id: "probe-ui-eval-" + Date.now().toString(16),
+        target_host: host,
+        target_port: port,
+        raw_request: raw,
+        hypothesis: "Interactive UI wire evaluation for protocol divergence",
+        mutation_type: "UI_WIRE_PROBE"
+      };
+      const res = await fetchWithTimeout('/api/protocol-research/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }, 8000);
+      const data = await res.json();
+      if (res.ok) {
+        if (resultBox) {
+          resultBox.innerHTML = `
+            <div style="color: #34d399; font-weight: 600;">Verdict: ${escapeHtml(data.status || 'OK')}</div>
+            <div style="color: #38bdf8;">Transport Outcome: ${escapeHtml(JSON.stringify(data.transport_outcome || {}))}</div>
+            <div style="color: #94a3b8; margin-top: 4px;">Observed Response Preview:</div>
+            <pre style="margin: 4px 0 0 0; background: #0b1120; padding: 4px; border-radius: 4px; max-height: 80px; overflow-y: auto;">${escapeHtml(data.wire_response || 'No response returned (Connection closed/rejected as expected)')}</pre>
+          `;
+        }
+        showDiagnosticToast({ status: 'PROBE_EVAL_COMPLETE', message: `Probe evaluated. Status: ${data.status}` });
+        fetchProtocolResearchData(true);
+      } else {
+        throw new Error(data.message || JSON.stringify(data));
+      }
+    } catch (err) {
+      if (resultBox) resultBox.textContent = `[Evaluation Denied/Failed]: ${err.message}`;
+      showDiagnosticToast({ status: 'EVAL_DENIED', message: err.message });
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function handoffToArm106Now() {
+    const btn = document.getElementById('pr-handoff-btn');
+    const resultBox = document.getElementById('pr-eval-result-box');
+    const host = document.getElementById('pr-probe-host')?.value || '127.0.0.1';
+    const port = parseInt(document.getElementById('pr-probe-port')?.value || '5006', 10);
+    const raw = document.getElementById('pr-probe-raw')?.value || '';
+
+    try {
+      if (btn) btn.disabled = true;
+      if (resultBox) resultBox.textContent = '[Arm 106 Handoff]: Executing differential cross-validation across parallel parser engines...';
+      const payload = {
+        finding_id: "finding-handoff-" + Date.now().toString(16),
+        probe_id: "probe-handoff-" + Date.now().toString(16),
+        target_host: host,
+        target_port: port,
+        raw_probe: raw,
+        observed_anomaly: "Observed state discrepancy or response divergence",
+        hypothesis: "Autonomous protocol research discovery requiring differential confirmation",
+        rfc_context: "RFC 9112 / RFC 7230 Canonical Parsing Spec"
+      };
+      const res = await fetchWithTimeout('/api/protocol-research/validate-arm106', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }, 8000);
+      const data = await res.json();
+      if (res.ok) {
+        if (resultBox) {
+          resultBox.innerHTML = `
+            <div style="color: #a855f7; font-weight: 600;">Arm 106 Differential Cross-Validation:</div>
+            <div style="color: #38bdf8;">Differential Action: ${escapeHtml(data.differential_action || 'QUARANTINE')}</div>
+            <div style="color: #34d399;">Consensus: ${escapeHtml(data.consensus || 'DIVERGENCE_VERIFIED')}</div>
+            <div style="color: #cbd5e1; margin-top: 4px;">Proposed Rule: ${escapeHtml(data.proposed_rule || '--')}</div>
+          `;
+        }
+        showDiagnosticToast({ status: 'ARM106_VALIDATED', message: 'Arm 106 differential cross-validation succeeded.' });
+      } else {
+        throw new Error(data.message || JSON.stringify(data));
+      }
+    } catch (err) {
+      if (resultBox) resultBox.textContent = `[Arm 106 Validation Failed]: ${err.message}`;
+      showDiagnosticToast({ status: 'ARM106_ERROR', message: err.message });
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function searchRfcFragments() {
+    const q = document.getElementById('pr-search-keyword')?.value || '';
+    try {
+      const res = await fetchWithTimeout(`/api/protocol-research/knowledge-base?keyword=${encodeURIComponent(q)}&limit=15`, {}, 2000);
+      if (res.ok) {
+        const data = await res.json();
+        const tbody = document.getElementById('pr-hypotheses-table-body');
+        if (!tbody) return;
+        const frags = data.matched_fragments || [];
+        if (frags.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #64748b; padding: 1rem;">No fragments found matching "${escapeHtml(q)}".</td></tr>`;
+          return;
+        }
+        tbody.innerHTML = frags.map((f, i) => `
+          <tr>
+            <td style="font-family: monospace; color: #38bdf8; font-size: 0.78rem;">frag-${i+1}</td>
+            <td style="font-weight: 600; color: #a5b4fc;">${escapeHtml(f.rfc_id || '--')}</td>
+            <td><span class="badge" style="background: rgba(14, 165, 233, 0.15); color: #38bdf8; border: 1px solid #0284c7; font-size: 0.72rem;">SPEC_CHUNK</span></td>
+            <td style="font-size: 0.78rem; color: #cbd5e1;">${escapeHtml(f.text || '--')}</td>
+            <td style="font-size: 0.72rem; color: #34d399; font-family: monospace;">Cedar Policy 8</td>
+          </tr>
+        `).join('');
+      }
+    } catch (err) {
+      showDiagnosticToast({ status: 'SEARCH_ERROR', message: err.message });
+    }
+  }
+
+  async function loadSwarmStatusInfo() {
+    const logBox = document.getElementById('pr-swarm-log-box');
+    try {
+      const res = await fetchWithTimeout('/api/protocol-research/swarm-status', {}, 2000);
+      if (res.ok) {
+        const data = await res.json();
+        if (logBox) {
+          logBox.innerHTML = `
+            <div style="color: #34d399; font-weight: 600;">● ${escapeHtml(data.swarm_name || 'ProtocolResearchSwarm')} [${escapeHtml(data.status || 'OK')}]</div>
+            <div>Entrypoint: <code style="color: #38bdf8;">${escapeHtml(data.entrypoint)}</code></div>
+            <div>Modes: <span style="color: #f59e0b;">${(data.supported_modes || []).join(', ')}</span> | Timeout: ${data.default_timeout_seconds}s</div>
+            <div>Active Modules: <span style="color: #a855f7;">${data.modules_active} engines</span></div>
+            <div>Sandboxed Worker: <span style="color: #10b981;">${data.active_worker_sandboxed ? 'AppContainer Active' : 'Suspended Job'}</span></div>
+            <div>Command: <code style="color: #34d399;">${escapeHtml(data.execution_command)}</code></div>
+          `;
+        }
+      }
+    } catch (err) {
+      if (logBox) logBox.textContent = `[Failed to retrieve swarm telemetry]: ${err.message}`;
+    }
+  }
+
+  // ========================================================
+  // Arm #108: Post-Quantum Cryptography & Attestation (ML-KEM / ML-DSA)
+  // ========================================================
+  let lastGeneratedPqcKey = null;
+
+  async function loadPqcStatus() {
+    try {
+      const res = await fetchWithTimeout('/api/pqc/status', {}, 1500);
+      if (!res.ok) return;
+      const data = await res.json();
+      
+      const badge = document.getElementById('pqc-status-badge');
+      if (badge) {
+        if (data.is_severed) {
+          badge.textContent = '● SEVERED (AUTOTOMY CONTAINED)';
+          badge.style.color = '#ef4444';
+          badge.style.borderColor = '#ef4444';
+          badge.style.background = 'rgba(239, 68, 68, 0.2)';
+        } else {
+          badge.textContent = '● ' + (data.status || 'OPERATIONAL_QUANTUM_RESISTANT');
+          badge.style.color = '#c084fc';
+          badge.style.borderColor = '#a855f7';
+          badge.style.background = 'rgba(168, 85, 247, 0.2)';
+        }
+      }
+
+      const scoreEl = document.getElementById('pqc-readiness-score');
+      if (scoreEl) scoreEl.textContent = `${data.quantum_readiness_score || 92}%`;
+      const keypairsEl = document.getElementById('pqc-total-keypairs');
+      if (keypairsEl) keypairsEl.textContent = data.total_keypairs_generated ?? 0;
+      const encapsEl = document.getElementById('pqc-total-encaps');
+      if (encapsEl) encapsEl.textContent = data.total_encapsulations ?? 0;
+      const decapsEl = document.getElementById('pqc-total-decaps');
+      if (decapsEl) decapsEl.textContent = data.total_decapsulations ?? 0;
+      const sigsEl = document.getElementById('pqc-total-sigs');
+      if (sigsEl) sigsEl.textContent = data.total_signatures_verified ?? 0;
+
+      if (data.latest_cbom_summary) {
+        renderCbomTable(data.latest_cbom_summary.entries || data.latest_cbom_summary.components || []);
+      }
+    } catch (e) {
+      // Background poll failure is non-fatal
+    }
+  }
+
+  async function executePqcKeygen() {
+    const algo = document.getElementById('pqc-kem-algo-select').value;
+    const resEl = document.getElementById('pqc-kem-result');
+    resEl.textContent = 'Generating post-quantum keypair...';
+    try {
+      const res = await fetch('/api/pqc/generate-keypair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ algorithm: algo })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        lastGeneratedPqcKey = data;
+        document.getElementById('pqc-kem-key-id').value = data.key_id;
+        resEl.style.color = '#34d399';
+        resEl.textContent = `Generated ${data.algorithm} keypair (${data.public_key_bytes_len} bytes PK). Ready for encapsulation.`;
+        loadPqcStatus();
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `Keygen failed: ${data.message || 'Error'}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Network error: ${e.message}`;
+    }
+  }
+
+  async function executePqcEncapsulate() {
+    const resEl = document.getElementById('pqc-kem-result');
+    if (!lastGeneratedPqcKey || !lastGeneratedPqcKey.public_key_hex) {
+      resEl.style.color = '#f59e0b';
+      resEl.textContent = 'Please generate a keypair first before encapsulating.';
+      return;
+    }
+    resEl.textContent = 'Encapsulating shared secret...';
+    try {
+      const res = await fetch('/api/pqc/encapsulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          algorithm: lastGeneratedPqcKey.algorithm,
+          public_key_hex: lastGeneratedPqcKey.public_key_hex
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        document.getElementById('pqc-kem-ciphertext').value = data.ciphertext_hex;
+        resEl.style.color = '#38bdf8';
+        resEl.textContent = `Encapsulated secret in ${data.execution_micros}µs. Shared secret length: ${data.shared_secret_bytes_len}B.`;
+        loadPqcStatus();
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `Encapsulation failed: ${data.message || 'Error'}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Error: ${e.message}`;
+    }
+  }
+
+  async function executePqcDecapsulate() {
+    const resEl = document.getElementById('pqc-kem-result');
+    const ct = document.getElementById('pqc-kem-ciphertext').value.trim();
+    const keyId = document.getElementById('pqc-kem-key-id').value.trim();
+    if (!ct || !keyId) {
+      resEl.style.color = '#f59e0b';
+      resEl.textContent = 'Ciphertext and Key ID are required to decapsulate.';
+      return;
+    }
+    resEl.textContent = 'Decapsulating shared secret...';
+    try {
+      const res = await fetch('/api/pqc/decapsulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key_id: keyId,
+          ciphertext_hex: ct
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        resEl.style.color = '#34d399';
+        resEl.textContent = `Decapsulated successfully in ${data.execution_micros}µs! Shared secret: ${data.shared_secret_hex.substring(0, 32)}...`;
+        loadPqcStatus();
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `Decapsulation failed: ${data.message || 'Error'}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Error: ${e.message}`;
+    }
+  }
+
+  async function executePqcSign() {
+    const msg = document.getElementById('pqc-dsa-message').value.trim();
+    const resEl = document.getElementById('pqc-dsa-result');
+    resEl.textContent = 'Signing message with ML-DSA...';
+    try {
+      const res = await fetch('/api/pqc/sign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        document.getElementById('pqc-dsa-sig-output').value = data.signature_hex;
+        resEl.style.color = '#34d399';
+        resEl.textContent = `Signed (${data.algorithm}, ${data.signature_bytes_len}B signature) in ${data.execution_micros}µs. Digest: ${data.message_digest_sha256.substring(0, 16)}...`;
+        loadPqcStatus();
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `Signing failed: ${data.message || 'Error'}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Error: ${e.message}`;
+    }
+  }
+
+  async function executePqcVerify() {
+    const msg = document.getElementById('pqc-dsa-message').value.trim();
+    const sig = document.getElementById('pqc-dsa-sig-output').value.trim();
+    const algo = document.getElementById('pqc-dsa-algo-select').value;
+    const resEl = document.getElementById('pqc-dsa-result');
+    if (!sig) {
+      resEl.style.color = '#f59e0b';
+      resEl.textContent = 'Please generate or provide a signature to verify.';
+      return;
+    }
+    resEl.textContent = 'Verifying post-quantum signature...';
+    try {
+      const statusRes = await fetch('/api/pqc/status');
+      const statusData = await statusRes.json();
+      const activeKey = (statusData.active_keypairs || []).find(k => k.algorithm.includes('MlDsa')) || statusData.active_keypairs?.[0];
+      if (!activeKey) {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = 'No verifying key found in Arm 108 registry.';
+        return;
+      }
+      const res = await fetch('/api/pqc/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          algorithm: algo,
+          public_key_hex: activeKey.public_key_hex,
+          message: msg,
+          signature_hex: sig
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.verified) {
+        resEl.style.color = '#34d399';
+        resEl.textContent = `VERIFIED: ${data.status} for ${data.algorithm}. Mathematical proof valid.`;
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `VERIFICATION FAILED: Signature invalid or corrupted.`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Error: ${e.message}`;
+    }
+  }
+
+  async function executePqcAuditCbom() {
+    try {
+      const res = await fetch('/api/pqc/audit-cbom', { method: 'POST', body: '{}' });
+      if (!res.ok) return;
+      const report = await res.json();
+      renderCbomTable(report.entries || report.components || []);
+    } catch (e) {
+      console.error('[CBOM] Audit error:', e);
+    }
+  }
+
+  function renderCbomTable(components) {
+    const tbody = document.getElementById('pqc-cbom-table-body');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    const list = Array.isArray(components) ? components : (components.entries || components.components || []);
+    list.forEach(c => {
+      const tr = document.createElement('tr');
+      const isSafe = c.vulnerability_level === 'QuantumSafe' || c.quantum_resistant === true;
+      const qColor = isSafe ? '#34d399' : '#f59e0b';
+      const qText = isSafe ? '🛡️ Quantum-Safe' : '⚠️ Classical (Vulnerable)';
+      const isShor = c.shor_vulnerable === true || c.shors_vulnerable === true;
+      const sColor = isShor ? '#ef4444' : '#34d399';
+      const sText = isShor ? '🚨 Vulnerable to Shor\'s' : '✅ Shor-Resistant';
+      const name = c.component_name || c.name || 'Cryptographic Primitive';
+      const advisory = c.recommendation || c.cnsa_2_0_advisory || 'Compliant';
+      tr.innerHTML = `
+        <td style="font-weight: 600; color: #f8fafc;">${name}</td>
+        <td><span class="badge" style="background: rgba(148, 163, 184, 0.15); color: #cbd5e1;">${c.algorithm}</span></td>
+        <td style="font-family: monospace;">${c.key_size_bits} bits</td>
+        <td style="color: ${qColor}; font-weight: 600;">${qText}</td>
+        <td style="color: ${sColor}; font-weight: 600;">${sText}</td>
+        <td style="color: #94a3b8; font-size: 0.75rem;">${advisory}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ========================================================
+  // Arm #109: OpenEvolve Evolutionary Code Optimizer (MAP-Elites)
+  // ========================================================
+  const EVOLUTION_PRESETS = {
+    safe_permutator: `# Safe RFC Boundary Permutator (Arm 107 Strategy)
+def permute_rfc_boundary(headers, payload):
+    """RFC 9112 Section 6.3 Transfer-Encoding & Content-Length permutation."""
+    mutated = dict(headers)
+    if 'Transfer-Encoding' in mutated:
+        mutated['Transfer-Encoding'] = mutated['Transfer-Encoding'] + ', chunked'
+    if 'Content-Length' in mutated:
+        mutated['Content-Length'] = f" {mutated['Content-Length']} "
+    return mutated, payload
+`,
+    safe_anomaly: `# Safe Multi-Trial Anomaly Scorer
+def score_response_divergence(baseline_res, probe_res):
+    """Evaluates response divergence between baseline and mutated RFC probe."""
+    score = 0.0
+    if baseline_res.get('status') != probe_res.get('status'):
+        score += 0.65
+    b_len = len(baseline_res.get('body', ''))
+    p_len = len(probe_res.get('body', ''))
+    if abs(b_len - p_len) > 32:
+        score += 0.35
+    return min(1.0, score)
+`,
+    malicious_cmd: `# Malicious Subprocess OS Command Injection
+import subprocess
+
+def exploit_boundary():
+    """Triggers forbidden OS shell command - AST Invariant Guard must veto."""
+    subprocess.call(['cmd.exe', '/c', 'dir'])
+`,
+    malicious_env: `# Malicious Environment Mutation (Zero-Touch PATH Law Violation)
+import os
+
+def mutate_system_env():
+    """Attempts to overwrite user PATH - AST Invariant Guard must veto."""
+    os.environ['PATH'] = 'C:\\\\temp'
+`,
+    malicious_net: `# Malicious Socket Exfiltration (Ring 2 Negative Control Violation)
+import socket
+
+def exfiltrate_credentials():
+    """Attempts raw socket exfiltration - AST Invariant Guard must veto."""
+    s = socket.socket()
+    s.connect(('1.2.3.4', 1337))
+`
+  };
+
+  async function fetchEvolutionData(force = false) {
+    try {
+      const [statusRes, candRes] = await Promise.all([
+        fetchWithTimeout('/api/evolution/status', {}, 1500),
+        fetchWithTimeout('/api/evolution/candidates', {}, 1500)
+      ]);
+      if (statusRes.ok) {
+        const s = await statusRes.json();
+        const badge = document.getElementById('evolution-status-badge');
+        if (badge) {
+          if (s.is_severed) {
+            badge.textContent = '● AUTOTOMY CONTAINED';
+            badge.style.color = '#ef4444';
+            badge.style.borderColor = '#ef4444';
+            badge.style.background = 'rgba(239, 68, 68, 0.2)';
+          } else if (s.active_job) {
+            badge.textContent = `● EVOLVING [${s.active_job.status.toUpperCase()}]`;
+            badge.style.color = '#38bdf8';
+            badge.style.borderColor = '#38bdf8';
+            badge.style.background = 'rgba(56, 189, 248, 0.2)';
+          } else {
+            badge.textContent = '● ' + (s.execution_status || 'STANDBY / READY');
+            badge.style.color = '#6ee7b7';
+            badge.style.borderColor = '#10b981';
+            badge.style.background = 'rgba(16, 185, 129, 0.2)';
+          }
+        }
+        const targetStat = document.getElementById('evolution-target-stat');
+        if (targetStat) targetStat.textContent = s.active_target_module || 'permutator';
+        const stagedStat = document.getElementById('evolution-staged-stat');
+        if (stagedStat) stagedStat.textContent = s.staged_candidates_count ?? 0;
+        const genStat = document.getElementById('evolution-generations-stat');
+        if (genStat) genStat.textContent = s.total_generations_run ?? 0;
+        const scoreStat = document.getElementById('evolution-score-stat');
+        if (scoreStat) scoreStat.textContent = s.best_fitness != null ? s.best_fitness.toFixed(3) : '0.000';
+        const promoStat = document.getElementById('evolution-promotions-stat');
+        if (promoStat) promoStat.textContent = s.total_promotions ?? 0;
+      }
+      if (candRes.ok) {
+        const cData = await candRes.json();
+        renderEvolutionCandidatesTable(cData.candidates || []);
+      }
+    } catch (_) {}
+  }
+
+  function renderEvolutionCandidatesTable(candidates) {
+    const tbody = document.getElementById('evolution-candidates-tbody');
+    if (!tbody) return;
+    if (!candidates || candidates.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; color: #94a3b8; padding: 1.5rem;">No candidates currently staged in quarantine. Launch an evolution run or evaluate a candidate.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = '';
+    candidates.forEach(c => {
+      const tr = document.createElement('tr');
+      const isPassed = c.security_audit && c.security_audit.passed;
+      const risk = c.security_audit ? c.security_audit.risk_level : 'UNKNOWN';
+      const guardBadge = isPassed
+        ? '<span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #6ee7b7; border: 1px solid #10b981;">✅ AST CLEAN</span>'
+        : `<span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444;" title="${escapeHtml((c.security_audit && c.security_audit.forbidden_tokens_found || []).join(', '))}">❌ VETO (${risk})</span>`;
+
+      const m = c.metrics || { attack_coverage: 0, false_positive_rate: 0, reproducibility_rate: 0, efficiency_score: 0, combined_score: 0 };
+      const metricsText = `Cov: ${(m.attack_coverage*100).toFixed(0)}% | FP: ${(m.false_positive_rate*100).toFixed(0)}% | Rep: ${(m.reproducibility_rate*100).toFixed(0)}% | Eff: ${(m.efficiency_score*100).toFixed(0)}%`;
+
+      let statusBadge = '';
+      if (c.status === 'Quarantined') {
+        statusBadge = '<span class="badge" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #f59e0b;">QUARANTINED</span>';
+      } else if (c.status === 'Promoted') {
+        statusBadge = '<span class="badge" style="background: rgba(16, 185, 129, 0.2); color: #6ee7b7; border: 1px solid #10b981;">PROMOTED</span>';
+      } else if (c.status === 'Approved') {
+        statusBadge = '<span class="badge" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid #0284c7;">APPROVED</span>';
+      } else {
+        statusBadge = `<span class="badge" style="background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444;">${escapeHtml(c.status.toUpperCase())}</span>`;
+      }
+
+      let actionHtml = '';
+      if (c.status === 'Promoted') {
+        actionHtml = '<span style="color: #6ee7b7; font-size: 0.75rem; font-weight: 600;">✔️ Active in Prod</span>';
+      } else if (c.status === 'Vetoed' || !isPassed) {
+        actionHtml = '<span style="color: #f87171; font-size: 0.75rem;">🚫 Blocked by Guard</span>';
+      } else {
+        actionHtml = `<button class="btn btn-primary" onclick="approveCandidatePromotion('${escapeHtml(c.candidate_id)}')" style="font-size: 0.72rem; padding: 0.25rem 0.55rem; background: #059669; border-color: #10b981;">⚡ Promote</button>`;
+      }
+
+      const shortSha = c.sha256 ? c.sha256.substring(0, 8) + '...' : '-';
+      tr.innerHTML = `
+        <td style="font-family: monospace; font-size: 0.75rem; color: #cbd5e1;">${escapeHtml(c.candidate_id)}</td>
+        <td style="color: #38bdf8; font-weight: 500;">${escapeHtml(c.target_module)}</td>
+        <td style="font-size: 0.75rem; color: #94a3b8;">Gen ${c.generation} (Isl ${c.island_id})</td>
+        <td style="font-family: monospace; font-size: 0.72rem; color: #64748b;" title="${escapeHtml(c.sha256)}">${shortSha}</td>
+        <td>${guardBadge}</td>
+        <td style="font-size: 0.75rem; color: #cbd5e1;">${metricsText}</td>
+        <td style="font-weight: 700; color: #34d399; font-size: 0.85rem;">${m.combined_score.toFixed(3)}</td>
+        <td>${statusBadge}</td>
+        <td>${actionHtml}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function applyEvolutionPreset(key) {
+    const codeEl = document.getElementById('evolution-candidate-snippet');
+    const targetEl = document.getElementById('evolution-target-select');
+    if (!codeEl) return;
+    if (EVOLUTION_PRESETS[key]) {
+      codeEl.value = EVOLUTION_PRESETS[key];
+    }
+    if (key.includes('anomaly') && targetEl) {
+      targetEl.value = 'anomaly_detector';
+    } else if (targetEl) {
+      targetEl.value = 'permutator';
+    }
+  }
+
+  async function evaluateCandidateSnippet() {
+    const target = document.getElementById('evolution-target-select').value;
+    const code = document.getElementById('evolution-candidate-snippet').value;
+    const resEl = document.getElementById('evolution-eval-result');
+    if (!code || !code.trim()) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = 'Please enter candidate Python code to evaluate.';
+      return;
+    }
+    resEl.style.color = '#38bdf8';
+    resEl.textContent = 'Auditing AST invariants & calculating multi-objective fitness...';
+    try {
+      const res = await fetch('/api/evolution/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_module: target, code: code })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const audit = data.security_audit;
+        const metrics = data.metrics;
+        if (audit.passed) {
+          resEl.style.color = '#34d399';
+          resEl.textContent = `✅ AST CLEAN (Risk: ${audit.risk_level}). Fitness: ${metrics.combined_score.toFixed(3)} [Coverage: ${(metrics.attack_coverage*100).toFixed(1)}%, FP: ${(metrics.false_positive_rate*100).toFixed(1)}%, Repro: ${(metrics.reproducibility_rate*100).toFixed(1)}%]. Staged in quarantine as ${data.candidate_id}.`;
+        } else {
+          resEl.style.color = '#f87171';
+          const tokens = audit.forbidden_tokens_found.join(', ') || 'AST Invariant Violation';
+          resEl.textContent = `❌ SECURITY VETO (${audit.risk_level})! Forbidden tokens: [${tokens}]. Candidate quarantined with status Vetoed.`;
+        }
+        fetchEvolutionData(true);
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `Evaluation rejected: ${data.message || 'Error'}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Network / Evaluation error: ${e.message}`;
+    }
+  }
+
+  async function startEvolutionJob() {
+    const target = document.getElementById('evolution-target-select').value;
+    const iters = parseInt(document.getElementById('evolution-iterations').value, 10) || 20;
+    const islands = parseInt(document.getElementById('evolution-islands').value, 10) || 3;
+    const pop = parseInt(document.getElementById('evolution-population').value, 10) || 30;
+    const resEl = document.getElementById('evolution-job-result');
+    resEl.style.color = '#38bdf8';
+    resEl.textContent = `Launching OpenEvolve MAP-Elites (${islands} islands, ${iters} iterations) for ${target}...`;
+    try {
+      const res = await fetch('/api/evolution/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_module: target,
+          iterations: iters,
+          island_count: islands,
+          population_per_island: pop
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        resEl.style.color = '#34d399';
+        resEl.textContent = `🚀 Job ${data.job_id} running! Target: ${data.target_module}, Generations: ${data.iterations_target}. Ring 2 negative control active.`;
+        fetchEvolutionData(true);
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `Failed to launch job: ${data.message || 'Error'}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Network error: ${e.message}`;
+    }
+  }
+
+  async function stopEvolutionJob() {
+    const resEl = document.getElementById('evolution-job-result');
+    resEl.style.color = '#fbbf24';
+    resEl.textContent = 'Terminating evolutionary optimization job...';
+    try {
+      const res = await fetch('/api/evolution/stop', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        resEl.style.color = '#fbbf24';
+        resEl.textContent = `⏹️ Job stopped: ${data.message || 'Terminated successfully'}.`;
+        fetchEvolutionData(true);
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `Stop request failed: ${data.message || 'Error'}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Network error: ${e.message}`;
+    }
+  }
+
+  async function rollbackPromotion() {
+    const target = document.getElementById('evolution-target-select').value;
+    const resEl = document.getElementById('evolution-job-result');
+    if (!confirm(`Restore ${target} from its previous production backup (.bak)?`)) return;
+    resEl.style.color = '#fbbf24';
+    resEl.textContent = `Rolling back ${target} to previous production state...`;
+    try {
+      const res = await fetch('/api/evolution/rollback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_module: target })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        resEl.style.color = '#34d399';
+        resEl.textContent = `🔄 Rollback successful! ${data.message}`;
+        fetchEvolutionData(true);
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `Rollback failed: ${data.message || 'Error'}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Network error: ${e.message}`;
+    }
+  }
+
+  async function approveCandidatePromotion(candidateId) {
+    if (!confirm(`Promote candidate ${candidateId} into production? A .bak backup of the existing production module will be created automatically.`)) {
+      return;
+    }
+    const resEl = document.getElementById('evolution-job-result');
+    resEl.style.color = '#38bdf8';
+    resEl.textContent = `Promoting candidate ${candidateId}...`;
+    try {
+      const res = await fetch('/api/evolution/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ candidate_id: candidateId })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        resEl.style.color = '#34d399';
+        resEl.textContent = `🎉 Promoted candidate ${data.candidate_id} to ${data.target_module}! Production file updated atomically. Backup created.`;
+        fetchEvolutionData(true);
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `Promotion rejected: ${data.message || 'Security invariant violation'}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Network error: ${e.message}`;
+    }
+  }
+
+  // Open Dream-RSI Client Logic (Arm 110)
+  async function fetchDreamRsiData(force = false) {
+    try {
+      const res = await fetchWithTimeout('/api/dream-rsi/status', {}, 1000);
+      if (!res.ok) return;
+      const data = await res.json();
+
+      const badge = document.getElementById('dream-rsi-status-badge');
+      if (badge) {
+        if (data.is_severed) {
+          badge.style.color = '#ef4444';
+          badge.style.borderColor = '#ef4444';
+          badge.textContent = '● SEVERED (AUTOTOMY)';
+        } else {
+          badge.style.color = '#c7d2fe';
+          badge.style.borderColor = '#818cf8';
+          badge.textContent = `● ${data.status}`;
+        }
+      }
+
+      const trajEl = document.getElementById('dream-rsi-trajectories-stat');
+      if (trajEl) trajEl.textContent = data.total_historical_trajectories;
+
+      const statesEl = document.getElementById('dream-rsi-states-stat');
+      if (statesEl) statesEl.textContent = data.total_world_model_states;
+
+      const genEl = document.getElementById('dream-rsi-gen-stat');
+      if (genEl) genEl.textContent = data.active_generation;
+
+      const fitnessEl = document.getElementById('dream-rsi-fitness-stat');
+      if (fitnessEl) fitnessEl.textContent = Number(data.active_policy_fitness || 0).toFixed(2);
+
+      const isoEl = document.getElementById('dream-rsi-isolation-stat');
+      if (isoEl) isoEl.textContent = data.offline_isolation_mode || 'RING 2 OFFLINE';
+
+      if (data.latest_experiment_plan) {
+        renderDreamRsiPlan(data.latest_experiment_plan);
+      }
+    } catch (_) {}
+  }
+
+  function renderDreamRsiPlan(plan) {
+    if (!plan) return;
+
+    const rationaleBox = document.getElementById('dream-rsi-rationale-box');
+    if (rationaleBox && plan.rationale) {
+      rationaleBox.textContent = plan.rationale;
+    }
+
+    const budgetEl = document.getElementById('dream-rsi-trial-budget-display');
+    if (budgetEl && plan.recommended_trial_budget) {
+      budgetEl.textContent = `${plan.recommended_trial_budget} trials`;
+    }
+
+    const rfcsTbody = document.getElementById('dream-rsi-rfcs-tbody');
+    if (rfcsTbody && plan.prioritized_rfcs) {
+      rfcsTbody.innerHTML = plan.prioritized_rfcs.map(r => `
+        <tr>
+          <td><strong style="color: #38bdf8;">RFC ${r.rfc_number}</strong></td>
+          <td style="color: #e2e8f0;">${escapeHtml(r.title)}</td>
+          <td><span class="badge blue">${Number(r.priority_score).toFixed(2)}x</span></td>
+          <td style="font-size: 0.75rem; color: #94a3b8;">${(r.recommended_sections || []).map(s => escapeHtml(s)).join(', ')}</td>
+        </tr>
+      `).join('');
+    }
+
+    const mutsTbody = document.getElementById('dream-rsi-mutations-tbody');
+    if (mutsTbody && plan.prioritized_mutations) {
+      mutsTbody.innerHTML = plan.prioritized_mutations.map(m => `
+        <tr>
+          <td><code style="color: #34d399;">${escapeHtml(m.mutation_type)}</code></td>
+          <td><span class="badge green">${Number(m.weight).toFixed(2)}x</span></td>
+          <td style="color: #fbbf24;">${(Number(m.historical_divergence_rate || 0) * 100).toFixed(1)}%</td>
+        </tr>
+      `).join('');
+    }
+  }
+
+  async function trainDreamRsi() {
+    const resEl = document.getElementById('dream-rsi-job-result');
+    const logEl = document.getElementById('dream-rsi-output-log');
+    const gens = parseInt(document.getElementById('dream-rsi-train-gens').value, 10) || 10;
+    const steps = parseInt(document.getElementById('dream-rsi-train-steps').value, 10) || 1000;
+
+    resEl.style.color = '#38bdf8';
+    resEl.textContent = `Running Dream-RSI offline policy optimization (${gens} gens, ${steps} steps/cand)...`;
+
+    try {
+      const res = await fetch('/api/dream-rsi/train', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ generations: gens, steps: steps })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        resEl.style.color = '#34d399';
+        resEl.textContent = `✓ Dream-RSI training complete! Active Policy Gen ${data.active_generation} (Fitness: ${Number(data.active_policy_fitness || 0).toFixed(2)}).`;
+        logEl.textContent = JSON.stringify(data, null, 2);
+        fetchDreamRsiData(true);
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `Training failed: ${data.message || 'Error'}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Network error: ${e.message}`;
+    }
+  }
+
+  async function runDreamRsiRollout() {
+    const resEl = document.getElementById('dream-rsi-job-result');
+    const logEl = document.getElementById('dream-rsi-output-log');
+    resEl.style.color = '#818cf8';
+    resEl.textContent = 'Simulating 1,000 steps rollout against offline World Model...';
+
+    try {
+      const res = await fetch('/api/dream-rsi/rollout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ steps: 1000 })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        resEl.style.color = '#34d399';
+        resEl.textContent = `✓ Rollout complete: ${data.simulated_anomalies_discovered} anomalies, ${data.simulated_false_positives_filtered} filtered. Yield: ${Number(data.projected_yield).toFixed(2)}%`;
+        logEl.textContent = JSON.stringify(data, null, 2);
+        fetchDreamRsiData(true);
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `Rollout failed: ${data.message || 'Error'}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Network error: ${e.message}`;
+    }
+  }
+
+  async function recommendDreamRsiPriorities() {
+    const resEl = document.getElementById('dream-rsi-job-result');
+    try {
+      const res = await fetch('/api/dream-rsi/recommend-priorities');
+      if (res.ok) {
+        const plan = await res.json();
+        renderDreamRsiPlan(plan);
+        resEl.style.color = '#34d399';
+        resEl.textContent = '✓ Research recommendations refreshed from active policy.';
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Failed to get recommendations: ${e.message}`;
+    }
+  }
+
   // Initial load
   fetchAuditLog();
   fetchUnifiedRuntimeActivity();
@@ -5922,12 +7695,21 @@ with urllib.request.urlopen(req) as resp:
   fetchOssFuzzStatus();
   fetchOsvStatus();
   fetchContainmentRings();
+  loadPqcStatus();
+  fetchProtocolResearchData(true);
+  fetchEvolutionData(true);
+  fetchDreamRsiData(true);
+  applyEvolutionPreset('safe_permutator');
   setInterval(() => { if (!runtimeFeedPaused) fetchUnifiedRuntimeActivity(false); }, 2000);
   setInterval(fetchRaspData, 2500);
   setInterval(fetchOssFuzzStatus, 3000);
   setInterval(fetchOsvStatus, 8000);
   setInterval(fetchAtlasStatus, 15000);
   setInterval(fetchContainmentRings, 4000);
+  setInterval(loadPqcStatus, 5000);
+  setInterval(() => fetchProtocolResearchData(true), 6000);
+  setInterval(fetchEvolutionData, 5000);
+  setInterval(fetchDreamRsiData, 5000);
 </script>
 </body>
 </html>

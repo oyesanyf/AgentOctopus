@@ -88,7 +88,9 @@ class FusionArbiter:
     ):
         self.endpoint = endpoint or os.environ.get("OLLAMA_ENDPOINT", self.DEFAULT_OLLAMA_ENDPOINT)
         self.db = db
-        self.client = httpx.Client(timeout=180.0)
+        timeout_env = os.environ.get("OLLAMA_TIMEOUT", "900.0")
+        self.timeout = float(timeout_env) if float(timeout_env) > 0 else None
+        self.client = httpx.Client(timeout=httpx.Timeout(self.timeout, connect=60.0))
         self.available_tags = self._fetch_available_tags()
 
         # Dynamic Model Assignment matching ModelFusion Tiered Scaling
@@ -127,24 +129,41 @@ class FusionArbiter:
             "model": model,
             "prompt": f"### SYSTEM:\n{system_prompt}\n\n### INSTRUCTION:\n{prompt}",
             "stream": False,
-            "keep_alive": "30m",
+            "keep_alive": "60m",
             "options": {"temperature": 0.7, "num_predict": 1024},
         }
-        try:
-            resp = self.client.post(f"{self.endpoint}/api/generate", json=payload, timeout=180.0)
-            if resp.status_code == 200:
-                return resp.json().get("response", "").strip()
-        except Exception as e:
-            logger.warning("Ollama query failed for %s: %s", model, e)
-            # Resilient fallback: if secondary model failed/timed out, try fast Qwen fallback
-            if model != "qwen2.5:7b" and "qwen2.5:7b" in self.available_tags:
-                try:
-                    payload["model"] = "qwen2.5:7b"
-                    resp = self.client.post(f"{self.endpoint}/api/generate", json=payload, timeout=45.0)
-                    if resp.status_code == 200:
-                        return resp.json().get("response", "").strip()
-                except Exception:
-                    pass
+        for attempt in range(2):
+            try:
+                resp = self.client.post(
+                    f"{self.endpoint}/api/generate",
+                    json=payload,
+                    timeout=httpx.Timeout(self.timeout, connect=60.0),
+                )
+                if resp.status_code == 200:
+                    return resp.json().get("response", "").strip()
+            except Exception as e:
+                if attempt == 0 and "timed out" in str(e).lower():
+                    logger.warning(
+                        "Ollama query timed out for %s on initial attempt (likely loading model into VRAM/RAM). Retrying with model now resident...",
+                        model,
+                    )
+                    time.sleep(2.0)
+                    continue
+                logger.warning("Ollama query failed for %s: %s", model, e)
+                # Resilient fallback: if secondary model failed/timed out, try fast Qwen fallback
+                if model != "qwen2.5:7b" and "qwen2.5:7b" in self.available_tags:
+                    try:
+                        payload["model"] = "qwen2.5:7b"
+                        resp = self.client.post(
+                            f"{self.endpoint}/api/generate",
+                            json=payload,
+                            timeout=httpx.Timeout(self.timeout, connect=60.0),
+                        )
+                        if resp.status_code == 200:
+                            return resp.json().get("response", "").strip()
+                    except Exception:
+                        pass
+                break
         return ""
 
     def run_fusion_pipeline(self, rfc_fragment: str, fragment_id: Optional[int] = None) -> FusionArbitrationResult:

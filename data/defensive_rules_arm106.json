@@ -1,0 +1,10 @@
+[
+  {
+    "rule_id": "OCTO-ARM106-0001",
+    "name": "Reject Pre-Colon Whitespace",
+    "type": "RUST_PARSER_GUARD",
+    "anchor": "RFC9112:5.1",
+    "body": "// Arm 106 Defense: Pre-colon whitespace rejection\nif header_name.ends_with(' ') || header_name.ends_with('\\t') {\n    return Err(ProtocolError::IllegalHeaderWhitespace);\n}",
+    "severity": "CRITICAL"
+  }
+]

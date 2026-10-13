@@ -417,6 +417,40 @@ impl ArmContainmentRing {
                 prefixes.push("http://localhost".to_string());
                 prefixes.push("http://[::1]".to_string());
             }
+            ArmRole::PostQuantumAttestation => {
+                tools.insert("pqc_kem_encapsulate".to_string());
+                tools.insert("pqc_kem_decapsulate".to_string());
+                tools.insert("pqc_dsa_sign".to_string());
+                tools.insert("pqc_dsa_verify".to_string());
+                tools.insert("pqc_cbom_scanner".to_string());
+                prefixes.push("pqc://".to_string());
+                prefixes.push("quantum://".to_string());
+                prefixes.push("kem://".to_string());
+                prefixes.push("dsa://".to_string());
+                prefixes.push("cbom://".to_string());
+            }
+            ArmRole::EvolutionaryOptimizer => {
+                tools.insert("openevolve_run".to_string());
+                tools.insert("openevolve_evaluate".to_string());
+                tools.insert("openevolve_stage_candidate".to_string());
+                tools.insert("openevolve_audit_invariant".to_string());
+                tools.insert("openevolve_promote".to_string());
+                prefixes.push("evolution://".to_string());
+                prefixes.push("openevolve://".to_string());
+                prefixes.push("candidate://".to_string());
+                prefixes.push("staging://".to_string());
+            }
+            ArmRole::DreamRsiOptimizer => {
+                tools.insert("dream_rsi_replay".to_string());
+                tools.insert("dream_rsi_train_world_model".to_string());
+                tools.insert("dream_rsi_policy_rollout".to_string());
+                tools.insert("dream_rsi_recommend_priorities".to_string());
+                tools.insert("dream_rsi_ingest_trajectories".to_string());
+                prefixes.push("dream_rsi://".to_string());
+                prefixes.push("replay://".to_string());
+                prefixes.push("world_model://".to_string());
+                prefixes.push("policy://".to_string());
+            }
         }
 
         Self {
@@ -957,11 +991,15 @@ impl ArmContainmentRing {
 /// for all 50 arms in the Agent Octopus swarm.
 #[derive(Clone)]
 pub struct ArmRingRegistry {
-    rings: Arc<RwLock<std::collections::HashMap<usize, Arc<ArmContainmentRing>>>>,
+    pub rings: Arc<RwLock<std::collections::HashMap<usize, Arc<ArmContainmentRing>>>>,
     master_seed: [u8; 32],
 }
 
 impl ArmRingRegistry {
+    /// Non-blocking synchronous lookup for an arm ring.
+    pub fn get_ring_sync(&self, arm_id: usize) -> Option<Arc<ArmContainmentRing>> {
+        self.rings.try_read().ok()?.get(&arm_id).cloned()
+    }
     /// Initializes Level 1 containment rings for `size` arms (default: 50).
     pub fn new(size: usize, master_seed: &[u8]) -> Self {
         let mut seed = [0u8; 32];
@@ -993,6 +1031,9 @@ impl ArmRingRegistry {
             (105, ArmRole::ContinuousOsvScanner),
             (106, ArmRole::DifferentialProtocolAnalyzer),
             (107, ArmRole::AutonomousProtocolResearch),
+            (108, ArmRole::PostQuantumAttestation),
+            (109, ArmRole::EvolutionaryOptimizer),
+            (110, ArmRole::DreamRsiOptimizer),
         ];
         for (sec_id, sec_role) in security_arm_roles {
             let sec_ring = Arc::new(ArmContainmentRing::new(sec_id, sec_role, 1, &seed));

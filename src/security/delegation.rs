@@ -74,6 +74,22 @@ impl DelegationScopeGuard {
                 tools.insert("protocol_analyzer");
                 tools.insert("fuzz_divergence");
             }
+            ArmRole::PostQuantumAttestation => {
+                tools.insert("pqc_kem_encapsulate");
+                tools.insert("pqc_kem_decapsulate");
+                tools.insert("pqc_dsa_sign");
+                tools.insert("pqc_dsa_verify");
+                tools.insert("pqc_cbom_scanner");
+            }
+            ArmRole::EvolutionaryOptimizer => {
+                tools.insert("evolution_evaluate");
+                tools.insert("evolution_stage");
+            }
+            ArmRole::DreamRsiOptimizer => {
+                tools.insert("dream_rsi_replay");
+                tools.insert("dream_rsi_rollout");
+                tools.insert("dream_rsi_prioritize");
+            }
         }
         tools
     }

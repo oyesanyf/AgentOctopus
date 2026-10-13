@@ -453,6 +453,9 @@ impl ArmRuntime {
             ArmRole::ContinuousOsvScanner => ("osv_client", Operation::MeshMessage),
             ArmRole::DifferentialProtocolAnalyzer => ("protocol_analyzer", Operation::MeshMessage),
             ArmRole::AutonomousProtocolResearch => ("protocol_research", Operation::MeshMessage),
+            ArmRole::PostQuantumAttestation => ("pqc_attestation", Operation::MeshMessage),
+            ArmRole::EvolutionaryOptimizer => ("evolutionary_optimizer", Operation::MeshMessage),
+            ArmRole::DreamRsiOptimizer => ("dream_rsi_optimizer", Operation::MeshMessage),
         };
 
         let amount_cents = self.extract_amount_cents(raw_payload);
