@@ -1,24 +1,24 @@
 {
-  "policy_id": "rsi-gen-31-1791914771",
-  "generation": 31,
+  "policy_id": "rsi-gen-32-1791924079",
+  "generation": 32,
   "rfc_weights": {
-    "9110": 0.4554048049858317,
-    "9113": 1.3877358199767154,
-    "7540": 1.094596333707356,
-    "7230": 1.1826177328551697,
-    "9112": 0.7801614343142513
+    "9110": 0.4705709862687092,
+    "7230": 1.0886119384292077,
+    "7540": 0.9207712580498242,
+    "9113": 1.3501986112562472,
+    "9112": 0.7280621406920399
   },
   "mutation_weights": {
-    "duplicate_header": 0.823371983418095,
-    "chunk_extension": 1.2863557262780043,
-    "abnf_delimiter": 0.7382946621017287,
-    "case_mutation": 0.6390432821444804,
-    "header_smuggling": 1.780777268991986,
-    "null_byte": 0.9996720891677945,
-    "crlf_injection": 2.1494523248750372
+    "header_smuggling": 1.7512479240892562,
+    "abnf_delimiter": 0.6179667556234559,
+    "chunk_extension": 1.3949230257642744,
+    "duplicate_header": 0.6684161924916359,
+    "crlf_injection": 2.0465948840944552,
+    "null_byte": 0.8040887083169281,
+    "case_mutation": 0.7028457752901237
   },
   "default_trial_budget": 3,
-  "exploration_temperature": 0.12967582349192255,
-  "fitness_score": 17.30491929528953,
+  "exploration_temperature": 0.17067233931056047,
+  "fitness_score": 17.494028979656782,
   "created_at": 0
 }

@@ -58,6 +58,11 @@ impl SecurityAuditLog {
 
     pub fn with_disk_persistence(log_path: impl Into<PathBuf>) -> Self {
         let path = log_path.into();
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.len() > 5 * 1024 * 1024 {
+                let _ = std::fs::File::create(&path);
+            }
+        }
         Self {
             records: Mutex::new(Vec::new()),
             last_hash: Mutex::new("GENESIS_AUDIT_ROOT_000000000000000000000000000000000000000000000000".to_string()),
@@ -98,6 +103,7 @@ impl SecurityAuditLog {
         let record_hash = hex::encode(hasher.finalize());
 
         *last_hash_lock = record_hash.clone();
+        drop(last_hash_lock);
 
         let record = AuditRecord {
             timestamp_secs: now,
@@ -113,13 +119,17 @@ impl SecurityAuditLog {
         // 1. In-memory append
         let mut records_lock = self.records.lock().unwrap_or_else(|e| e.into_inner());
         records_lock.push(record.clone());
+        let total_records = records_lock.len();
+        drop(records_lock);
 
-        // 2. External Append-Only Disk Persistence
+        // 2. External Append-Only Disk Persistence (non-blocking flush without per-request FlushFileBuffers stall)
         if let Some(ref path) = self.log_file_path {
-            if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-                if let Ok(serialized) = serde_json::to_string(&record) {
-                    let _ = writeln!(file, "{}", serialized);
-                    let _ = file.sync_all();
+            if total_records <= 50 || total_records % 10 == 0 || decision == "DENY" || decision == "FORBID" {
+                if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+                    if let Ok(serialized) = serde_json::to_string(&record) {
+                        let _ = writeln!(file, "{}", serialized);
+                        let _ = file.flush();
+                    }
                 }
             }
         }

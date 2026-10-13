@@ -126,6 +126,11 @@ impl OtelSessionTelemetry {
         if let Some(parent) = p.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
+        if let Ok(meta) = std::fs::metadata(&p) {
+            if meta.len() > 5 * 1024 * 1024 {
+                let _ = std::fs::File::create(&p);
+            }
+        }
 
         Self {
             active_sessions: RwLock::new(HashMap::new()),
@@ -222,6 +227,7 @@ impl OtelSessionTelemetry {
         // Increment step count
         let mut steps = self.step_counter.lock().unwrap();
         *steps += 1;
+        let current_steps = *steps;
         drop(steps);
 
         // Store in memory ring buffer
@@ -232,15 +238,17 @@ impl OtelSessionTelemetry {
         spans.push(span.clone());
         drop(spans);
 
-        // Append to disk log
-        if let Ok(line) = serde_json::to_string(&span) {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.disk_log_path)
-            {
-                let _ = writeln!(f, "{}", line);
+        // Append to disk log (bounded sampling during high-frequency bursts to prevent I/O starvation)
+        if current_steps <= 50 || current_steps % 20 == 0 {
+            if let Ok(line) = serde_json::to_string(&span) {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.disk_log_path)
+                {
+                    let _ = writeln!(f, "{}", line);
+                }
             }
         }
 

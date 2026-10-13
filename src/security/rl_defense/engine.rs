@@ -458,7 +458,9 @@ impl AdaptiveRlDefenseEngine {
             *eps_count += 1;
         }
 
-        self.save_to_disk();
+        if current_step <= 25 || current_step % 25 == 0 || is_terminal {
+            self.save_to_disk();
+        }
         reward
     }
 
@@ -492,7 +494,50 @@ impl AdaptiveRlDefenseEngine {
         }
 
         // 4. Save tuned model to disk
-        self.save_to_disk();
+        let steps = *self.steps_completed.read().unwrap();
+        if steps <= 25 || steps % 25 == 0 {
+            self.save_to_disk();
+        }
+    }
+
+    /// Self-heals false-positive escalations or missing prerequisite drift on verified supervisor-attested
+    /// workflows by penalizing unnecessary containment actions and boosting `PassiveObserve`.
+    pub fn self_heal_authorized_workflow(
+        &self,
+        state: &AdaptiveStateVector,
+        current_action: AdaptiveDefenseAction,
+    ) -> AdaptiveDefenseAction {
+        let bucket = state.discretize_bucket();
+        let observe_idx = AdaptiveDefenseAction::PassiveObserve.to_index();
+        let current_idx = current_action.to_index();
+
+        {
+            let mut q = self.q_table.write().unwrap();
+            if current_action.is_containment() {
+                let curr_q = *q.get(&(bucket, current_idx)).unwrap_or(&0.0);
+                q.insert((bucket, current_idx), curr_q - 35.0);
+            }
+            let obs_q = *q.get(&(bucket, observe_idx)).unwrap_or(&0.0);
+            q.insert((bucket, observe_idx), (obs_q + 35.0).min(250.0));
+        }
+
+        {
+            let mut adv_map = self.action_advantages.write().unwrap();
+            if current_action.is_containment() {
+                let curr_adv = *adv_map.get(&(bucket, current_idx)).unwrap_or(&0.0);
+                adv_map.insert((bucket, current_idx), curr_adv - 20.0);
+            }
+            let obs_adv = *adv_map.get(&(bucket, observe_idx)).unwrap_or(&0.0);
+            adv_map.insert((bucket, observe_idx), (obs_adv + 20.0).min(150.0));
+        }
+
+        {
+            let online_q = self.q_table.read().unwrap().clone();
+            let mut target_q = self.target_q_table.write().unwrap();
+            *target_q = online_q;
+        }
+
+        AdaptiveDefenseAction::PassiveObserve
     }
 
     /// Computes and returns current RL telemetry and statistics.

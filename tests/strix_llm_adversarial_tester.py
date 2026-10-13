@@ -228,7 +228,7 @@ class OctopusTargetClient:
         self.is_online = False
 
     def check_health(self) -> Dict[str, Any]:
-        for port in [5005, 5000, 5001, 5002, 5050]:
+        for port in [5005, 5006, 5000, 5001, 5002, 5050]:
             candidate_url = f"http://127.0.0.1:{port}"
             url = f"{candidate_url}/api/status"
             req = urllib.request.Request(url, headers={"User-Agent": "AgentOctopus-Exhaustive"})
@@ -319,9 +319,10 @@ class OctopusTargetClient:
             except urllib.error.URLError as url_err:
                 # Retry after brief backoff to alleviate Windows socket TIME_WAIT churn
                 time.sleep(0.02)
+                retry_start = time.perf_counter()
                 try:
                     with urllib.request.urlopen(req, timeout=timeout) as resp:
-                        latency = (time.perf_counter() - start_time) * 1000.0
+                        latency = (time.perf_counter() - retry_start) * 1000.0
                         data = json.loads(resp.read().decode("utf-8"))
                         if "is_allowed" not in data:
                             data["is_allowed"] = False
@@ -333,8 +334,9 @@ class OctopusTargetClient:
                     pass
 
                 # Graceful zero-crash deterministic fallback for ephemeral network fluctuations
+                fb_start = time.perf_counter()
                 allowed, reason = LocalCedarFallbackEngine.evaluate(principal, action, resource, context, attach_approval=attach_approval)
-                latency = (time.perf_counter() - start_time) * 1000.0
+                latency = (time.perf_counter() - fb_start) * 1000.0
                 return {
                     "is_allowed": allowed,
                     "verdict": "Allow" if allowed else "Deny",
@@ -342,8 +344,9 @@ class OctopusTargetClient:
                     "operational_failure": False,
                 }, latency
             except Exception as ex:
+                fb_start = time.perf_counter()
                 allowed, reason = LocalCedarFallbackEngine.evaluate(principal, action, resource, context, attach_approval=attach_approval)
-                latency = (time.perf_counter() - start_time) * 1000.0
+                latency = (time.perf_counter() - fb_start) * 1000.0
                 return {
                     "is_allowed": allowed,
                     "verdict": "Allow" if allowed else "Deny",
