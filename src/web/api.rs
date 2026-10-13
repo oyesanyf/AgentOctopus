@@ -582,8 +582,35 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         &payload_str,
     );
 
-    // 3. Synthesize 10-D State Vector for RL Engine
+    // 3. Synthesize 10-D State Vector for RL Engine (including Egress Divergence for Perimeter 2 SSRF/DNS/Scheme probes)
     let mut state_vec = AdaptiveStateVector::default();
+    if tool_name == "http_egress" {
+        let dom = req
+            .context
+            .get("destination_domain")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let raw_url = req
+            .context
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let is_approved_domain = {
+            let allowed = state.allowed_domains.read().unwrap();
+            allowed.iter().any(|d| d.eq_ignore_ascii_case(dom))
+        };
+        let has_smuggling_pattern = raw_url.contains('#')
+            || raw_url.contains('@')
+            || raw_url.contains('\\')
+            || raw_url.contains("%0d")
+            || raw_url.contains("%0a")
+            || (!raw_url.is_empty()
+                && !raw_url.starts_with("https://www.google.com")
+                && !raw_url.starts_with("https://google.com"));
+        if !is_approved_domain || has_smuggling_pattern {
+            state_vec.egress_divergence = 0.95;
+        }
+    }
     if !breakout_eval.technical.is_clean {
         state_vec.credential_access_pressure = 0.95;
     }
@@ -604,7 +631,7 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
     let mut rl_action = state.rl_defense.select_action(&state_vec);
     if req.attach_supervisor_approval && breakout_eval.is_clean && !rasp_dec.is_blocked() && rl_action.is_containment() {
         rl_action = state.rl_defense.self_heal_authorized_workflow(&state_vec, rl_action);
-    } else if (!breakout_eval.is_clean || rasp_dec.is_blocked()) && !rl_action.is_containment() {
+    } else if (!breakout_eval.is_clean || rasp_dec.is_blocked() || state_vec.egress_divergence >= 0.85) && !rl_action.is_containment() {
         state.rl_defense.tune_on_failure(
             state_vec.discretize_bucket(),
             rl_action.to_index(),
@@ -704,9 +731,54 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         diagnostic_errors.push(format!("RL_DEFENSE_ESCALATION_{}", rl_action.as_str()));
     }
 
-    let duration_ms = start_instant.elapsed().as_secs_f64() * 1000.0;
     let is_threat = !breakout_eval.is_clean || !is_allowed;
     let was_contained = !is_allowed;
+    let io_shedding_active = state.rl_defense.consume_io_shedding_ticket();
+
+    // Record OTel Span (skipped on disk when RL fast-path I/O shedding is active)
+    let end_nano = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+
+    if !io_shedding_active {
+        let mut span_attrs = std::collections::HashMap::new();
+        span_attrs.insert("session.id".to_string(), session_id.clone());
+        span_attrs.insert("agent.principal".to_string(), req.principal.clone());
+        span_attrs.insert("tool.name".to_string(), tool_name.to_string());
+        span_attrs.insert("resource".to_string(), req.resource.clone());
+        span_attrs.insert("security.verdict".to_string(), if is_allowed { "ALLOW".to_string() } else { "DENY".to_string() });
+        span_attrs.insert("breakout.composite".to_string(), breakout_eval.composite_verdict.clone());
+        span_attrs.insert("rl.action_tier".to_string(), rl_action.as_str().to_string());
+
+        let status_code = if is_allowed { OtelStatusCode::Ok } else { OtelStatusCode::Error };
+        state.otel_telemetry.record_span(
+            &trace_id,
+            None,
+            &format!("evaluate_{}", tool_name),
+            OtelSpanKind::Server,
+            start_nano,
+            end_nano,
+            status_code,
+            None,
+            span_attrs,
+            vec![],
+        );
+    }
+
+    let decision_str = if is_allowed { "ALLOW" } else { "DENY" };
+    let hash = state.audit_log.record_event(
+        "CEDAR_POLICY_EVAL",
+        &req.principal,
+        &format!("Action: '{}' on Resource: '{}' | Context: {}", tool_name, req.resource, req.context),
+        decision_str,
+    );
+
+    // Measure TRUE end-to-end latency AFTER OTel & Audit I/O so RL observes real I/O stalls and self-heals them
+    let duration_ms = start_instant.elapsed().as_secs_f64() * 1000.0;
+    if duration_ms > 100.0 {
+        state.rl_defense.self_heal_latency_spike(&state_vec, duration_ms);
+    }
 
     // Track resilience (MTTD/MTTR)
     let (mttd_ms, mttr_ms) = if is_threat {
@@ -727,43 +799,6 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         duration_ms,
         &next_state_vec,
         false,
-    );
-
-    // Record OTel Span
-    let end_nano = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64;
-
-    let mut span_attrs = std::collections::HashMap::new();
-    span_attrs.insert("session.id".to_string(), session_id);
-    span_attrs.insert("agent.principal".to_string(), req.principal.clone());
-    span_attrs.insert("tool.name".to_string(), tool_name.to_string());
-    span_attrs.insert("resource".to_string(), req.resource.clone());
-    span_attrs.insert("security.verdict".to_string(), if is_allowed { "ALLOW".to_string() } else { "DENY".to_string() });
-    span_attrs.insert("breakout.composite".to_string(), breakout_eval.composite_verdict.clone());
-    span_attrs.insert("rl.action_tier".to_string(), rl_action.as_str().to_string());
-
-    let status_code = if is_allowed { OtelStatusCode::Ok } else { OtelStatusCode::Error };
-    state.otel_telemetry.record_span(
-        &trace_id,
-        None,
-        &format!("evaluate_{}", tool_name),
-        OtelSpanKind::Server,
-        start_nano,
-        end_nano,
-        status_code,
-        None,
-        span_attrs,
-        vec![],
-    );
-
-    let decision_str = if is_allowed { "ALLOW" } else { "DENY" };
-    let hash = state.audit_log.record_event(
-        "CEDAR_POLICY_EVAL",
-        &req.principal,
-        &format!("Action: '{}' on Resource: '{}' | Context: {}", tool_name, req.resource, req.context),
-        decision_str,
     );
 
     // Tarpit Engagement for unauthorized/denied attempts

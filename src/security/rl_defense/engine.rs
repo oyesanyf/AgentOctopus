@@ -104,6 +104,8 @@ pub struct AdaptiveRlDefenseEngine {
     pub episodes_completed: RwLock<usize>,
     pub steps_completed: RwLock<usize>,
     pub cumulative_reward: RwLock<f32>,
+    /// Closed-loop RL latency & I/O backpressure self-healing actuator counter
+    pub fast_path_io_shedding_remaining: std::sync::atomic::AtomicUsize,
     persistence_path: std::path::PathBuf,
 }
 
@@ -139,6 +141,7 @@ impl AdaptiveRlDefenseEngine {
             episodes_completed: RwLock::new(0),
             steps_completed: RwLock::new(0),
             cumulative_reward: RwLock::new(0.0),
+            fast_path_io_shedding_remaining: std::sync::atomic::AtomicUsize::new(0),
             persistence_path: p,
         };
 
@@ -538,6 +541,45 @@ impl AdaptiveRlDefenseEngine {
         }
 
         AdaptiveDefenseAction::PassiveObserve
+    }
+
+    /// Closed-loop RL Latency & Backpressure Self-Healing Actuator:
+    /// When end-to-end request latency exceeds the SLA budget (e.g., > 100ms due to disk I/O or burst load),
+    /// RL activates fast-path I/O shedding for the next 250 requests and boosts fast-path containment
+    /// Q-values for high-divergence egress/breakout buckets.
+    pub fn self_heal_latency_spike(&self, state: &AdaptiveStateVector, observed_latency_ms: f64) {
+        if observed_latency_ms <= 100.0 {
+            return;
+        }
+        self.fast_path_io_shedding_remaining
+            .store(250, std::sync::atomic::Ordering::SeqCst);
+
+        let bucket = state.discretize_bucket();
+        if state.composite_threat_severity() > 0.0 {
+            let hard_idx = AdaptiveDefenseAction::HardMitigation.to_index();
+            let mut q = self.q_table.write().unwrap();
+            let curr = *q.get(&(bucket, hard_idx)).unwrap_or(&0.0);
+            q.insert((bucket, hard_idx), (curr + 40.0).min(300.0));
+        }
+    }
+
+    /// Consumes a ticket from the RL fast-path I/O shedding window if active.
+    pub fn consume_io_shedding_ticket(&self) -> bool {
+        let mut current = self
+            .fast_path_io_shedding_remaining
+            .load(std::sync::atomic::Ordering::Relaxed);
+        while current > 0 {
+            match self.fast_path_io_shedding_remaining.compare_exchange_weak(
+                current,
+                current - 1,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => current = actual,
+            }
+        }
+        false
     }
 
     /// Computes and returns current RL telemetry and statistics.
