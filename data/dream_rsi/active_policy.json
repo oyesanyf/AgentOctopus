@@ -2,23 +2,23 @@
   "policy_id": "rsi-gen-36-1791933803",
   "generation": 36,
   "rfc_weights": {
-    "7540": 0.9823641190031459,
     "7230": 0.8463913009377176,
+    "7540": 0.982364119003146,
     "9113": 1.1613279235692064,
     "9112": 0.6161298683416401,
     "9110": 0.30728215791920255
   },
   "mutation_weights": {
-    "header_smuggling": 1.5713814973764542,
-    "null_byte": 1.1250679094868405,
     "crlf_injection": 1.6491363345526944,
+    "header_smuggling": 1.5713814973764542,
+    "duplicate_header": 0.20862803817927572,
+    "null_byte": 1.1250679094868403,
     "case_mutation": 0.39743489867482235,
     "abnf_delimiter": 0.7489549337301764,
-    "duplicate_header": 0.20862803817927572,
     "chunk_extension": 1.1001908199862094
   },
   "default_trial_budget": 3,
   "exploration_temperature": 0.21159486287776264,
-  "fitness_score": 20.51067125575271,
+  "fitness_score": 16.92152043796183,
   "created_at": 0
 }

@@ -78,9 +78,12 @@ impl SecurityInvariantGuard {
         normalized.starts_with("vendor/rfchunt/permutator.py")
             || normalized.starts_with("vendor/rfchunt/anomaly_detector.py")
             || normalized.starts_with("vendor/rfchunt/engine/abnf_engine.py")
+            || normalized.starts_with("data/evolution_staging/auto_remediation_patches.py")
             || normalized == "permutator"
             || normalized == "anomaly_detector"
             || normalized == "abnf_engine"
+            || normalized == "auto_remediation"
+            || normalized == "enclave_fallback_patch"
     }
 }
 

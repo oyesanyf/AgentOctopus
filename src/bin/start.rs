@@ -15,8 +15,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("  [+] Audit Trail: Append-Only SHA-256 Hash Chain Initialized");
     println!("--------------------------------------------------------------------------------");
 
-    // Proactively check for updated PyRIT AI Red-Teaming, external scanners, and test suites on startup
-    check_startup_dependencies_and_toolchains();
+    // Proactively check for updated PyRIT AI Red-Teaming, external scanners, and test suites in background
+    // so that port 5005 binds immediately (<10ms) without waiting on Python/PyPI subprocesses.
+    tokio::task::spawn_blocking(|| {
+        check_startup_dependencies_and_toolchains();
+    });
 
     // Select port dynamically: default to 5005, then probe 5006..5050, or bind dynamically via OS port 0
     let candidate_ports = [5005, 5006, 5007, 5008, 5010, 5050, 8080];

@@ -685,6 +685,13 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
             );
             rl_action = state.rl_defense.self_heal_authorized_workflow(&state_vec, rl_action);
             state.otel_telemetry.update_session_rl_tier(&session_id, rl_action.as_str());
+            let _ = state
+                .evolution_arm
+                .synthesize_and_apply_fix_for_failure(
+                    &format!("CEDAR_TEMPORAL_{}", tool_name.to_ascii_uppercase()),
+                    &format!("Principal '{}' action '{}' on '{}'", req.principal, tool_name, req.resource),
+                )
+                .await;
 
             result = state.gateway.authorize_tool_invocation_with_approval(
                 &token,
@@ -2644,6 +2651,44 @@ pub async fn handle_evolution_rollback(state: &WebState, body: &str) -> Result<S
         Ok(msg) => Ok(serde_json::json!({ "status": "SUCCESS", "message": msg }).to_string()),
         Err(e) => Err(json_error_payload("ROLLBACK_FAILED", &format!("{}", e))),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EvolutionAutoFixRequest {
+    pub failure_id: Option<String>,
+    pub failure_context: Option<String>,
+}
+
+pub async fn handle_evolution_auto_fix(state: &WebState, body: &str) -> Result<String, String> {
+    let req: EvolutionAutoFixRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid auto-fix request: {}", e)))?;
+    let failure_id = req.failure_id.unwrap_or_else(|| "UNKNOWN_FAILURE".to_string());
+    let failure_context = req.failure_context.unwrap_or_else(|| "Runtime test failure".to_string());
+
+    // 1. Synthesize, AST-audit, and promote code patch via OpenEvolve (Arm 109)
+    let candidate = state
+        .evolution_arm
+        .synthesize_and_apply_fix_for_failure(&failure_id, &failure_context)
+        .await
+        .map_err(|e| json_error_payload("AUTO_FIX_FAILED", &format!("{}", e)))?;
+
+    // 2. Synchronize RL Double Q-Learning policy for the failure vector
+    let mut state_vec = AdaptiveStateVector::default();
+    if failure_id.to_ascii_uppercase().contains("EGRESS") {
+        state_vec.egress_divergence = 0.95;
+        state.rl_defense.self_heal_latency_spike(&state_vec, 1500.0);
+    } else {
+        let current_action = state.rl_defense.select_action(&state_vec);
+        let _ = state.rl_defense.self_heal_authorized_workflow(&state_vec, current_action);
+    }
+
+    Ok(serde_json::json!({
+        "status": "SUCCESS",
+        "remediated_by": "OpenEvolve_Arm109_and_RL_DoubleQ",
+        "failure_id": failure_id,
+        "candidate": candidate
+    })
+    .to_string())
 }
 
 #[derive(Debug, Deserialize)]

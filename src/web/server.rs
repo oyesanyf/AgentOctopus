@@ -23,7 +23,7 @@ use super::api::{
     handle_pqc_decapsulate, handle_pqc_sign, handle_pqc_verify, handle_pqc_audit_cbom,
     handle_evolution_status, handle_evolution_start, handle_evolution_stop,
     handle_evolution_candidates, handle_evolution_evaluate, handle_evolution_approve,
-    handle_evolution_rollback,
+    handle_evolution_rollback, handle_evolution_auto_fix,
     handle_dream_rsi_status, handle_dream_rsi_policy, handle_dream_rsi_train,
     handle_dream_rsi_rollout, handle_dream_rsi_recommend_priorities,
     handle_dream_rsi_feed_trajectories,
@@ -1036,6 +1036,20 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
+        ("POST", "/api/evolution/auto-fix") => {
+            let (status_code, json_body) = match handle_evolution_auto_fix(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
         ("GET", "/api/dream-rsi/status") => {
             let json_body = handle_dream_rsi_status(&state).await;
             let response = format!(
@@ -1708,6 +1722,7 @@ async fn stream_command_output(
     estimated_total: usize,
     passed: &mut usize,
     failed: &mut usize,
+    state: &Arc<WebState>,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -1751,6 +1766,7 @@ async fn stream_command_output(
                         }
 
                         let uncolored = strip_ansi(&clean_line);
+                        let mut failed_test_id: Option<String> = None;
 
                         if is_python {
                             let is_pass = uncolored.contains("[PASS] [");
@@ -1766,6 +1782,7 @@ async fn stream_command_output(
                                     *passed += 1;
                                 } else {
                                     *failed += 1;
+                                    failed_test_id = Some(test_name.to_string());
                                 }
 
                                 let res_event = format!(
@@ -1796,6 +1813,7 @@ async fn stream_command_output(
                                         *passed += 1;
                                     } else {
                                         *failed += 1;
+                                        failed_test_id = Some(test_name.to_string());
                                     }
 
                                     let res_event = format!(
@@ -1828,6 +1846,32 @@ async fn stream_command_output(
                             break;
                         }
                         let _ = stream.flush().await;
+
+                        // Autonomous OpenEvolve (Arm 109) + RL Active Defense Remediation on Failure
+                        if let Some(fail_id) = failed_test_id {
+                            if let Ok(cand) = state
+                                .evolution_arm
+                                .synthesize_and_apply_fix_for_failure(&fail_id, &uncolored)
+                                .await
+                            {
+                                let state_vec = crate::security::rl_defense::AdaptiveStateVector::default();
+                                let cur_act = state.rl_defense.select_action(&state_vec);
+                                let _ = state.rl_defense.self_heal_authorized_workflow(&state_vec, cur_act);
+
+                                let fix_event = format!(
+                                    "data: {}\n\n",
+                                    serde_json::json!({
+                                        "type": "output",
+                                        "line": format!(
+                                            "\x1b[96m[OPENEVOLVE-ARM109]\x1b[0m 🧬 Synthesized, AST-audited & promoted code fix '{}' for '{}' -> {}",
+                                            cand.candidate_id, fail_id, cand.target_path
+                                        )
+                                    })
+                                );
+                                let _ = stream.write_all(fix_event.as_bytes()).await;
+                                let _ = stream.flush().await;
+                            }
+                        }
                     }
                     _ => break,
                 }
@@ -2006,6 +2050,7 @@ async fn handle_sse_test_stream(
             estimated_total,
             &mut passed,
             &mut failed,
+            state,
         ).await;
 
         // Transition announcement between Phase 1 and Phase 2
@@ -2034,6 +2079,7 @@ async fn handle_sse_test_stream(
             estimated_total,
             &mut passed,
             &mut failed,
+            state,
         ).await;
     } else if is_python {
         let mut py_cmd = Command::new("python");
@@ -2064,6 +2110,7 @@ async fn handle_sse_test_stream(
             estimated_total,
             &mut passed,
             &mut failed,
+            state,
         ).await;
     } else {
         let cargo_target = match suite_name {
@@ -2082,6 +2129,7 @@ async fn handle_sse_test_stream(
             estimated_total,
             &mut passed,
             &mut failed,
+            state,
         ).await;
     }
 

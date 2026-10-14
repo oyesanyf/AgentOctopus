@@ -217,6 +217,21 @@ class LocalCedarFallbackEngine:
         if principal == "tarpit_arm" and action == "quarantine" and resource == "DecoyTrap":
             return True, "Action authorized by Tarpit decoy defense policy"
 
+        # 6. Kernel Sentinel Protection Policy
+        if principal == "kernel_sentinel_arm" and action == "kernel_enforce" and resource == "KernelSubstrate":
+            tier = str(context.get("enforcement_tier", "Ring0"))
+            pid = context.get("target_pid", 0)
+            if tier in ["Ring0", "JobObject"] and isinstance(pid, int) and 0 < pid < 65536 and attach_approval is True:
+                return True, "Action authorized by Kernel Sentinel Protection Policy (Rule #6)"
+            return False, "Kernel Sentinel enforcement denied: invalid tier, PID, or missing supervisor attestation"
+
+        # 8. Protocol Research Isolation Gate
+        if principal == "protocol_research_arm" and action == "evaluate" and resource == "NetworkTarget":
+            host = str(context.get("destination_host", "")).lower().strip()
+            if host in ["127.0.0.1", "localhost", "::1", "[::1]"]:
+                return True, "Action authorized by Protocol Research Isolation Gate (Rule #8)"
+            return False, "Protocol Research evaluation denied: non-loopback target host"
+
         return False, "Default deny: no matching permit policy"
 
 
