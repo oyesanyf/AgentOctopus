@@ -200,7 +200,11 @@ impl TemporalEventTrace {
         if !self.is_simulation {
             return Err("TAMPER_PROTECTION: Production temporal event history cannot be erased or cleared");
         }
-        self.events.write().unwrap().clear();
+        let mut guard = self
+            .events
+            .write()
+            .map_err(|_| "TEMPORAL_TRACE_POISONED: Temporal event trace lock poisoned")?;
+        guard.clear();
         Ok(())
     }
 

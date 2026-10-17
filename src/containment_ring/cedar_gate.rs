@@ -338,7 +338,10 @@ impl CedarGate {
         }
 
         // Joint Dogwood Temporal Enforcement (Fail-Closed)
-        let temporal_rules = gw.temporal_policies().read().unwrap();
+        let temporal_rules = gw
+            .temporal_policies()
+            .read()
+            .map_err(|_| OctopusSecurityError::CapabilityDenied("Temporal policy lock poisoned".to_string()))?;
         if let Some(temporal_policy) = temporal_rules.get(action_name).or_else(|| temporal_rules.get(action)) {
             let now_sec = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

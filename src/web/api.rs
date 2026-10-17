@@ -596,7 +596,10 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let is_approved_domain = {
-            let allowed = state.allowed_domains.read().unwrap();
+            let allowed = state
+                .allowed_domains
+                .read()
+                .map_err(|_| json_error_payload("LOCK_POISONED", "Allowed domains lock poisoned"))?;
             allowed.iter().any(|d| d.eq_ignore_ascii_case(dom))
         };
         let has_smuggling_pattern = raw_url.contains('#')
@@ -1222,7 +1225,7 @@ pub fn handle_governor_inject_sample(state: &WebState, body: &str) -> Result<Str
             is_interactive_shell_or_compiler: is_malicious,
         },
         "socket_connect" | "egress" => KernelEventKind::SocketConnect {
-            destination_ip: "198.51.100.23".parse().unwrap(),
+            destination_ip: std::net::IpAddr::V4(std::net::Ipv4Addr::new(198, 51, 100, 23)),
             port: if is_malicious { 4444 } else { 443 },
             is_whitelisted_endpoint: !is_malicious,
         },

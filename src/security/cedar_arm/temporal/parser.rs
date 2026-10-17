@@ -190,7 +190,11 @@ impl DogwoodParser {
             return Err(format!("Malformed predicate header: {}", header));
         }
 
-        let kind = EventKind::from(*parts.last().unwrap());
+        let last_part = parts
+            .last()
+            .copied()
+            .ok_or_else(|| format!("Malformed predicate header: {}", header))?;
+        let kind = EventKind::from(last_part);
         let action = if parts.len() >= 2 {
             parts[parts.len() - 2].to_string()
         } else {
@@ -237,11 +241,13 @@ impl DogwoodParser {
             other if other.starts_with('"') && other.ends_with('"') => {
                 Ok(TermPattern::Literal(serde_json::Value::String(other[1..other.len() - 1].to_string())))
             }
-            other if other.parse::<i64>().is_ok() => {
-                let n: i64 = other.parse().unwrap();
-                Ok(TermPattern::Literal(serde_json::json!(n)))
+            other => {
+                if let Ok(n) = other.parse::<i64>() {
+                    Ok(TermPattern::Literal(serde_json::json!(n)))
+                } else {
+                    Ok(TermPattern::Variable(other.to_string()))
+                }
             }
-            var_name => Ok(TermPattern::Variable(var_name.to_string())),
         }
     }
 

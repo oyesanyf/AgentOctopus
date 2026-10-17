@@ -630,7 +630,10 @@ impl CedarAuthorizationGateway {
         }
 
         // 5. JOINT DOGWOOD TEMPORAL ENFORCEMENT (FAIL-CLOSED)
-        let temporal_rules = self.temporal_policies.read().unwrap();
+        let temporal_rules = self
+            .temporal_policies
+            .read()
+            .map_err(|_| OctopusSecurityError::CapabilityDenied("Temporal policy lock poisoned".to_string()))?;
         if let Some(temporal_policy) = temporal_rules.get(tool_name).or_else(|| temporal_rules.get(action_name)) {
             let now_sec = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
