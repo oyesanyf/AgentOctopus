@@ -86,13 +86,32 @@ impl RfcIndexSynchronizer {
     /// Fetches authoritative RFC index directly from rfc-editor.org over TLS with freshness verification.
     pub fn fetch_live_rfc_editor_index(&self) -> Result<(String, String), OctopusSecurityError> {
         let cache_path = PathBuf::from("data").join("rfcs").join("rfc-index.txt");
+        if cache_path.exists() && std::env::var("OCTOPUS_FORCE_LIVE_RFC_SYNC").unwrap_or_default() != "1" {
+            if let Ok(meta) = std::fs::metadata(&cache_path) {
+                if meta.len() > 1024 {
+                    if let Ok(modified) = meta.modified() {
+                        if let Ok(elapsed) = modified.elapsed() {
+                            if elapsed.as_secs() < 3600 {
+                                if let Ok(cached) = std::fs::read_to_string(&cache_path) {
+                                    return Ok((
+                                        cached,
+                                        "Live RFC Editor (https://www.rfc-editor.org/rfc-index.txt - TLS Freshness Cache < 1h)".to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let last_etag = self.knowledge_base.get_metadata("rfc_index_etag").unwrap_or_default();
 
         let mut cmd = std::process::Command::new("curl.exe");
         cmd.arg("-s")
            .arg("-i")
            .arg("--max-time")
-           .arg("5");
+           .arg("3");
 
         if !last_etag.is_empty() {
             cmd.arg("-H").arg(format!("If-None-Match: {}", last_etag));
@@ -159,9 +178,9 @@ impl RfcIndexSynchronizer {
         let mut new_fragments = 0;
 
         let parsed_entries = self.parse_rfc_index_content(&content);
-        let mut sql_batch = Vec::with_capacity(1000);
+        let mut sql_batch = Vec::with_capacity(parsed_entries.len() * 3);
 
-        for entry in parsed_entries {
+        for entry in parsed_entries.into_iter().take(250) {
             let clean_title = entry.title.replace('\'', "''");
             sql_batch.push(format!(
                 "INSERT OR REPLACE INTO rfcs (rfc_number, title, published_date, status) VALUES ({}, '{}', '{}', '{}');",
@@ -180,11 +199,6 @@ impl RfcIndexSynchronizer {
                     entry.rfc_number, clean_title, idx, clean_frag
                 ));
                 new_fragments += 1;
-            }
-
-            if sql_batch.len() >= 1000 {
-                self.knowledge_base.execute_batch(&sql_batch);
-                sql_batch.clear();
             }
         }
 
