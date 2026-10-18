@@ -1786,7 +1786,7 @@ pub async fn handle_containment_rings(state: &WebState) -> String {
                 "name": "Global Containment Ring (OCR)",
                 "scope": "Host Protection & External Egress Boundary",
                 "status": "ACTIVE_ENFORCING",
-                "egress_allowed_domains": *state.allowed_domains.read().unwrap(),
+                "egress_allowed_domains": state.allowed_domains.read().map(|g| g.clone()).unwrap_or_default(),
                 "egress_google_invariant_enforced": true,
                 "os_kernel_job_substrate": "AgentOctopus.KernelJob",
                 "os_kernel_memory_clamp_mb": 64,
@@ -1804,7 +1804,7 @@ pub async fn handle_containment_rings(state: &WebState) -> String {
             },
             "level_1_arms": {
                 "name": "Individual Arm Containment Rings (ACR)",
-                "scope": "50 Individually Enforced Per-Arm Enclaves",
+                "scope": format!("{} Individually Enforced Per-Arm Enclaves", total_arms),
                 "total_arms": total_arms,
                 "active_arms": active_count,
                 "severed_arms": severed_count,

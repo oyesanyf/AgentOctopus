@@ -179,7 +179,7 @@ impl ExternalAuthorizationEngine {
         let expected_sig = hmac_sha256(&self.master_key, signing_content.as_bytes());
         let expected_hex = hex::encode(expected_sig);
 
-        if expected_hex != token.signature_hex {
+        if !crate::security::identity::constant_time_eq_hex(&expected_hex, &token.signature_hex) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "Tampered or forged capability token signature!".to_string(),
             ));
@@ -201,7 +201,21 @@ impl ExternalAuthorizationEngine {
             )));
         }
 
-        // 5. Resource URI scope prefix check
+        // 5. Resource URI scope prefix & traversal check
+        let lower_uri = resource_uri.to_ascii_lowercase();
+        if resource_uri.contains("..")
+            || lower_uri.contains("%2e")
+            || lower_uri.contains("%2f")
+            || lower_uri.contains("%5c")
+            || lower_uri.contains("%00")
+            || resource_uri.contains('\0')
+        {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "Resource URI traversal sequence rejected in '{}'",
+                resource_uri
+            )));
+        }
+
         if !resource_uri.starts_with(&token.resource_uri_prefix) && token.resource_uri_prefix != "*" {
             return Err(OctopusSecurityError::CapabilityDenied(format!(
                 "Resource scope violation: Target resource '{}' is outside token authorized prefix '{}'",

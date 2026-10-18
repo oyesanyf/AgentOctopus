@@ -232,7 +232,7 @@ impl OctopusSentinelRing {
         let expected_hmac = compute_sentinel_hmac(&self.secret_key, payload.as_bytes());
         let expected_hex = hex::encode(expected_hmac);
 
-        if heartbeat.signature_hex != expected_hex {
+        if !crate::security::constant_time_eq_hex(&heartbeat.signature_hex, &expected_hex) {
             let _ = self
                 .log_audit_event(
                     None,

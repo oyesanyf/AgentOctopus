@@ -246,13 +246,13 @@ impl ForensicAuditLog {
                 record.prev_hash
             );
             let computed_hash = hex::encode(Sha256::digest(hash_input.as_bytes()));
-            if record.record_hash != computed_hash {
+            if !crate::security::constant_time_eq_hex(&record.record_hash, &computed_hash) {
                 return false;
             }
 
             // Verify signature
             let expected_hmac = compute_hmac(&self.secret_key, computed_hash.as_bytes());
-            if record.hmac_signature != hex::encode(expected_hmac) {
+            if !crate::security::constant_time_eq_hex(&record.hmac_signature, &hex::encode(expected_hmac)) {
                 return false;
             }
 

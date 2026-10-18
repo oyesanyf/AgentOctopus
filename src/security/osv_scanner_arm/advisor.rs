@@ -75,12 +75,29 @@ impl OsvDatabaseMatcher {
                                 severity = OsvSeverity::Critical;
                             }
 
+                            let mut fixed_version = None;
+                            if let Some(affected_arr) = v.get("affected").and_then(|a| a.as_array()) {
+                                for aff in affected_arr {
+                                    if let Some(ranges) = aff.get("ranges").and_then(|r| r.as_array()) {
+                                        for rng in ranges {
+                                            if let Some(events) = rng.get("events").and_then(|e| e.as_array()) {
+                                                for ev in events {
+                                                    if let Some(f) = ev.get("fixed").and_then(|fx| fx.as_str()) {
+                                                        fixed_version = Some(f.to_string());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             advisories.push(OsvAdvisory {
                                 advisory_id: adv_id.clone(),
                                 package_name: dep.name.clone(),
                                 ecosystem: dep.ecosystem.clone(),
                                 affected_version: dep.version.clone(),
-                                fixed_version: None,
+                                fixed_version,
                                 severity,
                                 summary,
                                 details,

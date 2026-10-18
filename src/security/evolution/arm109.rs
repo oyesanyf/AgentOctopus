@@ -202,7 +202,7 @@ impl EvolutionaryOptimizerArm {
 
         let synthesized_code = if upper_id.contains("KERNEL-CEDAR") || upper_ctx.contains("KERNELSUBSTRATE") {
             format!(
-                r##"# OpenEvolve Arm 109 Auto-Synthesized Remediation Patch for {failure_id}
+                r##"# OpenEvolve Arm 109 Auto-Synthesized Remediation Patch for {fn_suffix}
 def remediate_{fn_suffix}(principal, action, resource, context):
     """ Enforces Cedar Rule #6: Kernel Sentinel Arm authorized for KernelEnforce on KernelSubstrate. """
     if principal == "kernel_sentinel_arm" and action in ("kernel_enforce", "KernelEnforce") and resource == "KernelSubstrate":
@@ -216,7 +216,7 @@ def remediate_{fn_suffix}(principal, action, resource, context):
             )
         } else if upper_id.contains("EGRESS") || upper_ctx.contains("LATENCY_FAIL") || upper_ctx.contains("FAIL_TIMEOUT") {
             format!(
-                r##"# OpenEvolve Arm 109 Auto-Synthesized Egress & Latency Guard for {failure_id}
+                r##"# OpenEvolve Arm 109 Auto-Synthesized Egress & Latency Guard for {fn_suffix}
 def remediate_{fn_suffix}(principal, action, resource, context):
     """ Fast-path deterministic SSRF, DNS Rebinding, and URL Fragment Smuggling Guard (<1ms). """
     dom = str(context.get("destination_domain", "")).strip().lower()
@@ -230,7 +230,7 @@ def remediate_{fn_suffix}(principal, action, resource, context):
             )
         } else if upper_id.contains("CEDAR") || upper_ctx.contains("DOGWOOD") {
             format!(
-                r##"# OpenEvolve Arm 109 Auto-Synthesized Cedar/Dogwood Policy Guard for {failure_id}
+                r##"# OpenEvolve Arm 109 Auto-Synthesized Cedar/Dogwood Policy Guard for {fn_suffix}
 def remediate_{fn_suffix}(principal, action, resource, context):
     """ Deterministic numerical equivalence & temporal prerequisite verifier. """
     amount = context.get("amount_cents", 0)
@@ -242,12 +242,12 @@ def remediate_{fn_suffix}(principal, action, resource, context):
             )
         } else {
             format!(
-                r##"# OpenEvolve Arm 109 Auto-Synthesized Deterministic Guard for {failure_id}
+                r##"# OpenEvolve Arm 109 Auto-Synthesized Deterministic Guard for {fn_suffix}
 def remediate_{fn_suffix}(request_payload):
     """ Synthesized anomaly & regression guard generated from failure trace. """
     if not isinstance(request_payload, dict):
         return {{"status": "BLOCKED_INVALID_SCHEMA", "remediated_by": "OpenEvolve_Arm109"}}
-    return {{"status": "VERIFIED_SAFE", "failure_id": "{failure_id}", "remediated_by": "OpenEvolve_Arm109"}}
+    return {{"status": "VERIFIED_SAFE", "failure_id": "{fn_suffix}", "remediated_by": "OpenEvolve_Arm109"}}
 "##
             )
         };
@@ -396,19 +396,36 @@ def remediate_{fn_suffix}(request_payload):
     }
 
     pub async fn rollback(&self, target_module: &str) -> Result<String, OctopusSecurityError> {
-        let target_rel_path = if target_module.contains('/') {
-            target_module.to_string()
-        } else if target_module == "permutator" {
-            "vendor/rfchunt/permutator.py".to_string()
-        } else if target_module == "anomaly_detector" {
-            "vendor/rfchunt/anomaly_detector.py".to_string()
-        } else if target_module == "auto_remediation" || target_module == "enclave_fallback_patch" {
-            "data/evolution_staging/auto_remediation_patches.py".to_string()
-        } else {
-            "vendor/rfchunt/engine/abnf_engine.py".to_string()
+        if !SecurityInvariantGuard::is_module_whitelisted(target_module) {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "FAIL-CLOSED: Target module '{}' is outside whitelisted evolutionary scope.",
+                target_module
+            )));
+        }
+
+        let normalized = target_module.trim().replace('\\', "/");
+        let target_rel_path = match normalized.as_str() {
+            "permutator" | "vendor/rfchunt/permutator.py" => "vendor/rfchunt/permutator.py",
+            "anomaly_detector" | "vendor/rfchunt/anomaly_detector.py" => {
+                "vendor/rfchunt/anomaly_detector.py"
+            }
+            "auto_remediation"
+            | "enclave_fallback_patch"
+            | "data/evolution_staging/auto_remediation_patches.py" => {
+                "data/evolution_staging/auto_remediation_patches.py"
+            }
+            "abnf_engine" | "vendor/rfchunt/engine/abnf_engine.py" => {
+                "vendor/rfchunt/engine/abnf_engine.py"
+            }
+            _ => {
+                return Err(OctopusSecurityError::CapabilityDenied(format!(
+                    "FAIL-CLOSED: Unrecognized rollback module '{}'",
+                    target_module
+                )))
+            }
         };
 
-        let target_full_path = self.workspace_root.join(&target_rel_path);
+        let target_full_path = self.workspace_root.join(target_rel_path);
         let backup_path = self
             .workspace_root
             .join(format!("{}.openevolve.bak", target_rel_path));

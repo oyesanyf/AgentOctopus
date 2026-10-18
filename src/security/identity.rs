@@ -4,6 +4,35 @@ use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+/// Constant-time byte slice equality comparison (`CWE-208` mitigation).
+/// Prevents timing side-channel attacks on HMAC tags and cryptographic digests.
+#[inline]
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= std::hint::black_box(x ^ y);
+    }
+    std::hint::black_box(diff) == 0
+}
+
+/// Constant-time case-insensitive hex string equality comparison (`CWE-208` mitigation).
+#[inline]
+pub fn constant_time_eq_hex(a: &str, b: &str) -> bool {
+    let a_bytes = a.trim().as_bytes();
+    let b_bytes = b.trim().as_bytes();
+    if a_bytes.len() != b_bytes.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (&x, &y) in a_bytes.iter().zip(b_bytes.iter()) {
+        diff |= std::hint::black_box(x.to_ascii_lowercase() ^ y.to_ascii_lowercase());
+    }
+    std::hint::black_box(diff) == 0
+}
+
 /// Standard HMAC-SHA256 implementation utilizing the sha2 primitive.
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     let mut k = [0u8; 64];
@@ -115,7 +144,7 @@ impl AgentIdentity {
         let expected_sig = hmac_sha256(&self.secret_key, signature_payload.as_bytes());
         let expected_hex = hex::encode(expected_sig);
 
-        if expected_hex != msg.signature_hex {
+        if !constant_time_eq_hex(&expected_hex, &msg.signature_hex) {
             return Err(OctopusSecurityError::IdentitySpoofingDetected(format!(
                 "Cryptographic signature mismatch for agent '{}': forged message rejected!",
                 self.agent_id

@@ -45,7 +45,7 @@ pub use governor::{
     GovernorError, GovernorStage, IncidentRecord, KernelEventKind, OperationalMetricsSummary,
     OutOfBandCircuitBreaker, SecurityGovernorState, TelemetrySample, WeightMatrix,
 };
-pub use identity::{hmac_sha256, AgentIdentity, SignedAgentMessage};
+pub use identity::{constant_time_eq, constant_time_eq_hex, hmac_sha256, AgentIdentity, SignedAgentMessage};
 pub use isolation::SandboxConfinementPolicy;
 pub use math_validator::{
     MonteCarloSimulationResult, ResilienceBreachEvent, SisypheanValidationReport,

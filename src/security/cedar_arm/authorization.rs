@@ -402,12 +402,12 @@ impl CedarAuthorizationGateway {
             receipt.expires_at_secs
         );
         let expected_sig = hmac_sha256(&self.secret_seed, content.as_bytes());
-        if hex::encode(expected_sig) != receipt.signature_hex {
+        if !crate::security::constant_time_eq_hex(&hex::encode(expected_sig), &receipt.signature_hex) {
             let in_grace_period = if let Some(prev) = &self.previous_epoch {
                 let elapsed = now.saturating_sub(self.active_epoch.activated_at_secs);
                 if elapsed <= self.grace_period_secs {
                     let prev_sig = hmac_sha256(&prev.secret, content.as_bytes());
-                    hex::encode(prev_sig) == receipt.signature_hex
+                    crate::security::constant_time_eq_hex(&hex::encode(prev_sig), &receipt.signature_hex)
                 } else {
                     false
                 }
@@ -430,7 +430,7 @@ impl CedarAuthorizationGateway {
         authorized_resource_digest: &str,
         execution_resource_digest: &str,
     ) -> Result<(), OctopusSecurityError> {
-        if authorized_resource_digest != execution_resource_digest {
+        if !crate::security::constant_time_eq_hex(authorized_resource_digest, execution_resource_digest) {
             return Err(OctopusSecurityError::MerkleTamperDetected(format!(
                 "TOCTOU violation: resource digest changed from '{}' at authorization to '{}' at execution",
                 authorized_resource_digest, execution_resource_digest

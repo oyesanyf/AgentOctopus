@@ -56,7 +56,7 @@ impl RingAttestation {
         let record = self.active_attestation.read().await;
         let payload = format!("{}:{}:{}", record.timestamp_ms, record.policy_root_hash, record.sandbox_profile_hash);
         let expected = crate::security::hmac_sha256(&self.secret_key[..], payload.as_bytes());
-        hex::encode(expected) == record.signature_hex
+        crate::security::constant_time_eq_hex(&hex::encode(expected), &record.signature_hex)
     }
 
     pub async fn update_policies(&self, policy_spec: &str, sandbox_spec: &str) {

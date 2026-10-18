@@ -70,7 +70,13 @@ impl HarnessTreeValidator {
             return Self::is_valid_slug(parts[1]);
         }
         if parts.len() == 4 && parts[0] == surface.skill_dir && parts[2] == "scripts" {
-            return Self::is_valid_slug(parts[1]) && !parts[3].is_empty();
+            let fname = parts[3];
+            return Self::is_valid_slug(parts[1])
+                && !fname.is_empty()
+                && !fname.starts_with('.')
+                && fname
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.');
         }
         // c5: sub_agents/<name>/AGENT.md
         if parts.len() == 3 && parts[0] == "sub_agents" && parts[2] == "AGENT.md" {

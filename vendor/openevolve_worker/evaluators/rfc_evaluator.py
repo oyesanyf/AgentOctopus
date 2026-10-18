@@ -24,12 +24,50 @@ class SecurityInvariantViolation(Exception):
 
 FORBIDDEN_CALLS = {
     "system", "popen", "spawn", "fork", "exec", "eval", "__import__",
-    "compile", "open", "read", "write", "remove", "unlink", "rmdir"
+    "compile", "open", "read", "write", "remove", "unlink", "rmdir",
+    "getattr", "setattr", "delattr", "globals", "locals", "vars", "breakpoint", "input"
 }
 
 FORBIDDEN_MODULES = {
     "subprocess", "shutil", "ctypes", "pty", "commands",
-    "winreg", "_winapi", "multiprocessing"
+    "winreg", "_winapi", "multiprocessing", "socket", "builtins"
+}
+
+FORBIDDEN_DUNDERS = {
+    "__builtins__", "__subclasses__", "__globals__", "__code__",
+    "__mro__", "__bases__", "__class__", "__dict__", "__import__"
+}
+
+ALLOWED_SAFE_IMPORTS = {
+    "re", "math", "typing", "dataclasses", "collections",
+    "json", "hashlib", "enum", "itertools", "functools", "string"
+}
+
+
+def _safe_import(name: str, globals_dict=None, locals_dict=None, fromlist=(), level=0):
+    root_mod = name.split(".")[0]
+    if root_mod not in ALLOWED_SAFE_IMPORTS:
+        raise SecurityInvariantViolation(f"Import of non-whitelisted module '{name}' blocked by sandbox")
+    return __import__(name, globals_dict, locals_dict, fromlist, level)
+
+
+SAFE_BUILTINS = {
+    "abs": abs, "all": all, "any": any, "ascii": ascii, "bin": bin, "bool": bool,
+    "bytearray": bytearray, "bytes": bytes, "callable": callable, "chr": chr,
+    "classmethod": classmethod, "complex": complex, "dict": dict, "divmod": divmod,
+    "enumerate": enumerate, "filter": filter, "float": float, "format": format,
+    "frozenset": frozenset, "hasattr": hasattr, "hash": hash, "hex": hex,
+    "int": int, "isinstance": isinstance, "issubclass": issubclass, "iter": iter,
+    "len": len, "list": list, "map": map, "max": max, "min": min, "next": next,
+    "object": object, "oct": oct, "ord": ord, "pow": pow, "print": print,
+    "property": property, "range": range, "repr": repr, "reversed": reversed,
+    "round": round, "set": set, "slice": slice, "sorted": sorted,
+    "staticmethod": staticmethod, "str": str, "sum": sum, "super": super,
+    "tuple": tuple, "type": type, "zip": zip,
+    "Exception": Exception, "ValueError": ValueError, "TypeError": TypeError,
+    "KeyError": KeyError, "IndexError": IndexError, "RuntimeError": RuntimeError,
+    "__build_class__": __build_class__, "__name__": "__candidate__",
+    "__import__": _safe_import,
 }
 
 
@@ -37,7 +75,7 @@ def audit_code_security_invariants(source_code: str) -> Tuple[bool, List[str]]:
     """
     Performs static AST analysis on candidate code before execution.
     Verifies that no unsafe OS primitives, filesystem escapements,
-    or environment mutations are introduced.
+    dunder sandbox escapes, or environment mutations are introduced.
     """
     violations = []
     try:
@@ -58,22 +96,28 @@ def audit_code_security_invariants(source_code: str) -> Tuple[bool, List[str]]:
                 if mod_root in FORBIDDEN_MODULES:
                     violations.append(f"Forbidden from-import: {node.module}")
 
-        # 2. Reject forbidden function calls and eval/exec
+        # 2. Reject forbidden function calls and eval/exec/open/getattr
         elif isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name):
-                if node.func.id in {"eval", "exec", "__import__", "compile"}:
+                if node.func.id in FORBIDDEN_CALLS:
                     violations.append(f"Forbidden built-in call: {node.func.id}")
             elif isinstance(node.func, ast.Attribute):
-                if node.func.attr in FORBIDDEN_CALLS and not isinstance(node.func.value, ast.Name):
-                    # Check module context
+                if node.func.attr in FORBIDDEN_DUNDERS:
+                    violations.append(f"Forbidden dunder call: {node.func.attr}")
+                elif node.func.attr in FORBIDDEN_CALLS and not isinstance(node.func.value, ast.Name):
                     violations.append(f"Forbidden attribute call: {node.func.attr}")
                 elif isinstance(node.func.value, ast.Name) and node.func.value.id == "os" and node.func.attr in FORBIDDEN_CALLS:
                     violations.append(f"Forbidden os call: os.{node.func.attr}")
 
-        # 3. Reject os.environ tampering
+        # 3. Reject os.environ tampering and dunder sandbox escapes
         elif isinstance(node, ast.Attribute):
-            if isinstance(node.value, ast.Name) and node.value.id == "os" and node.func.attr if hasattr(node, 'func') else node.attr == "environ":
+            if node.attr in FORBIDDEN_DUNDERS:
+                violations.append(f"Forbidden dunder attribute access: {node.attr}")
+            elif node.attr == "environ" or (isinstance(node.value, ast.Name) and node.value.id == "os" and node.attr == "environ"):
                 violations.append("Forbidden access/mutation of os.environ")
+        elif isinstance(node, ast.Name):
+            if node.id in FORBIDDEN_DUNDERS:
+                violations.append(f"Forbidden dunder identifier: {node.id}")
 
     return (len(violations) == 0), violations
 
@@ -113,13 +157,13 @@ def evaluate_candidate_code(source_code: str, target_module_name: str = "permuta
             "error": f"INVARIANT_VIOLATION_VETO: {'; '.join(violations)}"
         }
 
-    # Step 2: Dynamically load candidate in an isolated namespace
+    # Step 2: Dynamically load candidate in an isolated namespace with restricted builtins
     workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     rfchunt_dir = os.path.join(workspace_root, "vendor", "rfchunt")
     if rfchunt_dir not in sys.path:
         sys.path.insert(0, rfchunt_dir)
 
-    namespace: Dict[str, Any] = {}
+    namespace: Dict[str, Any] = {"__builtins__": dict(SAFE_BUILTINS)}
     start_time = time.perf_counter()
     try:
         compiled = compile(source_code, f"<candidate_{target_module_name}>", "exec")

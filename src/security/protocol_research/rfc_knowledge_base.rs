@@ -128,11 +128,24 @@ impl RfcKnowledgeBase {
         (0, 0, 0, 0)
     }
 
+    /// Sanitizes an arbitrary string before interpolation into a SQLite single-quoted string literal (`CWE-89` mitigation).
+    #[inline]
+    fn sanitize_sql_literal(input: &str) -> String {
+        input
+            .chars()
+            .filter(|&c| c != '\0')
+            .collect::<String>()
+            .replace('\'', "''")
+    }
+
     /// Queries RFC fragments matching a specific protocol token or header.
     pub fn search_fragments(&self, keyword: &str, limit: usize) -> Vec<RfcChunkDto> {
-        let sanitized = keyword.replace('\'', "''");
+        let sanitized = Self::sanitize_sql_literal(keyword)
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
         let query = format!(
-            "SELECT id, rfc_number, title, chunk_index, content, is_normative FROM fragments WHERE content LIKE '%{}%' LIMIT {};",
+            "SELECT id, rfc_number, title, chunk_index, content, is_normative FROM fragments WHERE content LIKE '%{}%' ESCAPE '\\' LIMIT {};",
             sanitized, limit
         );
 
@@ -209,15 +222,19 @@ impl RfcKnowledgeBase {
         details: &str,
         baseline_subtracted: bool,
     ) {
-        let clean_details = details.replace('\'', "''");
+        let clean_finding_id = Self::sanitize_sql_literal(finding_id);
+        let clean_probe_id = Self::sanitize_sql_literal(probe_id);
+        let clean_target_host = Self::sanitize_sql_literal(target_host);
+        let clean_status = Self::sanitize_sql_literal(finding_status);
+        let clean_details = Self::sanitize_sql_literal(details);
         let query = format!(
             "INSERT OR REPLACE INTO evaluations (id, probe_id, target_host, target_port, is_anomalous, finding_status, details, baseline_subtracted, created_at) VALUES ('{}', '{}', '{}', {}, {}, '{}', '{}', {}, datetime('now'));",
-            finding_id,
-            probe_id,
-            target_host,
+            clean_finding_id,
+            clean_probe_id,
+            clean_target_host,
             target_port,
             if is_anomalous { 1 } else { 0 },
-            finding_status,
+            clean_status,
             clean_details,
             if baseline_subtracted { 1 } else { 0 }
         );
@@ -237,12 +254,15 @@ impl RfcKnowledgeBase {
         parser_consensus: &str,
         requires_rule_promotion: bool,
     ) {
-        let clean_consensus = parser_consensus.replace('\'', "''");
+        let clean_validation_id = Self::sanitize_sql_literal(validation_id);
+        let clean_evaluation_id = Self::sanitize_sql_literal(evaluation_id);
+        let clean_tier = Self::sanitize_sql_literal(divergence_tier);
+        let clean_consensus = Self::sanitize_sql_literal(parser_consensus);
         let query = format!(
             "INSERT OR REPLACE INTO arm106_validations (id, evaluation_id, divergence_tier, parser_consensus, requires_rule_promotion, verified_at) VALUES ('{}', '{}', '{}', '{}', {}, datetime('now'));",
-            validation_id,
-            evaluation_id,
-            divergence_tier,
+            clean_validation_id,
+            clean_evaluation_id,
+            clean_tier,
             clean_consensus,
             if requires_rule_promotion { 1 } else { 0 }
         );
@@ -255,10 +275,12 @@ impl RfcKnowledgeBase {
 
     /// Inserts or updates an RFC metadata record in the database.
     pub fn insert_or_update_rfc(&self, rfc_number: u32, title: &str, published_date: &str, status: &str) {
-        let clean_title = title.replace('\'', "''");
+        let clean_title = Self::sanitize_sql_literal(title);
+        let clean_date = Self::sanitize_sql_literal(published_date);
+        let clean_status = Self::sanitize_sql_literal(status);
         let query = format!(
             "INSERT OR REPLACE INTO rfcs (rfc_number, title, published_date, status) VALUES ({}, '{}', '{}', '{}');",
-            rfc_number, clean_title, published_date, status
+            rfc_number, clean_title, clean_date, clean_status
         );
         let _ = Command::new("sqlite3")
             .arg(&self.db_path)
@@ -268,8 +290,8 @@ impl RfcKnowledgeBase {
 
     /// Inserts a chunk/normative fragment for an RFC with deduplication.
     pub fn insert_fragment(&self, rfc_number: u32, title: &str, chunk_index: usize, content: &str, is_normative: bool) {
-        let clean_title = title.replace('\'', "''");
-        let clean_content = content.replace('\'', "''");
+        let clean_title = Self::sanitize_sql_literal(title);
+        let clean_content = Self::sanitize_sql_literal(content);
         let query = format!(
             "INSERT OR REPLACE INTO fragments (rfc_number, title, chunk_index, content, is_normative) VALUES ({}, '{}', {}, '{}', {});",
             rfc_number, clean_title, chunk_index, clean_content, if is_normative { 1 } else { 0 }

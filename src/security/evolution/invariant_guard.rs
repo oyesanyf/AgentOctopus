@@ -7,6 +7,7 @@ impl SecurityInvariantGuard {
     const FORBIDDEN_CALLS: &'static [&'static str] = &[
         "os.system", "system(", "popen(", "os.popen", "spawn(", "os.spawn", "fork(", "os.fork",
         "exec(", "eval(", "__import__(", "compile(", "ctypes", "winreg", "_winapi", "pty.", "commands.",
+        "__builtins__", "__subclasses__", "__globals__", "__code__", "__mro__", "__bases__", "breakpoint(",
     ];
 
     const FORBIDDEN_MODULES: &'static [&'static str] = &[
@@ -73,17 +74,32 @@ impl SecurityInvariantGuard {
     }
 
     /// Verifies if a given module path is within the strictly whitelisted research scope.
+    /// Enforces exact match (`==`) and rejects any path traversal (`..`, `:`, `%2e`) (`CWE-22` mitigation).
     pub fn is_module_whitelisted(module_path: &str) -> bool {
-        let normalized = module_path.replace('\\', "/");
-        normalized.starts_with("vendor/rfchunt/permutator.py")
-            || normalized.starts_with("vendor/rfchunt/anomaly_detector.py")
-            || normalized.starts_with("vendor/rfchunt/engine/abnf_engine.py")
-            || normalized.starts_with("data/evolution_staging/auto_remediation_patches.py")
-            || normalized == "permutator"
-            || normalized == "anomaly_detector"
-            || normalized == "abnf_engine"
-            || normalized == "auto_remediation"
-            || normalized == "enclave_fallback_patch"
+        let trimmed = module_path.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        if trimmed.contains("..")
+            || trimmed.contains(':')
+            || trimmed.contains('\0')
+            || lower.contains("%2e")
+            || lower.contains("%2f")
+            || lower.contains("%5c")
+        {
+            return false;
+        }
+        let normalized = trimmed.replace('\\', "/");
+        matches!(
+            normalized.as_str(),
+            "vendor/rfchunt/permutator.py"
+                | "vendor/rfchunt/anomaly_detector.py"
+                | "vendor/rfchunt/engine/abnf_engine.py"
+                | "data/evolution_staging/auto_remediation_patches.py"
+                | "permutator"
+                | "anomaly_detector"
+                | "abnf_engine"
+                | "auto_remediation"
+                | "enclave_fallback_patch"
+        )
     }
 }
 

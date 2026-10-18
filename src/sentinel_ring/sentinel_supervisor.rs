@@ -232,7 +232,7 @@ impl SentinelSupervisor {
         }
 
         // 3. Digest Validation (Policy and Containment topology)
-        if hb.policy_digest != self.expected_policy_digest {
+        if !crate::security::constant_time_eq(&hb.policy_digest, &self.expected_policy_digest) {
             self.trigger_lockdown(
                 "Supervisor Policy Digest Tampering",
                 "Heartbeat policy digest does not match authoritative Sentinel manifest",
@@ -243,7 +243,7 @@ impl SentinelSupervisor {
             ));
         }
 
-        if hb.containment_digest != self.expected_containment_digest {
+        if !crate::security::constant_time_eq(&hb.containment_digest, &self.expected_containment_digest) {
             self.trigger_lockdown(
                 "Supervisor Containment Digest Tampering",
                 "Heartbeat containment digest does not match authoritative Sentinel manifest",
@@ -254,7 +254,7 @@ impl SentinelSupervisor {
             ));
         }
 
-        // 4. Cryptographic Authentication Tag (HMAC-SHA256)
+        // 4. Cryptographic Authentication Tag (RFC 2104 HMAC-SHA256)
         let expected_tag = compute_heartbeat_tag(
             &self.secret_key,
             &hb.supervisor_id,
@@ -265,7 +265,7 @@ impl SentinelSupervisor {
             &hb.containment_digest,
         );
 
-        if hb.authentication_tag != expected_tag {
+        if !crate::security::constant_time_eq(&hb.authentication_tag, &expected_tag) {
             self.trigger_lockdown(
                 "Supervisor Authentication Tag Invalid",
                 "Heartbeat HMAC tag verification failed; possible supervisor forgery",
@@ -432,7 +432,9 @@ impl SentinelSupervisor {
             .as_secs();
 
         let last_ago = if last_time == 0 { 0 } else { now.saturating_sub(last_time) };
-        let supervisor_ok = last_time > 0 && last_ago <= self.heartbeat_timeout_secs;
+        let supervisor_ok = !is_locked
+            && st == SentinelSystemState::Healthy
+            && (last_time == 0 || last_ago <= self.heartbeat_timeout_secs);
 
         let workers = self.process_monitor.get_all_workers().await.len();
         let audits = self.forensic_audit.get_records().await.len();
@@ -501,6 +503,7 @@ pub fn create_authenticated_heartbeat(
     }
 }
 
+/// Computes an RFC 2104 HMAC-SHA256 authentication tag over the heartbeat fields (`CWE-328` mitigation).
 fn compute_heartbeat_tag(
     key: &[u8; 32],
     supervisor_id: &str,
@@ -510,17 +513,13 @@ fn compute_heartbeat_tag(
     policy_digest: &[u8; 32],
     containment_digest: &[u8; 32],
 ) -> [u8; 32] {
-    let mut mac = Sha256::new();
-    mac.update(key);
-    mac.update(supervisor_id.as_bytes());
-    mac.update(&generation.to_le_bytes());
-    mac.update(&sequence_number.to_le_bytes());
-    mac.update(&monotonic_uptime_ms.to_le_bytes());
-    mac.update(policy_digest);
-    mac.update(containment_digest);
-    let hash = mac.finalize();
-
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&hash);
-    out
+    let mut payload = Vec::with_capacity(supervisor_id.len() + 24 + 64);
+    payload.extend_from_slice(supervisor_id.as_bytes());
+    payload.push(b':');
+    payload.extend_from_slice(&generation.to_le_bytes());
+    payload.extend_from_slice(&sequence_number.to_le_bytes());
+    payload.extend_from_slice(&monotonic_uptime_ms.to_le_bytes());
+    payload.extend_from_slice(policy_digest);
+    payload.extend_from_slice(containment_digest);
+    crate::security::hmac_sha256(key, &payload)
 }

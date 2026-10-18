@@ -208,7 +208,7 @@ impl NeuralMesh {
         );
         let expected_sig = hex::encode(compute_hmac_sha256(&state.hmac_key, &expected_payload));
 
-        if message.signature != expected_sig {
+        if !crate::security::constant_time_eq_hex(&message.signature, &expected_sig) {
             return Err(MeshError::AuthenticationFailed);
         }
 

@@ -750,7 +750,7 @@ impl ArmContainmentRing {
         let expected_sig = compute_ring_hmac(&epoch_key, signing_content.as_bytes());
         let expected_hex = hex::encode(expected_sig);
 
-        if token.signature_hex != expected_hex {
+        if !crate::security::constant_time_eq_hex(&token.signature_hex, &expected_hex) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "Invalid capability token signature for active epoch".to_string(),
             ));
@@ -832,7 +832,7 @@ impl ArmContainmentRing {
             msg.payload
         );
         let expected_sig = hex::encode(compute_ring_hmac(&sender_epoch_key, expected_data.as_bytes()));
-        if msg.signature_hex != expected_sig {
+        if !crate::security::constant_time_eq_hex(&msg.signature_hex, &expected_sig) {
             return Err(OctopusSecurityError::IdentitySpoofingDetected(format!(
                 "Cryptographic mesh signature mismatch from sender arm {} ({:?}, gen {}): payload tampering or role spoofing detected",
                 msg.sender_arm_id, msg.sender_role, msg.sender_generation

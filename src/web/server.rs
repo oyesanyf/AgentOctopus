@@ -2164,8 +2164,36 @@ async fn handle_sse_test_stream(
         ).await;
     } else {
         let cargo_target = match suite_name {
-            "continuous_rl" => "continuous_security_rl_tests",
-            other => other,
+            "continuous_rl" | "continuous_security_rl_tests" => "continuous_security_rl_tests",
+            "cedar_policy_tests" => "cedar_policy_tests",
+            "breakout_defense_tests" => "breakout_defense_tests",
+            "breakout_scripts" => "breakout_scripts",
+            "containment_tests" => "containment_tests",
+            "arm_containment_ring_tests" => "arm_containment_ring_tests",
+            "google_anomaly_detection_tests" => "google_anomaly_detection_tests",
+            "governor_tests" => "governor_tests",
+            "guard_arms_network_tests" => "guard_arms_network_tests",
+            "kernel_sentinel_tests" => "kernel_sentinel_tests",
+            "ledger_transparency_tests" => "ledger_transparency_tests",
+            "math_validator_tests" => "math_validator_tests",
+            "neural_mesh_integration_tests" => "neural_mesh_integration_tests",
+            "quantum_adversarial_tests" => "quantum_adversarial_tests",
+            "rasp_tests" => "rasp_tests",
+            "research_and_atlas_tests" => "research_and_atlas_tests",
+            "sentinel_ring_tests" => "sentinel_ring_tests",
+            "strict_http_terminator_tests" => "strict_http_terminator_tests",
+            _ => {
+                let err_event = format!(
+                    "data: {}\n\n",
+                    serde_json::json!({
+                        "type": "error",
+                        "line": format!("[SECURITY-GATE] Rejected unrecognized or disallowed test suite target '{}'.", suite_name)
+                    })
+                );
+                let _ = stream.write_all(err_event.as_bytes()).await;
+                let _ = stream.flush().await;
+                return Ok(());
+            }
         };
         let mut cargo_cmd = Command::new("cargo");
         cargo_cmd.current_dir(&root);
