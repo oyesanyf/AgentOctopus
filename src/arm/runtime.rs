@@ -478,6 +478,7 @@ impl ArmRuntime {
             ArmRole::PostQuantumAttestation => ("pqc_attestation", Operation::MeshMessage),
             ArmRole::EvolutionaryOptimizer => ("evolutionary_optimizer", Operation::MeshMessage),
             ArmRole::DreamRsiOptimizer => ("dream_rsi_optimizer", Operation::MeshMessage),
+            ArmRole::RecursiveHarnessOptimizer => ("harness2_optimizer", Operation::MeshMessage),
         };
 
         let amount_cents = self.extract_amount_cents(raw_payload);

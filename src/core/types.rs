@@ -77,6 +77,7 @@ pub enum ArmRole {
     PostQuantumAttestation,
     EvolutionaryOptimizer,
     DreamRsiOptimizer,
+    RecursiveHarnessOptimizer,
 }
 
 /// High-level strategic intent sent downward from Central Brain to Arm.

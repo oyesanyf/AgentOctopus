@@ -19,8 +19,8 @@ const TEST_MASTER_SEED: &[u8] = b"OCTOPUS_TEST_CONTAINMENT_SEED_2026";
 #[tokio::test]
 async fn test_fleet_initialization_of_50_distinct_arm_rings() {
     let registry = ArmRingRegistry::new(50, TEST_MASTER_SEED);
-    // 50 worker arms + 11 dedicated security arms (100 to 110) = 61
-    assert_eq!(registry.len().await, 61);
+    // 50 worker arms + 12 dedicated security arms (100 to 111) = 62
+    assert_eq!(registry.len().await, 62);
 
     // Verify all 50 arms have distinct identities and proper role distribution
     for arm_id in 0..50 {
@@ -306,9 +306,9 @@ async fn test_swarm_manager_integrates_50_individual_arm_rings() {
     let swarm = SwarmManager::new(50, tx);
     assert_eq!(swarm.size(), 50);
 
-    // Verify SwarmManager exposes containment ring with all arm rings (50 + 11 = 61)
+    // Verify SwarmManager exposes containment ring with all arm rings (50 + 12 = 62)
     let ocr = swarm.containment_ring();
-    assert_eq!(ocr.arm_registry.len().await, 61);
+    assert_eq!(ocr.arm_registry.len().await, 62);
 
     // Dispatch a legitimate invoice extraction task
     let tasks = vec![StrategicDirective {
@@ -397,13 +397,14 @@ async fn test_mesh_guard_pascal_case_and_security_arms_107_to_110_enforcement() 
         "PascalCase UntrustedDocIngest -> AccountingLedgerWrite must be blocked by MeshGuard"
     );
 
-    // Verify Arms 107-110 require generation epoch in ContainmentRing::evaluate_operation
+    // Verify Arms 107-111 require generation epoch in ContainmentRing::evaluate_operation
     let ring = ContainmentRing::default();
     for (arm_id, role, tool, target) in [
         (107, ArmRole::AutonomousProtocolResearch, "protocol_research", "protocol://scan"),
         (108, ArmRole::PostQuantumAttestation, "pqc_attestation", "pqc://attest"),
         (109, ArmRole::EvolutionaryOptimizer, "evolutionary_optimizer", "evolution://run"),
         (110, ArmRole::DreamRsiOptimizer, "dream_rsi_optimizer", "dream_rsi://rollout"),
+        (111, ArmRole::RecursiveHarnessOptimizer, "harness2_optimizer", "harness2://run"),
     ] {
         let req_missing_epoch = RingOperationRequest {
             agent_id: format!("arm-{:?}-{}", role, arm_id),

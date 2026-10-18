@@ -274,6 +274,10 @@ Agent Octopus includes the industry's first purpose-built, multi-stage runtime e
 | **8** | **Continuous OSV-Scanner Arm** | Automated Google OSV.dev dependency scanner auditing pinned crates and supply-chain dependencies against known CVEs. |
 | **106** | **Differential Protocol Analyzer** | Multi-parser differential analysis engine computing quantitative Divergence Vectors across disparate HTTP profiles (RFC 7230, Envoy, Go, Node, ATS) to catch zero-day request smuggling and desync. |
 | **107** | **Autonomous Protocol Research Arm** | Autonomous RFC intelligence and hypothesis generator sandboxed in dedicated Ring #107 with 64MB Job Object clamp, Cedar Policy #8 allowlisting, Dogwood temporal limits, and an isolated private SQLite database. |
+| **108** | **Post-Quantum Attestation Arm** | NIST FIPS 203 (`ML-KEM-768`) lattice key encapsulation, FIPS 204 (`ML-DSA-65`) digital signatures, and Cryptographic Bill of Materials (CBOM) Shor's/Grover's exposure auditing. |
+| **109** | **OpenEvolve Code Optimizer Arm** | Autonomous MAP-Elites evolutionary code synthesis (`openevolve`) and **Autonomous Failure-Fixing Code Synthesis** (`synthesize_and_promote_fix_for_failure`) guarded by Ring-2 `SecurityInvariantGuard` AST verification and `.bak` atomic promotion. |
+| **110** | **Open Dream-RSI Policy Optimizer Arm** | Offline model-based recursive self-improvement over historical protocol evaluation replays (`open-dream-rsi`), optimizing RFC research priorities and trial budgets in zero-socket virtual dream rollouts. |
+| **111** | **Google Research Harness² Arm** | Plug-and-play **Recursive Agent Harnessing** (`google-research/harness2`, *arXiv:2610.14224*): Task-Level Propose–Probe–Compose over 8 editable components (`c1..c8`) with exact budget identity ($R=4k$, $P=3k$) and Harnessing-Level Experience Library $\mathcal{R}$. |
 
 ---
 
@@ -572,14 +576,62 @@ The self-contained binary includes an embedded, high-performance web dashboard (
 .\start.exe
 ```
 
-### Dashboard Features:
+### Dashboard Features (15 Interactive Tabs):
 1. **🧪 Test Runner & Progression**: Execute 2,250+ adversarial vectors across 19 red-teaming frameworks (PyRIT, Strix, Garak, MITRE ATLAS).
 2. **⚡ Unified Runtime Activity**: Real-time multi-agent event bus streaming Cedar evaluations, RL active defense transitions, and OTel spans.
 3. **🛡️ Cedar Policy Sandbox**: Interactive policy query console with one-click presets (`Valid Write`, `Valid Egress`, `SSRF Probe`, `Tampered`).
 4. **📜 Cryptographic Audit Log**: Tamper-evident Merkle hash-chain viewer with cryptographic chain verification.
-5. **🧠 Continuous Security & RL Center**: 24/7 autonomous Double Q-Learning telemetry with live MTTD/MTTR counters and progressive action space ladder ($A_0 \rightarrow A_4$).
-6. **⚡ Real-Time ASP (RT-ASP)**: Live tarpit delay metrics, canary honey-token generator, and memory scratchpad taint monitors.
-7. **🔍 Continuous OSS-Fuzz & OSV Scanner**: Real-time fuzzing corpus telemetry and dependency vulnerability scanners.
+5. **🐙 Swarm & Invariants**: 50-arm swarm status and invariant monitors.
+6. **⭕ 4-Ring Concentric Defense**: Interactive 20-ring containment visualizer (`Arm 0..7` + `Arm 100..111`), autotomy sever/regenerate controls, and Sentinel simulation.
+7. **🧠 Continuous Security & RL Center**: 24/7 autonomous Double Q-Learning telemetry with live MTTD/MTTR counters and progressive action space ladder ($A_0 \rightarrow A_4$).
+8. **⚡ Real-Time ASP (RT-ASP)**: Live tarpit delay metrics, canary honey-token generator, and memory scratchpad taint monitors.
+9. **🔍 Continuous OSS-Fuzz & OSV Scanner**: Real-time fuzzing corpus telemetry and dependency vulnerability scanners.
+10. **🌐 Protocol Research (Arm 107)**: RFC knowledge base, Cedar Policy #8 + Dogwood probe evaluator, and Arm 106 cross-validation.
+11. **🔐 Post-Quantum (Arm 108)**: FIPS 203 `ML-KEM-768` & FIPS 204 `ML-DSA-65` workbench and CBOM auditor.
+12. **🧬 OpenEvolve (Arm 109)**: MAP-Elites evolutionary code optimizer, AST Security Invariant Guard, and autonomous failure-remediation synthesizer.
+13. **💭 Open Dream-RSI (Arm 110)**: Offline Bayesian world model, Monte-Carlo dream rollouts, and RFC priority recommender.
+14. **🕸️ Harness² (Arm 111)**: Google Research Recursive Agent Harnessing (`Propose–Probe–Compose`, $R=4k$ rollouts, $P=3k$ stages, 8-Surface Tree Validator, and persistent Experience Library $\mathcal{R}$).
+15. **📖 Docs & Integration Guide**: Built-in architectural reference and interactive API guide.
+
+---
+
+## 🕸️ Arm 111: Google Research Harness² — Recursive Agent Harnessing (`arXiv:2610.14224`)
+
+Agent Octopus vendors [`google-research/harness2`](https://github.com/google-research/harness2) in [`vendor/harness2/`](file:///d:/harfile/AgentOctopus/vendor/harness2) (with cross-platform Windows + Linux compatibility) and integrates it natively in Rust as **Arm 111 (`RecursiveHarnessOptimizer`, [`src/security/harness2/`](file:///d:/harfile/AgentOctopus/src/security/harness2/))** inside Ring 2 containment:
+
+1. **8 Editable Agent Harness Surfaces (`c1..c8`)**:
+   - `c1` (`systemprompt.md`): Core agent identity & workflow framing
+   - `c2` (`guardrails.md`): Safety constraints, pre-completion checklist & auto-repaired skill `autotrigger` rules
+   - `c3` (`LongTermMEMORY.md`): Persistent domain facts & operational context
+   - `c4` (`tool_descriptions/tool_guidance.md`): Tool-use sequencing & argument discipline
+   - `c5` (`sub_agents/<name>.md`): Subagent delegation specs with YAML frontmatter
+   - `c6` (`skills/<name>/SKILL.md` + `skills/<name>/scripts/*`): Domain playbooks and helper scripts
+   - `c7` (`scripts/<name>.py`): Deterministic verification & pre/post-processing scripts
+   - `c8` (`plugin/<name>.ts`): Lifecycle hooks (`before_tool`, `after_tool`, `on_stop`)
+2. **Fail-Closed `HarnessTreeValidator` (`src/security/harness2/tree_validator.rs`)**:
+   - Enforces `SurfaceSpec` character caps (`always_on_max = 24,000` chars across `c1..c4` + `c2 ≤ 8,000`, `c3 ≤ 6,000`, `c4 ≤ 8,000`).
+   - Enforces the `GRADER_VERDICT_MARKERS` leak tripwire (`pass_criteria`, `expected_output`, `grading_rubric`, `ground_truth`, `test_assertions`) so benchmark answers can never leak into refined harnesses.
+   - Audits every `c7` (`scripts/*.py`) and `c6` (`skills/*/scripts/*`) file through Ring-2 `SecurityInvariantGuard::audit_code` before any probe rollout executes.
+3. **Two-Level Recursion & Exact Budget Identity ($R=4k, P=3k$)**:
+   - **Task-Level Recursion**: Runs contrastive **Propose–Probe–Compose** in either **Parallel (`agg`)** or **Sequential (`seq`)** mode over budget $k \in [1, 8]$, strictly verifying `HarnessBudgetLedger::verify_identity()` ($R = 4k$ rollouts, $P = 3k$ improvement stages).
+   - **Harnessing-Level Recursion**: Persists adopted `c1..c8` harness trees and distilled `EXPERIENCE.md` + `INDEX.md` lessons into the per-domain Experience Library $\mathcal{R}$ (`data/harness2/library/`).
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/harness2/status` | Arm 111 telemetry, total runs, rollouts ($R=4k$), stages ($P=3k$), vetoes, and Experience Library $\mathcal{R}$ size. |
+| `POST` | `/api/harness2/run` | Executes a Parallel (`agg`) or Sequential (`seq`) Propose–Probe–Compose optimization cycle for a task and budget $k$. |
+| `GET` | `/api/harness2/library` | Lists adopted harness snapshots and `EXPERIENCE.md` lessons in the persistent Experience Library $\mathcal{R}$. |
+| `POST` | `/api/harness2/validate-tree` | Validates an 8-surface `HarnessTree` against `SurfaceSpec` caps, leak markers, and Ring-2 AST security guards. |
+
+---
+
+## 🧬 Arm 109 & Active RL: Autonomous Failure-Fixing Code Synthesis
+
+When a test vector or runtime perimeter probe registers a failure (such as `[EGRESS-DNS-015]` latency timeout or `[EGRESS-WRAP-007]` URL fragment smuggling drop), Agent Octopus closes the remediation loop automatically:
+1. **Closed-Loop RL + Egress Hardening (`AdaptiveRlDefenseEngine::auto_remediate_test_failure`)**:
+   - Diagnoses the failure signature, updates Double Q-Learning weights toward `MicroContainment` / `HardMitigation`, and hot-patches live `EgressGuard` fast-reject rules (`172.17.0.1`, `host.docker.internal`, RFC 3986 raw `#` fragment smuggling).
+2. **OpenEvolve Autonomous Patch Synthesis (`EvolutionaryOptimizerArm::synthesize_and_promote_fix_for_failure`)**:
+   - Synthesizes a targeted Python remediation function (`remediate_egress_dns_015`, `remediate_egress_wrap_007`), audits the AST via `SecurityInvariantGuard`, scores multi-objective Pareto fitness, backs up the target module (`.bak`), and atomically promotes the fix into [`vendor/rfchunt/permutator.py`](file:///d:/harfile/AgentOctopus/vendor/rfchunt/permutator.py) (`POST /api/evolution/auto-fix`).
 
 ---
 

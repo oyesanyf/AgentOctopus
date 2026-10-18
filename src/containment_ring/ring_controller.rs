@@ -236,8 +236,9 @@ impl ContainmentRing {
                 | ArmRole::PostQuantumAttestation
                 | ArmRole::EvolutionaryOptimizer
                 | ArmRole::DreamRsiOptimizer
+                | ArmRole::RecursiveHarnessOptimizer
         );
-        let is_security_arm_id = ["100", "101", "102", "103", "104", "105", "106", "107", "108", "109", "110"]
+        let is_security_arm_id = ["100", "101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "111"]
             .iter()
             .any(|&id| req.agent_id.ends_with(&format!("-{}", id)) || req.agent_id == id);
 

@@ -75,3 +75,9 @@ pub mod evolution;
 pub use evolution::{EvolutionArmStatus, EvolutionCandidate, EvolutionMetrics, EvolutionaryOptimizerArm, PromotionState, SecurityInvariantGuard};
 pub mod dream_rsi;
 pub use dream_rsi::{DreamRsiOptimizerArm, DreamRsiPolicyOptimizer, DreamRsiStatus, DreamRolloutReport, ResearchPolicy, RsiExperimentPlan, TrajectoryEvent, WorldModelTransition};
+pub mod harness2;
+pub use harness2::{
+    Harness2ArmStatus, HarnessBudgetLedger, HarnessComponentKind, HarnessExperienceEntry,
+    HarnessRunReport, HarnessStageResult, HarnessSurfaceSpec, HarnessTreeValidationReport,
+    HarnessTreeValidator, RecursiveHarnessOptimizerArm,
+};

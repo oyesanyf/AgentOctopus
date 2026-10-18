@@ -27,6 +27,8 @@ use super::api::{
     handle_dream_rsi_status, handle_dream_rsi_policy, handle_dream_rsi_train,
     handle_dream_rsi_rollout, handle_dream_rsi_recommend_priorities,
     handle_dream_rsi_feed_trajectories,
+    handle_harness2_status, handle_harness2_run, handle_harness2_library,
+    handle_harness2_validate_tree,
     WebState,
 };
 use super::static_files::INDEX_HTML;
@@ -1110,6 +1112,54 @@ async fn handle_connection(
 
         ("POST", "/api/dream-rsi/feed-trajectories") => {
             let (status_code, json_body) = match handle_dream_rsi_feed_trajectories(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/harness2/status") => {
+            let json_body = handle_harness2_status(&state).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/harness2/run") => {
+            let (status_code, json_body) = match handle_harness2_run(&state, body).await {
+                Ok(body) => ("200 OK", body),
+                Err(err) => ("400 Bad Request", err),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/harness2/library") => {
+            let json_body = handle_harness2_library(&state, "").await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/harness2/validate-tree") => {
+            let (status_code, json_body) = match handle_harness2_validate_tree(&state, body) {
                 Ok(body) => ("200 OK", body),
                 Err(err) => ("400 Bad Request", err),
             };

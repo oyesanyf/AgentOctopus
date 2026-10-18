@@ -321,6 +321,7 @@ impl CedarGate {
                 ArmRole::PostQuantumAttestation => "pqc_arm",
                 ArmRole::EvolutionaryOptimizer => "evolution_arm",
                 ArmRole::DreamRsiOptimizer => "dream_rsi_arm",
+                ArmRole::RecursiveHarnessOptimizer => "harness2_arm",
             }
         };
 

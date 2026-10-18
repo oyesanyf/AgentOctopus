@@ -90,6 +90,11 @@ impl DelegationScopeGuard {
                 tools.insert("dream_rsi_rollout");
                 tools.insert("dream_rsi_prioritize");
             }
+            ArmRole::RecursiveHarnessOptimizer => {
+                tools.insert("harness2_propose_probe_compose");
+                tools.insert("harness2_validate_tree");
+                tools.insert("harness2_experience_library");
+            }
         }
         tools
     }

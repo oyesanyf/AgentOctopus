@@ -79,6 +79,7 @@ pub struct WebState {
     pub pqc_arm: Arc<crate::security::pqc_arm::PostQuantumArm>,
     pub evolution_arm: Arc<crate::security::evolution::EvolutionaryOptimizerArm>,
     pub dream_rsi_arm: Arc<crate::security::dream_rsi::DreamRsiOptimizerArm>,
+    pub harness2_arm: Arc<crate::security::harness2::RecursiveHarnessOptimizerArm>,
 }
 
 fn load_or_init_egress_domains() -> Vec<String> {
@@ -259,6 +260,10 @@ impl Default for WebState {
             &arm_rings,
         ));
 
+        let harness2_arm = Arc::new(crate::security::harness2::RecursiveHarnessOptimizerArm::with_registry(
+            &arm_rings,
+        ));
+
         Self {
             gateway,
             audit_log,
@@ -285,6 +290,7 @@ impl Default for WebState {
             pqc_arm,
             evolution_arm,
             dream_rsi_arm,
+            harness2_arm,
         }
     }
 }
@@ -2760,6 +2766,84 @@ pub async fn handle_dream_rsi_feed_trajectories(state: &WebState, body: &str) ->
     let events = req.events.unwrap_or_default();
     let count = state.dream_rsi_arm.feed_trajectories(events).await;
     Ok(serde_json::json!({ "status": "SUCCESS", "ingested_count": count }).to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Harness2RunRequest {
+    pub domain: Option<String>,
+    pub task_id: Option<String>,
+    pub mode: Option<String>,
+    pub k: Option<usize>,
+    pub invoke_vendor_demo: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Harness2ValidateTreeRequest {
+    pub tree: Option<std::collections::BTreeMap<String, String>>,
+}
+
+pub async fn handle_harness2_status(state: &WebState) -> String {
+    let status = state.harness2_arm.get_status().await;
+    serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub async fn handle_harness2_run(state: &WebState, body: &str) -> Result<String, String> {
+    let req: Harness2RunRequest = if body.trim().is_empty() {
+        Harness2RunRequest {
+            domain: Some("accounting".to_string()),
+            task_id: Some("ledger-1".to_string()),
+            mode: Some("both".to_string()),
+            k: Some(2),
+            invoke_vendor_demo: Some(false),
+        }
+    } else {
+        serde_json::from_str(body)
+            .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid Harness² run request: {}", e)))?
+    };
+
+    let domain = req.domain.unwrap_or_else(|| "accounting".to_string());
+    let task_id = req.task_id.unwrap_or_else(|| "ledger-1".to_string());
+    let mode = req.mode.unwrap_or_else(|| "both".to_string());
+    let k = req.k.unwrap_or(2);
+    let invoke_vendor = req.invoke_vendor_demo.unwrap_or(false);
+
+    match state
+        .harness2_arm
+        .run_recursive_harnessing(&domain, &task_id, &mode, k, invoke_vendor)
+        .await
+    {
+        Ok(report) => Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => Err(json_error_payload("HARNESS2_RUN_FAILED", &format!("{}", e))),
+    }
+}
+
+pub async fn handle_harness2_library(state: &WebState, query: &str) -> String {
+    let mut domain_filter: Option<String> = None;
+    for param in query.split('&') {
+        if let Some((k, v)) = param.split_once('=') {
+            if k == "domain" && !v.trim().is_empty() {
+                domain_filter = Some(v.trim().to_string());
+            }
+        }
+    }
+    let entries = state
+        .harness2_arm
+        .list_library(domain_filter.as_deref())
+        .await;
+    serde_json::json!({
+        "status": "OK",
+        "total_entries": entries.len(),
+        "entries": entries
+    })
+    .to_string()
+}
+
+pub fn handle_harness2_validate_tree(state: &WebState, body: &str) -> Result<String, String> {
+    let req: Harness2ValidateTreeRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid validate-tree request: {}", e)))?;
+    let tree = req.tree.unwrap_or_default();
+    let report = state.harness2_arm.validate_candidate_tree(tree);
+    Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
 }
 
 #[cfg(test)]

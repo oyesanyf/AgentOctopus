@@ -195,6 +195,7 @@ impl Authorizer for CedarAuthorizer {
                 "pqc" | "PostQuantumAttestation" => crate::core::types::ArmRole::PostQuantumAttestation,
                 "evolution" | "EvolutionaryOptimizer" => crate::core::types::ArmRole::EvolutionaryOptimizer,
                 "dream_rsi" | "DreamRsiOptimizer" => crate::core::types::ArmRole::DreamRsiOptimizer,
+                "harness2" | "RecursiveHarnessOptimizer" => crate::core::types::ArmRole::RecursiveHarnessOptimizer,
                 _ => return Ok(false),
             };
 

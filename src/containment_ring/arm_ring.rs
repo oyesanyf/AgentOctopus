@@ -455,6 +455,15 @@ impl ArmContainmentRing {
                 prefixes.push("world_model://".to_string());
                 prefixes.push("policy://".to_string());
             }
+            ArmRole::RecursiveHarnessOptimizer => {
+                tools.insert("harness2_optimizer".to_string());
+                tools.insert("harness2_propose_probe_compose".to_string());
+                tools.insert("harness2_validate_tree".to_string());
+                tools.insert("harness2_experience_library".to_string());
+                prefixes.push("harness2://".to_string());
+                prefixes.push("library://".to_string());
+                prefixes.push("context://".to_string());
+            }
         }
 
         Self {
@@ -1077,6 +1086,7 @@ impl ArmRingRegistry {
             (108, ArmRole::PostQuantumAttestation),
             (109, ArmRole::EvolutionaryOptimizer),
             (110, ArmRole::DreamRsiOptimizer),
+            (111, ArmRole::RecursiveHarnessOptimizer),
         ];
         for (sec_id, sec_role) in security_arm_roles {
             let sec_ring = Arc::new(ArmContainmentRing::new(sec_id, sec_role, 1, &seed));

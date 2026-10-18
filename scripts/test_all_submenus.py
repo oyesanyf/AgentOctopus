@@ -829,6 +829,52 @@ def run_all_tests():
         results.record_fail(tab, "POST /api/dream-rsi/feed-trajectories", f"Status {status}, Body: {body[:100]}")
 
     # =========================================================================
+    # TAB 15: GOOGLE RESEARCH HARNESS² RECURSIVE AGENT HARNESSING (ARM 111)
+    # =========================================================================
+    tab = "Tab 15: Harness² Recursive Agent Harnessing (Arm 111)"
+    print(f"\n--- Checking {tab} ---")
+
+    # 15.1 Harness2 Arm Status
+    status, body, _ = http_get("/api/harness2/status")
+    h2_status = json.loads(body) if status == 200 else {}
+    if status == 200 and h2_status.get("arm_id") == 111:
+        results.record_pass(tab, "GET /api/harness2/status (Arm 111 Status & Telemetry)", f"Arm {h2_status.get('arm_id')}, Status: {h2_status.get('status')}")
+    else:
+        results.record_fail(tab, "GET /api/harness2/status", f"Status {status}, Body: {body[:100]}")
+
+    # 15.2 Validate 8-Surface Harness Tree
+    status, body, _ = http_post("/api/harness2/validate-tree", {})
+    h2_val = json.loads(body) if status == 200 else {}
+    if status == 200 and h2_val.get("valid") is True:
+        results.record_pass(tab, "POST /api/harness2/validate-tree (8-Surface Spec & Ring 2 AST Audit)", f"Surface: {h2_val.get('surface_name')}, Chars: {h2_val.get('always_on_chars')}/{h2_val.get('always_on_max')}")
+    else:
+        results.record_fail(tab, "POST /api/harness2/validate-tree", f"Status {status}, Body: {body[:100]}")
+
+    # 15.3 Execute Parallel Propose–Probe–Compose Optimization Run (k=2 -> R=8, P=6)
+    run_req = {
+        "task_id": "submenu-rfc-test-01",
+        "domain": "protocol-security",
+        "mode": "parallel",
+        "k": 2
+    }
+    status, body, _ = http_post("/api/harness2/run", run_req)
+    h2_run = json.loads(body) if status == 200 else {}
+    ledgers = h2_run.get("ledgers", [])
+    ledger0 = ledgers[0] if ledgers else {}
+    if status == 200 and ledger0.get("r_rollouts") == 8 and ledger0.get("p_sessions") == 6 and ledger0.get("identity_verified") is True:
+        results.record_pass(tab, "POST /api/harness2/run (Propose–Probe–Compose k=2, R=8, P=6)", f"Run ID: {h2_run.get('run_id')}, R={ledger0.get('r_rollouts')}, P={ledger0.get('p_sessions')}")
+    else:
+        results.record_fail(tab, "POST /api/harness2/run", f"Status {status}, Body: {body[:100]}")
+
+    # 15.4 Query Persistent Experience Library R
+    status, body, _ = http_get("/api/harness2/library")
+    h2_lib = json.loads(body) if status == 200 else {}
+    if status == 200 and h2_lib.get("total_entries", 0) >= 1:
+        results.record_pass(tab, "GET /api/harness2/library (Persistent Experience Library R)", f"Adopted Harnesses: {h2_lib.get('total_entries')}")
+    else:
+        results.record_fail(tab, "GET /api/harness2/library", f"Status {status}, Body: {body[:100]}")
+
+    # =========================================================================
     # SUMMARY REPORT
     # =========================================================================
     print("\n" + "=" * 80)

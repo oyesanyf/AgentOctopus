@@ -699,6 +699,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
   <div class="nav-tab" onclick="switchTab('pqc-attestation')">🔐 Post-Quantum (Arm 108)</div>
   <div class="nav-tab" onclick="switchTab('openevolve-view')">🧬 OpenEvolve (Arm 109)</div>
   <div class="nav-tab" onclick="switchTab('dream-rsi-view')">💭 Open Dream-RSI (Arm 110)</div>
+  <div class="nav-tab" onclick="switchTab('harness2-view')">🕸️ Harness² (Arm 111)</div>
   <div class="nav-tab" onclick="switchTab('user-guide')">📖 Docs &amp; Integration Guide</div>
 </nav>
 
@@ -3735,6 +3736,152 @@ with urllib.request.urlopen(req) as resp:
     </div>
   </div>
 
+  <!-- TAB 15: HARNESS² RECURSIVE AGENT HARNESSING (ARM 111) -->
+  <div id="harness2-view" class="tab-content">
+    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+      <div class="breadcrumb-trail">
+        <a class="breadcrumb-link" href="javascript:void(0)" onclick="switchTab('test-runner')"><span>🏠</span> Dashboard</a>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-link" style="cursor: default; pointer-events: none;">Recursive Agent Harnessing</span>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-current"><span>🕸️</span> Google Research Harness² (Arm #111)</span>
+      </div>
+      <div class="breadcrumb-meta">
+        <span class="breadcrumb-badge">🔁 Propose–Probe–Compose (R=4k, P=3k)</span>
+        <span class="breadcrumb-badge green">🛡️ 8-Component SurfaceSpec Validator</span>
+        <span class="breadcrumb-badge purple">📚 Experience Library R (EXPERIENCE.md)</span>
+        <span class="breadcrumb-badge blue">🔒 Ring 2 AST Guard on c6/c7 Scripts</span>
+      </div>
+    </nav>
+
+    <!-- HEADER CARD -->
+    <div class="card" style="background: linear-gradient(135deg, rgba(14, 165, 233, 0.2), rgba(15, 23, 42, 0.95)); border: 2px solid #0ea5e9; margin-bottom: 1.25rem;">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div style="display: flex; align-items: center; gap: 0.85rem;">
+          <div class="pulse-beacon" style="background: #38bdf8; box-shadow: 0 0 10px #38bdf8;"></div>
+          <div>
+            <h2 style="margin: 0; font-size: 1.15rem; font-weight: 800; color: #7dd3fc; letter-spacing: 0.5px;">🕸️ GOOGLE RESEARCH HARNESS² RECURSIVE AGENT HARNESSING (ARM #111)</h2>
+            <div style="font-size: 0.8rem; color: #cbd5e1; margin-top: 0.2rem;">
+              Two-level recursive agent harnessing (<em>arXiv:2610.14224</em>): Task-Level Propose–Probe–Compose over 8 editable components (<code>c1..c8</code>) with exact budget identity ($R=4k$ rollouts, $P=3k$ improvement stages) and Harnessing-Level Experience Library $\mathcal{R}$ accumulation.
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <span class="badge" id="harness2-status-badge" style="background: rgba(14, 165, 233, 0.25); color: #7dd3fc; border: 1px solid #38bdf8; font-weight: 800; font-size: 0.78rem; padding: 0.25rem 0.65rem;">
+            ● RECURSIVE HARNESS READY
+          </span>
+          <button class="btn btn-secondary" onclick="fetchHarness2Data(true)" style="font-size: 0.78rem; padding: 0.35rem 0.75rem;">
+            🔄 Refresh Status
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATS GRID -->
+    <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr); margin-bottom: 1.25rem;">
+      <div class="stat-box">
+        <div class="stat-value" id="harness2-runs-stat" style="color: #38bdf8;">0</div>
+        <div class="stat-label">Total Recursive Runs</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="harness2-rollouts-stat" style="color: #a855f7;">0</div>
+        <div class="stat-label">Cumulative Rollouts (R=4k)</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="harness2-stages-stat" style="color: #fbbf24;">0</div>
+        <div class="stat-label">Improvement Stages (P=3k)</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="harness2-library-stat" style="color: #34d399;">0</div>
+        <div class="stat-label">Adopted Library Harnesses (R)</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-value" id="harness2-vetoes-stat" style="color: #f43f5e;">0</div>
+        <div class="stat-label">Ring-2 Script &amp; Leak Vetoes</div>
+      </div>
+    </div>
+
+    <!-- TWO COLUMN OPERATIONAL CONTROL GRID -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem;">
+      <!-- PANEL 1: TASK-LEVEL RECURSION RUNNER (PROPOSE-PROBE-COMPOSE) -->
+      <div class="card">
+        <div class="card-header" style="border-bottom: 1px solid #334155; padding-bottom: 0.5rem; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center;">
+          <h3 style="margin: 0; font-size: 1rem; color: #7dd3fc;">🔁 Task-Level Propose–Probe–Compose Runner</h3>
+          <span class="badge" style="background: rgba(14, 165, 233, 0.15); color: #38bdf8; border: 1px solid #0284c7;">Budget Identity R=4k, P=3k</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem;">
+            <div>
+              <label style="display: block; font-size: 0.75rem; color: #cbd5e1; margin-bottom: 0.25rem;">Task ID:</label>
+              <input type="text" id="harness2-task-id" value="octopus-rfc-smuggling-01" style="width: 100%; font-size: 0.8rem; padding: 0.4rem 0.5rem; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px;" />
+            </div>
+            <div>
+              <label style="display: block; font-size: 0.75rem; color: #cbd5e1; margin-bottom: 0.25rem;">Domain Namespace:</label>
+              <input type="text" id="harness2-domain" value="protocol-security" style="width: 100%; font-size: 0.8rem; padding: 0.4rem 0.5rem; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px;" />
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem;">
+            <div>
+              <label style="display: block; font-size: 0.75rem; color: #cbd5e1; margin-bottom: 0.25rem;">Recursion Mode:</label>
+              <select id="harness2-mode" style="width: 100%; font-size: 0.8rem; padding: 0.4rem 0.5rem; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px;">
+                <option value="parallel">Parallel (agg — fan-out 3k candidates + Compose)</option>
+                <option value="sequential">Sequential (seq — k chained Propose–Probe–Compose steps)</option>
+              </select>
+            </div>
+            <div>
+              <label style="display: block; font-size: 0.75rem; color: #cbd5e1; margin-bottom: 0.25rem;">Recursion Budget (k):</label>
+              <input type="number" id="harness2-budget-k" value="2" min="1" max="8" style="width: 100%; font-size: 0.8rem; padding: 0.4rem 0.5rem; background: #0f172a; border: 1px solid #334155; color: #f8fafc; border-radius: 4px;" />
+            </div>
+          </div>
+          <div>
+            <label style="display: block; font-size: 0.75rem; color: #cbd5e1; margin-bottom: 0.25rem;">Task Description:</label>
+            <textarea id="harness2-task-desc" rows="2" style="width: 100%; background: #020617; border: 1px solid #1e293b; color: #e2e8f0; padding: 0.5rem; border-radius: 4px; font-size: 0.78rem;">Synthesize a multi-step RFC 9112 chunk-extension differential verification harness and produce structured JSON evidence.</textarea>
+          </div>
+          <div style="display: flex; gap: 0.5rem;">
+            <button class="btn btn-primary" onclick="runHarness2Optimization()" style="flex: 1; font-size: 0.8rem; padding: 0.45rem; background: #0284c7; border-color: #38bdf8;">
+              ⚡ Execute Propose–Probe–Compose Cycle
+            </button>
+            <button class="btn btn-secondary" onclick="validateHarness2Tree()" style="font-size: 0.8rem; padding: 0.45rem 0.85rem;">
+              🛡️ Validate 8-Surface Tree
+            </button>
+          </div>
+          <div id="harness2-run-result" style="background: #020617; border: 1px solid #1e293b; border-radius: 4px; padding: 0.6rem; font-family: monospace; font-size: 0.75rem; color: #7dd3fc; min-height: 2.8rem; display: flex; align-items: center;">
+            Harness² standing by. Configure budget k and click 'Execute Propose–Probe–Compose Cycle'.
+          </div>
+        </div>
+      </div>
+
+      <!-- PANEL 2: 8 EDITABLE HARNESS COMPONENTS & EXPERIENCE LIBRARY R -->
+      <div class="card">
+        <div class="card-header" style="border-bottom: 1px solid #334155; padding-bottom: 0.5rem; margin-bottom: 1rem; display: flex; justify-content: space-between; align-items: center;">
+          <h3 style="margin: 0; font-size: 1rem; color: #34d399;">📚 Persistent Experience Library &mathcal;R; &amp; 8 Surfaces (c1..c8)</h3>
+          <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid #059669;">always_on_max &le; 24,000 chars</span>
+        </div>
+        <p style="font-size: 0.78rem; color: #94a3b8; margin-top: 0;">
+          Harnessing-level recursion persists adopted harnesses and distilled <code>EXPERIENCE.md</code> lessons across tasks:
+          <code>c1:systemprompt.md</code>, <code>c2:guardrails.md</code>, <code>c3:LongTermMEMORY.md</code>, <code>c4:tool_guidance.md</code>, <code>c5:sub_agents/</code>, <code>c6:skills/</code>, <code>c7:scripts/</code>, <code>c8:plugin/</code>.
+        </p>
+        <div style="overflow-x: auto; max-height: 250px;">
+          <table class="test-table" style="font-size: 0.78rem; margin: 0;">
+            <thead>
+              <tr>
+                <th>Task ID</th>
+                <th>Domain</th>
+                <th>Mode (k)</th>
+                <th>Quality</th>
+                <th>Tree SHA-256</th>
+                <th>Evidence Summary</th>
+              </tr>
+            </thead>
+            <tbody id="harness2-library-tbody">
+              <tr><td colspan="6" style="text-align: center; color: #94a3b8;">Loading Experience Library R...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </main>
 
 <script>
@@ -3923,6 +4070,8 @@ with urllib.request.urlopen(req) as resp:
         fetchEvolutionData(true);
       } else if (tabId === 'dream-rsi-view') {
         fetchDreamRsiData(true);
+      } else if (tabId === 'harness2-view') {
+        fetchHarness2Data(true);
       }
     } catch (err) {
       showDiagnosticToast({
@@ -7682,6 +7831,122 @@ def exfiltrate_credentials():
     }
   }
 
+  // Google Research Harness² Client Logic (Arm 111)
+  async function fetchHarness2Data(force = false) {
+    try {
+      const res = await fetchWithTimeout('/api/harness2/status', {}, 1000);
+      if (!res.ok) return;
+      const data = await res.json();
+
+      const badge = document.getElementById('harness2-status-badge');
+      if (badge) {
+        if (data.is_severed) {
+          badge.style.color = '#ef4444';
+          badge.style.borderColor = '#ef4444';
+          badge.textContent = '● SEVERED (AUTOTOMY)';
+        } else {
+          badge.style.color = '#7dd3fc';
+          badge.style.borderColor = '#38bdf8';
+          badge.textContent = `● ${data.status}`;
+        }
+      }
+
+      const runsEl = document.getElementById('harness2-runs-stat');
+      if (runsEl) runsEl.textContent = data.total_recursion_runs || 0;
+      const rolloutsEl = document.getElementById('harness2-rollouts-stat');
+      if (rolloutsEl) rolloutsEl.textContent = data.total_rollouts_r || 0;
+      const stagesEl = document.getElementById('harness2-stages-stat');
+      if (stagesEl) stagesEl.textContent = data.total_sessions_p || 0;
+      const libEl = document.getElementById('harness2-library-stat');
+      if (libEl) libEl.textContent = data.experience_library_entries || 0;
+      const vetoesEl = document.getElementById('harness2-vetoes-stat');
+      if (vetoesEl) vetoesEl.textContent = (data.domains_covered || []).length;
+
+      const libRes = await fetchWithTimeout('/api/harness2/library', {}, 1000);
+      if (libRes.ok) {
+        const libData = await libRes.json();
+        const tbody = document.getElementById('harness2-library-tbody');
+        if (tbody) {
+          const entries = libData.entries || [];
+          if (entries.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #94a3b8;">No adopted harnesses yet. Execute a Propose–Probe–Compose cycle to populate R.</td></tr>';
+          } else {
+            tbody.innerHTML = entries.slice().reverse().map(e => `
+              <tr>
+                <td><strong style="color: #38bdf8;">${escapeHtml(e.task_id)}</strong></td>
+                <td><span class="badge blue">${escapeHtml(e.domain)}</span></td>
+                <td><code>${escapeHtml(e.mode)} (${escapeHtml(e.adopted_label || 'compose')})</code></td>
+                <td style="color: #34d399; font-weight: 700;">${escapeHtml(e.confidence || 'high')}</td>
+                <td style="font-family: monospace; font-size: 0.72rem; color: #94a3b8;">${escapeHtml(e.edits_summary || '')}</td>
+                <td style="font-size: 0.74rem; color: #cbd5e1;">${escapeHtml(e.lesson || e.evidence || '')}</td>
+              </tr>
+            `).join('');
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  async function runHarness2Optimization() {
+    const resEl = document.getElementById('harness2-run-result');
+    const taskId = (document.getElementById('harness2-task-id')?.value || 'octopus-task-01').trim();
+    const domain = (document.getElementById('harness2-domain')?.value || 'protocol-security').trim();
+    const mode = document.getElementById('harness2-mode')?.value || 'parallel';
+    const budgetK = parseInt(document.getElementById('harness2-budget-k')?.value || '2', 10) || 2;
+
+    resEl.style.color = '#38bdf8';
+    resEl.textContent = `Running Harness² ${mode} Propose–Probe–Compose (k=${budgetK} -> R=${4*budgetK} rollouts, P=${3*budgetK} stages)...`;
+    try {
+      const res = await fetch('/api/harness2/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: taskId,
+          domain: domain,
+          mode: mode,
+          k: budgetK
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const l0 = (data.ledgers && data.ledgers[0]) || {};
+        resEl.style.color = '#34d399';
+        resEl.textContent = `✅ Run ${data.run_id} complete! | R=${l0.r_rollouts} rollouts, P=${l0.p_sessions} stages (Identity Verified: ${l0.identity_verified}) | Stages: ${(data.stages || []).length}`;
+        fetchHarness2Data(true);
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `Optimization rejected: ${data.message || 'Error'}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Network error: ${e.message}`;
+    }
+  }
+
+  async function validateHarness2Tree() {
+    const resEl = document.getElementById('harness2-run-result');
+    resEl.style.color = '#38bdf8';
+    resEl.textContent = 'Validating 8-surface HarnessTree against SurfaceSpec, Leak Markers, and Ring 2 AST Guard...';
+    try {
+      const res = await fetch('/api/harness2/validate-tree', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      const data = await res.json();
+      if (res.ok && data.valid) {
+        resEl.style.color = '#34d399';
+        resEl.textContent = `🛡️ 8-Surface Tree VALIDATED (Surface: ${data.surface_name}, always_on=${data.always_on_chars}/${data.always_on_max} chars, AST Clean: ${data.security_audit?.passed}).`;
+      } else {
+        resEl.style.color = '#ef4444';
+        resEl.textContent = `❌ Tree Validation Failed: ${(data.errors || []).join('; ')}`;
+      }
+    } catch (e) {
+      resEl.style.color = '#ef4444';
+      resEl.textContent = `Validation error: ${e.message}`;
+    }
+  }
+
   // Initial load
   fetchAuditLog();
   fetchUnifiedRuntimeActivity();
@@ -7699,6 +7964,7 @@ def exfiltrate_credentials():
   fetchProtocolResearchData(true);
   fetchEvolutionData(true);
   fetchDreamRsiData(true);
+  fetchHarness2Data(true);
   applyEvolutionPreset('safe_permutator');
   setInterval(() => { if (!runtimeFeedPaused) fetchUnifiedRuntimeActivity(false); }, 2000);
   setInterval(fetchRaspData, 2500);
@@ -7710,6 +7976,7 @@ def exfiltrate_credentials():
   setInterval(() => fetchProtocolResearchData(true), 6000);
   setInterval(fetchEvolutionData, 5000);
   setInterval(fetchDreamRsiData, 5000);
+  setInterval(fetchHarness2Data, 5000);
 </script>
 </body>
 </html>
