@@ -25,6 +25,7 @@ pub mod primitives;
 pub mod resource_guard;
 pub mod ring_controller;
 pub mod sentinel;
+pub mod tiered_executor;
 pub mod trusted_controller;
 
 pub use arm_ring::{
@@ -59,6 +60,9 @@ pub use mesh_guard::{
 };
 pub use resource_guard::{BudgetQuota, ResourceGuard};
 pub use ring_controller::{ContainmentAuditHarness, ContainmentRing, RingOperationRequest};
+pub use tiered_executor::{
+    ExecutionTier, TieredExecutionDispatcher, TieredExecutionReceipt, TieredToolRequest,
+};
 pub use trusted_controller::{
     AuditEvent, Authorizer, BoxFuture, CedarAuthorizer, EnclaveToolExecutor, Operation,
     RingConfig, RingController, RingError, RingRequest, ToolExecutor, TrustedArmHandle,

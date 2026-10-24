@@ -141,3 +141,10 @@ pub use command_line::{
     normalize_executable_stem, parse_powershell_args, strip_cmd_carets_outside_quotes,
     tokenize_windows_argv, EncodedCommandState, ParsedInvocation, PsParameter, MAX_UNWRAP_DEPTH,
 };
+
+pub mod wasm_tier1;
+pub use wasm_tier1::{
+    WasmExecutionReceipt, WasmHostState, WasmSandboxLimits, WasmTier1Executor,
+    WASI_ERR_ACCESS_DENIED, WASI_ERR_FAULT, WASI_ERR_IO, WASM_DOC_EXTRACTOR_WAT,
+    WASM_LEDGER_VALIDATOR_WAT,
+};

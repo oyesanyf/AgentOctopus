@@ -781,7 +781,7 @@ async fn test_finding2_authenticated_role_trust_and_multihop_provenance_taint() 
         .verify_incoming_message(&hop1)
         .await
         .expect("Untrusted -> Worker relay1 allowed");
-    assert_eq!(verified_hop1.taint_floor(), TrustTier::Untrusted);
+    assert_eq!(verified_hop1.effective_taint_floor(), TrustTier::Untrusted);
 
     // Hop 2: Relay1 (2) -> Relay2 (3) automatically attaches sticky taint_floor and provenance from hop1
     let hop2 = relay1
@@ -794,7 +794,7 @@ async fn test_finding2_authenticated_role_trust_and_multihop_provenance_taint() 
         .verify_incoming_message(&hop2)
         .await
         .expect("Worker relay1 -> Worker relay2 allowed");
-    assert_eq!(verified_hop2.taint_floor(), TrustTier::Untrusted);
+    assert_eq!(verified_hop2.effective_taint_floor(), TrustTier::Untrusted);
 
     // Hop 3: Relay2 (3) -> LedgerSink (4) — sticky taint_state and multi-hop provenance chain
     // cause LedgerSink (PrivilegedSink) to reject the 4-hop tainted relay!
@@ -891,7 +891,7 @@ fn test_finding5_open_confined_rejects_junctions_and_hardlinks() {
 
     let base = std::env::temp_dir().join(format!("octopus_confined_test_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(&base).unwrap();
+    std::fs::create_dir_all(base.join("sub")).unwrap();
 
     // 1. Normal confined file write & read succeeds
     {
@@ -1053,4 +1053,252 @@ fn test_finding8_dashboard_request_guard_blocks_rebinding_csrf_and_unauthenticat
         tok
     )
     .is_ok());
+}
+
+// ============================================================================
+// 8. Pure-Rust 3-Tier Hybrid Containment Verification (Tier 1 Wasmtime + Tier 2 Win32)
+// ============================================================================
+
+#[test]
+fn test_tier1_wasm_zero_ambient_authority_and_open_confined_bridge() {
+    use agent_octopus::security::{
+        WasmSandboxLimits, WasmTier1Executor, WASI_ERR_ACCESS_DENIED,
+    };
+
+    let executor = WasmTier1Executor::try_new().expect("Initialize WasmTier1Executor");
+    let scratch =
+        std::env::temp_dir().join(format!("octopus_wasm_tier1_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(scratch.join("notes")).unwrap();
+    std::fs::write(scratch.join("notes/allowed.txt"), b"WASM_CONFINED_OK").unwrap();
+
+    // 1. Any module importing ambient WASI outside "octopus_wasi" must be rejected before instantiation
+    let ambient_wasi_wat = r#"
+    (module
+        (import "wasi_snapshot_preview1" "proc_exit" (func $exit (param i32)))
+        (memory (export "memory") 1)
+        (func (export "octopus_run") (result i32)
+            (call $exit (i32.const 0))
+            (i32.const 0)
+        )
+    )
+    "#;
+    let ambient_res = executor.execute_wat(
+        "ambient_probe",
+        ambient_wasi_wat,
+        b"",
+        WasmSandboxLimits {
+            scratchpad_root: scratch.clone(),
+            allow_scratch_write: false,
+            ..WasmSandboxLimits::default()
+        },
+    );
+    assert!(
+        ambient_res.is_err(),
+        "Wasm module requesting ambient wasi_snapshot_preview1 import must fail closed"
+    );
+
+    // 2. Guest module that reads its input path via `octopus_wasi::scratch_read` and returns the result code
+    let scratch_probe_wat = r#"
+    (module
+        (import "octopus_wasi" "input_len" (func $input_len (result i32)))
+        (import "octopus_wasi" "read_input" (func $read_input (param i32 i32) (result i32)))
+        (import "octopus_wasi" "scratch_read" (func $scratch_read (param i32 i32 i32 i32) (result i32)))
+        (import "octopus_wasi" "emit_output" (func $emit_output (param i32 i32) (result i32)))
+        (memory (export "memory") 2 8)
+        (func (export "octopus_run") (result i32)
+            (local $plen i32)
+            (local $rc i32)
+            (local.set $plen (call $input_len))
+            (drop (call $read_input (i32.const 0) (local.get $plen)))
+            (local.set $rc (call $scratch_read (i32.const 0) (local.get $plen) (i32.const 1024) (i32.const 4096)))
+            (if (i32.gt_s (local.get $rc) (i32.const 0))
+                (then (drop (call $emit_output (i32.const 1024) (local.get $rc))))
+            )
+            (local.get $rc)
+        )
+    )
+    "#;
+
+    // 2a. Allowed relative file inside scratchpad succeeds
+    let ok_receipt = executor
+        .execute_wat(
+            "scratch_probe",
+            scratch_probe_wat,
+            b"notes/allowed.txt",
+            WasmSandboxLimits {
+                scratchpad_root: scratch.clone(),
+                allow_scratch_write: false,
+                ..WasmSandboxLimits::default()
+            },
+        )
+        .expect("Confined scratch_read must succeed");
+    assert_eq!(ok_receipt.exit_code, 16);
+    assert_eq!(ok_receipt.raw_output, "WASM_CONFINED_OK");
+
+    // 2b. Escape attempts (SAM hive, .. traversal, UNC path, hardlink, junction) return WASI_ERR_ACCESS_DENIED (-5)
+    let outside_secret =
+        std::env::temp_dir().join(format!("octopus_wasm_outside_{}.txt", std::process::id()));
+    std::fs::write(&outside_secret, b"OUTSIDE_HOST_SECRET").unwrap();
+    let _ = std::fs::hard_link(&outside_secret, scratch.join("hardlinked.txt"));
+
+    for bad_path in [
+        r"C:\Windows\System32\config\SAM",
+        r"..\..\Windows\win.ini",
+        r"\\.\PhysicalDrive0",
+        "hardlinked.txt",
+    ] {
+        let esc_receipt = executor
+            .execute_wat(
+                "scratch_probe",
+                scratch_probe_wat,
+                bad_path.as_bytes(),
+                WasmSandboxLimits {
+                    scratchpad_root: scratch.clone(),
+                    allow_scratch_write: false,
+                    ..WasmSandboxLimits::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            esc_receipt.exit_code, WASI_ERR_ACCESS_DENIED,
+            "Wasm guest escape attempt '{}' must be denied by open_confined with -5",
+            bad_path
+        );
+        assert!(!esc_receipt.blocked_escape_attempts.is_empty());
+    }
+
+    let _ = std::fs::remove_file(&outside_secret);
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn test_tier1_wasm_deterministic_fuel_and_linear_memory_traps() {
+    use agent_octopus::security::{WasmSandboxLimits, WasmTier1Executor};
+
+    let executor = WasmTier1Executor::try_new().expect("Initialize WasmTier1Executor");
+
+    // 1. Infinite loop `(loop (br 0))` deterministically traps when fuel_budget = 25,000 is exhausted
+    let inf_loop_wat = r#"
+    (module
+        (memory (export "memory") 1)
+        (func (export "octopus_run") (result i32)
+            (loop $inf
+                (br $inf)
+            )
+            (i32.const 0)
+        )
+    )
+    "#;
+    let loop_res = executor.execute_wat(
+        "infinite_loop_probe",
+        inf_loop_wat,
+        b"",
+        WasmSandboxLimits {
+            fuel_budget: 25_000,
+            ..WasmSandboxLimits::default()
+        },
+    );
+    assert!(
+        loop_res.is_err(),
+        "Infinite loop in Wasm guest must deterministically trap on fuel exhaustion"
+    );
+    let err_msg = loop_res.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("TIER1_WASM_OUT_OF_FUEL"),
+        "Unexpected fuel trap message: {}",
+        err_msg
+    );
+
+    // 2. Linear memory growth beyond `max_linear_memory_bytes` (e.g. requesting 32 pages = 2 MiB under a 512 KiB cap)
+    // is deterministically denied by `WasmHostState::memory_growing` (`memory.grow` returns -1 and sets `memory_limit_exceeded`)
+    let mem_bomb_wat = r#"
+    (module
+        (memory (export "memory") 1)
+        (func (export "octopus_run") (result i32)
+            (memory.grow (i32.const 32))
+        )
+    )
+    "#;
+    let mem_receipt = executor
+        .execute_wat(
+            "mem_bomb_probe",
+            mem_bomb_wat,
+            b"",
+            WasmSandboxLimits {
+                max_linear_memory_bytes: 512 * 1024, // 512 KiB ceiling
+                ..WasmSandboxLimits::default()
+            },
+        )
+        .expect("memory.grow denial returns -1 to guest");
+    assert_eq!(
+        mem_receipt.exit_code, -1,
+        "ResourceLimiter must deny memory.grow beyond 512 KiB ceiling"
+    );
+    assert!(mem_receipt.memory_limit_exceeded);
+}
+
+#[test]
+fn test_tier1_vs_tier2_hybrid_dispatcher_end_to_end() {
+    use agent_octopus::containment_ring::{
+        ExecutionTier, TieredExecutionDispatcher, TieredToolRequest,
+    };
+    use std::sync::Arc;
+
+    let mercury = Arc::new(MercuryContainmentEngine::new());
+    let dispatcher =
+        TieredExecutionDispatcher::try_new(mercury).expect("Create TieredExecutionDispatcher");
+    let scratch =
+        std::env::temp_dir().join(format!("octopus_hybrid_disp_{}", std::process::id()));
+
+    // 1. Tier 1 (Default): Untrusted document extraction runs in-process inside Wasmtime
+    let tier1_req = TieredToolRequest {
+        agent_id: "arm-doc-101".to_string(),
+        role: ArmRole::UntrustedDocIngest,
+        tool_name: "wasm_doc_extractor".to_string(),
+        payload: b"Invoice #900\x00\x07\nAmount: $420.00".to_vec(),
+        custom_wat: None,
+        native_command: None,
+        scratchpad_root: scratch.clone(),
+        allow_scratch_write: false,
+    };
+    let r1 = dispatcher
+        .dispatch(&tier1_req)
+        .expect("Tier 1 Wasm doc extraction must succeed");
+    assert_eq!(r1.selected_tier, ExecutionTier::Tier1InProcessWasm);
+    let wasm_rec = r1.wasm_receipt.expect("Must include WasmExecutionReceipt");
+    assert!(wasm_rec.fuel_consumed > 0);
+    assert_eq!(wasm_rec.raw_output, "Invoice #900\nAmount: $420.00");
+    assert!(r1.win32_child_token_posture.is_none());
+
+    // 2. Tier 2 (Native CLI): Runs under de-elevated restricted token + WindowsJobObject kernel I/O accounting
+    let tier2_req = TieredToolRequest {
+        agent_id: "arm-cli-102".to_string(),
+        role: ArmRole::VulnerabilityResearch,
+        tool_name: "native_cmd_echo".to_string(),
+        payload: Vec::new(),
+        custom_wat: None,
+        native_command: Some((
+            r"C:\Windows\System32\cmd.exe".to_string(),
+            vec!["/C".to_string(), "echo".to_string(), "tier2_confined_ok".to_string()],
+        )),
+        scratchpad_root: scratch.clone(),
+        allow_scratch_write: false,
+    };
+    let r2 = dispatcher
+        .dispatch(&tier2_req)
+        .expect("Tier 2 confined native CLI execution must succeed");
+    assert_eq!(r2.selected_tier, ExecutionTier::Tier2NativeWin32Confinement);
+    assert_eq!(r2.exit_code, 0);
+    let posture = r2
+        .win32_child_token_posture
+        .expect("Must include verified de-elevated child TokenPosture");
+    assert!(
+        posture.verify_agent_safe().is_ok(),
+        "Tier 2 child token must be non-elevated and safe: {:?}",
+        posture
+    );
+    assert!(r2.job_io_sample.is_some());
+
+    let _ = std::fs::remove_dir_all(&scratch);
 }

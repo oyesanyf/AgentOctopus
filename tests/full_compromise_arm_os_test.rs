@@ -160,7 +160,9 @@ fn posture_child_probe() {
             .stderr(std::process::Stdio::null())
             .status();
         let reg_ok = reg_status.map(|s| s.success()).unwrap_or(false);
-        let hive_exists = hive_out.exists();
+        let hive_non_empty = std::fs::metadata(&hive_out)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
         let _ = std::fs::remove_file(&hive_out);
 
         let report = serde_json::json!({
@@ -168,7 +170,7 @@ fn posture_child_probe() {
             "sam_open_os_error": os_err(r"C:\Windows\System32\config\SAM"),
             "system_open_os_error": os_err(r"C:\Windows\System32\config\SYSTEM"),
             "reg_save_sam_succeeded": reg_ok,
-            "reg_save_file_exists": hive_exists,
+            "reg_save_file_exists": hive_non_empty,
             "physical_drive_open_os_error": os_err(r"\\.\PhysicalDrive0"),
         });
         std::fs::write(&out, report.to_string()).expect("write probe report");

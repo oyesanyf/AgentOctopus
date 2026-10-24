@@ -320,7 +320,7 @@ fn query_token_buffer(token: sys::HANDLE, class: u32) -> Result<Vec<u64>, Octopu
             token,
             class,
             buf.as_mut_ptr() as *mut std::ffi::c_void,
-            (buf.len() * 8) as u32,
+            needed,
             &mut needed,
         )
     };

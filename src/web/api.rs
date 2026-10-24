@@ -3051,6 +3051,26 @@ pub fn handle_oshoosiclaw_containment_evaluate(state: &WebState, body: &str) -> 
                 }).to_string()),
             }
         }
+        "tiered_execute" => {
+            let mercury = std::sync::Arc::new(crate::security::mercury_guard::MercuryContainmentEngine::new());
+            let dispatcher = crate::containment_ring::TieredExecutionDispatcher::try_new(mercury)
+                .map_err(|e| json_error_payload("DISPATCHER_INIT_ERROR", &e.to_string()))?;
+            let payload_str = req.payload.as_deref().unwrap_or("INVOICE #1042\x00\x07\nTotal: $250.00");
+            let t_req = crate::containment_ring::TieredToolRequest {
+                agent_id: "arm-101".to_string(),
+                role: crate::core::types::ArmRole::UntrustedDocIngest,
+                tool_name: "wasm_doc_extractor".to_string(),
+                payload: payload_str.as_bytes().to_vec(),
+                custom_wat: None,
+                native_command: None,
+                scratchpad_root: std::env::temp_dir().join("octopus_api_tier1_scratch"),
+                allow_scratch_write: false,
+            };
+            match dispatcher.dispatch(&t_req) {
+                Ok(receipt) => Ok(serde_json::to_string_pretty(&receipt).unwrap_or_else(|_| "{}".to_string())),
+                Err(e) => Err(json_error_payload("TIERED_EXECUTION_DENIED", &e.to_string())),
+            }
+        }
         other => Err(json_error_payload(
             "UNKNOWN_ACTION",
             &format!("Unsupported oshoosiclaw-evaluate action: {}", other),
