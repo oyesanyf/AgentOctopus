@@ -102,6 +102,18 @@ impl EgressProxy {
         domains.insert(domain.to_lowercase());
     }
 
+    pub async fn remove_allowed_domain(&self, domain: &str) -> bool {
+        let mut domains = self.allowed_domains.write().await;
+        domains.remove(&domain.to_lowercase())
+    }
+
+    pub async fn list_allowed_domains(&self) -> Vec<String> {
+        let domains = self.allowed_domains.read().await;
+        let mut list: Vec<String> = domains.iter().cloned().collect();
+        list.sort();
+        list
+    }
+
     /// Evaluates and proxies an external egress request through the containment ring.
     pub async fn dispatch_egress(
         &self,

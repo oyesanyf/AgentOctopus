@@ -57,6 +57,56 @@ impl SafeDocumentExtractor {
         Ok(())
     }
 
+    /// Identifies document format from raw bytes and optional filename (PDF, Word, Excel, PowerPoint, XML, CSV, JSON, Text).
+    pub fn identify_document_format_bytes(data: &[u8], filename: Option<&str>) -> &'static str {
+        if data.starts_with(b"%PDF-") {
+            return "pdf";
+        }
+        if data.starts_with(b"PK\x03\x04") {
+            let window = &data[..data.len().min(65536)];
+            if window.windows(19).any(|w| w == b"xl/sharedStrings.xm" || w == b"xl/workbook.xml")
+                || window.windows(14).any(|w| w == b"xl/worksheets/")
+            {
+                return "xlsx";
+            }
+            if window.windows(17).any(|w| w == b"word/document.xml") {
+                return "docx";
+            }
+            if window.windows(19).any(|w| w == b"ppt/presentation.xm") {
+                return "pptx";
+            }
+        }
+        if data.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
+            if let Some(name) = filename {
+                let lower = name.to_ascii_lowercase();
+                if lower.ends_with(".xls") {
+                    return "xls";
+                }
+                if lower.ends_with(".doc") {
+                    return "doc";
+                }
+            }
+            return "ole2";
+        }
+        let trimmed = data.iter().copied().skip_while(|b| b.is_ascii_whitespace()).take(16).collect::<Vec<u8>>();
+        if trimmed.starts_with(b"<?xml") || trimmed.starts_with(b"<") {
+            return "xml";
+        }
+        if trimmed.starts_with(b"{") || trimmed.starts_with(b"[") {
+            return "json";
+        }
+        if let Some(name) = filename {
+            let lower = name.to_ascii_lowercase();
+            if lower.ends_with(".csv") {
+                return "csv";
+            }
+            if lower.ends_with(".md") {
+                return "markdown";
+            }
+        }
+        "txt"
+    }
+
     /// Extract strictly-typed invoice artifact from raw sanitized stream.
     /// Guarantees that raw text never travels to the central brain.
     pub fn extract_artifact(
