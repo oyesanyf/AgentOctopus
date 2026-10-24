@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() {
+    let _ = agent_octopus::harden_windows_console();
     println!("================================================================================");
     println!("    🐙 AGENT OCTOPUS: CEPHALOPOD-INSPIRED SWARM BREAKOUT DEFENSE SYSTEM");
     println!("================================================================================\n");

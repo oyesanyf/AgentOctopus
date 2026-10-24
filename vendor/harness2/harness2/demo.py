@@ -96,6 +96,7 @@ class DemoAdapter:
             text=True,
             check=True,
             timeout=timeout or 10,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
         (run_dir / "answer.txt").write_text(result.stdout, encoding="utf-8")
         (run_dir / "trajectory.md").write_text(

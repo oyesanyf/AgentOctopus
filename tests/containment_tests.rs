@@ -368,8 +368,10 @@ fn test_windows_job_object_and_appcontainer_kernel_isolation() {
     // 3. Real Job Object membership verification using Win32 IsProcessInJob (positive & negative controls)
     #[cfg(windows)]
     {
+        use agent_octopus::CommandConsoleExt;
         use std::os::windows::io::AsRawHandle;
         let mut child = std::process::Command::new("cmd.exe")
+            .enforce_no_window()
             .args(["/c", "ping -n 5 127.0.0.1 > nul"])
             .spawn()
             .expect("Spawn test child process");
@@ -383,6 +385,7 @@ fn test_windows_job_object_and_appcontainer_kernel_isolation() {
 
         // Negative control: unassigned child process must return false
         let mut unassigned_child = std::process::Command::new("cmd.exe")
+            .enforce_no_window()
             .args(["/c", "ping -n 5 127.0.0.1 > nul"])
             .spawn()
             .expect("Spawn unassigned child process");
@@ -548,7 +551,9 @@ fn test_windows_runtime_job_object_limits_and_escape_prevention() {
         .expect("Job Object creation");
 
     // 2. Spawn a managed child process
+    use agent_octopus::CommandConsoleExt;
     let mut child = std::process::Command::new("cmd.exe")
+        .enforce_no_window()
         .args(["/c", "ping -n 5 127.0.0.1 > nul"])
         .spawn()
         .expect("Spawn test child process");

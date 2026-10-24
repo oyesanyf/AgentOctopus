@@ -98,8 +98,10 @@ impl ContinuousOsvScannerArm {
             for chunk in deps.chunks(50) {
                 let payload = OsvDatabaseMatcher::build_batch_query_payload(chunk);
                 if let Ok(payload_str) = serde_json::to_string(&payload) {
-                    // Query OSV API via curl with strict 5s timeout
+                    // Query OSV API via curl with strict 5s timeout and CREATE_NO_WINDOW
+                    use crate::security::console_defense::CommandConsoleExt;
                     let output = std::process::Command::new("curl.exe")
+                        .enforce_no_window()
                         .arg("-s")
                         .arg("-X")
                         .arg("POST")

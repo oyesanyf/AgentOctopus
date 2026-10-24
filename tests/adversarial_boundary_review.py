@@ -70,12 +70,38 @@ def send_req(method, path, body=None, headers=None, timeout=5.0):
 
 def ensure_server_running():
     """Verify backend start.exe is online; if not, launch it in background and wait for readiness."""
-    status, _ = send_req("GET", "/api/status", timeout=1.0)
-    if status == 200:
-        print("[+] Detected existing live Agent Octopus server on http://127.0.0.1:5005 (reusing)")
+    global BASE_URL, SERVER_PORT
+    root_dir = os.path.dirname(SCRIPT_DIR)
+    active_port_file = os.path.join(root_dir, "logs", "active_port.txt")
+
+    def _probe_active_port():
+        global BASE_URL, SERVER_PORT
+        candidates = []
+        if os.path.exists(active_port_file):
+            try:
+                with open(active_port_file, "r", encoding="utf-8") as f:
+                    p = f.read().strip()
+                    if p.isdigit():
+                        candidates.append(int(p))
+            except Exception:
+                pass
+        for p in range(5005, 5026):
+            if p not in candidates:
+                candidates.append(p)
+        for p in candidates:
+            BASE_URL = f"http://127.0.0.1:{p}"
+            SERVER_PORT = p
+            status, _ = send_req("GET", "/api/status", timeout=0.6)
+            if status == 200:
+                return True
+        BASE_URL = "http://127.0.0.1:5005"
+        SERVER_PORT = 5005
+        return False
+
+    if _probe_active_port():
+        print(f"[+] Detected existing live Agent Octopus server on {BASE_URL} (reusing)")
         return None
 
-    root_dir = os.path.dirname(SCRIPT_DIR)
     start_exe = os.path.join(root_dir, "start.exe")
     if not os.path.exists(start_exe):
         candidate = os.path.join(root_dir, "target", "debug", "start.exe")
@@ -98,6 +124,7 @@ def ensure_server_running():
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 
     deadline = time.time() + 15.0
@@ -110,8 +137,7 @@ def ensure_server_running():
                 f"STDOUT: {out.decode('utf-8', errors='replace')}\n"
                 f"STDERR: {err.decode('utf-8', errors='replace')}"
             )
-        status, _ = send_req("GET", "/api/status", timeout=0.5)
-        if status == 200:
+        if _probe_active_port():
             ready = True
             break
         time.sleep(0.3)

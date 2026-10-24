@@ -21,6 +21,7 @@ pub mod egress_proxy;
 pub mod identity_gate;
 pub mod isolation_manager;
 pub mod mesh_guard;
+pub mod primitives;
 pub mod resource_guard;
 pub mod ring_controller;
 pub mod sentinel;
@@ -28,6 +29,10 @@ pub mod trusted_controller;
 
 pub use arm_ring::{
     ArmContainmentRing, ArmRingConfig, ArmRingMeshMessage, ArmRingRegistry, ArmRingStatusDto,
+};
+pub use primitives::{
+    now_micros, DiracDeltaCapabilityTicket, IndependentTrustBoundaryVerifier, MeshWatchOutSignal,
+    MultiLayerGateVerdict, PinnedToolObjectBinding, ZeroCopyImmutableToolBuffer,
 };
 pub use sentinel::{
     evaluate as evaluate_sentinel, create_supervisor_heartbeat, OctopusSentinelRing,
@@ -37,11 +42,17 @@ pub use attestation::{PolicyAttestationRecord, RingAttestation};
 pub use audit::{RingAuditEntry, RingAuditLedger};
 pub use auditor::{ContainmentAuditor, DefenseAuditReport};
 pub use capability_gate::CapabilityGate;
-pub use cedar_gate::{CedarAuditControlToken, CedarGate, NegativeControlToken};
-pub use egress_proxy::{EgressProxy, EgressRequest, EgressResponse, EgressSecurityLevel};
+pub use cedar_gate::{
+    AlgebraicTraceProof, CedarAuditControlToken, CedarGate, NegativeControlToken,
+    VanishingPolynomialTraceVerifier, MERSENNE_PRIME_127,
+};
+pub use egress_proxy::{
+    is_restricted_rebinding_ip, validate_agent_egress_url, EgressProxy, EgressRequest,
+    EgressResponse, EgressSecurityLevel,
+};
 pub use identity_gate::IdentityGate;
 pub use isolation_manager::{IsolationManager, SandboxConstraints};
-pub use mesh_guard::MeshGuard;
+pub use mesh_guard::{HomologicalAuditReport, HomologicalBoundaryAuditor, MeshGuard};
 pub use resource_guard::{BudgetQuota, ResourceGuard};
 pub use ring_controller::{ContainmentAuditHarness, ContainmentRing, RingOperationRequest};
 pub use trusted_controller::{

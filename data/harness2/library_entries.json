@@ -29,35 +29,6 @@
     "timestamp": 1791950000
   },
   {
-    "task_id": "cedar-ledger-reconcile",
-    "domain": "security_policy",
-    "mode": "both",
-    "adopted_label": "agg2",
-    "why": "Selected via anonymized behavioral contrast; satisfies R=4k, P=3k budget identity and Ring-2 AST audit.",
-    "cue": "When executing 'security_policy' tasks requiring multi-step verification",
-    "lesson": "Combine deterministic c7 helper scripts (`scripts/summarize.py`) with auto-triggered c6 skills in `guardrails.md`.",
-    "evidence": "Candidate `agg2` outperformed base rollouts across k=2 Propose–Probe–Compose steps.",
-    "confidence": "high (verified by contrastive rollout trajectories)",
-    "edits_summary": "components: systemprompt.md, guardrails.md, scripts/summarize.py, skills/octopus_harness_guard/SKILL.md | verdict: helped",
-    "components_inventory": [
-      "c1:system_prompt",
-      "c2:guardrails",
-      "c3:memory",
-      "c4:tool_guidance",
-      "c6:skills/octopus_harness_guard",
-      "c7:scripts/summarize.py"
-    ],
-    "harness_tree": {
-      "LongTermMEMORY.md": "Accumulated Harness² domain memory for 'security_policy': preserve signed values, verify temporal prerequisites, and avoid off-surface file writes.",
-      "guardrails.md": "- When solving tasks in domain security_policy, load the `octopus_harness_guard` skill.",
-      "scripts/summarize.py": "import csv\nimport sys\nfrom decimal import Decimal\n\nwith open(sys.argv[1]) as source:\n    amounts = [Decimal(row['amount']) for row in csv.DictReader(source)]\ntotal = sum(amounts, Decimal(0))\nprint(f'Total: {total:.2f}')\n",
-      "skills/octopus_harness_guard/SKILL.md": "---\nname: octopus_harness_guard\ndescription: solving tasks in domain security_policy\n---\n1. Inspect source files.\n2. Run `python3 scripts/summarize.py`.\n3. Verify output invariants.",
-      "systemprompt.md": "You are an Agent Octopus autonomous solver operating in domain 'security_policy'. Execute scripts/summarize.py and adhere to Cedar & Dogwood invariants.",
-      "tool_descriptions/tool_guidance.md": "Prefer deterministic helper scripts in `scripts/` and validate outputs before concluding."
-    },
-    "timestamp": 1792347671
-  },
-  {
     "task_id": "submenu-rfc-test-01",
     "domain": "protocol-security",
     "mode": "agg",
@@ -85,5 +56,34 @@
       "tool_descriptions/tool_guidance.md": "Prefer deterministic helper scripts in `scripts/` and validate outputs before concluding."
     },
     "timestamp": 1792348011
+  },
+  {
+    "task_id": "cedar-ledger-reconcile",
+    "domain": "security_policy",
+    "mode": "both",
+    "adopted_label": "agg2",
+    "why": "Selected via anonymized behavioral contrast; satisfies R=4k, P=3k budget identity and Ring-2 AST audit.",
+    "cue": "When executing 'security_policy' tasks requiring multi-step verification",
+    "lesson": "Combine deterministic c7 helper scripts (`scripts/summarize.py`) with auto-triggered c6 skills in `guardrails.md`.",
+    "evidence": "Candidate `agg2` outperformed base rollouts across k=2 Propose–Probe–Compose steps.",
+    "confidence": "high (verified by contrastive rollout trajectories)",
+    "edits_summary": "components: systemprompt.md, guardrails.md, scripts/summarize.py, skills/octopus_harness_guard/SKILL.md | verdict: helped",
+    "components_inventory": [
+      "c1:system_prompt",
+      "c2:guardrails",
+      "c3:memory",
+      "c4:tool_guidance",
+      "c6:skills/octopus_harness_guard",
+      "c7:scripts/summarize.py"
+    ],
+    "harness_tree": {
+      "LongTermMEMORY.md": "Accumulated Harness² domain memory for 'security_policy': preserve signed values, verify temporal prerequisites, and avoid off-surface file writes.",
+      "guardrails.md": "- When solving tasks in domain security_policy, load the `octopus_harness_guard` skill.",
+      "scripts/summarize.py": "import csv\nimport sys\nfrom decimal import Decimal\n\nwith open(sys.argv[1]) as source:\n    amounts = [Decimal(row['amount']) for row in csv.DictReader(source)]\ntotal = sum(amounts, Decimal(0))\nprint(f'Total: {total:.2f}')\n",
+      "skills/octopus_harness_guard/SKILL.md": "---\nname: octopus_harness_guard\ndescription: solving tasks in domain security_policy\n---\n1. Inspect source files.\n2. Run `python3 scripts/summarize.py`.\n3. Verify output invariants.",
+      "systemprompt.md": "You are an Agent Octopus autonomous solver operating in domain 'security_policy'. Execute scripts/summarize.py and adhere to Cedar & Dogwood invariants.",
+      "tool_descriptions/tool_guidance.md": "Prefer deterministic helper scripts in `scripts/` and validate outputs before concluding."
+    },
+    "timestamp": 1792860347
   }
 ]

@@ -3,4 +3,4 @@ pub mod server;
 pub mod strict_http;
 pub mod static_files;
 
-pub use server::start_web_server;
+pub use server::{is_loopback_port_available, select_available_loopback_port, start_web_server};

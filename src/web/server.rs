@@ -29,6 +29,7 @@ use super::api::{
     handle_dream_rsi_feed_trajectories,
     handle_harness2_status, handle_harness2_run, handle_harness2_library,
     handle_harness2_validate_tree,
+    handle_oshoosiclaw_containment_status, handle_oshoosiclaw_containment_evaluate,
     WebState,
 };
 use super::static_files::INDEX_HTML;
@@ -38,39 +39,151 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 
+/// Checks whether a loopback port is completely free on both IPv4 (`127.0.0.1`) and IPv6 (`[::1]`).
+/// Never touches or allows port 5000.
+pub fn is_loopback_port_available(port: u16) -> bool {
+    if port == 0 || port == 5000 {
+        return false;
+    }
+    let ipv4_ok = std::net::TcpListener::bind(("127.0.0.1", port)).is_ok();
+    if !ipv4_ok {
+        return false;
+    }
+    let ipv6_supported = std::net::TcpListener::bind(("::1", 0)).is_ok();
+    if ipv6_supported {
+        std::net::TcpListener::bind(("::1", port)).is_ok()
+    } else {
+        true
+    }
+}
+
+/// Selects the first available dual-stack loopback port starting from `preferred_port`,
+/// falling back across `5005..=5099`, `8080..=8099`, and finally an OS-assigned dynamic port.
+pub fn select_available_loopback_port(preferred_port: u16) -> u16 {
+    let start_port = if preferred_port == 0 || preferred_port == 5000 {
+        5005
+    } else {
+        preferred_port
+    };
+    if is_loopback_port_available(start_port) {
+        return start_port;
+    }
+    for port in (5005..=5099).chain(8080..=8099) {
+        if port != start_port && is_loopback_port_available(port) {
+            return port;
+        }
+    }
+    if let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", 0)) {
+        if let Ok(local) = listener.local_addr() {
+            return local.port();
+        }
+    }
+    5005
+}
+
 /// Starts the Agent Octopus Web Server, listening across dual-stack loopback (IPv4 127.0.0.1 and IPv6 [::1])
-/// on the dynamically assigned or requested port (default 5005). Never touches or binds port 5000.
+/// on the dynamically assigned or requested port (default 5005). If the requested port is in use,
+/// automatically tries the next available port. Never touches or binds port 5000.
 pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state = Arc::new(WebState::default());
 
-    let port = match addr.rsplit(':').next() {
-        Some(p) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => p,
-        _ => "5005",
-    };
+    let requested_port: u16 = addr
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse::<u16>().ok())
+        .or_else(|| {
+            std::env::var("OCTOPUS_PORT")
+                .ok()
+                .and_then(|v| v.parse::<u16>().ok())
+        })
+        .filter(|&p| p != 0 && p != 5000)
+        .unwrap_or(5005);
 
-    let mut candidate_addrs = vec![
-        addr.to_string(),
-        format!("127.0.0.1:{}", port),
-        format!("[::1]:{}", port),
-    ];
-    candidate_addrs.dedup();
+    let ipv6_supported = TcpListener::bind("[::1]:0").await.is_ok();
+
+    let mut candidate_ports: Vec<u16> = Vec::with_capacity(120);
+    candidate_ports.push(requested_port);
+    for port in (5005..=5099).chain(8080..=8099) {
+        if port != requested_port && port != 5000 {
+            candidate_ports.push(port);
+        }
+    }
+    candidate_ports.push(0); // Final fallback: OS-assigned ephemeral port
 
     let mut listeners = Vec::new();
-    let mut bound_addrs = std::collections::HashSet::new();
+    let mut selected_port = requested_port;
 
-    for candidate in candidate_addrs {
-        if let Ok(listener) = TcpListener::bind(&candidate).await {
-            if let Ok(local) = listener.local_addr() {
-                if bound_addrs.insert(local.to_string()) {
-                    println!("🐙 Agent Octopus Web Dashboard running on: http://{}", local);
-                    listeners.push(listener);
+    for candidate_port in candidate_ports {
+        if candidate_port == 0 {
+            if let Ok(v4_listener) = TcpListener::bind("127.0.0.1:0").await {
+                if let Ok(local_v4) = v4_listener.local_addr() {
+                    selected_port = local_v4.port();
+                    listeners.push(v4_listener);
+                    if ipv6_supported {
+                        if let Ok(v6_listener) = TcpListener::bind(format!("[::1]:{}", selected_port)).await {
+                            listeners.push(v6_listener);
+                        }
+                    }
+                    break;
                 }
+            }
+            continue;
+        }
+
+        let v4_addr = format!("127.0.0.1:{}", candidate_port);
+        let v6_addr = format!("[::1]:{}", candidate_port);
+
+        match TcpListener::bind(&v4_addr).await {
+            Ok(v4_listener) => {
+                if ipv6_supported {
+                    match TcpListener::bind(&v6_addr).await {
+                        Ok(v6_listener) => {
+                            selected_port = candidate_port;
+                            listeners.push(v4_listener);
+                            listeners.push(v6_listener);
+                            break;
+                        }
+                        Err(_) => {
+                            // IPv6 loopback on this port is in use by another process; drop v4 and try next port
+                            drop(v4_listener);
+                            continue;
+                        }
+                    }
+                } else {
+                    selected_port = candidate_port;
+                    listeners.push(v4_listener);
+                    break;
+                }
+            }
+            Err(_) => {
+                // IPv4 loopback on this port is in use; try next port
+                continue;
             }
         }
     }
 
     if listeners.is_empty() {
-        return Err(format!("FAIL-CLOSED: Unable to bind loopback on port {}", port).into());
+        return Err(format!(
+            "FAIL-CLOSED: Unable to bind any loopback port (tried {} and fallback range 5005..5099)",
+            requested_port
+        )
+        .into());
+    }
+
+    if selected_port != requested_port {
+        println!(
+            "⚠️ Port {} is in use — automatically switched to available port {}",
+            requested_port, selected_port
+        );
+    }
+
+    let _ = std::fs::create_dir_all("logs");
+    let _ = std::fs::write("logs/active_port.txt", selected_port.to_string());
+
+    for listener in &listeners {
+        if let Ok(local) = listener.local_addr() {
+            println!("🐙 Agent Octopus Web Dashboard running on: http://{}", local);
+        }
     }
 
     let first = listeners.remove(0);
@@ -1717,6 +1830,35 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
+        ("GET", "/api/containment/oshoosiclaw-status") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_oshoosiclaw_containment_status(&state))) {
+                Ok(body) => ("200 OK", body),
+                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/containment/oshoosiclaw-status")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/containment/oshoosiclaw-evaluate") => {
+            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_oshoosiclaw_containment_evaluate(&state, body))) {
+                Ok(Ok(resp)) => ("200 OK", resp),
+                Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/containment/oshoosiclaw-evaluate")),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                response_body.len(),
+                response_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
         ("GET", "/api/test-stream") => {
             // Extract suite from query
             let mut suite_name = "cedar_policy_tests";
@@ -1790,6 +1932,10 @@ async fn stream_command_output(
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(crate::security::console_defense::CREATE_NO_WINDOW);
+    }
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -2196,6 +2342,7 @@ async fn handle_sse_test_stream(
             "research_and_atlas_tests" => "research_and_atlas_tests",
             "sentinel_ring_tests" => "sentinel_ring_tests",
             "strict_http_terminator_tests" => "strict_http_terminator_tests",
+            "oshoosiclaw_adapted_containment_tests" => "oshoosiclaw_adapted_containment_tests",
             _ => {
                 let err_event = format!(
                     "data: {}\n\n",

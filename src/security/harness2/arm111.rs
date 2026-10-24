@@ -327,7 +327,9 @@ impl RecursiveHarnessOptimizerArm {
                     "seq" => "sequential",
                     _ => "both",
                 };
+                use crate::security::console_defense::CommandConsoleExt;
                 if let Ok(output) = std::process::Command::new("python")
+                    .enforce_no_window()
                     .env("PYTHONPATH", &vendor_dir)
                     .args([
                         "-m",

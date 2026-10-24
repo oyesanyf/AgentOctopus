@@ -1031,3 +1031,103 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
         "FAIL-CLOSED: Windows Job Object and AppContainer process isolation is strictly unsupported on non-Windows platforms. Production containment refused.".to_string(),
     ))
 }
+
+
+// ============================================================================
+// OshoosiClaw Adapted Windows Confinement Policy & Pre-Resume Confinement Gate
+// ============================================================================
+
+/// Windows Job Object + AppContainer + UI Limit Confinement Policy (`RULE[windows_containment_invariants.md]`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WindowsConfinementPolicy {
+    pub container_name: String,
+    pub require_appcontainer: bool,
+    pub kill_on_job_close: bool,
+    pub active_process_limit: u32,
+    pub max_memory_bytes: usize,
+    pub enforce_ui_limits: bool,
+    pub create_suspended_before_job_assign: bool,
+}
+
+impl Default for WindowsConfinementPolicy {
+    fn default() -> Self {
+        Self {
+            container_name: "AgentOctopus.DefaultConfinement".to_string(),
+            require_appcontainer: true,
+            kill_on_job_close: true,
+            active_process_limit: 1,
+            max_memory_bytes: 64 * 1024 * 1024,
+            enforce_ui_limits: true,
+            create_suspended_before_job_assign: true,
+        }
+    }
+}
+
+/// Validates that a `WindowsConfinementPolicy` satisfies all mandatory kernel isolation invariants.
+pub fn verify_windows_confinement_invariants(
+    policy: &WindowsConfinementPolicy,
+) -> Result<(), OctopusSecurityError> {
+    if !policy.create_suspended_before_job_assign {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "WIN_CONFINEMENT_INVARIANT: Worker process MUST be spawned with CREATE_SUSPENDED (0x00000004) before Job Object assignment".to_string(),
+        ));
+    }
+    if !policy.kill_on_job_close {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "WIN_CONFINEMENT_INVARIANT: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE must be enabled".to_string(),
+        ));
+    }
+    if policy.active_process_limit == 0 {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "WIN_CONFINEMENT_INVARIANT: active_process_limit must be >= 1".to_string(),
+        ));
+    }
+    if policy.max_memory_bytes == 0 || policy.max_memory_bytes > 512 * 1024 * 1024 {
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "WIN_CONFINEMENT_INVARIANT: max_memory_bytes ({}) outside valid confinement range",
+            policy.max_memory_bytes
+        )));
+    }
+    if !policy.enforce_ui_limits {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "WIN_CONFINEMENT_INVARIANT: JOB_OBJECT_UILIMIT_ALL must be enforced to prevent Shatter/clipboard attacks".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Evaluates the pre-resume confinement gate (`RULE[windows_containment_invariants.md]`):
+/// Asserts that `created_suspended`, `appcontainer_bound` (when required), `assigned_to_job`,
+/// and `verified_in_job` (`IsProcessInJob == TRUE`) all hold BEFORE `ResumeThread` is ever called.
+/// If any check fails, the suspended process MUST be terminated immediately with zero fallback.
+pub fn evaluate_pre_resume_confinement_gate(
+    policy: &WindowsConfinementPolicy,
+    created_suspended: bool,
+    appcontainer_bound: bool,
+    assigned_to_job: bool,
+    verified_in_job: bool,
+) -> Result<(), OctopusSecurityError> {
+    verify_windows_confinement_invariants(policy)?;
+
+    if !created_suspended {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL_CLOSED_PRE_RESUME: Process was not created with CREATE_SUSPENDED (0x00000004)".to_string(),
+        ));
+    }
+    if policy.require_appcontainer && !appcontainer_bound {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL_CLOSED_PRE_RESUME: AppContainer profile/SID binding failed; unisolated fallback forbidden".to_string(),
+        ));
+    }
+    if !assigned_to_job {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL_CLOSED_PRE_RESUME: AssignProcessToJobObject failed; terminating suspended process before ResumeThread".to_string(),
+        ));
+    }
+    if !verified_in_job {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL_CLOSED_PRE_RESUME: IsProcessInJob returned FALSE; terminating suspended process before ResumeThread".to_string(),
+        ));
+    }
+    Ok(())
+}

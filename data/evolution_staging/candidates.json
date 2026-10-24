@@ -310,5 +310,29 @@
     "promotion_state": "ApprovedActive",
     "code_diff": "+ [OpenEvolve Auto-Fix for 'CEDAR_TEMPORAL_LEDGER_WRITER': synthesized & promoted remediate_cedar_temporal_ledger_writer() (575 bytes)]",
     "source_code": "# OpenEvolve Arm 109 Auto-Synthesized Cedar/Dogwood Policy Guard for cedar_temporal_ledger_writer\ndef remediate_cedar_temporal_ledger_writer(principal, action, resource, context):\n    \"\"\" Deterministic numerical equivalence & temporal prerequisite verifier. \"\"\"\n    amount = context.get(\"amount_cents\", 0)\n    approved = bool(context.get(\"approved\", False))\n    if isinstance(amount, int) and 0 < amount <= 10000000 and approved:\n        return {\"is_allowed\": True, \"remediated_by\": \"OpenEvolve_Arm109\"}\n    return {\"is_allowed\": False, \"remediated_by\": \"OpenEvolve_Arm109\"}\n"
+  },
+  {
+    "candidate_id": "autofix-kernel_cedar_auth_01-ebbb",
+    "target_module": "auto_remediation",
+    "target_path": "data/evolution_staging/auto_remediation_patches.py",
+    "generation": 1,
+    "created_at": 1792860347,
+    "metrics": {
+      "combined_score": 0.99,
+      "coverage_score": 0.98,
+      "false_positive_rate": 0.0,
+      "reproducibility": 1.0,
+      "latency_ms": 0.8,
+      "security_clean": true
+    },
+    "security_audit": {
+      "passed": true,
+      "violations": [],
+      "audited_tokens": 73,
+      "audit_timestamp": 1792860347
+    },
+    "promotion_state": "ApprovedActive",
+    "code_diff": "+ [OpenEvolve Auto-Fix for 'KERNEL-CEDAR-AUTH-01': synthesized & promoted remediate_kernel_cedar_auth_01() (849 bytes)]",
+    "source_code": "# OpenEvolve Arm 109 Auto-Synthesized Remediation Patch for kernel_cedar_auth_01\ndef remediate_kernel_cedar_auth_01(principal, action, resource, context):\n    \"\"\" Enforces Cedar Rule #6: Kernel Sentinel Arm authorized for KernelEnforce on KernelSubstrate. \"\"\"\n    if principal == \"kernel_sentinel_arm\" and action in (\"kernel_enforce\", \"KernelEnforce\") and resource == \"KernelSubstrate\":\n        ring0_driver_loaded = bool(context.get(\"ring0_driver_loaded\", False))\n        integrity_verified = bool(context.get(\"integrity_verified\", False))\n        if ring0_driver_loaded and integrity_verified:\n            return {\"is_allowed\": True, \"policy_id\": \"policy_kernel_sentinel_rule6\", \"remediated_by\": \"OpenEvolve_Arm109\"}\n        return {\"is_allowed\": False, \"reason\": \"Denied: ring0_driver_loaded and integrity_verified must be true\"}\n    return None\n"
   }
 ]

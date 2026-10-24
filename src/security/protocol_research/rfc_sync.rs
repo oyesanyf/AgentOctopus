@@ -107,7 +107,9 @@ impl RfcIndexSynchronizer {
 
         let last_etag = self.knowledge_base.get_metadata("rfc_index_etag").unwrap_or_default();
 
+        use crate::security::console_defense::CommandConsoleExt;
         let mut cmd = std::process::Command::new("curl.exe");
+        cmd.enforce_no_window();
         cmd.arg("-s")
            .arg("-i")
            .arg("--max-time")

@@ -59,3 +59,23 @@ pub use security::{
 pub use swarm::{SwarmBatchSummary, SwarmManager};
 pub use telemetry::{AnomalyDetector, WatchdogSupervisor};
 pub use web::{start_web_server, static_files::INDEX_HTML};
+
+
+pub use containment_ring::{
+    is_restricted_rebinding_ip, now_micros, validate_agent_egress_url, AlgebraicTraceProof,
+    DiracDeltaCapabilityTicket, HomologicalAuditReport, HomologicalBoundaryAuditor,
+    IndependentTrustBoundaryVerifier, MeshWatchOutSignal, MultiLayerGateVerdict,
+    PinnedToolObjectBinding, VanishingPolynomialTraceVerifier, ZeroCopyImmutableToolBuffer,
+    MERSENNE_PRIME_127,
+};
+pub use security::{
+    compute_hardened_console_mode, evaluate_pre_resume_confinement_gate, harden_windows_console,
+    is_console_mode_hardened, validate_agent_filesystem_access, validate_sandbox_relative_path,
+    verify_windows_confinement_invariants, AgentClassificationVerdict, AlignmentScanVerdict,
+    CommandConsoleExt, ConfidenceInterval95, CyberBattleBenchmarkReport, DynamicAgentClassifier,
+    FileLineageRecord, FileLineageTracker, HostActuationPore, LineageCheckVerdict,
+    MercuryContainmentEngine, MercuryEvaluationResult, OrbWebContainmentEngine,
+    OrbWebEvaluationResult, PolicyBenchmarkMetrics, ProcessBehavioralTelemetry,
+    RuntimeAlignmentScanner, SessionIntentContract, SilkRegime, ToolCallTraceStep,
+    WindowsConfinementPolicy, ZeroMiProjectionResult, ZeroMutualInformationProjector,
+};

@@ -1,4 +1,5 @@
 use super::types::{CandidateProbeDto, RfcChunkDto};
+use crate::security::console_defense::CommandConsoleExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -15,6 +16,15 @@ impl Default for RfcKnowledgeBase {
 }
 
 impl RfcKnowledgeBase {
+    /// Creates a `sqlite3` command pre-configured with `CREATE_NO_WINDOW (0x0800_0000)`
+    /// (`EDR-VEC-23`) so it never spawns a visible console prompt window on Windows.
+    fn sqlite_cmd(&self) -> Command {
+        let mut cmd = Command::new("sqlite3");
+        cmd.enforce_no_window();
+        cmd.arg(&self.db_path);
+        cmd
+    }
+
     /// Creates a new RfcKnowledgeBase pointing to Octopus's private data store.
     pub fn new() -> Self {
         let base_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -94,8 +104,7 @@ impl RfcKnowledgeBase {
             );
         ";
 
-        let _ = Command::new("sqlite3")
-            .arg(&self.db_path)
+        let _ = self.sqlite_cmd()
             .arg(schema_sql)
             .output();
     }
@@ -109,8 +118,7 @@ impl RfcKnowledgeBase {
     /// Returns all counts including recorded evaluations.
     pub fn get_full_counts(&self) -> (usize, usize, usize, usize) {
         let query = "SELECT (SELECT COUNT(*) FROM rfcs), (SELECT COUNT(*) FROM fragments), (SELECT COUNT(*) FROM probes), (SELECT COUNT(*) FROM evaluations);";
-        let output = Command::new("sqlite3")
-            .arg(&self.db_path)
+        let output = self.sqlite_cmd()
             .arg(query)
             .output();
 
@@ -150,8 +158,7 @@ impl RfcKnowledgeBase {
         );
 
         let mut results = Vec::new();
-        let output = Command::new("sqlite3")
-            .arg(&self.db_path)
+        let output = self.sqlite_cmd()
             .arg("-separator")
             .arg("<|OCT_SEP|>")
             .arg(&query)
@@ -184,8 +191,7 @@ impl RfcKnowledgeBase {
         );
 
         let mut probes = Vec::new();
-        let output = Command::new("sqlite3")
-            .arg(&self.db_path)
+        let output = self.sqlite_cmd()
             .arg("-separator")
             .arg("<|OCT_SEP|>")
             .arg(&query)
@@ -239,8 +245,7 @@ impl RfcKnowledgeBase {
             if baseline_subtracted { 1 } else { 0 }
         );
 
-        let _ = Command::new("sqlite3")
-            .arg(&self.db_path)
+        let _ = self.sqlite_cmd()
             .arg(&query)
             .output();
     }
@@ -267,8 +272,7 @@ impl RfcKnowledgeBase {
             if requires_rule_promotion { 1 } else { 0 }
         );
 
-        let _ = Command::new("sqlite3")
-            .arg(&self.db_path)
+        let _ = self.sqlite_cmd()
             .arg(&query)
             .output();
     }
@@ -282,8 +286,7 @@ impl RfcKnowledgeBase {
             "INSERT OR REPLACE INTO rfcs (rfc_number, title, published_date, status) VALUES ({}, '{}', '{}', '{}');",
             rfc_number, clean_title, clean_date, clean_status
         );
-        let _ = Command::new("sqlite3")
-            .arg(&self.db_path)
+        let _ = self.sqlite_cmd()
             .arg(&query)
             .output();
     }
@@ -296,8 +299,7 @@ impl RfcKnowledgeBase {
             "INSERT OR REPLACE INTO fragments (rfc_number, title, chunk_index, content, is_normative) VALUES ({}, '{}', {}, '{}', {});",
             rfc_number, clean_title, chunk_index, clean_content, if is_normative { 1 } else { 0 }
         );
-        let _ = Command::new("sqlite3")
-            .arg(&self.db_path)
+        let _ = self.sqlite_cmd()
             .arg(&query)
             .output();
     }
@@ -309,8 +311,7 @@ impl RfcKnowledgeBase {
             rfc_number
         );
         let mut results = Vec::new();
-        let output = Command::new("sqlite3")
-            .arg(&self.db_path)
+        let output = self.sqlite_cmd()
             .arg("-separator")
             .arg("<|OCT_SEP|>")
             .arg(&query)
@@ -338,7 +339,7 @@ impl RfcKnowledgeBase {
     /// Returns the total chunk count for an RFC.
     pub fn get_chunk_count_for_rfc(&self, rfc_number: u32) -> usize {
         let query = format!("SELECT COUNT(*) FROM fragments WHERE rfc_number = {};", rfc_number);
-        if let Ok(out) = Command::new("sqlite3").arg(&self.db_path).arg(&query).output() {
+        if let Ok(out) = self.sqlite_cmd().arg(&query).output() {
             let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
             text.parse().unwrap_or(0)
         } else {
@@ -364,8 +365,7 @@ impl RfcKnowledgeBase {
     pub fn get_metadata(&self, key: &str) -> Option<String> {
         let clean_key = key.replace('\'', "''");
         let query = format!("SELECT value FROM sync_metadata WHERE key = '{}';", clean_key);
-        let output = Command::new("sqlite3")
-            .arg(&self.db_path)
+        let output = self.sqlite_cmd()
             .arg(&query)
             .output()
             .ok()?;
@@ -385,8 +385,7 @@ impl RfcKnowledgeBase {
             "INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('{}', '{}', datetime('now'));",
             clean_key, clean_val
         );
-        let _ = Command::new("sqlite3")
-            .arg(&self.db_path)
+        let _ = self.sqlite_cmd()
             .arg(&query)
             .output();
     }
@@ -394,8 +393,7 @@ impl RfcKnowledgeBase {
     /// Deletes all fragments for a given RFC number for transactional updates.
     pub fn delete_rfc_fragments(&self, rfc_number: u32) {
         let query = format!("DELETE FROM fragments WHERE rfc_number = {};", rfc_number);
-        let _ = Command::new("sqlite3")
-            .arg(&self.db_path)
+        let _ = self.sqlite_cmd()
             .arg(&query)
             .output();
     }
@@ -407,8 +405,7 @@ impl RfcKnowledgeBase {
         }
 
         use std::io::Write;
-        let mut child = match Command::new("sqlite3")
-            .arg(&self.db_path)
+        let mut child = match self.sqlite_cmd()
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

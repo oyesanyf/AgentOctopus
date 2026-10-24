@@ -5,12 +5,40 @@ Systematically tests all 10 tabs, interactive submenus, presets, controls, and A
 on http://127.0.0.1:5005.
 """
 
+import os
 import sys
 import json
 import urllib.request
 import urllib.error
 
-BASE_URL = "http://127.0.0.1:5005"
+
+def _resolve_active_base_url():
+    candidates = []
+    env_port = os.environ.get("OCTOPUS_PORT")
+    if env_port and env_port.isdigit():
+        candidates.append(int(env_port))
+    try:
+        with open("logs/active_port.txt", "r", encoding="utf-8") as f:
+            file_port = f.read().strip()
+            if file_port.isdigit():
+                candidates.append(int(file_port))
+    except Exception:
+        pass
+    for p in range(5005, 5026):
+        if p not in candidates:
+            candidates.append(p)
+    for port in candidates:
+        url = f"http://127.0.0.1:{port}"
+        try:
+            with urllib.request.urlopen(f"{url}/api/status", timeout=0.8) as resp:
+                if resp.getcode() == 200:
+                    return url
+        except Exception:
+            continue
+    return f"http://127.0.0.1:{candidates[0] if candidates else 5005}"
+
+
+BASE_URL = _resolve_active_base_url()
 
 class TestSuiteResults:
     def __init__(self):
@@ -873,6 +901,28 @@ def run_all_tests():
         results.record_pass(tab, "GET /api/harness2/library (Persistent Experience Library R)", f"Adopted Harnesses: {h2_lib.get('total_entries')}")
     else:
         results.record_fail(tab, "GET /api/harness2/library", f"Status {status}, Body: {body[:100]}")
+
+    # =========================================================================
+    # TAB 16: OSHOOSICLAW ADAPTED CONTAINMENT & MATHEMATICAL LAWS
+    # =========================================================================
+    tab = "Tab 16: OshoosiClaw Adapted Containment & Mathematical Laws"
+    print(f"\n--- Checking {tab} ---")
+
+    # 16.1 OshoosiClaw Containment Status
+    status, body, _ = http_get("/api/containment/oshoosiclaw-status")
+    oc_status = json.loads(body) if status == 200 else {}
+    if status == 200 and oc_status.get("status") == "ONLINE" and oc_status.get("orthogonal_3layer_trust_gate", {}).get("overall_allowed") is True:
+        results.record_pass(tab, "GET /api/containment/oshoosiclaw-status (Laws 1, 2, 3, 5, 8 & 3-Layer Trust Gate)", f"CREATE_NO_WINDOW={oc_status.get('console_defense_edr_vec_23', {}).get('create_no_window_flag')}")
+    else:
+        results.record_fail(tab, "GET /api/containment/oshoosiclaw-status", f"Status {status}, Body: {body[:100]}")
+
+    # 16.2 OshoosiClaw 5-Policy RL Benchmark Evaluation
+    status, body, _ = http_post("/api/containment/oshoosiclaw-evaluate", {"action": "rl_benchmark", "episodes": 5, "seed": 42})
+    oc_eval = json.loads(body) if status == 200 else {}
+    if status == 200 and oc_eval.get("learned_superiority_verified") is True and len(oc_eval.get("policies", [])) == 5:
+        results.record_pass(tab, "POST /api/containment/oshoosiclaw-evaluate (5-Policy RL Benchmark & 95% CIs)", f"Backend: {oc_eval.get('backend_label')}, Superiority: {oc_eval.get('learned_superiority_verified')}")
+    else:
+        results.record_fail(tab, "POST /api/containment/oshoosiclaw-evaluate", f"Status {status}, Body: {body[:100]}")
 
     # =========================================================================
     # SUMMARY REPORT

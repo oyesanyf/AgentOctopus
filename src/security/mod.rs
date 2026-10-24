@@ -81,3 +81,42 @@ pub use harness2::{
     HarnessRunReport, HarnessStageResult, HarnessSurfaceSpec, HarnessTreeValidationReport,
     HarnessTreeValidator, RecursiveHarnessOptimizerArm,
 };
+
+
+pub mod agent_classifier;
+pub mod alignment_scanner;
+pub mod console_defense;
+pub mod file_lineage;
+pub mod mercury_guard;
+pub mod spider_physics;
+
+pub use agent_classifier::{
+    AgentClassificationVerdict, DynamicAgentClassifier, ProcessBehavioralTelemetry,
+};
+pub use alignment_scanner::{
+    AlignmentScanVerdict, RuntimeAlignmentScanner, SessionIntentContract, ToolCallTraceStep,
+};
+pub use breakouts::{
+    validate_agent_filesystem_access, validate_sandbox_relative_path, ZeroMiProjectionResult,
+    ZeroMutualInformationProjector,
+};
+pub use console_defense::{
+    compute_hardened_console_mode, harden_windows_console, is_console_mode_hardened,
+    CommandConsoleExt, CREATE_NO_WINDOW, ENABLE_EXTENDED_FLAGS, ENABLE_INSERT_MODE,
+    ENABLE_MOUSE_INPUT, ENABLE_QUICK_EDIT_MODE,
+};
+pub use file_lineage::{
+    FileLineageRecord, FileLineageTracker, LineageCheckVerdict, MAX_LINEAGE_RECORDS,
+};
+pub use mercury_guard::{
+    HostActuationPore, MercuryContainmentEngine, MercuryEvaluationResult, CRITICAL_WEBER_NUMBER,
+    MERCURY_ABS_COS_THETA, MERCURY_DENSITY_KG_M3, MERCURY_SURFACE_TENSION_N_PER_M,
+};
+pub use rl_defense::{
+    ConfidenceInterval95, CyberBattleBenchmarkReport, PolicyBenchmarkMetrics, PolicyBenchmarkReport,
+};
+pub use spider_physics::{OrbWebContainmentEngine, OrbWebEvaluationResult, SilkRegime};
+pub use windows_sandbox::{
+    evaluate_pre_resume_confinement_gate, verify_windows_confinement_invariants,
+    WindowsConfinementPolicy,
+};

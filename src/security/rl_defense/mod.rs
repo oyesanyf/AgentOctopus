@@ -4,6 +4,9 @@ pub mod reward;
 pub mod state;
 
 pub use action::AdaptiveDefenseAction;
-pub use engine::{AdaptiveRlDefenseEngine, DefenseExperience, PerTrainingMetrics, PolicyBenchmarkReport, RlDefenseStats};
+pub use engine::{
+    AdaptiveRlDefenseEngine, ConfidenceInterval95, CyberBattleBenchmarkReport, DefenseExperience,
+    PerTrainingMetrics, PolicyBenchmarkMetrics, PolicyBenchmarkReport, RlDefenseStats,
+};
 pub use reward::AdaptiveRewardEngine;
 pub use state::AdaptiveStateVector;

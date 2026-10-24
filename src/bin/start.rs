@@ -77,29 +77,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         check_startup_dependencies_and_toolchains(console_requested);
     });
 
-    // Select port dynamically: default to 5005, then probe 5006..5050, or bind dynamically via OS port 0
-    let candidate_ports = [5005, 5006, 5007, 5008, 5010, 5050, 8080];
-    let mut selected_port = 5005;
+    // Select port dynamically: default to 5005 (or --port / OCTOPUS_PORT), then probe 5005..=5099, 8080..=8099, or OS port 0
+    let mut preferred_port: u16 = std::env::var("OCTOPUS_PORT")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+        .filter(|&p| p != 0 && p != 5000)
+        .unwrap_or(5005);
 
-    let mut bound = false;
-    for port in candidate_ports {
-        if let Ok(listener) = std::net::TcpListener::bind(format!("127.0.0.1:{}", port)) {
-            if let Ok(local) = listener.local_addr() {
-                selected_port = local.port();
-                bound = true;
-                drop(listener);
-                break;
+    for i in 0..args.len() {
+        if (args[i] == "--port" || args[i] == "-p") && i + 1 < args.len() {
+            if let Ok(p) = args[i + 1].parse::<u16>() {
+                if p != 0 && p != 5000 {
+                    preferred_port = p;
+                }
+            }
+        } else if let Some(val) = args[i].strip_prefix("--port=") {
+            if let Ok(p) = val.parse::<u16>() {
+                if p != 0 && p != 5000 {
+                    preferred_port = p;
+                }
             }
         }
     }
 
-    if !bound {
-        if let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:0") {
-            if let Ok(local) = listener.local_addr() {
-                selected_port = local.port();
-                drop(listener);
-            }
-        }
+    let selected_port = agent_octopus::web::select_available_loopback_port(preferred_port);
+    if selected_port != preferred_port && console_requested {
+        println!(
+            "  [!] Port {} is in use — automatically selected available port {}",
+            preferred_port, selected_port
+        );
     }
 
     let addr = format!("127.0.0.1:{}", selected_port);
@@ -113,13 +119,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // Spawn browser launch in background after short delay without spawning any cmd.exe shell window
-    let url_for_browser = dashboard_url.clone();
+    let fallback_port = selected_port;
     tokio::spawn(async move {
         sleep(Duration::from_millis(400)).await;
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if std::env::var("OCTOPUS_NO_BROWSER").is_ok() || std::env::var("HEADLESS").is_ok() {
                 return;
             }
+            let active_port = std::fs::read_to_string("logs/active_port.txt")
+                .ok()
+                .and_then(|s| s.trim().parse::<u16>().ok())
+                .unwrap_or(fallback_port);
+            let url_for_browser = format!("http://127.0.0.1:{}", active_port);
             #[cfg(target_os = "windows")]
             {
                 use std::os::windows::process::CommandExt;

@@ -1037,6 +1037,105 @@ impl ArmContainmentRing {
             appcontainer_sid,
         }
     }
+
+    /// `SEC-RING-01`: Validates that a target OS PID is a terminable worker child process
+    /// and NEVER the supervisor process itself (`std::process::id()`) or a Windows/Unix system
+    /// process (`pid <= 4`).
+    pub fn verify_terminable_child_pid(pid: u32) -> Result<(), OctopusSecurityError> {
+        let self_pid = std::process::id();
+        if pid <= 4 || pid == self_pid {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "SEC-RING-01_PID_PROTECTION: Refusing to terminate protected system/supervisor PID {} (self_pid={})",
+                pid, self_pid
+            )));
+        }
+        Ok(())
+    }
+
+    /// Issues a Law 3 `DiracDeltaCapabilityTicket` bound to this arm's active generation epoch.
+    pub async fn issue_dirac_ticket(
+        &self,
+        tool: &str,
+        resource: &str,
+        window_us: u64,
+        canary_token_hash: Option<String>,
+    ) -> Result<super::primitives::DiracDeltaCapabilityTicket, OctopusSecurityError> {
+        let current_gen = self.current_generation();
+        self.validate_tool_invocation(tool, resource, current_gen)
+            .await?;
+        let key = self.epoch_key(current_gen);
+        Ok(super::primitives::DiracDeltaCapabilityTicket::issue(
+            &self.agent_name,
+            current_gen,
+            tool,
+            resource,
+            window_us,
+            &key,
+            canary_token_hash,
+        ))
+    }
+
+    /// Consumes a Law 3 `DiracDeltaCapabilityTicket` against this arm's active generation epoch.
+    pub async fn consume_dirac_ticket(
+        &self,
+        ticket: &mut super::primitives::DiracDeltaCapabilityTicket,
+        tool: &str,
+        resource: &str,
+        observed_canary_hash: Option<&str>,
+    ) -> Result<[u8; 32], OctopusSecurityError> {
+        let current_gen = self.current_generation();
+        self.validate_epoch(current_gen).await?;
+        let key = self.epoch_key(current_gen);
+        ticket.consume_once(tool, resource, current_gen, &key, observed_canary_hash)
+    }
+
+    /// Executes a tool closure inside the pre-execution containment gate:
+    /// 1. Verifies active generation epoch and tool/resource scope.
+    /// 2. Enforces step and 64MB memory budgets.
+    /// 3. Consumes the single-use Law 3 `DiracDeltaCapabilityTicket` (`Cap(t)` impulse).
+    /// 4. Page-locks `payload` in a Law 5 `ZeroCopyImmutableToolBuffer` (`PAGE_READONLY`, `\Delta t_TOCTOU = 0`).
+    /// 5. Evaluates the 4-category `BreakoutDefenseCoordinator` before invoking `closure`.
+    pub async fn execute_contained_tool<F, R>(
+        &self,
+        ticket: &mut super::primitives::DiracDeltaCapabilityTicket,
+        tool: &str,
+        resource: &str,
+        payload: &[u8],
+        observed_canary_hash: Option<&str>,
+        closure: F,
+    ) -> Result<R, OctopusSecurityError>
+    where
+        F: FnOnce(&[u8]) -> Result<R, OctopusSecurityError>,
+    {
+        let current_gen = self.current_generation();
+        self.validate_tool_invocation(tool, resource, current_gen)
+            .await?;
+        let next_step = (self.step_counter.load(Ordering::SeqCst) as usize) + 1;
+        self.check_step_budget(next_step)?;
+        self.check_memory_budget(payload.len())?;
+
+        // Law 3: Consume single-use Dirac capability ticket
+        let _receipt = self
+            .consume_dirac_ticket(ticket, tool, resource, observed_canary_hash)
+            .await?;
+
+        // Law 5: Hardware page-locked immutable buffer (\Delta t_TOCTOU = 0)
+        let immutable_buf = super::primitives::ZeroCopyImmutableToolBuffer::create_and_lock(payload)?;
+        let verified_slice = immutable_buf.as_verified_slice()?;
+
+        // 4-Category Breakout Coordinator check
+        let payload_str = String::from_utf8_lossy(verified_slice);
+        let coordinator = crate::security::BreakoutDefenseCoordinator::default();
+        let eval = coordinator.evaluate_action(&self.agent_name, tool, resource, &payload_str);
+        if !eval.is_clean {
+            return Err(OctopusSecurityError::BreakoutDetected(format!(
+                "PRE_EXEC_BREAKOUT_VETO: {}",
+                eval.composite_verdict
+            )));
+        }
+
+        closure(verified_slice)
+    }
 }
 
 /// A supervisor-managed registry containing the Level 1 containment rings
@@ -1045,6 +1144,7 @@ impl ArmContainmentRing {
 pub struct ArmRingRegistry {
     pub rings: Arc<RwLock<std::collections::HashMap<usize, Arc<ArmContainmentRing>>>>,
     master_seed: [u8; 32],
+    watchout_signals: Arc<RwLock<Vec<super::primitives::MeshWatchOutSignal>>>,
 }
 
 impl ArmRingRegistry {
@@ -1096,7 +1196,31 @@ impl ArmRingRegistry {
         Self {
             rings: Arc::new(RwLock::new(map)),
             master_seed: seed,
+            watchout_signals: Arc::new(RwLock::new(Vec::new())),
         }
+    }
+
+    /// Records a P2P Mesh Watch-Out Broadcast signal across the swarm.
+    pub async fn record_mesh_watchout(
+        &self,
+        severed_arm_id: usize,
+        revoked_generation: u64,
+        new_generation: u64,
+        reason: &str,
+    ) {
+        let mut signals = self.watchout_signals.write().await;
+        signals.push(super::primitives::MeshWatchOutSignal {
+            severed_arm_id,
+            revoked_generation,
+            new_generation,
+            reason: reason.to_string(),
+            timestamp_us: super::primitives::now_micros(),
+        });
+    }
+
+    /// Returns all P2P Mesh Watch-Out Broadcast signals emitted by autotomy events.
+    pub async fn list_watchout_signals(&self) -> Vec<super::primitives::MeshWatchOutSignal> {
+        self.watchout_signals.read().await.clone()
     }
 
     /// Generates a cryptographically strong 32-byte master seed for ring derivations.
@@ -1150,7 +1274,11 @@ impl ArmRingRegistry {
     pub async fn sever_arm(&self, arm_id: usize, reason: &str) -> Result<(), OctopusSecurityError> {
         let rings = self.rings.read().await;
         if let Some(ring) = rings.get(&arm_id) {
+            let old_gen = ring.current_generation();
             ring.sever(reason).await;
+            drop(rings);
+            self.record_mesh_watchout(arm_id, old_gen, old_gen, reason)
+                .await;
             Ok(())
         } else {
             Err(OctopusSecurityError::CapabilityDenied(format!(
@@ -1164,7 +1292,17 @@ impl ArmRingRegistry {
     pub async fn sever_and_regenerate(&self, arm_id: usize) -> Result<u64, OctopusSecurityError> {
         let rings = self.rings.read().await;
         if let Some(ring) = rings.get(&arm_id) {
-            Ok(ring.sever_and_regenerate().await)
+            let old_gen = ring.current_generation();
+            let next_gen = ring.sever_and_regenerate().await;
+            drop(rings);
+            self.record_mesh_watchout(
+                arm_id,
+                old_gen,
+                next_gen,
+                "AUTOTOMY_REGENERATION_EPOCH_ADVANCE",
+            )
+            .await;
+            Ok(next_gen)
         } else {
             Err(OctopusSecurityError::CapabilityDenied(format!(
                 "Arm {} not found in registry",
