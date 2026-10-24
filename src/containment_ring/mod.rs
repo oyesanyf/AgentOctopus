@@ -29,6 +29,7 @@ pub mod trusted_controller;
 
 pub use arm_ring::{
     ArmContainmentRing, ArmRingConfig, ArmRingMeshMessage, ArmRingRegistry, ArmRingStatusDto,
+    ProvenanceHop,
 };
 pub use primitives::{
     now_micros, DiracDeltaCapabilityTicket, IndependentTrustBoundaryVerifier, MeshWatchOutSignal,
@@ -47,12 +48,15 @@ pub use cedar_gate::{
     VanishingPolynomialTraceVerifier, MERSENNE_PRIME_127,
 };
 pub use egress_proxy::{
-    is_restricted_rebinding_ip, validate_agent_egress_url, EgressProxy, EgressRequest,
-    EgressResponse, EgressSecurityLevel,
+    is_restricted_rebinding_ip, pinned_curl_command, resolve_and_pin, validate_agent_egress_url,
+    EgressProxy, EgressRequest, EgressResponse, EgressSecurityLevel, PinnedEgress,
 };
 pub use identity_gate::IdentityGate;
 pub use isolation_manager::{IsolationManager, SandboxConstraints};
-pub use mesh_guard::{HomologicalAuditReport, HomologicalBoundaryAuditor, MeshGuard};
+pub use mesh_guard::{
+    role_trust_tier, HomologicalAuditReport, HomologicalBoundaryAuditor, MeshGuard, TrustTier,
+    VerifiedMeshMessage, MAX_RELAY_HOPS,
+};
 pub use resource_guard::{BudgetQuota, ResourceGuard};
 pub use ring_controller::{ContainmentAuditHarness, ContainmentRing, RingOperationRequest};
 pub use trusted_controller::{

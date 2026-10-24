@@ -1,4 +1,4 @@
-use crate::core::types::OctopusSecurityError;
+use crate::core::types::{ArmRole, OctopusSecurityError};
 use crate::neural_mesh::MessageKind;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -103,89 +103,93 @@ impl HomologicalBoundaryAuditor {
         out
     }
 
-    /// Assigns the discrete privilege potential $\phi(v) \in \mathbb{Z}$ to an agent node.
-    pub fn privilege_potential(node_id: &str) -> i64 {
-        let lower = Self::normalize_identifier_uts39_skeleton(node_id);
-        if lower.contains("untrusted")
-            || lower.contains("ingest")
-            || lower.contains("doc")
-            || lower.contains("fuzz")
-            || lower.contains("tarpit")
-            || lower.contains("differential")
-            || lower.contains("protocolresearch")
-            || lower.contains("external")
-        {
-            10 // Low-trust / untrusted ingress potential
-        } else if lower.contains("ledger")
-            || lower.contains("accounting")
-            || lower.contains("kernel")
-            || lower.contains("sentinel")
-            || lower.contains("admin")
-            || lower.contains("supervisor")
-        {
-            100 // High-privilege sink potential
-        } else {
-            50 // Standard worker / intermediate potential
-        }
+    /// Discrete privilege potential $\phi(v) \in \mathbb{Z}$, derived ONLY from an authenticated
+    /// [`ArmRole`] (the role is bound into the sender's epoch HMAC key derivation), never from a
+    /// self-chosen agent name. An untrusted arm calling itself `arm-Worker-7` or `docker-admin`
+    /// still carries `UntrustedDocIngest` in its signature.
+    pub fn privilege_potential(role: &ArmRole) -> i64 {
+        role_trust_tier(role).potential()
     }
 
-    /// Evaluates a direct 1-simplex edge $[v_0, v_1]$ or a 2-simplex transitive path $[v_0, v_1, v_2]$
-    /// for simplicial boundary exactness ($\partial_1 \circ \partial_2 = 0$) and proxy laundering.
-    pub fn audit_simplex_transition(
-        sender: &str,
-        intermediary: Option<&str>,
-        recipient: &str,
-    ) -> HomologicalAuditReport {
-        let phi_s = Self::privilege_potential(sender);
-        let phi_i = intermediary.map(Self::privilege_potential);
-        let phi_r = Self::privilege_potential(recipient);
+    /// Law 1 audit over a full relay chain $[v_0, v_1, \dots, v_n]$ of authenticated roles
+    /// (origin first, recipient last).
+    ///
+    /// Taint is sticky: the effective origin potential is the **minimum** potential over every
+    /// upstream hop, so `untrusted -> worker -> worker -> ledger` is vetoed exactly like the direct
+    /// edge. Chains shorter than 2 or longer than [`MAX_RELAY_HOPS`] + 1 fail closed.
+    pub fn audit_role_chain(chain: &[ArmRole]) -> HomologicalAuditReport {
+        let describe = |r: &ArmRole| format!("{:?}", r);
+        if chain.len() < 2 || chain.len() > MAX_RELAY_HOPS + 1 {
+            return HomologicalAuditReport {
+                allowed: false,
+                sender: chain.first().map(describe).unwrap_or_default(),
+                intermediary: None,
+                recipient: chain.last().map(describe).unwrap_or_default(),
+                sender_potential: 0,
+                intermediary_potential: None,
+                recipient_potential: 0,
+                coboundary_residue: 0,
+                boundary_squared_zero: false,
+                proxy_laundering_detected: true,
+                reason: format!(
+                    "LAW1_CHAIN_LENGTH_VETO: relay chain length {} outside [2, {}]",
+                    chain.len(),
+                    MAX_RELAY_HOPS + 1
+                ),
+            };
+        }
 
-        // Verify \partial_1(\partial_2([v_0, v_1, v_2])) = (v_1 - v_0) - (v_2 - v_0) + (v_2 - v_1) = 0
-        let coboundary_residue = if let Some(p_i) = phi_i {
-            let d_01 = p_i - phi_s;
-            let d_12 = phi_r - p_i;
-            let d_02 = phi_r - phi_s;
-            (d_01 + d_12) - d_02
-        } else {
-            0
-        };
+        let potentials: Vec<i64> = chain.iter().map(Self::privilege_potential).collect();
+        let n = potentials.len();
+        let phi_s = potentials[0];
+        let phi_r = potentials[n - 1];
+        let middle = &potentials[1..n - 1];
+        let phi_i = middle.iter().copied().min();
+
+        // Telescoping boundary check: sum of consecutive edge differences equals the direct edge.
+        let telescoped: i64 = potentials.windows(2).map(|w| w[1] - w[0]).sum();
+        let coboundary_residue = telescoped - (phi_r - phi_s);
         let boundary_squared_zero = coboundary_residue == 0;
 
-        // Detect direct or transitive proxy laundering from untrusted source (phi <= 10)
-        // to high-privilege sink (phi >= 100), even when relayed via an intermediate worker (phi == 50).
-        let direct_violation = phi_s <= 10 && phi_r >= 100;
-        let transitive_laundering = match phi_i {
-            Some(p_i) => phi_s <= 10 && p_i > phi_s && phi_r >= 100,
-            None => false,
-        };
-        let proxy_laundering_detected =
-            direct_violation || transitive_laundering || !boundary_squared_zero;
-
+        // Sticky taint: lowest-trust upstream hop determines the effective origin.
+        let origin_floor = potentials[..n - 1].iter().copied().min().unwrap_or(phi_s);
+        let direct_violation = n == 2 && phi_s <= TrustTier::Untrusted.potential() && phi_r >= TrustTier::PrivilegedSink.potential();
+        let transitive_laundering = n > 2
+            && origin_floor <= TrustTier::Untrusted.potential()
+            && phi_r >= TrustTier::PrivilegedSink.potential();
+        let proxy_laundering_detected = direct_violation || transitive_laundering || !boundary_squared_zero;
         let allowed = !proxy_laundering_detected;
+
+        let chain_str = chain.iter().map(describe).collect::<Vec<_>>().join(" -> ");
         let reason = if allowed {
-            "LAW1_HOMOLOGICAL_EXACTNESS_VERIFIED: Simplicial boundary d1(d2(sigma)) = 0 and privilege potential preserved".to_string()
+            format!(
+                "LAW1_HOMOLOGICAL_EXACTNESS_VERIFIED: chain [{}] preserves privilege potential (origin floor {} -> sink {})",
+                chain_str, origin_floor, phi_r
+            )
         } else if transitive_laundering {
             format!(
-                "LAW1_PROXY_LAUNDERING_VETO: 2-simplex [{} -> {} -> {}] attempts confused-deputy privilege laundering (phi: {} -> {} -> {})",
-                sender,
-                intermediary.unwrap_or("none"),
-                recipient,
-                phi_s,
-                phi_i.unwrap_or(0),
+                "LAW1_PROXY_LAUNDERING_VETO: {}-hop relay [{}] carries untrusted taint (floor {}) into privileged sink (phi {})",
+                n - 1,
+                chain_str,
+                origin_floor,
                 phi_r
             )
         } else {
             format!(
-                "LAW1_DIRECT_BOUNDARY_VETO: 1-simplex [{} -> {}] violates cochain privilege potential (phi: {} -> {})",
-                sender, recipient, phi_s, phi_r
+                "LAW1_DIRECT_BOUNDARY_VETO: 1-simplex [{}] violates cochain privilege potential (phi: {} -> {})",
+                chain_str, phi_s, phi_r
             )
         };
 
         HomologicalAuditReport {
             allowed,
-            sender: sender.to_string(),
-            intermediary: intermediary.map(|s| s.to_string()),
-            recipient: recipient.to_string(),
+            sender: describe(&chain[0]),
+            intermediary: if n > 2 {
+                Some(chain[1..n - 1].iter().map(describe).collect::<Vec<_>>().join(" -> "))
+            } else {
+                None
+            },
+            recipient: describe(&chain[n - 1]),
             sender_potential: phi_s,
             intermediary_potential: phi_i,
             recipient_potential: phi_r,
@@ -195,14 +199,80 @@ impl HomologicalBoundaryAuditor {
             reason,
         }
     }
+
+    /// Evaluates a direct 1-simplex edge $[v_0, v_1]$ or a 2-simplex relay $[v_0, v_1, v_2]$
+    /// over authenticated roles. Convenience wrapper around [`Self::audit_role_chain`].
+    pub fn audit_simplex_transition(
+        sender: &ArmRole,
+        intermediary: Option<&ArmRole>,
+        recipient: &ArmRole,
+    ) -> HomologicalAuditReport {
+        let mut chain = vec![sender.clone()];
+        if let Some(i) = intermediary {
+            chain.push(i.clone());
+        }
+        chain.push(recipient.clone());
+        Self::audit_role_chain(&chain)
+    }
+}
+
+/// Maximum number of relay hops carried in a mesh message's signed provenance chain.
+pub const MAX_RELAY_HOPS: usize = 16;
+
+/// Trust tier of an authenticated arm role (the 0-cochain $\phi$ values).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum TrustTier {
+    /// Arms that ingest attacker-controlled input (documents, fuzz corpora, raw wire traffic, decoys).
+    Untrusted = 10,
+    /// Standard worker / analysis arms.
+    Worker = 50,
+    /// High-privilege sinks (ledger writes, kernel sentinel, policy authority, signing keys).
+    PrivilegedSink = 100,
+}
+
+impl TrustTier {
+    pub fn potential(self) -> i64 {
+        self as i64
+    }
+}
+
+/// Exhaustive role -> trust tier mapping. There is deliberately NO wildcard arm: adding a new
+/// [`ArmRole`] variant is a compile error until it is explicitly classified (fail-closed).
+pub fn role_trust_tier(role: &ArmRole) -> TrustTier {
+    match role {
+        ArmRole::UntrustedDocIngest
+        | ArmRole::DifferentialProtocolAnalyzer
+        | ArmRole::AutonomousProtocolResearch
+        | ArmRole::ContinuousOssFuzz
+        | ArmRole::TarpitDecoyDefense => TrustTier::Untrusted,
+
+        ArmRole::AccountingLedgerWrite
+        | ArmRole::KernelLevelSentinel
+        | ArmRole::CedarPolicyEvaluation
+        | ArmRole::PostQuantumAttestation => TrustTier::PrivilegedSink,
+
+        ArmRole::OutboundNotification
+        | ArmRole::NetworkEgress
+        | ArmRole::AtlasThreatIntelligence
+        | ArmRole::AnomalyDetection
+        | ArmRole::VulnerabilityResearch
+        | ArmRole::ContinuousOsvScanner
+        | ArmRole::EvolutionaryOptimizer
+        | ArmRole::DreamRsiOptimizer
+        | ArmRole::RecursiveHarnessOptimizer => TrustTier::Worker,
+    }
 }
 
 /// Inner Ring Neural Mesh Guard:
 /// Mediates inter-arm communication, preventing privilege escalation,
 /// message forgery, and unauthorized lateral movement.
+///
+/// Operates exclusively on [`VerifiedMeshMessage`]s, which can only be produced by
+/// `ArmContainmentRing::verify_incoming_message` after HMAC verification against the sender's
+/// `(arm_id, epoch, role)` key. Roles are therefore authenticated, never taken from names.
 #[derive(Clone)]
 pub struct MeshGuard {
-    allowed_routes: Arc<RwLock<HashSet<(String, String, Option<MessageKind>)>>>,
+    allowed_routes: Arc<RwLock<HashSet<(usize, usize, Option<MessageKind>)>>>,
 }
 
 impl Default for MeshGuard {
@@ -218,80 +288,99 @@ impl MeshGuard {
         }
     }
 
-    /// Allows a specific route and message kind between two endpoints.
-    pub async fn allow_route(&self, sender: &str, recipient: &str, kind: Option<MessageKind>) {
+    /// Allows a specific route (by authenticated arm id) and message kind between two arms.
+    pub async fn allow_route(&self, sender_arm_id: usize, recipient_arm_id: usize, kind: Option<MessageKind>) {
         let mut routes = self.allowed_routes.write().await;
-        routes.insert((sender.to_string(), recipient.to_string(), kind));
+        routes.insert((sender_arm_id, recipient_arm_id, kind));
     }
 
-    /// Audits a 2-simplex transitive relay (`origin_sender -> intermediary -> recipient`) using Law 1.
-    pub fn validate_transitive_simplex(
-        &self,
-        origin_sender: &str,
-        intermediary: &str,
-        recipient: &str,
-    ) -> Result<HomologicalAuditReport, OctopusSecurityError> {
-        let report = HomologicalBoundaryAuditor::audit_simplex_transition(
-            origin_sender,
-            Some(intermediary),
-            recipient,
-        );
-        if !report.allowed {
-            return Err(OctopusSecurityError::DelegationScopeViolation(
-                report.reason,
-            ));
-        }
-        Ok(report)
-    }
-
-    /// Validates an inter-agent message crossing the Inner Ring.
+    /// Validates an authenticated inter-agent message crossing the Inner Ring.
     ///
-    /// INVARIANT: An inter-agent message passes data, NEVER authority.
-    /// An untrusted ingest arm sending an artifact to a ledger arm CANNOT
-    /// grant the sender or recipient ledger-writing capabilities.
+    /// INVARIANTS:
+    /// - An inter-agent message passes data, NEVER authority.
+    /// - Law 1 is evaluated over the full signed provenance chain (multi-hop sticky taint).
+    /// - An empty route table means **deny** (fail-closed), not "allow everything".
     pub async fn validate_message(
         &self,
-        sender: &str,
-        recipient: &str,
-        kind: &MessageKind,
-        correlation_id: &str,
-        content: &str,
-    ) -> Result<(), OctopusSecurityError> {
+        verified: &VerifiedMeshMessage,
+    ) -> Result<HomologicalAuditReport, OctopusSecurityError> {
+        let msg = verified.message();
+
         // 1. Metadata bounds
-        if correlation_id.len() > 128 {
+        if msg.correlation_id.len() > 128 {
             return Err(OctopusSecurityError::EnclaveViolation(
                 "Inter-arm message correlation_id exceeds strict 128-byte limit".to_string(),
             ));
         }
-
-        if content.len() > 16 * 1024 {
+        if msg.payload.len() > 16 * 1024 {
             return Err(OctopusSecurityError::EnclaveViolation(
                 "Inter-arm message payload exceeds 16KB neural mesh capacity".to_string(),
             ));
         }
 
-        // 2. Law 1 Homological Boundary & High-trust inter-arm boundary check
-        let homological =
-            HomologicalBoundaryAuditor::audit_simplex_transition(sender, None, recipient);
-        if !homological.allowed {
+        // 2. Law 1 over the authenticated role chain
+        let report = HomologicalBoundaryAuditor::audit_role_chain(verified.role_chain());
+        if !report.allowed {
             return Err(OctopusSecurityError::DelegationScopeViolation(format!(
-                "Inner Ring Boundary Violation: Untrusted Arm '{}' is forbidden from direct lateral messaging to Sensitive Sink Arm '{}' ({})",
-                sender, recipient, homological.reason
+                "Inner Ring Boundary Violation: arm {} -> arm {} ({})",
+                msg.sender_arm_id,
+                verified.recipient_arm_id(),
+                report.reason
             )));
         }
 
-        // 3. Route authorization
+        // 3. Route authorization (fail-closed on empty table)
         let routes = self.allowed_routes.read().await;
-        let permitted = routes.contains(&(sender.to_string(), recipient.to_string(), Some(kind.clone())))
-            || routes.contains(&(sender.to_string(), recipient.to_string(), None));
-
-        if !permitted && !routes.is_empty() {
+        let permitted = routes.contains(&(msg.sender_arm_id, verified.recipient_arm_id(), Some(msg.kind.clone())))
+            || routes.contains(&(msg.sender_arm_id, verified.recipient_arm_id(), None));
+        if !permitted {
             return Err(OctopusSecurityError::CapabilityDenied(format!(
-                "Inner Ring Route Veto: Route ({}) -> ({}) for kind {:?} is not authorized",
-                sender, recipient, kind
+                "Inner Ring Route Veto: route arm {} -> arm {} for kind {:?} is not authorized",
+                msg.sender_arm_id,
+                verified.recipient_arm_id(),
+                msg.kind
             )));
         }
 
-        Ok(())
+        Ok(report)
+    }
+}
+
+/// A mesh message whose HMAC, epochs and provenance were verified by the recipient's
+/// `ArmContainmentRing`. Constructible only inside the crate.
+#[derive(Debug, Clone)]
+pub struct VerifiedMeshMessage {
+    message: crate::containment_ring::arm_ring::ArmRingMeshMessage,
+    recipient_arm_id: usize,
+    recipient_role: ArmRole,
+    role_chain: Vec<ArmRole>,
+    effective_taint_floor: TrustTier,
+}
+
+impl VerifiedMeshMessage {
+    pub(crate) fn new(
+        message: crate::containment_ring::arm_ring::ArmRingMeshMessage,
+        recipient_arm_id: usize,
+        recipient_role: ArmRole,
+        role_chain: Vec<ArmRole>,
+        effective_taint_floor: TrustTier,
+    ) -> Self {
+        Self { message, recipient_arm_id, recipient_role, role_chain, effective_taint_floor }
+    }
+    pub fn message(&self) -> &crate::containment_ring::arm_ring::ArmRingMeshMessage {
+        &self.message
+    }
+    pub fn recipient_arm_id(&self) -> usize {
+        self.recipient_arm_id
+    }
+    pub fn recipient_role(&self) -> &ArmRole {
+        &self.recipient_role
+    }
+    /// Authenticated roles: provenance hops, then sender, then recipient.
+    pub fn role_chain(&self) -> &[ArmRole] {
+        &self.role_chain
+    }
+    pub fn effective_taint_floor(&self) -> TrustTier {
+        self.effective_taint_floor
     }
 }

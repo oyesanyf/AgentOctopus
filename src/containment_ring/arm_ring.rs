@@ -17,6 +17,9 @@
 
 use crate::containment_ring::cedar_gate::NegativeControlToken;
 use crate::containment_ring::isolation_manager::SandboxConstraints;
+use crate::containment_ring::mesh_guard::{
+    role_trust_tier, HomologicalBoundaryAuditor, TrustTier, VerifiedMeshMessage, MAX_RELAY_HOPS,
+};
 use crate::core::types::{ArmRole, OctopusSecurityError};
 use crate::neural_mesh::MessageKind;
 use crate::security::CapabilityToken;
@@ -49,7 +52,19 @@ impl Default for ArmRingConfig {
     }
 }
 
+/// One authenticated relay hop in a mesh message's provenance chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProvenanceHop {
+    pub arm_id: usize,
+    pub role: ArmRole,
+    pub generation: u64,
+}
+
 /// Strongly typed, epoch-tagged inter-arm neural mesh message.
+///
+/// `provenance` and `taint_floor` are attached by the *sender's ring* (supervisor-side), not by
+/// agent code, and are covered by the sender's epoch HMAC. A relaying arm therefore cannot strip
+/// the upstream taint of data it previously received.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArmRingMeshMessage {
     pub sender_arm_id: usize,
@@ -60,7 +75,33 @@ pub struct ArmRingMeshMessage {
     pub kind: MessageKind,
     pub correlation_id: String,
     pub payload: String,
+    /// Upstream relay hops (oldest first) whose data flowed into this sender during its epoch.
+    pub provenance: Vec<ProvenanceHop>,
+    /// Lowest trust tier of any data the sender has accepted during its current epoch.
+    pub taint_floor: TrustTier,
     pub signature_hex: String,
+}
+
+fn mesh_signing_content(
+    sender_arm_id: usize,
+    sender_generation: u64,
+    target_arm_id: usize,
+    target_generation: u64,
+    kind: &MessageKind,
+    correlation_id: &str,
+    payload: &str,
+    provenance: &[ProvenanceHop],
+    taint_floor: TrustTier,
+) -> String {
+    let prov = provenance
+        .iter()
+        .map(|h| format!("{}/{:?}/{}", h.arm_id, h.role, h.generation))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{}:{}:{}:{}:{:?}:{}:{}|prov=[{}]|floor={:?}",
+        sender_arm_id, sender_generation, target_arm_id, target_generation, kind, correlation_id, payload, prov, taint_floor
+    )
 }
 
 /// Telemetry and state DTO representing an arm containment ring for UI/API monitoring.
@@ -290,6 +331,8 @@ pub struct ArmContainmentRing {
     budget_enforcement_enabled: Arc<AtomicBool>,
     audit_control_token: Arc<String>,
     pub(crate) quarantined_instances: Arc<RwLock<HashMap<String, Arc<crate::security::windows_sandbox::QuarantinedProcessInstance>>>>,
+    /// Sticky information-flow taint for the current epoch: (lowest accepted trust tier, provenance).
+    taint_state: Arc<RwLock<(TrustTier, Vec<ProvenanceHop>)>>,
 }
 
 impl ArmContainmentRing {
@@ -466,6 +509,7 @@ impl ArmContainmentRing {
             }
         }
 
+        let initial_tier = role_trust_tier(&role);
         Self {
             arm_id,
             agent_name,
@@ -483,6 +527,7 @@ impl ArmContainmentRing {
             budget_enforcement_enabled: Arc::new(AtomicBool::new(true)),
             audit_control_token: audit_token,
             quarantined_instances: Arc::new(RwLock::new(HashMap::new())),
+            taint_state: Arc::new(RwLock::new((initial_tier, Vec::new()))),
         }
     }
 
@@ -560,6 +605,12 @@ impl ArmContainmentRing {
         let next_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.step_counter.store(0, Ordering::SeqCst);
         self.is_severed.store(false, Ordering::SeqCst);
+
+        // Fresh incarnation: taint/provenance belonged to the revoked epoch.
+        {
+            let mut taint = self.taint_state.write().await;
+            *taint = (role_trust_tier(&self.role), Vec::new());
+        }
 
         // Terminate any stale quarantined instances before regeneration
         let mut instances = self.quarantined_instances.write().await;
@@ -760,6 +811,10 @@ impl ArmContainmentRing {
     }
 
     /// Signs an outbound Neural Mesh message tagged with sender and target generation epochs.
+    ///
+    /// The ring (not agent code) attaches its sticky taint floor and the provenance chain of every
+    /// upstream hop whose data it accepted during this epoch, plus itself as the newest hop is
+    /// implied by `sender_*`. Both are covered by the HMAC.
     pub async fn sign_mesh_message(
         &self,
         target_arm_id: usize,
@@ -771,10 +826,23 @@ impl ArmContainmentRing {
         let current_gen = self.current_generation();
         self.validate_epoch(current_gen).await?;
 
+        let (taint_floor, provenance) = {
+            let taint = self.taint_state.read().await;
+            let own = role_trust_tier(&self.role);
+            (taint.0.min(own), taint.1.clone())
+        };
+
         let epoch_key = self.epoch_key(current_gen);
-        let data = format!(
-            "{}:{}:{}:{}:{:?}:{}:{}",
-            self.arm_id, current_gen, target_arm_id, target_generation, kind, correlation_id, payload
+        let data = mesh_signing_content(
+            self.arm_id,
+            current_gen,
+            target_arm_id,
+            target_generation,
+            &kind,
+            correlation_id,
+            payload,
+            &provenance,
+            taint_floor,
         );
         let sig = compute_ring_hmac(&epoch_key, data.as_bytes());
         let sig_hex = hex::encode(sig);
@@ -788,17 +856,28 @@ impl ArmContainmentRing {
             kind,
             correlation_id: correlation_id.to_string(),
             payload: payload.to_string(),
+            provenance,
+            taint_floor,
             signature_hex: sig_hex,
         })
     }
 
+    /// Returns this ring's current sticky taint floor and provenance chain.
+    pub async fn taint_state(&self) -> (TrustTier, Vec<ProvenanceHop>) {
+        self.taint_state.read().await.clone()
+    }
+
     /// Verifies an incoming Neural Mesh message at the recipient's Level 1 arm ring.
-    /// Verifies target arm ID, recipient active epoch, sender cryptographic HMAC signature,
-    /// and Level 2 lateral sink isolation.
+    ///
+    /// Verifies target arm ID, recipient active epoch, sender cryptographic HMAC signature (which
+    /// authenticates `sender_role`, `provenance` and `taint_floor`), then evaluates Law 1 over the
+    /// full authenticated role chain `provenance... -> sender -> self`. On success the recipient's
+    /// own sticky taint floor is lowered to the message's effective floor, so data cannot be
+    /// laundered by relaying it through additional hops.
     pub async fn verify_incoming_message(
         &self,
         msg: &ArmRingMeshMessage,
-    ) -> Result<(), OctopusSecurityError> {
+    ) -> Result<VerifiedMeshMessage, OctopusSecurityError> {
         if msg.target_arm_id != self.arm_id {
             return Err(OctopusSecurityError::IdentitySpoofingDetected(format!(
                 "Message misrouted: target_arm_id {} != receiver arm_id {}",
@@ -812,24 +891,34 @@ impl ArmContainmentRing {
             ));
         }
 
+        if msg.provenance.len() > MAX_RELAY_HOPS - 1 {
+            return Err(OctopusSecurityError::DelegationScopeViolation(format!(
+                "Mesh provenance chain of {} hops exceeds the {}-hop limit",
+                msg.provenance.len(),
+                MAX_RELAY_HOPS - 1
+            )));
+        }
+
         // Validate recipient epoch: will reject if msg.target_generation is revoked or obsolete
         self.validate_epoch(msg.target_generation).await?;
 
-        // Verify cryptographic HMAC-SHA256 signature bound to sender_arm_id, sender_generation, and sender_role
+        // Verify cryptographic HMAC-SHA256 signature bound to sender_arm_id, sender_generation,
+        // sender_role (via key derivation), provenance and taint floor (via signed content).
         let sender_epoch_key = self.derive_arm_epoch_key(
             msg.sender_arm_id,
             msg.sender_generation,
             &msg.sender_role,
         );
-        let expected_data = format!(
-            "{}:{}:{}:{}:{:?}:{}:{}",
+        let expected_data = mesh_signing_content(
             msg.sender_arm_id,
             msg.sender_generation,
             msg.target_arm_id,
             msg.target_generation,
-            msg.kind,
-            msg.correlation_id,
-            msg.payload
+            &msg.kind,
+            &msg.correlation_id,
+            &msg.payload,
+            &msg.provenance,
+            msg.taint_floor,
         );
         let expected_sig = hex::encode(compute_ring_hmac(&sender_epoch_key, expected_data.as_bytes()));
         if !crate::security::constant_time_eq_hex(&msg.signature_hex, &expected_sig) {
@@ -839,23 +928,72 @@ impl ArmContainmentRing {
             )));
         }
 
-        // Level 2 lateral boundary: Untrusted, fuzzing, and quarantine arms cannot message Ledger directly
-        let is_untrusted_or_quarantine_sender = matches!(
-            msg.sender_role,
-            ArmRole::UntrustedDocIngest
-                | ArmRole::DifferentialProtocolAnalyzer
-                | ArmRole::AutonomousProtocolResearch
-                | ArmRole::ContinuousOssFuzz
-                | ArmRole::TarpitDecoyDefense
-        );
-        if self.role == ArmRole::AccountingLedgerWrite && is_untrusted_or_quarantine_sender {
-            return Err(OctopusSecurityError::DelegationScopeViolation(format!(
-                "Ring Boundary Violation: Arm {} ({:?}) is forbidden from direct lateral messaging to Sensitive Sink Arm {}",
-                msg.sender_arm_id, msg.sender_role, self.arm_id
+        // A sender can never claim a taint floor above its own authenticated role tier.
+        let sender_tier = role_trust_tier(&msg.sender_role);
+        if msg.taint_floor > sender_tier {
+            return Err(OctopusSecurityError::IdentitySpoofingDetected(format!(
+                "Mesh taint floor {:?} exceeds sender role tier {:?}",
+                msg.taint_floor, sender_tier
             )));
         }
 
-        Ok(())
+        // Law 1 over the authenticated chain: provenance hops -> sender -> recipient.
+        let mut role_chain: Vec<ArmRole> = msg.provenance.iter().map(|h| h.role.clone()).collect();
+        role_chain.push(msg.sender_role.clone());
+        role_chain.push(self.role.clone());
+        let effective_floor = msg
+            .provenance
+            .iter()
+            .map(|h| role_trust_tier(&h.role))
+            .fold(msg.taint_floor.min(sender_tier), |a, b| a.min(b));
+
+        let mut audit = HomologicalBoundaryAuditor::audit_role_chain(&role_chain);
+        let recipient_tier = role_trust_tier(&self.role);
+        if audit.allowed && effective_floor == TrustTier::Untrusted && recipient_tier == TrustTier::PrivilegedSink {
+            // Sticky floor captured taint that the hop list alone may not show.
+            audit.allowed = false;
+            audit.proxy_laundering_detected = true;
+            audit.reason = format!(
+                "LAW1_STICKY_TAINT_VETO: sender carries untrusted taint floor into privileged sink {:?}",
+                self.role
+            );
+        }
+        if !audit.allowed {
+            return Err(OctopusSecurityError::DelegationScopeViolation(format!(
+                "Ring Boundary Violation: Arm {} ({:?}) -> Sensitive Sink Arm {} ({:?}) rejected: {}",
+                msg.sender_arm_id, msg.sender_role, self.arm_id, self.role, audit.reason
+            )));
+        }
+
+        // Accepting data lowers this arm's own sticky taint for the rest of its epoch.
+        {
+            let mut taint = self.taint_state.write().await;
+            taint.0 = taint.0.min(effective_floor);
+            let mut chain = msg.provenance.clone();
+            chain.push(ProvenanceHop {
+                arm_id: msg.sender_arm_id,
+                role: msg.sender_role.clone(),
+                generation: msg.sender_generation,
+            });
+            for hop in chain {
+                if !taint.1.contains(&hop) {
+                    taint.1.push(hop);
+                }
+            }
+            let excess = taint.1.len().saturating_sub(MAX_RELAY_HOPS - 1);
+            if excess > 0 {
+                // Keep newest hops for audit; the floor already records the lowest trust seen.
+                taint.1.drain(0..excess);
+            }
+        }
+
+        Ok(VerifiedMeshMessage::new(
+            msg.clone(),
+            self.arm_id,
+            self.role.clone(),
+            role_chain,
+            effective_floor,
+        ))
     }
 
     /// Executes an authoritative Level 1 containment ring quarantine operation on an arm.

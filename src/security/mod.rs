@@ -97,8 +97,8 @@ pub use alignment_scanner::{
     AlignmentScanVerdict, RuntimeAlignmentScanner, SessionIntentContract, ToolCallTraceStep,
 };
 pub use breakouts::{
-    validate_agent_filesystem_access, validate_sandbox_relative_path, ZeroMiProjectionResult,
-    ZeroMutualInformationProjector,
+    open_confined, validate_agent_filesystem_access, validate_sandbox_relative_path,
+    ZeroMiProjectionResult, ZeroMutualInformationProjector,
 };
 pub use console_defense::{
     compute_hardened_console_mode, harden_windows_console, is_console_mode_hardened,
@@ -119,4 +119,25 @@ pub use spider_physics::{OrbWebContainmentEngine, OrbWebEvaluationResult, SilkRe
 pub use windows_sandbox::{
     evaluate_pre_resume_confinement_gate, verify_windows_confinement_invariants,
     WindowsConfinementPolicy,
+};
+
+pub mod token_posture;
+pub use token_posture::{
+    current_token_posture, relaunch_deelevated_or_fail, TokenPosture, DANGEROUS_PRIVILEGES,
+    DEELEVATED_ENV_MARKER, INTEGRITY_HIGH, INTEGRITY_MEDIUM,
+};
+#[cfg(windows)]
+pub use token_posture::{create_deelevated_token, spawn_deelevated, DeelevatedChild, OwnedToken};
+
+pub mod hidden_process_ledger;
+pub use hidden_process_ledger::{
+    list_hidden_spawns, output_hidden, record_hidden_spawn, spawn_hidden, spawn_hidden_tokio,
+    status_hidden, HiddenSpawnRecord,
+};
+
+pub mod command_line;
+pub use command_line::{
+    analyze_command_line, decode_base64_strict, decode_encoded_command, encode_utf16le_base64,
+    normalize_executable_stem, parse_powershell_args, strip_cmd_carets_outside_quotes,
+    tokenize_windows_argv, EncodedCommandState, ParsedInvocation, PsParameter, MAX_UNWRAP_DEPTH,
 };

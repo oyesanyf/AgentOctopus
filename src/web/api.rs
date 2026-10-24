@@ -2862,9 +2862,9 @@ pub fn handle_harness2_validate_tree(state: &WebState, body: &str) -> Result<Str
 /// - 5-Policy Standardized RL Benchmark (`run_standardized_5policy_benchmark`)
 pub async fn handle_oshoosiclaw_containment_status(state: &WebState) -> String {
     let homological_report = crate::containment_ring::HomologicalBoundaryAuditor::audit_simplex_transition(
-        "worker_relay",
-        None,
-        "worker_relay",
+        &crate::core::types::ArmRole::UntrustedDocIngest,
+        Some(&crate::core::types::ArmRole::AnomalyDetection),
+        &crate::core::types::ArmRole::AccountingLedgerWrite,
     );
 
     let trace_proof = crate::containment_ring::VanishingPolynomialTraceVerifier::verify_execution_trace(
@@ -2878,31 +2878,67 @@ pub async fn handle_oshoosiclaw_containment_status(state: &WebState) -> String {
         100,
     );
 
+    // Derive live state from active runtime registries instead of static constants
+    let arm_statuses = state.arm_rings.list_rings().await;
+    let watchout_signals = state.arm_rings.list_watchout_signals().await;
+    let (harness_clean, harness_issues) = state
+        .breakout_coordinator
+        .behavioral
+        .verify_harness_integrity();
+    let posture = crate::security::token_posture::current_token_posture().ok();
+    let non_elevated_ok = posture
+        .as_ref()
+        .map(|p| p.verify_agent_safe().is_ok())
+        .unwrap_or(false);
+
+    let merkle_root = state.audit_log.latest_hash();
+    let first_arm_epoch = arm_statuses.first().map(|s| s.generation).unwrap_or(1);
     let trust_verifier = crate::containment_ring::IndependentTrustBoundaryVerifier::new(
-        b"octopus_master_seed_32bytes_long",
+        state.arm_rings.master_seed(),
     );
-    let l1 = trust_verifier.compute_layer1_token("arm-101", 1);
-    let l2 = trust_verifier.compute_layer2_token("merkle-root-genesis", 1);
-    let l3 = trust_verifier.compute_layer3_token("job-container-101", 1);
+    let l1 = trust_verifier.compute_layer1_token("arm-101", first_arm_epoch);
+    let l2 = trust_verifier.compute_layer2_token(&merkle_root, first_arm_epoch);
+    let l3 = trust_verifier.compute_layer3_token("job-container-101", first_arm_epoch);
     let trust_verdict = trust_verifier.evaluate_three_layer_gate(
         "arm-101",
-        "merkle-root-genesis",
+        &merkle_root,
         "job-container-101",
         &l1,
         &l2,
         &l3,
-        true,
+        harness_clean && non_elevated_ok,
     );
 
     let mercury = crate::security::mercury_guard::MercuryContainmentEngine::new();
-    let mercury_eval = mercury.evaluate_pore_pressure(
-        "arm-101",
-        crate::security::mercury_guard::HostActuationPore::FilesystemWrite,
-        12_000.0,
-        1.5,
-        0.0005,
-        0.05,
-    );
+    let mercury_eval = match crate::security::windows_sandbox::WindowsJobObject::create(
+        "OctopusStatusProbeJob",
+        4,
+        64 * 1024 * 1024,
+    ) {
+        Ok(job) => match crate::security::mercury_guard::MeasuredActuationSample::sample_from_job(
+            &job,
+            crate::security::mercury_guard::HostActuationPore::FilesystemWrite,
+            1.0,
+        ) {
+            Ok(sample) => mercury.evaluate_measured_sample("arm-101", &sample),
+            Err(_) => mercury.evaluate_pore_pressure(
+                "arm-101",
+                crate::security::mercury_guard::HostActuationPore::FilesystemWrite,
+                0.0,
+                0.0,
+                0.0015,
+                0.0,
+            ),
+        },
+        Err(_) => mercury.evaluate_pore_pressure(
+            "arm-101",
+            crate::security::mercury_guard::HostActuationPore::FilesystemWrite,
+            0.0,
+            0.0,
+            0.0015,
+            0.0,
+        ),
+    };
 
     let spider = crate::security::spider_physics::OrbWebContainmentEngine::default();
     let spider_eval = spider.evaluate_impact(0.12, 8.0, 0.005, 0.010, 50.0, Some(500), Some(2));
@@ -2912,15 +2948,15 @@ pub async fn handle_oshoosiclaw_containment_status(state: &WebState) -> String {
         &win_policy,
         true,
         true,
-        true,
-        true,
+        non_elevated_ok,
+        harness_clean,
     )
     .is_ok();
 
-    let watchout_signals = state.arm_rings.list_watchout_signals().await;
+    let hidden_spawns = crate::security::hidden_process_ledger::list_hidden_spawns();
 
     serde_json::json!({
-        "status": "ONLINE",
+        "status": if harness_clean && non_elevated_ok { "ONLINE" } else { "DEGRADED" },
         "adapted_from": "OshoosiClaw AgentOctopus Containment Suite",
         "laws": {
             "law_1_homological_boundary": homological_report,
@@ -2936,7 +2972,14 @@ pub async fn handle_oshoosiclaw_containment_status(state: &WebState) -> String {
         "mercury_capillary_containment": mercury_eval,
         "spider_orb_web_physics": spider_eval,
         "windows_pre_resume_confinement_gate_ok": win_gate_ok,
+        "token_posture": posture,
+        "harness_integrity": {
+            "clean": harness_clean,
+            "issues": harness_issues,
+        },
+        "registered_arms_count": arm_statuses.len(),
         "mesh_watchout_signals_count": watchout_signals.len(),
+        "hidden_process_spawns_logged": hidden_spawns.len(),
         "console_defense_edr_vec_23": {
             "create_no_window_flag": crate::security::console_defense::CREATE_NO_WINDOW,
             "quick_edit_stripped": true

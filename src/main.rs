@@ -8,6 +8,11 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() {
+    // Finding 7 (FAIL-CLOSED): arms must never run under an elevated / Administrator token.
+    if let Err(e) = agent_octopus::security::relaunch_deelevated_or_fail(false) {
+        eprintln!("{}", e);
+        std::process::exit(5);
+    }
     let _ = agent_octopus::harden_windows_console();
     println!("================================================================================");
     println!("    🐙 AGENT OCTOPUS: CEPHALOPOD-INSPIRED SWARM BREAKOUT DEFENSE SYSTEM");

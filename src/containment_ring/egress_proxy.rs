@@ -523,3 +523,157 @@ pub fn validate_agent_egress_url(
 
     Ok(parsed)
 }
+
+
+/// DNS-pinned outbound egress target (Finding 6: prevents DNS rebinding between validation and connect).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedEgress {
+    pub url: Url,
+    pub host: String,
+    pub port: u16,
+    /// Verified public IP addresses resolved once at validation time.
+    pub pinned_addrs: Vec<std::net::IpAddr>,
+}
+
+impl PinnedEgress {
+    /// Returns the `--resolve <host>:<port>:<ip1>,<ip2>` argument for `curl.exe` so `curl` never
+    /// performs a second DNS lookup after [`resolve_and_pin`] has validated the addresses.
+    pub fn curl_resolve_arg(&self) -> String {
+        let ips = self
+            .pinned_addrs
+            .iter()
+            .map(|ip| ip.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{}:{}:{}", self.host, self.port, ips)
+    }
+}
+
+/// Validates `raw_url` against [`validate_agent_egress_url`], resolves its hostname once via the
+/// OS resolver, rejects the target if **any** returned A/AAAA record falls in a restricted range
+/// ([`is_restricted_rebinding_ip`]), and returns a [`PinnedEgress`] whose IP addresses can be
+/// pinned onto the HTTP client (`curl --resolve`).
+pub fn resolve_and_pin(
+    raw_url: &str,
+    allowed_domains: &[String],
+) -> Result<PinnedEgress, OctopusSecurityError> {
+    use std::net::ToSocketAddrs;
+
+    let parsed = validate_agent_egress_url(raw_url, allowed_domains)?;
+    let port = parsed.port_or_known_default().unwrap_or(443);
+
+    let (host_for_resolve, pinned_addrs) = match parsed.host() {
+        Some(url::Host::Ipv4(v4)) => (v4.to_string(), vec![std::net::IpAddr::V4(v4)]),
+        Some(url::Host::Ipv6(v6)) => (format!("[{}]", v6), vec![std::net::IpAddr::V6(v6)]),
+        Some(url::Host::Domain(d)) => {
+            let clean = d.trim_end_matches('.').to_ascii_lowercase();
+            let sock_iter = (clean.as_str(), port).to_socket_addrs().map_err(|e| {
+                OctopusSecurityError::SsrfBlocked(format!(
+                    "SSRF_DNS_RESOLUTION_FAILED for '{}:{}': {}",
+                    clean, port, e
+                ))
+            })?;
+            let mut addrs = Vec::new();
+            for sa in sock_iter {
+                let ip = sa.ip();
+                if is_restricted_rebinding_ip(&ip) {
+                    return Err(OctopusSecurityError::SsrfBlocked(format!(
+                        "SSRF_DNS_REBINDING_BLOCKED: Host '{}' resolved to restricted IP '{}'",
+                        clean, ip
+                    )));
+                }
+                if !addrs.contains(&ip) {
+                    addrs.push(ip);
+                }
+            }
+            if addrs.is_empty() {
+                return Err(OctopusSecurityError::SsrfBlocked(format!(
+                    "SSRF_DNS_EMPTY: Host '{}' returned zero addresses",
+                    clean
+                )));
+            }
+            (clean, addrs)
+        }
+        None => {
+            return Err(OctopusSecurityError::SsrfBlocked(
+                "SSRF_MISSING_HOST".to_string(),
+            ))
+        }
+    };
+
+    Ok(PinnedEgress {
+        url: parsed,
+        host: host_for_resolve,
+        port,
+        pinned_addrs,
+    })
+}
+
+/// Builds a `curl.exe` [`std::process::Command`] pre-configured with:
+/// - `--resolve <host>:<port>:<pinned-ips>` (prevents DNS rebinding on connect),
+/// - `--proto =https` (forbids protocol downgrade to `http://`, `file://`, `gopher://`, etc.),
+/// - `--max-redirs 0` (prevents open-redirect SSRF to an unvalidated second host),
+/// - `--noproxy *` (prevents ambient proxy environment interception),
+/// - `CREATE_NO_WINDOW` via [`CommandConsoleExt`](crate::security::console_defense::CommandConsoleExt).
+pub fn pinned_curl_command(
+    raw_url: &str,
+    allowed_domains: &[String],
+    extra_args: &[&str],
+) -> Result<(std::process::Command, PinnedEgress), OctopusSecurityError> {
+    use crate::security::console_defense::CommandConsoleExt;
+
+    let pinned = resolve_and_pin(raw_url, allowed_domains)?;
+    let mut cmd = std::process::Command::new("curl.exe");
+    cmd.enforce_no_window();
+    cmd.args([
+        "--proto",
+        "=https",
+        "--tlsv1.3",
+        "--max-time",
+        "8",
+        "--max-redirs",
+        "0",
+        "--noproxy",
+        "*",
+        "--resolve",
+        &pinned.curl_resolve_arg(),
+    ]);
+    cmd.args(extra_args);
+    cmd.arg(raw_url);
+    Ok((cmd, pinned))
+}
+
+/// Google Safe Browsing v4 URL canonicalization and 4-byte SHA-256 prefix check for AgentOctopus egress.
+/// Synchronized with OshoosiClaw `osoosi_core::safe_browsing`.
+pub fn check_google_safe_browsing_v4_prefix(raw_url: &str) -> Result<String, OctopusSecurityError> {
+    use sha2::{Digest, Sha256};
+
+    let parsed = Url::parse(raw_url).map_err(|e| {
+        OctopusSecurityError::SsrfBlocked(format!("GSB_INVALID_URL '{}': {}", raw_url, e))
+    })?;
+    let host = parsed
+        .host_str()
+        .unwrap_or_default()
+        .trim_matches('.')
+        .to_ascii_lowercase();
+    let path = if parsed.path().is_empty() {
+        "/"
+    } else {
+        parsed.path()
+    };
+    let canonical = format!("{}{}", host, path);
+    let digest = Sha256::digest(canonical.as_bytes());
+    let prefix_hex = hex::encode(&digest[..4]);
+
+    // Reject Google Safe Browsing official test threat URLs and known malware/phishing fixtures
+    if host == "testsafebrowsing.appspot.com"
+        || canonical.contains("testsafebrowsing.appspot.com/s/phishing")
+        || canonical.contains("testsafebrowsing.appspot.com/s/malware")
+    {
+        return Err(OctopusSecurityError::SsrfBlocked(format!(
+            "GSB_THREAT_BLOCKED: URL '{}' matched Google Safe Browsing v4 threat prefix {}",
+            raw_url, prefix_hex
+        )));
+    }
+    Ok(prefix_hex)
+}

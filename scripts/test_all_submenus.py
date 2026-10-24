@@ -30,7 +30,7 @@ def _resolve_active_base_url():
     for port in candidates:
         url = f"http://127.0.0.1:{port}"
         try:
-            with urllib.request.urlopen(f"{url}/api/status", timeout=0.8) as resp:
+            with urllib.request.urlopen(f"{url}/", timeout=0.8) as resp:
                 if resp.getcode() == 200:
                     return url
         except Exception:
@@ -39,6 +39,22 @@ def _resolve_active_base_url():
 
 
 BASE_URL = _resolve_active_base_url()
+
+
+def _fetch_dashboard_token(base_url):
+    import re
+    try:
+        with urllib.request.urlopen(f"{base_url}/", timeout=2.0) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+            m = re.search(r'<meta\s+name="octopus-token"\s+content="([0-9a-fA-F]+)"', html)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+
+OCTOPUS_TOKEN = _fetch_dashboard_token(BASE_URL)
 
 class TestSuiteResults:
     def __init__(self):
@@ -61,7 +77,12 @@ class TestSuiteResults:
 
 def http_get(path, headers=None):
     url = f"{BASE_URL}{path}"
-    req = urllib.request.Request(url, headers=headers or {})
+    h = {}
+    if OCTOPUS_TOKEN:
+        h["X-Octopus-Token"] = OCTOPUS_TOKEN
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(url, headers=h)
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             status = resp.getcode()
@@ -77,6 +98,8 @@ def http_get(path, headers=None):
 def http_post(path, data=None, headers=None):
     url = f"{BASE_URL}{path}"
     h = {"Content-Type": "application/json"}
+    if OCTOPUS_TOKEN:
+        h["X-Octopus-Token"] = OCTOPUS_TOKEN
     if headers:
         h.update(headers)
     encoded = json.dumps(data).encode('utf-8') if data is not None else b"{}"

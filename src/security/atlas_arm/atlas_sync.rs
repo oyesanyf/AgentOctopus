@@ -363,22 +363,22 @@ impl AtlasSyncManager {
                 let _ = std::fs::create_dir_all(parent);
             }
             let download_url = "https://github.com/mitre-atlas/atlas-data/releases/latest/download/stix-atlas.json";
+            let allowed = vec![
+                "github.com".to_string(),
+                "objects.githubusercontent.com".to_string(),
+                "release-assets.githubusercontent.com".to_string(),
+            ];
 
-            // Execute curl with strict TLS 1.3, HTTPS-only, 8s timeout, and CREATE_NO_WINDOW
-            use crate::security::console_defense::CommandConsoleExt;
-            let status = std::process::Command::new("curl.exe")
-                .enforce_no_window()
-                .arg("--proto")
-                .arg("=https")
-                .arg("--tlsv1.3")
-                .arg("--max-time")
-                .arg("8")
-                .arg("-L")
-                .arg("-s")
-                .arg("-o")
-                .arg(cache_file_path)
-                .arg(download_url)
-                .status();
+            // Execute curl with DNS-pinned egress, strict TLS 1.3, HTTPS-only, 8s timeout, and ledgered CREATE_NO_WINDOW
+            use crate::security::hidden_process_ledger::LedgeredCommandExt;
+            let status = match crate::containment_ring::pinned_curl_command(
+                download_url,
+                &allowed,
+                &["-s", "-o", cache_file_path],
+            ) {
+                Ok((mut cmd, _pinned)) => cmd.status_logged("atlas_sync::download_stix_bundle"),
+                Err(_) => return self.load_embedded_golden_bundle(),
+            };
 
             match status {
                 Ok(s) if s.success() && path.exists() => {

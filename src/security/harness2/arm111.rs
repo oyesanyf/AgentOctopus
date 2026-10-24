@@ -328,6 +328,7 @@ impl RecursiveHarnessOptimizerArm {
                     _ => "both",
                 };
                 use crate::security::console_defense::CommandConsoleExt;
+                use crate::security::hidden_process_ledger::LedgeredCommandExt;
                 if let Ok(output) = std::process::Command::new("python")
                     .enforce_no_window()
                     .env("PYTHONPATH", &vendor_dir)
@@ -341,7 +342,7 @@ impl RecursiveHarnessOptimizerArm {
                         "--mode",
                         cli_mode,
                     ])
-                    .output()
+                    .output_logged("ARM-111 harness2 deterministic demo (python -m harness2.cli.demo)")
                 {
                     if output.status.success() {
                         vendor_invoked = true;

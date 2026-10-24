@@ -708,12 +708,33 @@ impl WindowsRestrictedTokenPolicy {
 
         let mut restricted_token: windows_sys::Win32::Foundation::HANDLE = std::ptr::null_mut();
 
+        // BUILTIN\Administrators (S-1-5-32-544) must be deny-only in any agent token; otherwise an
+        // elevated supervisor hands full admin group membership to the "restricted" child.
+        let mut admins_sid: win32::PSID = std::ptr::null_mut();
+        let admins_w: Vec<u16> = "S-1-5-32-544\0".encode_utf16().collect();
+        let admins_ok = unsafe { win32::ConvertStringSidToSidW(admins_w.as_ptr(), &mut admins_sid) };
+        if admins_ok == 0 || admins_sid.is_null() {
+            unsafe { CloseHandle(current_token); }
+            if !restricted_sid.is_null() {
+                unsafe { win32::LocalFree(restricted_sid); }
+            }
+            return Err(OctopusSecurityError::IsolationViolation(
+                "FAIL-CLOSED: Unable to resolve BUILTIN\\Administrators SID for deny-only".to_string(),
+            ));
+        }
+        let disable_admins = win32::SID_AND_ATTRIBUTES {
+            Sid: admins_sid,
+            Attributes: 0,
+        };
+
+        // LUA_TOKEN (0x4): UAC-filtered limited-user token.
+        const LUA_TOKEN: u32 = 0x4;
         let rest_res = unsafe {
             win32::CreateRestrictedToken(
                 current_token,
-                DISABLE_MAX_PRIVILEGE,
-                0,
-                std::ptr::null(),
+                DISABLE_MAX_PRIVILEGE | LUA_TOKEN,
+                1,
+                &disable_admins as *const _ as *const std::ffi::c_void,
                 0,
                 std::ptr::null(),
                 sid_count,
@@ -722,6 +743,7 @@ impl WindowsRestrictedTokenPolicy {
             )
         };
         unsafe { CloseHandle(current_token); }
+        unsafe { win32::LocalFree(admins_sid); }
         if !restricted_sid.is_null() {
             unsafe { win32::LocalFree(restricted_sid); }
         }

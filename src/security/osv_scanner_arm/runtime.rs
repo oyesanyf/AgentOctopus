@@ -98,21 +98,26 @@ impl ContinuousOsvScannerArm {
             for chunk in deps.chunks(50) {
                 let payload = OsvDatabaseMatcher::build_batch_query_payload(chunk);
                 if let Ok(payload_str) = serde_json::to_string(&payload) {
-                    // Query OSV API via curl with strict 5s timeout and CREATE_NO_WINDOW
-                    use crate::security::console_defense::CommandConsoleExt;
-                    let output = std::process::Command::new("curl.exe")
-                        .enforce_no_window()
-                        .arg("-s")
-                        .arg("-X")
-                        .arg("POST")
-                        .arg("https://api.osv.dev/v1/querybatch")
-                        .arg("-H")
-                        .arg("Content-Type: application/json")
-                        .arg("-d")
-                        .arg(&payload_str)
-                        .output();
+                    // Query OSV API via DNS-pinned curl with strict timeout and ledgered CREATE_NO_WINDOW
+                    use crate::security::hidden_process_ledger::LedgeredCommandExt;
+                    let allowed = vec!["api.osv.dev".to_string()];
+                    let output = crate::containment_ring::pinned_curl_command(
+                        "https://api.osv.dev/v1/querybatch",
+                        &allowed,
+                        &[
+                            "-s",
+                            "-X",
+                            "POST",
+                            "-H",
+                            "Content-Type: application/json",
+                            "-d",
+                            &payload_str,
+                        ],
+                    )
+                    .ok()
+                    .and_then(|(mut cmd, _pinned)| cmd.output_logged("osv_scanner_arm::querybatch").ok());
 
-                    if let Ok(out) = output {
+                    if let Some(out) = output {
                         if out.status.success() {
                             if let Ok(resp_json) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
                                 let mut batch_adv = OsvDatabaseMatcher::parse_osv_batch_response(&resp_json, chunk);

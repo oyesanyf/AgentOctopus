@@ -1,3 +1,4 @@
+use crate::security::command_line::{analyze_command_line, ParsedInvocation};
 use serde::{Deserialize, Serialize};
 
 /// Verdict resulting from inspecting an action for Technical Breakout indicators.
@@ -7,6 +8,8 @@ pub struct TechnicalBreakoutVerdict {
     pub detected_vectors: Vec<String>,
     pub sandbox_quarantine_required: bool,
     pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parsed_invocation: Option<ParsedInvocation>,
 }
 
 /// Technical Breakout Guard:
@@ -62,18 +65,39 @@ impl TechnicalBreakoutGuard {
             }
         }
 
-        // 3. Container namespace, encoded shell execution, and privilege escalation indicators
+        // 3. Container namespace and privilege escalation indicators
         if lower_cmd.contains("nsenter")
             || lower_cmd.contains("unshare")
             || lower_cmd.contains("--privileged")
-            || lower_payload.contains("powershell -enc")
-            || lower_payload.contains("-encodedcommand")
-            || lower_payload.contains("ignore previous instructions")
         {
             detected_vectors.push(
-                "Host namespace access, encoded shell injection, or privileged container spawn attempt"
-                    .to_string(),
+                "Host namespace access or privileged container spawn attempt".to_string(),
             );
+        }
+
+        // 4. Structural command-line parsing (Finding 1): Windows argv tokenization, recursive
+        // `cmd /c` unwrapping, PowerShell unambiguous-prefix switch matching (`-e`, `-ec`, `-en`,
+        // `-enc`, ..., `-EncodedCommand`, `/e`, Unicode dashes), and UTF-16LE Base64 decoding.
+        let combined = if raw_payload.trim().is_empty() {
+            command_or_path.to_string()
+        } else if command_or_path.trim().is_empty() {
+            raw_payload.to_string()
+        } else {
+            let cmd_parsed = analyze_command_line(command_or_path);
+            let pay_parsed = analyze_command_line(raw_payload);
+            if pay_parsed.is_powershell || pay_parsed.is_cmd_wrapper || pay_parsed.has_breakout_signals() {
+                raw_payload.to_string()
+            } else if cmd_parsed.is_cmd_wrapper {
+                format!("{} /c {}", command_or_path.trim(), raw_payload.trim())
+            } else if cmd_parsed.is_powershell {
+                format!("{} {}", command_or_path.trim(), raw_payload.trim())
+            } else {
+                raw_payload.to_string()
+            }
+        };
+        let parsed = analyze_command_line(&combined);
+        for finding in parsed.collect_findings() {
+            detected_vectors.push(format!("Command-line structural analysis: {}", finding));
         }
 
         let is_clean = detected_vectors.is_empty();
@@ -89,6 +113,7 @@ impl TechnicalBreakoutGuard {
             detected_vectors,
             sandbox_quarantine_required,
             description,
+            parsed_invocation: Some(parsed),
         }
     }
 

@@ -53,6 +53,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let console_requested = args.iter().any(|a| a == "--console" || a == "-c")
         || std::env::var("OCTOPUS_CONSOLE").map(|v| v == "1" || v == "true").unwrap_or(false);
 
+    // Finding 7 (FAIL-CLOSED): never run arms under an elevated / Administrator token.
+    // Elevated launch -> relaunch under a verified de-elevated token and exit; still elevated -> refuse.
+    let token_posture = match agent_octopus::security::relaunch_deelevated_or_fail(!console_requested) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{}", e);
+            let _ = std::fs::create_dir_all("logs");
+            let _ = std::fs::write("logs/startup_refused.txt", e.to_string());
+            std::process::exit(5);
+        }
+    };
+
     #[cfg(target_os = "windows")]
     {
         win_console::setup_console_suppression(console_requested);
@@ -63,6 +75,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("    🐙 AGENT OCTOPUS: AUTONOMOUS SWARM BREAKOUT DEFENSE & POLICY ENGINE");
         println!("================================================================================");
         println!("  [+] Mode: Production Security Defense & Interactive Test Runner");
+        println!(
+            "  [+] Token Posture: elevated={} integrity={} admins_enabled={} dangerous_privs={:?}",
+            token_posture.elevated,
+            token_posture.integrity_label(),
+            token_posture.admins_enabled,
+            token_posture.dangerous_privileges_present()
+        );
         println!("  [+] Architecture: 8 Isolated Specialized Arms + Central Brain");
         println!("  [+] Cedar Policy Arm: AWS Cedar v4.13 Deterministic Engine Online");
         println!("  [+] Egress Boundary: Strict Google Egress Filter (Only google.com / www.google.com)");
@@ -133,13 +152,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let url_for_browser = format!("http://127.0.0.1:{}", active_port);
             #[cfg(target_os = "windows")]
             {
-                use std::os::windows::process::CommandExt;
                 // Never execute "cmd /c start" as that opens an unwanted console window.
-                // Invoke explorer directly with CREATE_NO_WINDOW flag.
-                let _ = std::process::Command::new("explorer")
-                    .arg(&url_for_browser)
-                    .creation_flags(win_console::CREATE_NO_WINDOW)
-                    .spawn();
+                // Invoke explorer directly with CREATE_NO_WINDOW flag (recorded in hidden-process ledger).
+                let mut explorer = std::process::Command::new("explorer");
+                explorer.arg(&url_for_browser);
+                let _ = agent_octopus::security::spawn_hidden(&mut explorer, "startup: open dashboard in default browser");
             }
             #[cfg(not(target_os = "windows"))]
             {
@@ -170,7 +187,7 @@ fn check_startup_dependencies_and_toolchains(verbose: bool) {
     pyrit_cmd.args(["-c", "import pyrit; print(getattr(pyrit, '__version__', '1.1.0'))"]);
     #[cfg(target_os = "windows")]
     pyrit_cmd.creation_flags(win_console::CREATE_NO_WINDOW);
-    let pyrit_check = pyrit_cmd.output();
+    let pyrit_check = agent_octopus::security::output_hidden(&mut pyrit_cmd, "startup: PyRIT installed version probe");
 
     match pyrit_check {
         Ok(out) if out.status.success() => {
@@ -180,7 +197,7 @@ fn check_startup_dependencies_and_toolchains(verbose: bool) {
             pypi_cmd.args(["-c", "import urllib.request, json; print(json.loads(urllib.request.urlopen(urllib.request.Request('https://pypi.org/pypi/pyrit/json', headers={'User-Agent': 'AgentOctopus'}), timeout=1.5).read())['info']['version'])"]);
             #[cfg(target_os = "windows")]
             pypi_cmd.creation_flags(win_console::CREATE_NO_WINDOW);
-            let pypi_check = pypi_cmd.output();
+            let pypi_check = agent_octopus::security::output_hidden(&mut pypi_cmd, "startup: PyRIT upstream PyPI version probe");
 
             match pypi_check {
                 Ok(p_out) if p_out.status.success() => {

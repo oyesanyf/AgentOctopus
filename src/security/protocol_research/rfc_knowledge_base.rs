@@ -1,5 +1,6 @@
 use super::types::{CandidateProbeDto, RfcChunkDto};
 use crate::security::console_defense::CommandConsoleExt;
+use crate::security::hidden_process_ledger::LedgeredCommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -106,7 +107,7 @@ impl RfcKnowledgeBase {
 
         let _ = self.sqlite_cmd()
             .arg(schema_sql)
-            .output();
+            .output_logged("rfc knowledge base: sqlite3");
     }
 
     /// Returns aggregate telemetry: (rfc_count, fragment_count, probe_count, evaluations_count).
@@ -120,7 +121,7 @@ impl RfcKnowledgeBase {
         let query = "SELECT (SELECT COUNT(*) FROM rfcs), (SELECT COUNT(*) FROM fragments), (SELECT COUNT(*) FROM probes), (SELECT COUNT(*) FROM evaluations);";
         let output = self.sqlite_cmd()
             .arg(query)
-            .output();
+            .output_logged("rfc knowledge base: sqlite3");
 
         if let Ok(out) = output {
             let result_str = String::from_utf8_lossy(&out.stdout);
@@ -162,7 +163,7 @@ impl RfcKnowledgeBase {
             .arg("-separator")
             .arg("<|OCT_SEP|>")
             .arg(&query)
-            .output();
+            .output_logged("rfc knowledge base: sqlite3");
 
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -195,7 +196,7 @@ impl RfcKnowledgeBase {
             .arg("-separator")
             .arg("<|OCT_SEP|>")
             .arg(&query)
-            .output();
+            .output_logged("rfc knowledge base: sqlite3");
 
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -247,7 +248,7 @@ impl RfcKnowledgeBase {
 
         let _ = self.sqlite_cmd()
             .arg(&query)
-            .output();
+            .output_logged("rfc knowledge base: sqlite3");
     }
 
     /// Records an Arm 106 differential cross-validation outcome.
@@ -274,7 +275,7 @@ impl RfcKnowledgeBase {
 
         let _ = self.sqlite_cmd()
             .arg(&query)
-            .output();
+            .output_logged("rfc knowledge base: sqlite3");
     }
 
     /// Inserts or updates an RFC metadata record in the database.
@@ -288,7 +289,7 @@ impl RfcKnowledgeBase {
         );
         let _ = self.sqlite_cmd()
             .arg(&query)
-            .output();
+            .output_logged("rfc knowledge base: sqlite3");
     }
 
     /// Inserts a chunk/normative fragment for an RFC with deduplication.
@@ -301,7 +302,7 @@ impl RfcKnowledgeBase {
         );
         let _ = self.sqlite_cmd()
             .arg(&query)
-            .output();
+            .output_logged("rfc knowledge base: sqlite3");
     }
 
     /// Retrieves all fragments/chunks belonging to a specific RFC.
@@ -315,7 +316,7 @@ impl RfcKnowledgeBase {
             .arg("-separator")
             .arg("<|OCT_SEP|>")
             .arg(&query)
-            .output();
+            .output_logged("rfc knowledge base: sqlite3");
 
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -339,7 +340,7 @@ impl RfcKnowledgeBase {
     /// Returns the total chunk count for an RFC.
     pub fn get_chunk_count_for_rfc(&self, rfc_number: u32) -> usize {
         let query = format!("SELECT COUNT(*) FROM fragments WHERE rfc_number = {};", rfc_number);
-        if let Ok(out) = self.sqlite_cmd().arg(&query).output() {
+        if let Ok(out) = self.sqlite_cmd().arg(&query).output_logged("rfc knowledge base: sqlite3") {
             let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
             text.parse().unwrap_or(0)
         } else {
@@ -367,7 +368,7 @@ impl RfcKnowledgeBase {
         let query = format!("SELECT value FROM sync_metadata WHERE key = '{}';", clean_key);
         let output = self.sqlite_cmd()
             .arg(&query)
-            .output()
+            .output_logged("rfc knowledge base: sqlite3")
             .ok()?;
         let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if val.is_empty() {
@@ -387,7 +388,7 @@ impl RfcKnowledgeBase {
         );
         let _ = self.sqlite_cmd()
             .arg(&query)
-            .output();
+            .output_logged("rfc knowledge base: sqlite3");
     }
 
     /// Deletes all fragments for a given RFC number for transactional updates.
@@ -395,7 +396,7 @@ impl RfcKnowledgeBase {
         let query = format!("DELETE FROM fragments WHERE rfc_number = {};", rfc_number);
         let _ = self.sqlite_cmd()
             .arg(&query)
-            .output();
+            .output_logged("rfc knowledge base: sqlite3");
     }
 
     /// Executes a batch of SQL statements wrapped in a single transaction for high-performance synchronization.
@@ -409,7 +410,7 @@ impl RfcKnowledgeBase {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .spawn()
+            .spawn_logged("rfc knowledge base: sqlite3 (stdin import)")
         {
             Ok(c) => c,
             Err(_) => return,

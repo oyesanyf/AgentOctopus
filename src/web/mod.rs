@@ -1,4 +1,5 @@
 pub mod api;
+pub mod request_guard;
 pub mod server;
 pub mod strict_http;
 pub mod static_files;

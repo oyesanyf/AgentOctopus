@@ -22,13 +22,19 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 
-/// TEST 1: OS-Level Filesystem Boundary Enforcement
+/// TEST 1: OS-Level Filesystem Boundary Enforcement under a verified de-elevated agent token.
 ///
-/// Under full RCE in an arm, the attacker executes raw `std::fs::File::open`
-/// or Win32 `CreateFileW`, attempting to read sensitive host files.
+/// Under full RCE in an arm, the attacker executes raw `std::fs::File::open`, `reg save HKLM\SAM`,
+/// or raw disk reads (`\\.\PhysicalDrive0`). The arm must be running under a token that is:
+/// - not elevated (`TokenIsElevated == 0`), integrity <= Medium,
+/// - `BUILTIN\Administrators` deny-only,
+/// - free of `SeBackupPrivilege` / `SeRestorePrivilege` / `SeDebugPrivilege` (and the rest of
+///   `DANGEROUS_PRIVILEGES`).
 ///
-/// Invariant: The operating system must return `PermissionDenied` (OS Error 5: ERROR_ACCESS_DENIED)
-/// or the sandbox boundary must reject the raw filesystem path before any handle is granted.
+/// The probe runs inside a *real* child process spawned via `spawn_deelevated` (CreateProcessAsUserW,
+/// CREATE_SUSPENDED, token verified before ResumeThread). This holds whether the test runner itself is
+/// elevated or not. Only OS Error 5 (ERROR_ACCESS_DENIED) is accepted for SAM/SYSTEM: Error 32
+/// (sharing violation) means the *lock* stopped the read, not the access check, and fails the test.
 #[test]
 fn test_os_filesystem_access_denied_under_full_compromise() {
     let sensitive_paths = [
@@ -40,8 +46,8 @@ fn test_os_filesystem_access_denied_under_full_compromise() {
     let sandbox_root = std::env::temp_dir().join("octopus_enclave_sandbox");
     let _ = std::fs::create_dir_all(&sandbox_root);
 
+    // 1. Sandbox containment gate MUST unconditionally reject raw host paths (pre-filter).
     for path in &sensitive_paths {
-        // 1. Sandbox containment gate MUST unconditionally reject raw host paths
         let containment_check =
             agent_octopus::security::validate_agent_filesystem_access(path, Some(&sandbox_root));
         assert!(
@@ -49,35 +55,123 @@ fn test_os_filesystem_access_denied_under_full_compromise() {
             "Sandbox filesystem boundary must reject host path '{}'",
             path
         );
+    }
 
-        // 2. Attempt raw direct filesystem open (simulating attacker executing unconstrained code)
-        let direct_os_result = File::open(path);
+    // 2. OS enforcement inside a real de-elevated child process.
+    #[cfg(windows)]
+    {
+        let out_path = std::env::temp_dir().join(format!(
+            "octopus_posture_probe_{}_{}.json",
+            std::process::id(),
+            rand_suffix()
+        ));
+        let _ = std::fs::remove_file(&out_path);
 
-        // On Windows:
-        // - Under standard user / AppContainer token, accessing SAM/SYSTEM returns OS Error 5 (ERROR_ACCESS_DENIED / PermissionDenied).
-        // - Under an elevated Administrator token, the NT Kernel Registry subsystem holds an exclusive kernel lock on SAM/SYSTEM
-        //   and denies raw open with OS Error 32 (ERROR_SHARING_VIOLATION).
-        if path.contains("SAM") || path.contains("SYSTEM") {
-            assert!(
-                direct_os_result.is_err(),
-                "OS kernel must deny raw access to SAM/SYSTEM hives"
-            );
-            if let Err(ref e) = direct_os_result {
-                let raw_code = e.raw_os_error().unwrap_or(0);
-                println!(
-                    "[OS ENFORCEMENT VERIFIED] Direct open of '{}' failed with genuine OS error: kind={:?}, raw_os_error={}",
-                    path, e.kind(), raw_code
-                );
-                assert!(
-                    e.kind() == std::io::ErrorKind::PermissionDenied
-                        || raw_code == 5
-                        || raw_code == 32,
-                    "Expected OS Error 5 (ERROR_ACCESS_DENIED) or OS Error 32 (ERROR_SHARING_VIOLATION), got kind={:?} raw={}",
-                    e.kind(),
-                    raw_code
-                );
-            }
+        let exe = std::env::current_exe().expect("current test exe");
+        // Process-scoped env only (inherited by the child's default environment block).
+        std::env::set_var(PROBE_PARENT_ENV, std::process::id().to_string());
+        std::env::set_var(PROBE_OUT_ENV, &out_path);
+        let cmdline = format!(
+            "\"{}\" posture_child_probe --exact --nocapture --test-threads=1",
+            exe.display()
+        );
+
+        let child = agent_octopus::security::spawn_deelevated(&cmdline, true)
+            .expect("FAIL-CLOSED: de-elevated agent child must spawn and pass pre-resume token verification");
+
+        // Pre-resume verification as seen by the supervisor
+        assert!(!child.posture.elevated, "child token must not be elevated");
+        assert!(child.posture.integrity_rid <= agent_octopus::security::INTEGRITY_MEDIUM);
+        assert!(!child.posture.admins_enabled, "Administrators must not be enabled in child");
+        assert!(
+            child.posture.dangerous_privileges_present().is_empty(),
+            "child must hold no dangerous privileges, found {:?}",
+            child.posture.dangerous_privileges_present()
+        );
+
+        let exit = child.wait().expect("child exit code");
+        assert_eq!(exit, 0, "posture probe child process failed (exit code {})", exit);
+
+        let raw = std::fs::read_to_string(&out_path).expect("child must write probe report");
+        let _ = std::fs::remove_file(&out_path);
+        let report: serde_json::Value = serde_json::from_str(&raw).expect("probe JSON");
+        println!("[DE-ELEVATED CHILD PROBE] {}", report);
+
+        // In-child self-inspection
+        assert_eq!(report["posture"]["elevated"], false);
+        assert!(report["posture"]["integrity_rid"].as_u64().unwrap() <= 0x2000);
+        assert_eq!(report["posture"]["admins_enabled"], false);
+        let present: Vec<String> = serde_json::from_value(report["posture"]["present_privileges"].clone()).unwrap();
+        for p in ["SeBackupPrivilege", "SeRestorePrivilege", "SeDebugPrivilege"] {
+            assert!(!present.iter().any(|x| x == p), "{} must be absent in agent token", p);
         }
+
+        // SAM / SYSTEM: access check must deny (error 5) — NOT a sharing-lock (32).
+        assert_eq!(report["sam_open_os_error"].as_i64(), Some(5), "SAM open must fail with ERROR_ACCESS_DENIED");
+        assert_eq!(report["system_open_os_error"].as_i64(), Some(5), "SYSTEM open must fail with ERROR_ACCESS_DENIED");
+        // `reg save HKLM\SAM` (needs SeBackupPrivilege) must fail.
+        assert_eq!(report["reg_save_sam_succeeded"], false, "reg save HKLM\\SAM must fail in agent token");
+        assert_eq!(report["reg_save_file_exists"], false, "reg save must not produce a hive file");
+        // Raw disk read must be denied.
+        assert_eq!(report["physical_drive_open_os_error"].as_i64(), Some(5), "raw \\\\.\\PhysicalDrive0 must be access-denied");
+    }
+}
+
+#[cfg(windows)]
+const PROBE_PARENT_ENV: &str = "OCTOPUS_POSTURE_PROBE_PARENT";
+#[cfg(windows)]
+const PROBE_OUT_ENV: &str = "OCTOPUS_POSTURE_PROBE_OUT";
+
+#[cfg(windows)]
+fn rand_suffix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+/// Child-side probe. Executes only inside the de-elevated child spawned by TEST 1
+/// (the parent PID marker differs from our own PID); in every other process it is a no-op.
+#[test]
+fn posture_child_probe() {
+    #[cfg(windows)]
+    {
+        let parent = match std::env::var(PROBE_PARENT_ENV) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        if parent == std::process::id().to_string() {
+            return; // We are the parent test process, not the probe child.
+        }
+        let out = std::env::var(PROBE_OUT_ENV).expect("probe output path");
+
+        let posture = agent_octopus::security::current_token_posture().expect("posture");
+        let os_err = |p: &str| File::open(p).err().and_then(|e| e.raw_os_error());
+
+        let hive_out = std::env::temp_dir().join(format!("octopus_sam_save_{}.hiv", std::process::id()));
+        let _ = std::fs::remove_file(&hive_out);
+        use std::os::windows::process::CommandExt;
+        let reg_status = std::process::Command::new("reg.exe")
+            .args(["save", r"HKLM\SAM"])
+            .arg(&hive_out)
+            .arg("/y")
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let reg_ok = reg_status.map(|s| s.success()).unwrap_or(false);
+        let hive_exists = hive_out.exists();
+        let _ = std::fs::remove_file(&hive_out);
+
+        let report = serde_json::json!({
+            "posture": posture,
+            "sam_open_os_error": os_err(r"C:\Windows\System32\config\SAM"),
+            "system_open_os_error": os_err(r"C:\Windows\System32\config\SYSTEM"),
+            "reg_save_sam_succeeded": reg_ok,
+            "reg_save_file_exists": hive_exists,
+            "physical_drive_open_os_error": os_err(r"\\.\PhysicalDrive0"),
+        });
+        std::fs::write(&out, report.to_string()).expect("write probe report");
     }
 }
 

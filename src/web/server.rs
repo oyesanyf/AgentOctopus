@@ -284,7 +284,7 @@ pub fn api_error_payload(code: &str, message: &str) -> String {
 pub fn api_error_response(status_code: &str, code: &str, message: &str) -> String {
     let body = api_error_payload(code, message);
     format!(
-        "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         status_code,
         body.len(),
         body
@@ -539,12 +539,41 @@ async fn handle_connection(
         None => (full_path, ""),
     };
 
+    // Finding 8: Host allowlist + Origin/Sec-Fetch-Site + per-launch token, before ANY routing.
+    let local_port = stream.local_addr().map(|a| a.port()).unwrap_or(0);
+    let guard_req = super::request_guard::GuardRequest {
+        method,
+        path,
+        query,
+        headers: headers_str,
+        local_port,
+    };
+    if let Err(rejection) =
+        super::request_guard::authorize_request(&guard_req, super::request_guard::dashboard_token())
+    {
+        state.audit_log.record_event(
+            "DASHBOARD_REQUEST_REJECTED",
+            &format!("recon_{}", client_ip),
+            &format!("{} {} -> {} ({})", method, path, rejection.code(), rejection.message()),
+            "REJECTED",
+        );
+        let resp = api_error_response(rejection.status_line(), rejection.code(), &rejection.message());
+        let _ = stream.write_all(resp.as_bytes()).await;
+        let _ = stream.shutdown().await;
+        return Ok(());
+    }
+
     match (method, path) {
         ("GET", "/") | ("GET", "/index.html") | ("HEAD", "/") | ("HEAD", "/index.html") => {
-            let body = if method == "HEAD" { "" } else { INDEX_HTML };
+            let index = super::request_guard::inject_token_into_index(
+                INDEX_HTML,
+                super::request_guard::dashboard_token(),
+            );
+            let body = if method == "HEAD" { "" } else { index.as_str() };
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                INDEX_HTML.len(),
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                super::request_guard::SECURITY_HEADERS,
+                index.len(),
                 body
             );
             stream.write_all(response.as_bytes()).await?;
@@ -616,7 +645,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/status")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -630,7 +659,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/audit-log")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -652,7 +681,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/live-tests")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -666,7 +695,7 @@ async fn handle_connection(
             let sanitized = crate::security::LogSanitizer::sanitize_text(&raw_str);
             let content = sanitized.into_bytes();
             let header = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"adversarial_execution.log\"\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"adversarial_execution.log\"\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 content.len()
             );
             stream.write_all(header.as_bytes()).await?;
@@ -679,7 +708,7 @@ async fn handle_connection(
             let sanitized = crate::security::LogSanitizer::sanitize_text(&raw_str);
             let content = sanitized.into_bytes();
             let header = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Disposition: attachment; filename=\"adversarial_audit.json\"\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Disposition: attachment; filename=\"adversarial_audit.json\"\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 content.len()
             );
             stream.write_all(header.as_bytes()).await?;
@@ -692,7 +721,7 @@ async fn handle_connection(
             let sanitized = crate::security::LogSanitizer::sanitize_text(&raw_str);
             let content = sanitized.into_bytes();
             let header = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"security_audit.log\"\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: attachment; filename=\"security_audit.log\"\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 content.len()
             );
             stream.write_all(header.as_bytes()).await?;
@@ -719,7 +748,7 @@ async fn handle_connection(
             };
 
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -731,7 +760,7 @@ async fn handle_connection(
             let state_cl = Arc::clone(&state);
             let json_body = handle_containment_rings(&state_cl).await;
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -746,7 +775,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 resp_body.len(),
                 resp_body
@@ -762,7 +791,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 resp_body.len(),
                 resp_body
@@ -778,7 +807,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 resp_body.len(),
                 resp_body
@@ -798,7 +827,7 @@ async fn handle_connection(
                 }
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 resp_body.len(),
                 resp_body
@@ -818,7 +847,7 @@ async fn handle_connection(
                 }
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 resp_body.len(),
                 resp_body
@@ -835,7 +864,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/tarpit-stats")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -849,7 +878,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/kernel-stats")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -863,7 +892,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -877,7 +906,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -891,7 +920,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -902,7 +931,7 @@ async fn handle_connection(
         ("GET", "/api/protocol-research/status") => {
             let json_body = handle_protocol_research_status(&state).await;
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -912,7 +941,7 @@ async fn handle_connection(
         ("GET", "/api/protocol-research/knowledge-base") => {
             let json_body = handle_protocol_research_knowledge_base(&state, &query);
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -925,7 +954,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -939,7 +968,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -950,7 +979,7 @@ async fn handle_connection(
         ("GET", "/api/protocol-research/hypotheses") => {
             let json_body = handle_protocol_research_hypotheses(&state);
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -963,7 +992,7 @@ async fn handle_connection(
                 Err(err) => ("500 Internal Server Error", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -974,7 +1003,7 @@ async fn handle_connection(
         ("GET", "/api/protocol-research/swarm-status") => {
             let json_body = handle_protocol_research_swarm_status(&state).await;
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -984,7 +1013,7 @@ async fn handle_connection(
         ("GET", "/api/pqc/status") => {
             let json_body = handle_pqc_status(&state).await;
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -997,7 +1026,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1011,7 +1040,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1025,7 +1054,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1039,7 +1068,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1053,7 +1082,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1067,7 +1096,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1078,7 +1107,7 @@ async fn handle_connection(
         ("GET", "/api/evolution/status") => {
             let json_body = handle_evolution_status(&state).await;
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -1091,7 +1120,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1105,7 +1134,7 @@ async fn handle_connection(
                 Err(err) => ("500 Internal Server Error", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1116,7 +1145,7 @@ async fn handle_connection(
         ("GET", "/api/evolution/candidates") => {
             let json_body = handle_evolution_candidates(&state).await;
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -1129,7 +1158,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1143,7 +1172,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1157,7 +1186,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1171,7 +1200,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1182,7 +1211,7 @@ async fn handle_connection(
         ("GET", "/api/dream-rsi/status") => {
             let json_body = handle_dream_rsi_status(&state).await;
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -1192,7 +1221,7 @@ async fn handle_connection(
         ("GET", "/api/dream-rsi/policy") => {
             let json_body = handle_dream_rsi_policy(&state).await;
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -1205,7 +1234,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1219,7 +1248,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1230,7 +1259,7 @@ async fn handle_connection(
         ("GET", "/api/dream-rsi/recommend-priorities") | ("POST", "/api/dream-rsi/recommend-priorities") => {
             let json_body = handle_dream_rsi_recommend_priorities(&state).await;
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -1243,7 +1272,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1254,7 +1283,7 @@ async fn handle_connection(
         ("GET", "/api/harness2/status") => {
             let json_body = handle_harness2_status(&state).await;
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -1267,7 +1296,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1278,7 +1307,7 @@ async fn handle_connection(
         ("GET", "/api/harness2/library") => {
             let json_body = handle_harness2_library(&state, "").await;
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -1291,7 +1320,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1305,7 +1334,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1316,7 +1345,7 @@ async fn handle_connection(
         ("GET", "/api/dogwood/trace") => {
             let json_body = handle_dogwood_trace(&state);
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -1329,7 +1358,7 @@ async fn handle_connection(
                 Err(err) => ("400 Bad Request", err),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1340,7 +1369,7 @@ async fn handle_connection(
         ("GET", "/api/dogwood/presets") => {
             let json_body = handle_dogwood_presets();
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -1353,7 +1382,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/egress-domains")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1369,7 +1398,7 @@ async fn handle_connection(
             };
 
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1383,7 +1412,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rl-defense/status")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1408,7 +1437,7 @@ async fn handle_connection(
                 }
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1426,7 +1455,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("CYCLE_FETCH_FAULT", "Failed to retrieve latest continuous evaluation report")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1441,7 +1470,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rl-defense/evaluate-action")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1455,7 +1484,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/atlas/status")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1470,7 +1499,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/atlas/sync")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1485,7 +1514,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/atlas/dynamic-tests")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1499,7 +1528,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/oss-fuzz/status")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1513,7 +1542,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/oss-fuzz/run-burst")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1527,7 +1556,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/oss-fuzz/sarif")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1541,7 +1570,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/osv-scanner/status")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1555,7 +1584,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/osv-scanner/scan-now")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1569,7 +1598,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/osv-scanner/sarif")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1583,7 +1612,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/otel/sessions")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1597,7 +1626,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/otel/spans")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1611,7 +1640,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/runtime-activity/stream")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1625,7 +1654,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/resilience/metrics")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1639,7 +1668,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/breakout-guards/status")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1654,7 +1683,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/math/validate-sisyphean")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1668,7 +1697,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/math/vassilev-proof")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1682,7 +1711,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/governor/status")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1697,7 +1726,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/governor/inject-sample")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1711,7 +1740,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/governor/reset")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1725,7 +1754,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/status")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1747,7 +1776,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/telemetry")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1762,7 +1791,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/intercept-prompt")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1777,7 +1806,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/intercept-tool")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1792,7 +1821,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/intercept-memory")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1807,7 +1836,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/canary")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1822,7 +1851,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/mitigation-tier")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1834,7 +1863,7 @@ async fn handle_connection(
             let json_body = handle_oshoosiclaw_containment_status(&state).await;
             let status_code = "200 OK";
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 json_body.len(),
                 json_body
@@ -1849,7 +1878,7 @@ async fn handle_connection(
                 Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/containment/oshoosiclaw-evaluate")),
             };
             let response = format!(
-                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
                 response_body.len(),
                 response_body
@@ -1871,8 +1900,29 @@ async fn handle_connection(
             handle_sse_test_stream(&mut stream, suite_name, &state).await?;
         }
 
+        ("GET", "/api/hidden-processes") => {
+            let records = crate::security::list_hidden_spawns();
+            let body = serde_json::json!({
+                "count": records.len(),
+                "note": "Every CREATE_NO_WINDOW subprocess launched by Agent Octopus code paths (also appended to logs/hidden_processes.jsonl)",
+                "records": records,
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                super::request_guard::SECURITY_HEADERS,
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
         ("OPTIONS", _) => {
-            let response = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nConnection: close\r\n\r\n";
+            // No CORS grants: same-origin dashboard requests never preflight.
+            let response = format!(
+                "HTTP/1.1 204 No Content\r\n{}Allow: GET, POST, HEAD\r\nConnection: close\r\n\r\n",
+                super::request_guard::SECURITY_HEADERS
+            );
             stream.write_all(response.as_bytes()).await?;
         }
 
@@ -1930,12 +1980,9 @@ async fn stream_command_output(
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(crate::security::console_defense::CREATE_NO_WINDOW);
-    }
 
-    let mut child = match cmd.spawn() {
+    let purpose = format!("dashboard test runner: {}", suite_label);
+    let mut child = match crate::security::spawn_hidden_tokio(&mut cmd, &purpose) {
         Ok(c) => c,
         Err(e) => {
             let err_event = format!(
@@ -2126,7 +2173,7 @@ async fn handle_sse_test_stream(
     state.breakout_coordinator.behavioral.record_harness_baseline("tests/strix_llm_adversarial_tester.py");
     state.breakout_coordinator.behavioral.record_harness_baseline("tests/exhaustive_adversarial_tester.py");
 
-    let sse_header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache, no-transform\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\nX-Accel-Buffering: no\r\n\r\n";
+    let sse_header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache, no-transform\r\nConnection: keep-alive\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nX-Accel-Buffering: no\r\n\r\n";
     stream.write_all(sse_header.as_bytes()).await?;
     stream.flush().await?;
 
@@ -2183,15 +2230,6 @@ async fn handle_sse_test_stream(
         })
     );
     stream.write_all(sync_event.as_bytes()).await?;
-
-    let sync_ok_event = format!(
-        "data: {}\n\n",
-        serde_json::json!({
-            "type": "output",
-            "line": "[SUITE-SYNC] ✓ PyRIT v1.1.0 verified, 19 Red-Teaming Frameworks & 13 Perimeters synchronized with active Cedar engine."
-        })
-    );
-    stream.write_all(sync_ok_event.as_bytes()).await?;
     stream.flush().await?;
 
     // Send initial status event with robust serde JSON
@@ -2326,6 +2364,23 @@ async fn handle_sse_test_stream(
             &mut failed,
             state,
         ).await;
+
+        // `--lib` unit tests (inline #[cfg(test)] modules) are NOT executed from the dashboard:
+        // Windows Smart App Control blocks the freshly-built unsigned lib test binary (os error 4551).
+        // Report that explicitly instead of silently skipping, with the latest CI result for them.
+        let ci_status = latest_ci_lib_test_status(&root);
+        let lib_event = format!(
+            "data: {}\n\n",
+            serde_json::json!({
+                "type": "output",
+                "line": format!(
+                    "[NOT RUN LOCALLY] lib_unit_tests (`cargo test --lib`): blocked by Smart App Control (os error 4551). Latest CI: {}",
+                    ci_status
+                )
+            })
+        );
+        let _ = stream.write_all(lib_event.as_bytes()).await;
+        let _ = stream.flush().await;
     } else if is_python {
         let mut py_cmd = Command::new("python");
         py_cmd.arg("-u");
@@ -2444,4 +2499,41 @@ async fn handle_sse_test_stream(
     let _ = stream.flush().await;
 
     Ok(())
+}
+
+/// Queries the most recent GitHub Actions run on `main` via `gh` (hidden, ledgered) and returns a
+/// one-line summary. Returns an explicit "unavailable" reason instead of inventing a result.
+fn latest_ci_lib_test_status(root: &std::path::Path) -> String {
+    let mut cmd = std::process::Command::new("gh");
+    cmd.current_dir(root).args([
+        "run",
+        "list",
+        "--branch",
+        "main",
+        "--limit",
+        "1",
+        "--json",
+        "workflowName,conclusion,status,headSha,url",
+    ]);
+    match crate::security::output_hidden(&mut cmd, "dashboard: latest CI status for --lib unit tests") {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(serde_json::Value::Array(runs)) if !runs.is_empty() => {
+                    let r = &runs[0];
+                    format!(
+                        "{} -> {} / {} ({}) {}",
+                        r["workflowName"].as_str().unwrap_or("?"),
+                        r["status"].as_str().unwrap_or("?"),
+                        r["conclusion"].as_str().unwrap_or("pending"),
+                        r["headSha"].as_str().map(|s| &s[..s.len().min(7)]).unwrap_or("?"),
+                        r["url"].as_str().unwrap_or("")
+                    )
+                }
+                _ => "unavailable (no CI runs returned)".to_string(),
+            }
+        }
+        Ok(out) => format!("unavailable (gh exited {})", out.status),
+        Err(e) => format!("unavailable (gh not runnable: {})", e),
+    }
 }

@@ -107,20 +107,21 @@ impl RfcIndexSynchronizer {
 
         let last_etag = self.knowledge_base.get_metadata("rfc_index_etag").unwrap_or_default();
 
-        use crate::security::console_defense::CommandConsoleExt;
-        let mut cmd = std::process::Command::new("curl.exe");
-        cmd.enforce_no_window();
-        cmd.arg("-s")
-           .arg("-i")
-           .arg("--max-time")
-           .arg("3");
-
+        use crate::security::hidden_process_ledger::LedgeredCommandExt;
+        let allowed = vec!["www.rfc-editor.org".to_string(), "rfc-editor.org".to_string()];
+        let mut extra_args = vec!["-s".to_string(), "-i".to_string()];
         if !last_etag.is_empty() {
-            cmd.arg("-H").arg(format!("If-None-Match: {}", last_etag));
+            extra_args.push("-H".to_string());
+            extra_args.push(format!("If-None-Match: {}", last_etag));
         }
-        cmd.arg("https://www.rfc-editor.org/rfc-index.txt");
+        let extra_refs: Vec<&str> = extra_args.iter().map(|s| s.as_str()).collect();
+        let (mut cmd, _pinned) = crate::containment_ring::pinned_curl_command(
+            "https://www.rfc-editor.org/rfc-index.txt",
+            &allowed,
+            &extra_refs,
+        )?;
 
-        let output = cmd.output().map_err(|e| {
+        let output = cmd.output_logged("rfc_sync::fetch_rfc_index").map_err(|e| {
             OctopusSecurityError::DeterministicLayerViolation(format!("Live RFC Editor TLS request failed: {}", e))
         })?;
 

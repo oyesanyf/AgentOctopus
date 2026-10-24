@@ -252,30 +252,33 @@ async fn test_negative_control_policy_tampering_triggers_failure() {
 
 #[tokio::test]
 async fn test_mesh_guard_prevents_ambient_privilege_inheritance() {
+    use agent_octopus::containment_ring::ArmContainmentRing;
+
     let ring = ContainmentRing::default();
+    let master_seed = b"test_master_seed_32_bytes_000001";
+    let doc_ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, master_seed);
+    let atlas_ring = ArmContainmentRing::new(2, ArmRole::AnomalyDetection, 1, master_seed);
 
-    // Allow Finding message from doc ingest to atlas
-    ring.mesh_guard.allow_route("doc_ingest", "atlas", Some(MessageKind::Finding)).await;
+    // Allow Finding message from arm 0 (doc ingest) to arm 2 (atlas)
+    ring.mesh_guard.allow_route(0, 2, Some(MessageKind::Finding)).await;
 
-    // Doc ingest sending finding to atlas is permitted
-    let valid_msg = ring.mesh_guard.validate_message(
-        "doc_ingest",
-        "atlas",
-        &MessageKind::Finding,
-        "corr-1",
-        "found line items",
-    ).await;
+    // Doc ingest sending HMAC-authenticated finding to atlas is permitted when route is registered
+    let signed_valid = doc_ring
+        .sign_mesh_message(2, 1, MessageKind::Finding, "corr-1", "found line items")
+        .await
+        .unwrap();
+    let verified_valid = atlas_ring.verify_incoming_message(&signed_valid).await.unwrap();
+    let valid_msg = ring.mesh_guard.validate_message(&verified_valid).await;
     assert!(valid_msg.is_ok());
 
-    // Boundary Invariant: Ingestion arm attempting to message ledger arm is strictly forbidden
-    let lateral_msg = ring.mesh_guard.validate_message(
-        "doc_ingest",
-        "ledger_arm",
-        &MessageKind::Finding,
-        "corr-2",
-        "execute transfer",
-    ).await;
-    assert!(matches!(lateral_msg, Err(OctopusSecurityError::DelegationScopeViolation(_))));
+    // Boundary Invariant: Ingestion arm attempting to message ledger arm (arm 1) is strictly forbidden
+    let ledger_ring = ArmContainmentRing::new(1, ArmRole::AccountingLedgerWrite, 1, master_seed);
+    let signed_lateral = doc_ring
+        .sign_mesh_message(1, 1, MessageKind::Finding, "corr-2", "execute transfer")
+        .await
+        .unwrap();
+    let lateral_verify = ledger_ring.verify_incoming_message(&signed_lateral).await;
+    assert!(matches!(lateral_verify, Err(OctopusSecurityError::DelegationScopeViolation(_))));
 }
 
 #[tokio::test]
