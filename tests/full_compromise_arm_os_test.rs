@@ -37,23 +37,45 @@ fn test_os_filesystem_access_denied_under_full_compromise() {
         r"C:\Windows\System32\drivers\etc\hosts",
     ];
 
+    let sandbox_root = std::env::temp_dir().join("octopus_enclave_sandbox");
+    let _ = std::fs::create_dir_all(&sandbox_root);
+
     for path in &sensitive_paths {
-        // Attempt raw direct filesystem open (simulating attacker executing unconstrained code)
+        // 1. Sandbox containment gate MUST unconditionally reject raw host paths
+        let containment_check =
+            agent_octopus::security::validate_agent_filesystem_access(path, Some(&sandbox_root));
+        assert!(
+            containment_check.is_err(),
+            "Sandbox filesystem boundary must reject host path '{}'",
+            path
+        );
+
+        // 2. Attempt raw direct filesystem open (simulating attacker executing unconstrained code)
         let direct_os_result = File::open(path);
 
-        // On Windows with standard user permissions, accessing the SAM hive produces
-        // OS Error 5 (ERROR_ACCESS_DENIED / PermissionDenied).
+        // On Windows:
+        // - Under standard user / AppContainer token, accessing SAM/SYSTEM returns OS Error 5 (ERROR_ACCESS_DENIED / PermissionDenied).
+        // - Under an elevated Administrator token, the NT Kernel Registry subsystem holds an exclusive kernel lock on SAM/SYSTEM
+        //   and denies raw open with OS Error 32 (ERROR_SHARING_VIOLATION).
         if path.contains("SAM") || path.contains("SYSTEM") {
             assert!(
                 direct_os_result.is_err(),
-                "OS must deny raw access to SAM/SYSTEM hives"
+                "OS kernel must deny raw access to SAM/SYSTEM hives"
             );
             if let Err(ref e) = direct_os_result {
+                let raw_code = e.raw_os_error().unwrap_or(0);
                 println!(
-                    "[OS ENFORCEMENT VERIFIED] Direct open of '{}' failed with genuine OS error: {:?}",
-                    path, e.kind()
+                    "[OS ENFORCEMENT VERIFIED] Direct open of '{}' failed with genuine OS error: kind={:?}, raw_os_error={}",
+                    path, e.kind(), raw_code
                 );
-                assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+                assert!(
+                    e.kind() == std::io::ErrorKind::PermissionDenied
+                        || raw_code == 5
+                        || raw_code == 32,
+                    "Expected OS Error 5 (ERROR_ACCESS_DENIED) or OS Error 32 (ERROR_SHARING_VIOLATION), got kind={:?} raw={}",
+                    e.kind(),
+                    raw_code
+                );
             }
         }
     }

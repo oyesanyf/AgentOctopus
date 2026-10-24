@@ -2266,7 +2266,7 @@ async fn handle_sse_test_stream(
             "data: {}\n\n",
             serde_json::json!({
                 "type": "output",
-                "line": "\n=====================================================================================\n  [PHASE 2] STARTING NATIVE RUST INTEGRATION TEST MATRIX (ALL 15 SUITES)\n====================================================================================="
+                "line": "\n=====================================================================================\n  [PHASE 2] STARTING NATIVE RUST INTEGRATION TEST MATRIX (ALL 31 SUITES)\n====================================================================================="
             })
         );
         let _ = stream.write_all(phase2_banner.as_bytes()).await;
@@ -2275,9 +2275,46 @@ async fn handle_sse_test_stream(
         // =====================================================================
         // PHASE 2: Native Rust Integration Test Suites (Cargo)
         // =====================================================================
+        let all_rust_suites = [
+            "oshoosiclaw_adapted_containment_tests",
+            "full_compromise_arm_os_test",
+            "arm_containment_ring_tests",
+            "sentinel_ring_tests",
+            "containment_tests",
+            "containment_ring_tests",
+            "containment_ring_negative_controls",
+            "negative_control_comprehensive_suite",
+            "cedar_policy_tests",
+            "breakout_defense_tests",
+            "breakout_scripts",
+            "continuous_security_rl_tests",
+            "adversarial_challenger_gate_tests",
+            "arm107_protocol_research_tests",
+            "differential_arm106_containment_tests",
+            "dogwood_temporal_policy_tests",
+            "dream_rsi_tests",
+            "evolution_tests",
+            "gate2_boundary_adversarial_tests",
+            "google_anomaly_detection_tests",
+            "governor_tests",
+            "guard_arms_network_tests",
+            "http_terminator_defense_tests",
+            "kernel_sentinel_tests",
+            "ledger_transparency_tests",
+            "math_validator_tests",
+            "neural_mesh_integration_tests",
+            "pqc_tests",
+            "quantum_adversarial_tests",
+            "rasp_tests",
+            "research_and_atlas_tests",
+        ];
         let mut cargo_cmd = Command::new("cargo");
         cargo_cmd.current_dir(&root);
-        cargo_cmd.args(["test", "--tests", "--", "--nocapture"]);
+        cargo_cmd.args(["test", "--offline"]);
+        for target in all_rust_suites {
+            cargo_cmd.args(["--test", target]);
+        }
+        cargo_cmd.args(["--", "--nocapture"]);
 
         let _ = stream_command_output(
             stream,
@@ -2327,19 +2364,31 @@ async fn handle_sse_test_stream(
             "breakout_defense_tests" => "breakout_defense_tests",
             "breakout_scripts" => "breakout_scripts",
             "containment_tests" => "containment_tests",
+            "containment_ring_tests" => "containment_ring_tests",
+            "containment_ring_negative_controls" => "containment_ring_negative_controls",
+            "negative_control_comprehensive_suite" => "negative_control_comprehensive_suite",
             "arm_containment_ring_tests" => "arm_containment_ring_tests",
+            "full_compromise_arm_os_test" => "full_compromise_arm_os_test",
+            "adversarial_challenger_gate_tests" => "adversarial_challenger_gate_tests",
+            "arm107_protocol_research_tests" => "arm107_protocol_research_tests",
+            "differential_arm106_containment_tests" => "differential_arm106_containment_tests",
+            "dogwood_temporal_policy_tests" => "dogwood_temporal_policy_tests",
+            "dream_rsi_tests" => "dream_rsi_tests",
+            "evolution_tests" => "evolution_tests",
+            "gate2_boundary_adversarial_tests" => "gate2_boundary_adversarial_tests",
             "google_anomaly_detection_tests" => "google_anomaly_detection_tests",
             "governor_tests" => "governor_tests",
             "guard_arms_network_tests" => "guard_arms_network_tests",
+            "http_terminator_defense_tests" | "strict_http_terminator_tests" => "http_terminator_defense_tests",
             "kernel_sentinel_tests" => "kernel_sentinel_tests",
             "ledger_transparency_tests" => "ledger_transparency_tests",
             "math_validator_tests" => "math_validator_tests",
             "neural_mesh_integration_tests" => "neural_mesh_integration_tests",
+            "pqc_tests" => "pqc_tests",
             "quantum_adversarial_tests" => "quantum_adversarial_tests",
             "rasp_tests" => "rasp_tests",
             "research_and_atlas_tests" => "research_and_atlas_tests",
             "sentinel_ring_tests" => "sentinel_ring_tests",
-            "strict_http_terminator_tests" => "strict_http_terminator_tests",
             "oshoosiclaw_adapted_containment_tests" => "oshoosiclaw_adapted_containment_tests",
             _ => {
                 let err_event = format!(
@@ -2356,7 +2405,7 @@ async fn handle_sse_test_stream(
         };
         let mut cargo_cmd = Command::new("cargo");
         cargo_cmd.current_dir(&root);
-        cargo_cmd.args(["test", "--test", cargo_target, "--", "--nocapture"]);
+        cargo_cmd.args(["test", "--offline", "--test", cargo_target, "--", "--nocapture"]);
 
         let _ = stream_command_output(
             stream,

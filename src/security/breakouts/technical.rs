@@ -62,9 +62,18 @@ impl TechnicalBreakoutGuard {
             }
         }
 
-        // 3. Container namespace and privilege escalation indicators
-        if lower_cmd.contains("nsenter") || lower_cmd.contains("unshare") || lower_cmd.contains("--privileged") {
-            detected_vectors.push("Host namespace access or privileged container spawn attempt".to_string());
+        // 3. Container namespace, encoded shell execution, and privilege escalation indicators
+        if lower_cmd.contains("nsenter")
+            || lower_cmd.contains("unshare")
+            || lower_cmd.contains("--privileged")
+            || lower_payload.contains("powershell -enc")
+            || lower_payload.contains("-encodedcommand")
+            || lower_payload.contains("ignore previous instructions")
+        {
+            detected_vectors.push(
+                "Host namespace access, encoded shell injection, or privileged container spawn attempt"
+                    .to_string(),
+            );
         }
 
         let is_clean = detected_vectors.is_empty();

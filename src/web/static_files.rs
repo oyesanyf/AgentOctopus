@@ -928,7 +928,16 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
         <div style="flex: 1;">
           <label style="display: block; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); margin-bottom: 0.35rem;">SELECT SPECIFIC TEST SUITE</label>
           <select id="suite-selector">
-            <option value="all" selected style="font-weight: 800; color: #38bdf8; background: #1e1b4b;">ALL (Combined Master Suite - All 2,250+ Tests Combined: 19 Red-Teaming Frameworks &amp; 15 Native Rust Suites)</option>
+            <option value="all" selected style="font-weight: 800; color: #38bdf8; background: #1e1b4b;">ALL (Combined Master Suite - All 2,500+ Tests Combined: 19 Red-Teaming Frameworks &amp; 31 Native Rust Suites)</option>
+            <option value="oshoosiclaw_adapted_containment_tests" style="color: #34d399; font-weight: 700;">OshoosiClaw Adapted Containment, Mathematical Laws &amp; Physics (28 tests)</option>
+            <option value="full_compromise_arm_os_test" style="color: #f472b6; font-weight: 700;">Full-Compromise Arm OS-Level Kernel Isolation (6 tests)</option>
+            <option value="arm_containment_ring_tests">Per-Arm Containment Ring &amp; Mesh Guard (13 tests)</option>
+            <option value="sentinel_ring_tests">Out-of-Process Sentinel Ring &amp; Heartbeat Verification (10 tests)</option>
+            <option value="pqc_tests">FIPS 203 ML-KEM-768 &amp; FIPS 204 ML-DSA-65 Post-Quantum (Arm 108)</option>
+            <option value="evolution_tests">OpenEvolve MAP-Elites Code Optimizer &amp; AST Guard (Arm 109)</option>
+            <option value="dream_rsi_tests">Open Dream-RSI Policy Optimizer (Arm 110)</option>
+            <option value="arm107_protocol_research_tests">RFCHunt Protocol Research &amp; Differential Oracle (Arm 107)</option>
+            <option value="dogwood_temporal_policy_tests">Dogwood Temporal Policy &amp; MFOTL Verification</option>
             <option value="atlas_dynamic" style="color: #c084fc; font-weight: 700;">MITRE ATLAS Dynamic STIX Matrix (208 Techniques - mitre-atlas/atlas-data)</option>
             <option value="oss_fuzz_burst" style="color: #10b981; font-weight: 700;">Google OSS-Fuzz Continuous Runtime Arm (1,000 Mutation Burst)</option>
             <option value="osv_scanner_now" style="color: #38bdf8; font-weight: 700;">Google OSV-Scanner Continuous Dependency Scan (342 Pinned Crates)</option>
