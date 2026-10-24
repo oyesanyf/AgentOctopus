@@ -1,24 +1,80 @@
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use agent_octopus::web::start_web_server;
 use std::time::Duration;
 use tokio::time::sleep;
 
+#[cfg(target_os = "windows")]
+mod win_console {
+    #[link(name = "kernel32")]
+    extern "system" {
+        pub fn AttachConsole(dwProcessId: u32) -> i32;
+        pub fn FreeConsole() -> i32;
+        pub fn GetStdHandle(nStdHandle: u32) -> isize;
+        pub fn SetConsoleMode(hConsoleHandle: isize, dwMode: u32) -> i32;
+        pub fn GetConsoleMode(hConsoleHandle: isize, lpMode: *mut u32) -> i32;
+        pub fn FlushConsoleInputBuffer(hConsoleInput: isize) -> i32;
+    }
+    pub const ATTACH_PARENT_PROCESS: u32 = 0xFFFFFFFF;
+    pub const STD_INPUT_HANDLE: u32 = 0xFFFFFFF6;
+    pub const ENABLE_QUICK_EDIT_MODE: u32 = 0x0040;
+    pub const ENABLE_INSERT_MODE: u32 = 0x0020;
+    pub const ENABLE_MOUSE_INPUT: u32 = 0x0010;
+    pub const ENABLE_EXTENDED_FLAGS: u32 = 0x0080;
+    pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    /// Suppresses visible console window and mitigates QuickEdit Mode DoS / Select freezes.
+    pub fn setup_console_suppression(enable_console: bool) {
+        unsafe {
+            if enable_console {
+                // Attach to caller's console if explicitly requested
+                let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+                let handle = GetStdHandle(STD_INPUT_HANDLE);
+                if handle != 0 && handle != -1 {
+                    let mut mode = 0u32;
+                    if GetConsoleMode(handle, &mut mode) != 0 {
+                        // Strip QuickEdit mode so selecting text cannot freeze the daemon
+                        let hardened = (mode & !(ENABLE_QUICK_EDIT_MODE | ENABLE_INSERT_MODE | ENABLE_MOUSE_INPUT)) | ENABLE_EXTENDED_FLAGS;
+                        let _ = SetConsoleMode(handle, hardened);
+                        let _ = FlushConsoleInputBuffer(handle);
+                    }
+                }
+            } else {
+                // Default: completely detach and suppress any console shell window
+                let _ = FreeConsole();
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!("================================================================================");
-    println!("    🐙 AGENT OCTOPUS: AUTONOMOUS SWARM BREAKOUT DEFENSE & POLICY ENGINE");
-    println!("================================================================================");
-    println!("  [+] Mode: Production Security Defense & Interactive Test Runner");
-    println!("  [+] Architecture: 8 Isolated Specialized Arms + Central Brain");
-    println!("  [+] Cedar Policy Arm: AWS Cedar v4.13 Deterministic Engine Online");
-    println!("  [+] Egress Boundary: Strict Google Egress Filter (Only google.com / www.google.com)");
-    println!("  [+] Windows Confinement: Job Objects + AppContainer Monikers + Wasmtime Fuel");
-    println!("  [+] Audit Trail: Append-Only SHA-256 Hash Chain Initialized");
-    println!("--------------------------------------------------------------------------------");
+    let args: Vec<String> = std::env::args().collect();
+    let console_requested = args.iter().any(|a| a == "--console" || a == "-c")
+        || std::env::var("OCTOPUS_CONSOLE").map(|v| v == "1" || v == "true").unwrap_or(false);
+
+    #[cfg(target_os = "windows")]
+    {
+        win_console::setup_console_suppression(console_requested);
+    }
+
+    if console_requested {
+        println!("================================================================================");
+        println!("    🐙 AGENT OCTOPUS: AUTONOMOUS SWARM BREAKOUT DEFENSE & POLICY ENGINE");
+        println!("================================================================================");
+        println!("  [+] Mode: Production Security Defense & Interactive Test Runner");
+        println!("  [+] Architecture: 8 Isolated Specialized Arms + Central Brain");
+        println!("  [+] Cedar Policy Arm: AWS Cedar v4.13 Deterministic Engine Online");
+        println!("  [+] Egress Boundary: Strict Google Egress Filter (Only google.com / www.google.com)");
+        println!("  [+] Windows Confinement: Job Objects + AppContainer Monikers + Wasmtime Fuel");
+        println!("  [+] Audit Trail: Append-Only SHA-256 Hash Chain Initialized");
+        println!("--------------------------------------------------------------------------------");
+    }
 
     // Proactively check for updated PyRIT AI Red-Teaming, external scanners, and test suites in background
     // so that port 5005 binds immediately (<10ms) without waiting on Python/PyPI subprocesses.
-    tokio::task::spawn_blocking(|| {
-        check_startup_dependencies_and_toolchains();
+    tokio::task::spawn_blocking(move || {
+        check_startup_dependencies_and_toolchains(console_requested);
     });
 
     // Select port dynamically: default to 5005, then probe 5006..5050, or bind dynamically via OS port 0
@@ -47,14 +103,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let addr = format!("127.0.0.1:{}", selected_port);
-
     let dashboard_url = format!("http://127.0.0.1:{}", selected_port);
-    println!("  [+] Web Dashboard URL: {}", dashboard_url);
-    println!("  [+] Launching your web browser...");
-    println!("  [+] Press Ctrl+C in this terminal to shut down the server.");
-    println!("================================================================================\n");
 
-    // Spawn browser launch in background after short delay
+    if console_requested {
+        println!("  [+] Web Dashboard URL: {}", dashboard_url);
+        println!("  [+] Launching your web browser...");
+        println!("  [+] Press Ctrl+C in this terminal to shut down the server.");
+        println!("================================================================================\n");
+    }
+
+    // Spawn browser launch in background after short delay without spawning any cmd.exe shell window
     let url_for_browser = dashboard_url.clone();
     tokio::spawn(async move {
         sleep(Duration::from_millis(400)).await;
@@ -64,15 +122,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
             #[cfg(target_os = "windows")]
             {
-                if std::process::Command::new("cmd")
-                    .args(["/c", "start", "", &url_for_browser])
-                    .spawn()
-                    .is_err()
-                {
-                    let _ = std::process::Command::new("explorer")
-                        .arg(&url_for_browser)
-                        .spawn();
-                }
+                use std::os::windows::process::CommandExt;
+                // Never execute "cmd /c start" as that opens an unwanted console window.
+                // Invoke explorer directly with CREATE_NO_WINDOW flag.
+                let _ = std::process::Command::new("explorer")
+                    .arg(&url_for_browser)
+                    .creation_flags(win_console::CREATE_NO_WINDOW)
+                    .spawn();
             }
             #[cfg(not(target_os = "windows"))]
             {
@@ -90,38 +146,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 /// Probes runtime dependencies, external red-teaming scanners, and updates on binary startup.
-fn check_startup_dependencies_and_toolchains() {
-    println!("[STARTUP-CHECK] 🔍 Scanning test suite tools, red-teaming dependencies, and external engines...");
+fn check_startup_dependencies_and_toolchains(verbose: bool) {
+    if verbose {
+        println!("[STARTUP-CHECK] 🔍 Scanning test suite tools, red-teaming dependencies, and external engines...");
+    }
+
+    #[cfg(target_os = "windows")]
+    use std::os::windows::process::CommandExt;
 
     // 1. PyRIT Version & Upstream PyPI Update Check
-    let pyrit_check = std::process::Command::new("python")
-        .args(["-c", "import pyrit; print(getattr(pyrit, '__version__', '1.1.0'))"])
-        .output();
+    let mut pyrit_cmd = std::process::Command::new("python");
+    pyrit_cmd.args(["-c", "import pyrit; print(getattr(pyrit, '__version__', '1.1.0'))"]);
+    #[cfg(target_os = "windows")]
+    pyrit_cmd.creation_flags(win_console::CREATE_NO_WINDOW);
+    let pyrit_check = pyrit_cmd.output();
 
     match pyrit_check {
         Ok(out) if out.status.success() => {
             let installed_ver = String::from_utf8_lossy(&out.stdout).trim().to_string();
             // Check upstream release on PyPI (1500ms timeout)
-            let pypi_check = std::process::Command::new("python")
-                .args(["-c", "import urllib.request, json; print(json.loads(urllib.request.urlopen(urllib.request.Request('https://pypi.org/pypi/pyrit/json', headers={'User-Agent': 'AgentOctopus'}), timeout=1.5).read())['info']['version'])"])
-                .output();
+            let mut pypi_cmd = std::process::Command::new("python");
+            pypi_cmd.args(["-c", "import urllib.request, json; print(json.loads(urllib.request.urlopen(urllib.request.Request('https://pypi.org/pypi/pyrit/json', headers={'User-Agent': 'AgentOctopus'}), timeout=1.5).read())['info']['version'])"]);
+            #[cfg(target_os = "windows")]
+            pypi_cmd.creation_flags(win_console::CREATE_NO_WINDOW);
+            let pypi_check = pypi_cmd.output();
 
             match pypi_check {
                 Ok(p_out) if p_out.status.success() => {
                     let upstream_ver = String::from_utf8_lossy(&p_out.stdout).trim().to_string();
-                    if installed_ver == upstream_ver {
-                        println!("  [+] PyRIT AI Red-Teaming Engine: v{} (Verified: Up-to-date with PyPI release)", installed_ver);
-                    } else {
-                        println!("  [!] PyRIT AI Red-Teaming Engine: v{} (Upstream v{} available on PyPI)", installed_ver, upstream_ver);
+                    if verbose {
+                        if installed_ver == upstream_ver {
+                            println!("  [+] PyRIT AI Red-Teaming Engine: v{} (Verified: Up-to-date with PyPI release)", installed_ver);
+                        } else {
+                            println!("  [!] PyRIT AI Red-Teaming Engine: v{} (Upstream v{} available on PyPI)", installed_ver, upstream_ver);
+                        }
                     }
                 }
                 _ => {
-                    println!("  [+] PyRIT AI Red-Teaming Engine: v{} (Operational / Offline cache verified)", installed_ver);
+                    if verbose {
+                        println!("  [+] PyRIT AI Red-Teaming Engine: v{} (Operational / Offline cache verified)", installed_ver);
+                    }
                 }
             }
         }
         _ => {
-            println!("  [!] PyRIT AI Red-Teaming Engine: Not detected (Native fallback suite active)");
+            if verbose {
+                println!("  [!] PyRIT AI Red-Teaming Engine: Not detected (Native fallback suite active)");
+            }
         }
     }
 
@@ -136,9 +207,11 @@ fn check_startup_dependencies_and_toolchains() {
     for (name, path_str) in tools {
         let p = std::path::Path::new(path_str);
         if p.exists() {
-            let sz_mb = std::fs::metadata(p).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
-            println!("  [+] {}: {} ({:.1} MB, operational)", name, path_str, sz_mb);
-        } else {
+            if verbose {
+                let sz_mb = std::fs::metadata(p).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+                println!("  [+] {}: {} ({:.1} MB, operational)", name, path_str, sz_mb);
+            }
+        } else if verbose {
             println!("  [!] {}: {} (Standby / native emulation mode)", name, path_str);
         }
     }
@@ -152,11 +225,12 @@ fn check_startup_dependencies_and_toolchains() {
         ("RL Continuous Defense Tests", "tests/continuous_security_rl_tests.rs"),
     ];
 
-    for (label, s_path) in suite_paths {
-        if std::path::Path::new(s_path).exists() {
-            println!("  [+] Test Suite: {} ({}) verified & synchronized", label, s_path);
+    if verbose {
+        for (label, s_path) in suite_paths {
+            if std::path::Path::new(s_path).exists() {
+                println!("  [+] Test Suite: {} ({}) verified & synchronized", label, s_path);
+            }
         }
+        println!("  [+] ✓ All 19 Red-Teaming Frameworks & 13 Perimeters bound to unified policy engine.\n");
     }
-    println!("  [+] ✓ All 19 Red-Teaming Frameworks & 13 Perimeters bound to unified policy engine.\n");
 }
-

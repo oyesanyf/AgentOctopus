@@ -90,20 +90,34 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
         loop {
             interval.tick().await;
             let report = state_auto.continuous_eval.run_continuous_training_cycle().await;
-            eprintln!(
+            tracing::info!(
                 "[AUTONOMOUS-24/7] Cycle #{}: Passed: {}/{} | Breaches: {} | RL Posture: {} | MTTD: {:.2}ms | MTTR: {:.2}ms | Survival: {:.2}%",
                 report.cycle_id, report.passed_invariants, report.total_probes, report.defensive_breaches,
                 if report.epsilon_after_cycle < 0.1 { "CONVERGED" } else { "TUNING" },
                 report.mttd_ms, report.mttr_ms, report.cumulative_survival_prob * 100.0
             );
+            if std::env::var("OCTOPUS_CONSOLE").map(|v| v == "1" || v == "true").unwrap_or(false) {
+                eprintln!(
+                    "[AUTONOMOUS-24/7] Cycle #{}: Passed: {}/{} | Breaches: {} | RL Posture: {} | MTTD: {:.2}ms | MTTR: {:.2}ms | Survival: {:.2}%",
+                    report.cycle_id, report.passed_invariants, report.total_probes, report.defensive_breaches,
+                    if report.epsilon_after_cycle < 0.1 { "CONVERGED" } else { "TUNING" },
+                    report.mttd_ms, report.mttr_ms, report.cumulative_survival_prob * 100.0
+                );
+            }
 
             // Continuous Google OSS-Fuzz dynamic runtime fuzzing pass
             let fuzz_rep = state_auto.oss_fuzz_arm.run_continuous_fuzz_cycle(10);
             if fuzz_rep.crashes_prevented > 0 || fuzz_rep.hangs_intercepted > 0 || fuzz_rep.cycle_id % 10 == 0 {
-                eprintln!(
+                tracing::info!(
                     "[OSS-FUZZ] Executed: {} total | Exec/s: {:.1} | Crashes Contained: {} | Hangs Intercepted: {}",
                     fuzz_rep.total_executions, fuzz_rep.execs_per_sec, fuzz_rep.crashes_prevented, fuzz_rep.hangs_intercepted
                 );
+                if std::env::var("OCTOPUS_CONSOLE").map(|v| v == "1" || v == "true").unwrap_or(false) {
+                    eprintln!(
+                        "[OSS-FUZZ] Executed: {} total | Exec/s: {:.1} | Crashes Contained: {} | Hangs Intercepted: {}",
+                        fuzz_rep.total_executions, fuzz_rep.execs_per_sec, fuzz_rep.crashes_prevented, fuzz_rep.hangs_intercepted
+                    );
+                }
             }
         }
     });
