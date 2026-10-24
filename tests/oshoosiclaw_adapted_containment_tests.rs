@@ -706,7 +706,7 @@ fn test_finding1_real_command_line_tokenizer_and_encoded_command_decoder() {
         );
         let verdict = guard.evaluate_execution("cmd.exe", &cmd);
         assert!(
-            !verdict.is_clean && verdict.sandbox_terminated,
+            !verdict.is_clean && verdict.sandbox_quarantine_required,
             "TechnicalBreakoutGuard must block encoded PowerShell payload: {}",
             cmd
         );
@@ -736,7 +736,7 @@ fn test_finding1_real_command_line_tokenizer_and_encoded_command_decoder() {
 #[tokio::test]
 async fn test_finding2_authenticated_role_trust_and_multihop_provenance_taint() {
     use agent_octopus::containment_ring::{role_trust_tier, TrustTier};
-    use agent_octopus::mesh::MessageKind;
+    use agent_octopus::MessageKind;
 
     let seed = b"finding2_master_seed_32_bytes_99";
 
@@ -781,7 +781,7 @@ async fn test_finding2_authenticated_role_trust_and_multihop_provenance_taint() 
         .verify_incoming_message(&hop1)
         .await
         .expect("Untrusted -> Worker relay1 allowed");
-    assert_eq!(verified_hop1.taint_floor, TrustTier::Untrusted);
+    assert_eq!(verified_hop1.taint_floor(), TrustTier::Untrusted);
 
     // Hop 2: Relay1 (2) -> Relay2 (3) automatically attaches sticky taint_floor and provenance from hop1
     let hop2 = relay1
@@ -794,7 +794,7 @@ async fn test_finding2_authenticated_role_trust_and_multihop_provenance_taint() 
         .verify_incoming_message(&hop2)
         .await
         .expect("Worker relay1 -> Worker relay2 allowed");
-    assert_eq!(verified_hop2.taint_floor, TrustTier::Untrusted);
+    assert_eq!(verified_hop2.taint_floor(), TrustTier::Untrusted);
 
     // Hop 3: Relay2 (3) -> LedgerSink (4) — sticky taint_state and multi-hop provenance chain
     // cause LedgerSink (PrivilegedSink) to reject the 4-hop tainted relay!

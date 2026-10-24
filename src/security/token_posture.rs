@@ -201,11 +201,11 @@ mod sys {
             ExistingTokenHandle: HANDLE,
             Flags: u32,
             DisableSidCount: u32,
-            SidsToDisable: *const SID_AND_ATTRIBUTES,
+            SidsToDisable: *const c_void,
             DeletePrivilegeCount: u32,
             PrivilegesToDelete: *const c_void,
             RestrictedSidCount: u32,
-            SidsToRestrict: *const SID_AND_ATTRIBUTES,
+            SidsToRestrict: *const c_void,
             NewTokenHandle: *mut HANDLE,
         ) -> BOOL;
         pub fn ConvertStringSidToSidW(StringSid: *const u16, Sid: *mut PSID) -> BOOL;
@@ -478,7 +478,7 @@ pub fn create_deelevated_token() -> Result<OwnedToken, OctopusSecurityError> {
             current.raw(),
             sys::DISABLE_MAX_PRIVILEGE | sys::LUA_TOKEN,
             disable.len() as u32,
-            disable.as_ptr(),
+            disable.as_ptr() as *const std::ffi::c_void,
             0,
             std::ptr::null(),
             0,
