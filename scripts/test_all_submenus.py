@@ -917,10 +917,10 @@ def run_all_tests():
         results.record_fail(tab, "GET /api/containment/oshoosiclaw-status", f"Status {status}, Body: {body[:100]}")
 
     # 16.2 OshoosiClaw 5-Policy RL Benchmark Evaluation
-    status, body, _ = http_post("/api/containment/oshoosiclaw-evaluate", {"action": "rl_benchmark", "episodes": 5, "seed": 42})
+    status, body, _ = http_post("/api/containment/oshoosiclaw-evaluate", {"action": "rl_benchmark", "episodes": 10, "seed": 42})
     oc_eval = json.loads(body) if status == 200 else {}
-    if status == 200 and oc_eval.get("learned_superiority_verified") is True and len(oc_eval.get("policies", [])) == 5:
-        results.record_pass(tab, "POST /api/containment/oshoosiclaw-evaluate (5-Policy RL Benchmark & 95% CIs)", f"Backend: {oc_eval.get('backend_label')}, Superiority: {oc_eval.get('learned_superiority_verified')}")
+    if status == 200 and oc_eval.get("empirical_superiority_verified") is True and oc_eval.get("environment_backend"):
+        results.record_pass(tab, "POST /api/containment/oshoosiclaw-evaluate (5-Policy RL Benchmark & 95% CIs)", f"Backend: {oc_eval.get('environment_backend')}, Superiority: {oc_eval.get('empirical_superiority_verified')}")
     else:
         results.record_fail(tab, "POST /api/containment/oshoosiclaw-evaluate", f"Status {status}, Body: {body[:100]}")
 

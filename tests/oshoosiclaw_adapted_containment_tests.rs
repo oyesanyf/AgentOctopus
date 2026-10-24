@@ -77,7 +77,7 @@ fn test_law3_dirac_delta_capability_ticket_and_law5_zero_copy_buffer() {
     let buf = ZeroCopyImmutableToolBuffer::create_and_lock(b"{\"invoice\":100}")
         .expect("Page-aligned buffer allocation and PAGE_READONLY lock");
     assert!(buf.is_locked_readonly());
-    assert_eq!(buf.delta_t_toctou_ns, 0);
+    assert_ne!(buf.sha256_digest, [0u8; 32]);
     assert_eq!(buf.as_verified_slice().unwrap(), b"{\"invoice\":100}");
 
     // First consumption succeeds
@@ -141,19 +141,19 @@ fn test_descriptor_pinning_and_3layer_non_circular_trust_gate() {
     assert!(!fail_verdict.allowed);
 }
 
-#[test]
-fn test_sec_ring_01_pid_guard_and_mesh_watchout_broadcast() {
+#[tokio::test]
+async fn test_sec_ring_01_pid_guard_and_mesh_watchout_broadcast() {
     assert!(ArmContainmentRing::verify_terminable_child_pid(0).is_err());
     assert!(ArmContainmentRing::verify_terminable_child_pid(4).is_err());
     assert!(ArmContainmentRing::verify_terminable_child_pid(std::process::id()).is_err());
     assert!(ArmContainmentRing::verify_terminable_child_pid(std::process::id() + 10_000).is_ok());
 
-    let registry = ArmRingRegistry::new();
-    let severed = registry
+    let registry = ArmRingRegistry::new(50, b"test_master_seed_32_bytes_000001");
+    registry
         .sever_arm(1, "Canary Tripwire Activated")
+        .await
         .expect("Must sever arm 1");
-    assert!(severed);
-    let watchouts = registry.list_watchout_signals();
+    let watchouts = registry.list_watchout_signals().await;
     assert!(!watchouts.is_empty());
     assert_eq!(watchouts[0].severed_arm_id, 1);
 }
@@ -161,9 +161,10 @@ fn test_sec_ring_01_pid_guard_and_mesh_watchout_broadcast() {
 #[test]
 fn test_law8_zero_mi_projector_and_path_egress_guards() {
     let dirty = "{\"z\":1,\"a\":\"secret\u{200B}text Alpha Bravo Charlie Delta Echo\"}";
-    let projected = ZeroMutualInformationProjector::project_output(dirty, 1_700_000_000_333);
-    assert!(!projected.projected_payload.contains('\u{200B}'));
-    assert_eq!(projected.quantized_timestamp_ms % 100, 0);
+    let projected = ZeroMutualInformationProjector::project_output(dirty, 1_700_000_000_333, 100);
+    assert!(!projected.canonical_output.contains('\u{200B}'));
+    assert_eq!(projected.quantized_release_slot_ms % 100, 0);
+    assert_eq!(projected.mutual_information_upper_bound_bits, 0.0);
 
     let sandbox = std::env::temp_dir();
     assert!(validate_sandbox_relative_path(&sandbox, "C:\\Windows\\System32\\cmd.exe").is_err());
@@ -174,7 +175,7 @@ fn test_law8_zero_mi_projector_and_path_egress_guards() {
     let _ = std::fs::create_dir_all(&tmp_sub);
     let test_file = tmp_sub.join("summary.json");
     std::fs::write(&test_file, b"{}").unwrap();
-    assert!(validate_agent_filesystem_access(&tmp_sub, "summary.json", &[]).is_ok());
+    assert!(validate_agent_filesystem_access("summary.json", Some(&tmp_sub)).is_ok());
     let _ = std::fs::remove_file(&test_file);
 
     let allowed = vec!["google.com".to_string(), "www.google.com".to_string()];
@@ -268,7 +269,7 @@ fn test_alignment_mercury_spider_classifier_and_5policy_rl_benchmark() {
     let orb = OrbWebContainmentEngine::default();
     let o_res = orb.evaluate_impact(0.01, 5.0, 0.002, 0.003, 10.0, Some(100), Some(1));
     assert_eq!(o_res.regime, SilkRegime::Regime1LinearElastic);
-    assert!(!o_res.exposure_bound_violated);
+    assert!(o_res.exposure_bound_satisfied);
 
     // 4. DynamicAgentClassifier
     let c_verdict = DynamicAgentClassifier::classify_process(&ProcessBehavioralTelemetry {
@@ -287,6 +288,7 @@ fn test_alignment_mercury_spider_classifier_and_5policy_rl_benchmark() {
     let rl_path = std::env::temp_dir().join("octopus_rl_bench_test.json");
     let rl_engine = AdaptiveRlDefenseEngine::new(rl_path.to_str().unwrap());
     let report = rl_engine.run_standardized_5policy_benchmark(10, 2026);
-    assert!(report.learned_superior_over_all_4_baselines);
+    assert!(report.empirical_superiority_verified);
+    assert!(!report.environment_backend.is_empty());
     let _ = std::fs::remove_file(&rl_path);
 }

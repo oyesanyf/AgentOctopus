@@ -1831,10 +1831,8 @@ async fn handle_connection(
         }
 
         ("GET", "/api/containment/oshoosiclaw-status") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_oshoosiclaw_containment_status(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/containment/oshoosiclaw-status")),
-            };
+            let json_body = handle_oshoosiclaw_containment_status(&state).await;
+            let status_code = "200 OK";
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,

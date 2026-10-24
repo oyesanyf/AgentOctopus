@@ -2860,7 +2860,7 @@ pub fn handle_harness2_validate_tree(state: &WebState, body: &str) -> Result<Str
 /// - Dynamic Bayesian Agent Classifier (`DynamicAgentClassifier`)
 /// - Windows Pre-Resume Confinement Gate (`WindowsConfinementPolicy`)
 /// - 5-Policy Standardized RL Benchmark (`run_standardized_5policy_benchmark`)
-pub fn handle_oshoosiclaw_containment_status(state: &WebState) -> String {
+pub async fn handle_oshoosiclaw_containment_status(state: &WebState) -> String {
     let homological_report = crate::containment_ring::HomologicalBoundaryAuditor::audit_simplex_transition(
         "worker_relay",
         None,
@@ -2875,6 +2875,7 @@ pub fn handle_oshoosiclaw_containment_status(state: &WebState) -> String {
     let sample_projection = crate::security::breakouts::ZeroMutualInformationProjector::project_output(
         r#"{"b":1,"a":"normal\u200Btext"}"#,
         1_700_000_000_123,
+        100,
     );
 
     let trust_verifier = crate::containment_ring::IndependentTrustBoundaryVerifier::new(
@@ -2916,7 +2917,7 @@ pub fn handle_oshoosiclaw_containment_status(state: &WebState) -> String {
     )
     .is_ok();
 
-    let watchout_signals = state.arm_rings.list_watchout_signals();
+    let watchout_signals = state.arm_rings.list_watchout_signals().await;
 
     serde_json::json!({
         "status": "ONLINE",
@@ -2981,6 +2982,7 @@ pub fn handle_oshoosiclaw_containment_evaluate(state: &WebState, body: &str) -> 
             let res = crate::security::breakouts::ZeroMutualInformationProjector::project_output(
                 req.payload.as_deref().unwrap_or(""),
                 1_700_000_000_987,
+                100,
             );
             Ok(serde_json::to_string_pretty(&res).unwrap_or_else(|_| "{}".to_string()))
         }
@@ -2988,7 +2990,7 @@ pub fn handle_oshoosiclaw_containment_evaluate(state: &WebState, body: &str) -> 
             let url = req.url.as_deref().unwrap_or("https://www.google.com");
             let allowed = vec!["google.com".to_string(), "www.google.com".to_string()];
             match crate::containment_ring::validate_agent_egress_url(url, &allowed) {
-                Ok(host) => Ok(serde_json::json!({ "allowed": true, "host": host }).to_string()),
+                Ok(parsed) => Ok(serde_json::json!({ "allowed": true, "host": parsed.as_str() }).to_string()),
                 Err(reason) => Ok(serde_json::json!({ "allowed": false, "reason": reason.to_string() }).to_string()),
             }
         }

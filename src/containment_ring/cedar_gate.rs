@@ -476,15 +476,19 @@ impl VanishingPolynomialTraceVerifier {
             let expected_next = Self::field_add(states[i], expected_deltas[i]);
             let actual_next = states[i + 1] % MERSENNE_PRIME_127;
             let step_residual = Self::field_sub(actual_next, expected_next);
-            if step_residual != 0 && offending_step.is_none() {
-                offending_step = Some(i);
+            if step_residual != 0 {
+                if offending_step.is_none() {
+                    offending_step = Some(i);
+                }
+                // Weight step residual by position (i + 1) so telescopic +delta/-delta tampering cannot cancel
+                let weighted = step_residual.saturating_mul((i as u128) + 1) % MERSENNE_PRIME_127;
+                accumulated_defect = Self::field_add(accumulated_defect, weighted.max(1));
             }
-            accumulated_defect = Self::field_add(accumulated_defect, step_residual);
         }
 
         let vanishing_eval: u128 = 65537;
         let remainder = accumulated_defect % vanishing_eval;
-        let verified = accumulated_defect == 0 && remainder == 0;
+        let verified = offending_step.is_none() && accumulated_defect == 0 && remainder == 0;
 
         let reason = if verified {
             format!(
