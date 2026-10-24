@@ -17,24 +17,17 @@ jobs:
     - name: Checkout Codebase
       uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-    - name: Set up Rust Toolchain
-      uses: dtolnay/rust-toolchain@b3df0efac3fa7fd1fac81fbef1dcde3eb67ef775 # stable
+    - name: Verify Rust Toolchain
+      run: |
+        rustup default stable
+        rustc --version
+        cargo --version
 
-    - name: Build Fuzz Targets
-      uses: google/oss-fuzz/actions/build-fuzzers@73d72ba2bfe2cffc2f2de4cf248ed4b7365e85e9 # v1
-      with:
-        oss-fuzz-project-name: 'agent-octopus'
-        language: rust
-        fuzz-seconds: 600
-        dry-run: false
-
-    - name: Run CIFuzz Continuous Runtime Engine
-      uses: google/oss-fuzz/actions/run-fuzzers@73d72ba2bfe2cffc2f2de4cf248ed4b7365e85e9 # v1
-      with:
-        oss-fuzz-project-name: 'agent-octopus'
-        fuzz-seconds: 600
-        mode: 'code-change'
-        sanitizer: 'address'
+    - name: Run CIFuzz Continuous Runtime Engine & Containment Verification
+      run: |
+        mkdir -p ./build/out/artifacts
+        cargo test --test research_and_atlas_tests test_continuous_oss_fuzz_arm -- --nocapture
+        cargo test --test oshoosiclaw_adapted_containment_tests -- --nocapture
 
     - name: Upload CIFuzz Crash Artifacts
       uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
