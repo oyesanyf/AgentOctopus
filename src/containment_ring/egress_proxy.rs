@@ -39,12 +39,80 @@ pub struct EgressProxy {
     security_level: Arc<RwLock<EgressSecurityLevel>>,
     allowlist_enabled: Arc<AtomicBool>,
     audit_control_token: Arc<String>,
+    dns_overrides: Arc<RwLock<std::collections::HashMap<String, Vec<std::net::IpAddr>>>>,
 }
 
 impl Default for EgressProxy {
     fn default() -> Self {
         Self::new(EgressSecurityLevel::StrictGoogleOnly)
     }
+}
+
+/// Validates a domain candidate before inserting it into the egress allowlist (`AO-FIND-12`).
+/// Rejects wildcards (`*`), URLs/schemes, paths, ports, IP literals, non-standard IP encodings,
+/// and internal/loopback/local suffixes (`.localhost`, `.internal`, `.local`).
+pub fn validate_egress_allowlist_domain(domain: &str) -> Result<String, OctopusSecurityError> {
+    let normalized = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    if normalized.is_empty() || normalized.len() > 253 {
+        return Err(OctopusSecurityError::SsrfBlocked(
+            "EGRESS_INVALID_ALLOWLIST_DOMAIN: Domain must be 1..=253 characters".to_string(),
+        ));
+    }
+    if normalized.contains('*')
+        || normalized.contains("://")
+        || normalized.contains('/')
+        || normalized.contains('\\')
+        || normalized.contains(':')
+        || normalized.contains('@')
+        || normalized.contains('?')
+        || normalized.contains('#')
+        || normalized.chars().any(|c| c.is_whitespace())
+    {
+        return Err(OctopusSecurityError::SsrfBlocked(format!(
+            "EGRESS_INVALID_ALLOWLIST_DOMAIN: Wildcards, schemes, ports, or paths are forbidden in '{}'",
+            domain
+        )));
+    }
+    if is_non_standard_ip_host_encoding(&normalized)
+        || normalized.parse::<std::net::IpAddr>().is_ok()
+    {
+        return Err(OctopusSecurityError::SsrfBlocked(format!(
+            "EGRESS_INVALID_ALLOWLIST_DOMAIN: Raw IP literal or non-standard IP encoding '{}' cannot be added as a domain",
+            domain
+        )));
+    }
+    if normalized == "localhost"
+        || normalized.ends_with(".localhost")
+        || normalized.ends_with(".internal")
+        || normalized.ends_with(".local")
+        || normalized == "metadata.google.internal"
+    {
+        return Err(OctopusSecurityError::SsrfBlocked(format!(
+            "EGRESS_INVALID_ALLOWLIST_DOMAIN: Internal or loopback domain '{}' is forbidden",
+            domain
+        )));
+    }
+    let labels: Vec<&str> = normalized.split('.').collect();
+    if labels.len() < 2 {
+        return Err(OctopusSecurityError::SsrfBlocked(format!(
+            "EGRESS_INVALID_ALLOWLIST_DOMAIN: Single-label host '{}' is forbidden",
+            domain
+        )));
+    }
+    for label in &labels {
+        if label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return Err(OctopusSecurityError::SsrfBlocked(format!(
+                "EGRESS_INVALID_ALLOWLIST_DOMAIN: Malformed DNS label '{}' in '{}'",
+                label, domain
+            )));
+        }
+    }
+    Ok(normalized)
 }
 
 impl EgressProxy {
@@ -77,6 +145,7 @@ impl EgressProxy {
             security_level: Arc::new(RwLock::new(level)),
             allowlist_enabled: Arc::new(AtomicBool::new(true)),
             audit_control_token: audit_token,
+            dns_overrides: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -88,7 +157,7 @@ impl EgressProxy {
     /// Enables or deliberately disables domain allowlist enforcement for negative-control sensitivity tests.
     /// FAIL-CLOSED: Requires presenting the cryptographically unforgeable `NegativeControlToken`.
     pub fn set_allowlist_enabled(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
-        if token.as_str() != self.audit_control_token.as_str() {
+        if !crate::security::constant_time_eq(token.as_str().as_bytes(), self.audit_control_token.as_bytes()) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Modification of egress proxy allowlist state requires authoritative NegativeControlToken".to_string(),
             ));
@@ -97,14 +166,31 @@ impl EgressProxy {
         Ok(())
     }
 
-    pub async fn add_allowed_domain(&self, domain: &str) {
+    /// Validates and adds an allowed domain (`AO-FIND-12`).
+    pub async fn try_add_allowed_domain(&self, domain: &str) -> Result<String, OctopusSecurityError> {
+        let normalized = validate_egress_allowlist_domain(domain)?;
         let mut domains = self.allowed_domains.write().await;
-        domains.insert(domain.to_lowercase());
+        domains.insert(normalized.clone());
+        Ok(normalized)
+    }
+
+    pub async fn add_allowed_domain(&self, domain: &str) {
+        if let Ok(normalized) = validate_egress_allowlist_domain(domain) {
+            let mut domains = self.allowed_domains.write().await;
+            domains.insert(normalized);
+        }
+    }
+
+    /// Registers a deterministic DNS resolution mapping for `host` (used to test DNS-rebinding defenses).
+    pub async fn set_dns_override(&self, host: &str, addrs: Vec<std::net::IpAddr>) {
+        let clean = host.trim().trim_end_matches('.').to_ascii_lowercase();
+        let mut map = self.dns_overrides.write().await;
+        map.insert(clean, addrs);
     }
 
     pub async fn remove_allowed_domain(&self, domain: &str) -> bool {
         let mut domains = self.allowed_domains.write().await;
-        domains.remove(&domain.to_lowercase())
+        domains.remove(&domain.trim().trim_end_matches('.').to_lowercase())
     }
 
     pub async fn list_allowed_domains(&self) -> Vec<String> {
@@ -127,7 +213,36 @@ impl EgressProxy {
             )));
         }
 
-        let parsed_url = Url::parse(&req.target_url).map_err(|e| {
+        let trimmed = req.target_url.trim();
+        if trimmed.is_empty() {
+            return Err(OctopusSecurityError::SsrfBlocked(
+                "Malformed URL: empty target_url".to_string(),
+            ));
+        }
+
+        // 0. Pre-parse CIS 3.3 Non-Standard IP Host Encoding Gate (blocks decimal 2130706433, hex 0x7f000001, octal 0177.0.0.1, shorthand 127.1)
+        if let Some(after_scheme) = trimmed.split("://").nth(1) {
+            let authority = after_scheme
+                .split(&['/', '?', '#'][..])
+                .next()
+                .unwrap_or("");
+            let raw_host_port = authority.rsplit('@').next().unwrap_or(authority);
+            let raw_host = if raw_host_port.starts_with('[') {
+                raw_host_port.split(']').next().unwrap_or(raw_host_port)
+            } else {
+                raw_host_port.split(':').next().unwrap_or(raw_host_port)
+            }
+            .trim()
+            .to_ascii_lowercase();
+            if is_non_standard_ip_host_encoding(&raw_host) {
+                return Err(OctopusSecurityError::SsrfBlocked(format!(
+                    "SSRF_NON_STANDARD_IP_ENCODING (CIS 3.3): Host '{}' is prohibited",
+                    raw_host
+                )));
+            }
+        }
+
+        let parsed_url = Url::parse(trimmed).map_err(|e| {
             OctopusSecurityError::SsrfBlocked(format!("Malformed URL '{}': {}", req.target_url, e))
         })?;
 
@@ -160,56 +275,21 @@ impl EgressProxy {
             OctopusSecurityError::SsrfBlocked("URL missing valid hostname".to_string())
         })?;
 
-        // 2. Anti-SSRF / Cloud Metadata, RFC1918, Link-Local, CGNAT & Loopback Invariant
-        let host_lower = host.to_lowercase();
+        // 2. Unified Mathematical IPv4/IPv6 SSRF & Cloud Metadata Classifier (AO-FIND-03)
+        let host_lower = host.trim_end_matches('.').to_lowercase();
         let is_prohibited_ip = match parsed_url.host() {
-            Some(url::Host::Ipv4(ip)) => {
-                let octets = ip.octets();
-                ip.is_loopback()
-                    || ip.is_private()
-                    || ip.is_link_local()
-                    || ip.is_unspecified()
-                    || ip.is_broadcast()
-                    || ip.is_multicast()
-                    || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 64) // 100.64.0.0/10 CGNAT
-                    || (octets[0] == 169 && octets[1] == 254)
-            }
-            Some(url::Host::Ipv6(ip)) => {
-                let octets = ip.octets();
-                let is_unique_local = (octets[0] & 0xfe) == 0xfc; // fc00::/7
-                let is_link_local_v6 = (octets[0] == 0xfe) && ((octets[1] & 0xc0) == 0x80); // fe80::/10
-                let is_v4_mapped_private = if let Some(v4) = ip.to_ipv4_mapped() {
-                    let o = v4.octets();
-                    v4.is_loopback()
-                        || v4.is_private()
-                        || v4.is_link_local()
-                        || v4.is_unspecified()
-                        || (o[0] == 100 && (o[1] & 0b1100_0000) == 64)
-                } else {
-                    false
-                };
-                ip.is_loopback()
-                    || ip.is_unspecified()
-                    || ip.is_multicast()
-                    || is_unique_local
-                    || is_link_local_v6
-                    || is_v4_mapped_private
-            }
+            Some(url::Host::Ipv4(ip)) => is_restricted_rebinding_ip(&std::net::IpAddr::V4(ip)),
+            Some(url::Host::Ipv6(ip)) => is_restricted_rebinding_ip(&std::net::IpAddr::V6(ip)),
             Some(url::Host::Domain(d)) => {
-                if let Ok(ip) = d.parse::<std::net::IpAddr>() {
-                    match ip {
-                        std::net::IpAddr::V4(v4) => {
-                            let octets = v4.octets();
-                            v4.is_loopback()
-                                || v4.is_private()
-                                || v4.is_link_local()
-                                || v4.is_unspecified()
-                                || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 64)
-                        }
-                        std::net::IpAddr::V6(v6) => {
-                            v6.is_loopback() || v6.is_unspecified()
-                        }
-                    }
+                let unbracketed = d
+                    .trim_end_matches('.')
+                    .strip_prefix('[')
+                    .and_then(|s| s.strip_suffix(']'))
+                    .unwrap_or(d.trim_end_matches('.'));
+                if is_non_standard_ip_host_encoding(unbracketed) {
+                    true
+                } else if let Ok(ip) = unbracketed.parse::<std::net::IpAddr>() {
+                    is_restricted_rebinding_ip(&ip)
                 } else {
                     false
                 }
@@ -220,6 +300,9 @@ impl EgressProxy {
         if is_prohibited_ip
             || host_lower == "127.0.0.1"
             || host_lower == "localhost"
+            || host_lower.ends_with(".localhost")
+            || host_lower.ends_with(".internal")
+            || host_lower.ends_with(".local")
             || host_lower == "0.0.0.0"
             || host_lower == "169.254.169.254"
             || host_lower.starts_with("10.")
@@ -234,6 +317,9 @@ impl EgressProxy {
                 host
             )));
         }
+
+        // 2b. Google Safe Browsing v4 canonical prefix & threat check
+        check_google_safe_browsing_v4_prefix(trimmed)?;
 
         // 3. Domain Allowlist Invariant
         if self.is_allowlist_enabled() {
@@ -252,6 +338,49 @@ impl EgressProxy {
                     "Egress destination '{}' is not in the approved Containment Ring allowlist",
                     host
                 )));
+            }
+        }
+
+        // 3b. DNS Anti-Rebinding Resolution & Verification (AO-FIND-03)
+        // Verify that every A/AAAA record resolved for `host_lower` is a public, non-restricted IP.
+        {
+            let overrides = self.dns_overrides.read().await;
+            if let Some(addrs) = overrides.get(&host_lower) {
+                if addrs.is_empty() {
+                    return Err(OctopusSecurityError::SsrfBlocked(format!(
+                        "SSRF_DNS_EMPTY: Host '{}' returned zero addresses",
+                        host_lower
+                    )));
+                }
+                for ip in addrs {
+                    if is_restricted_rebinding_ip(ip) {
+                        return Err(OctopusSecurityError::SsrfBlocked(format!(
+                            "SSRF_DNS_REBINDING_BLOCKED: Host '{}' resolved to restricted IP '{}'",
+                            host_lower, ip
+                        )));
+                    }
+                }
+            } else if matches!(parsed_url.host(), Some(url::Host::Domain(_))) {
+                use std::net::ToSocketAddrs;
+                if let Ok(sock_iter) = (host_lower.as_str(), 443u16).to_socket_addrs() {
+                    let mut checked_any = false;
+                    for sa in sock_iter {
+                        checked_any = true;
+                        let ip = sa.ip();
+                        if is_restricted_rebinding_ip(&ip) {
+                            return Err(OctopusSecurityError::SsrfBlocked(format!(
+                                "SSRF_DNS_REBINDING_BLOCKED: Host '{}' resolved to restricted IP '{}'",
+                                host_lower, ip
+                            )));
+                        }
+                    }
+                    if !checked_any {
+                        return Err(OctopusSecurityError::SsrfBlocked(format!(
+                            "SSRF_DNS_EMPTY: Host '{}' returned zero addresses",
+                            host_lower
+                        )));
+                    }
+                }
             }
         }
 

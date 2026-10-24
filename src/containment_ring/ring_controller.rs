@@ -272,8 +272,57 @@ impl ContainmentRing {
             return (RingDecision::Deny, format!("Resource budget veto: {}", e));
         }
 
-        // 3. Outer Ring: Filesystem Boundary Enforcement
-        if req.operation_type == "filesystem" {
+        // 3. Outer Ring: Filesystem Boundary Enforcement (AO-FIND-09: enforce on "filesystem" and any local path/traversal target)
+        let target_lower = req.target.trim().to_ascii_lowercase();
+        let is_non_file_uri = target_lower.starts_with("http://")
+            || target_lower.starts_with("https://")
+            || target_lower.starts_with("s3://")
+            || target_lower.starts_with("ledger://")
+            || target_lower.starts_with("notification://")
+            || target_lower.starts_with("tarpit://")
+            || target_lower.starts_with("kernel://")
+            || target_lower.starts_with("cedar://")
+            || target_lower.starts_with("policy://")
+            || target_lower.starts_with("stix://")
+            || target_lower.starts_with("atlas://")
+            || target_lower.starts_with("telemetry://")
+            || target_lower.starts_with("behavior://")
+            || target_lower.starts_with("vuln://")
+            || target_lower.starts_with("cve://")
+            || target_lower.starts_with("fuzz://")
+            || target_lower.starts_with("corpus://")
+            || target_lower.starts_with("osv://")
+            || target_lower.starts_with("advisories://")
+            || target_lower.starts_with("protocol://")
+            || target_lower.starts_with("differential://")
+            || target_lower.starts_with("terminator://")
+            || target_lower.starts_with("pqc://")
+            || target_lower.starts_with("quantum://")
+            || target_lower.starts_with("kem://")
+            || target_lower.starts_with("dsa://")
+            || target_lower.starts_with("cbom://")
+            || target_lower.starts_with("evolution://")
+            || target_lower.starts_with("openevolve://")
+            || target_lower.starts_with("candidate://")
+            || target_lower.starts_with("staging://")
+            || target_lower.starts_with("dream_rsi://")
+            || target_lower.starts_with("replay://")
+            || target_lower.starts_with("world_model://")
+            || target_lower.starts_with("harness2://")
+            || target_lower.starts_with("library://")
+            || target_lower.starts_with("context://");
+        let has_local_path_or_traversal = req.operation_type == "filesystem"
+            || target_lower.starts_with("sandbox://")
+            || target_lower.starts_with("file://")
+            || target_lower.starts_with("c:\\")
+            || target_lower.starts_with("d:\\")
+            || target_lower.starts_with("\\\\")
+            || target_lower.starts_with('/')
+            || target_lower.contains("..")
+            || target_lower.contains("%2e")
+            || target_lower.contains("%2f")
+            || target_lower.contains("%5c");
+        if has_local_path_or_traversal && (!is_non_file_uri || target_lower.contains("..") || target_lower.contains("%2e")) {
             if let Err(e) = self.isolation_manager.validate_filesystem_access(&req.target).await {
                 return (RingDecision::Deny, format!("Filesystem sandbox veto: {}", e));
             }
@@ -364,6 +413,69 @@ impl ContainmentRing {
             RingDecision::Deny => {
                 Err(OctopusSecurityError::DeterministicLayerViolation(reason))
             }
+            RingDecision::Quarantine => {
+                let _ = self.isolation_manager.terminate_arm(&req.agent_id, &reason).await;
+                self.capability_gate.revoke_for_agent(&req.agent_id).await;
+                let _ = self.trusted_controller.revoke(&req.agent_id).await;
+                Err(OctopusSecurityError::BreakoutDetected(format!(
+                    "Arm quarantined by Containment Ring: {}",
+                    reason
+                )))
+            }
+            RingDecision::Terminate => {
+                let _ = self.isolation_manager.terminate_arm(&req.agent_id, &reason).await;
+                self.capability_gate.revoke_for_agent(&req.agent_id).await;
+                let _ = self.trusted_controller.revoke(&req.agent_id).await;
+                Err(OctopusSecurityError::LimbKilled)
+            }
+        }
+    }
+
+    /// Zero-Closure Confined Execution Broker (`AO-FIND-01` Remediation):
+    /// Binds Dual Concentric Containment Ring authorization directly to a structured
+    /// [`TieredToolRequest`](super::tiered_executor::TieredToolRequest) executed via
+    /// [`TieredExecutionDispatcher`](super::tiered_executor::TieredExecutionDispatcher),
+    /// eliminating any arbitrary in-process `FnOnce` closure in the untrusted execution path.
+    pub async fn execute_tiered_with_containment(
+        &self,
+        req: &RingOperationRequest,
+        tiered_req: &super::tiered_executor::TieredToolRequest,
+        dispatcher: &super::tiered_executor::TieredExecutionDispatcher,
+    ) -> Result<super::tiered_executor::TieredExecutionReceipt, OctopusSecurityError> {
+        if req.agent_id != tiered_req.agent_id || req.role != tiered_req.role {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "RING_TIERED_IDENTITY_MISMATCH: RingOperationRequest ({}, {:?}) != TieredToolRequest ({}, {:?})",
+                req.agent_id, req.role, tiered_req.agent_id, tiered_req.role
+            )));
+        }
+        if let Some((ref prog, ref args)) = tiered_req.native_command {
+            if req.operation_type == "doc_extractor"
+                || req.operation_type == "extract"
+                || req.operation_type == "ledger_writer"
+                || req.operation_type == "write"
+            {
+                return Err(OctopusSecurityError::IsolationViolation(format!(
+                    "RING_METADATA_MISREPRESENTATION: Operation '{}' cannot invoke native binary '{} {:?}'",
+                    req.operation_type, prog, args
+                )));
+            }
+        }
+
+        let (decision, reason) = self.evaluate_operation(req).await;
+        self.audit_ledger
+            .record(
+                &req.agent_id,
+                "ConcentricOCR-Tiered",
+                &req.operation_type,
+                &req.target,
+                decision,
+                &reason,
+            )
+            .await;
+
+        match decision {
+            RingDecision::Allow => dispatcher.dispatch(tiered_req),
+            RingDecision::Deny => Err(OctopusSecurityError::DeterministicLayerViolation(reason)),
             RingDecision::Quarantine => {
                 let _ = self.isolation_manager.terminate_arm(&req.agent_id, &reason).await;
                 self.capability_gate.revoke_for_agent(&req.agent_id).await;

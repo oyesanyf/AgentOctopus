@@ -621,6 +621,87 @@ pub fn spawn_deelevated(command_line: &str, hide_window: bool) -> Result<Deeleva
     Ok(DeelevatedChild { pid: pi.dwProcessId, posture, process: pi.hProcess })
 }
 
+/// Spawns `command_line` under [`create_deelevated_token`] AND binds the suspended child
+/// to `job` (`WindowsJobObject`), verifying both `TokenPosture::verify_agent_safe` and
+/// `IsProcessInJob == TRUE` while `CREATE_SUSPENDED` before `ResumeThread` (`AO-FIND-07`).
+#[cfg(windows)]
+pub fn spawn_deelevated_in_job(
+    command_line: &str,
+    hide_window: bool,
+    job: &crate::security::windows_sandbox::WindowsJobObject,
+) -> Result<DeelevatedChild, OctopusSecurityError> {
+    let token = create_deelevated_token()?;
+
+    let mut si: sys::STARTUPINFOW = unsafe { std::mem::zeroed() };
+    si.cb = std::mem::size_of::<sys::STARTUPINFOW>() as u32;
+    let mut pi: sys::PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    let mut wide_cmd: Vec<u16> = command_line.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let mut flags = sys::CREATE_SUSPENDED | sys::CREATE_UNICODE_ENVIRONMENT;
+    if hide_window {
+        flags |= sys::CREATE_NO_WINDOW;
+    }
+
+    let ok = unsafe {
+        sys::CreateProcessAsUserW(
+            token.raw(),
+            std::ptr::null(),
+            wide_cmd.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            flags,
+            std::ptr::null(),
+            std::ptr::null(),
+            &si,
+            &mut pi,
+        )
+    };
+    if ok == 0 {
+        return Err(last_err("CreateProcessAsUserW(de-elevated+job, CREATE_SUSPENDED)"));
+    }
+
+    let terminate = |reason: String| -> OctopusSecurityError {
+        unsafe {
+            sys::TerminateProcess(pi.hProcess, 1);
+            sys::CloseHandle(pi.hThread);
+            sys::CloseHandle(pi.hProcess);
+        }
+        OctopusSecurityError::IsolationViolation(reason)
+    };
+
+    if let Err(e) = job.assign_process(pi.hProcess) {
+        return Err(terminate(format!("FAIL-CLOSED: job.assign_process failed: {}", e)));
+    }
+    match job.verify_process_in_job(pi.hProcess) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(terminate(
+                "FAIL-CLOSED: IsProcessInJob returned FALSE on suspended child".to_string(),
+            ))
+        }
+        Err(e) => return Err(terminate(format!("FAIL-CLOSED: verify_process_in_job failed: {}", e))),
+    }
+
+    let posture = match TokenPosture::of_process(pi.hProcess) {
+        Ok(p) => p,
+        Err(e) => return Err(terminate(format!("FAIL-CLOSED: child token inspection failed: {}", e))),
+    };
+    if let Err(reasons) = posture.verify_agent_safe() {
+        return Err(terminate(format!(
+            "FAIL-CLOSED: suspended child token unsafe, terminated before ResumeThread: {}",
+            reasons.join("; ")
+        )));
+    }
+
+    if unsafe { sys::ResumeThread(pi.hThread) } == u32::MAX {
+        return Err(terminate("FAIL-CLOSED: ResumeThread failed on verified child".to_string()));
+    }
+    unsafe { sys::CloseHandle(pi.hThread) };
+
+    Ok(DeelevatedChild { pid: pi.dwProcessId, posture, process: pi.hProcess })
+}
+
 /// Called first thing in `main` of every long-running Agent Octopus binary.
 ///
 /// - Not elevated → returns `Ok(posture)` and the caller continues.

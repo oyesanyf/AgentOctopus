@@ -143,7 +143,7 @@ impl CedarGate {
     /// FAIL-CLOSED: Requires presenting the cryptographically unforgeable `NegativeControlToken`.
     /// Untrusted agents or arbitrary external callers without this token are denied immediately.
     pub fn set_enabled(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
-        if token.as_str() != self.audit_control_token.as_str() {
+        if !crate::security::constant_time_eq(token.as_str().as_bytes(), self.audit_control_token.as_bytes()) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Modification of Cedar gate authorization state requires authoritative NegativeControlToken".to_string(),
             ));
@@ -164,7 +164,7 @@ impl CedarGate {
         policy_fingerprint: &str,
         token: &NegativeControlToken,
     ) -> Result<String, OctopusSecurityError> {
-        if token.as_str() != self.audit_control_token.as_str() {
+        if !crate::security::constant_time_eq(token.as_str().as_bytes(), self.audit_control_token.as_bytes()) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Secret rotation requires authoritative NegativeControlToken".to_string(),
             ));
@@ -180,7 +180,7 @@ impl CedarGate {
         &self,
         token: &NegativeControlToken,
     ) -> Result<String, OctopusSecurityError> {
-        if token.as_str() != self.audit_control_token.as_str() {
+        if !crate::security::constant_time_eq(token.as_str().as_bytes(), self.audit_control_token.as_bytes()) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Secret rollback requires authoritative NegativeControlToken".to_string(),
             ));

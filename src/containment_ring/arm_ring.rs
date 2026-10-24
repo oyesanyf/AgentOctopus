@@ -1102,9 +1102,12 @@ impl ArmContainmentRing {
         instances.get(report_id).cloned()
     }
 
-    // Negative-control test hook methods
+    // Negative-control test hook methods (constant-time token verification — AO-FIND-08)
     pub fn set_epoch_enforcement(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
-        if token.as_str() != self.audit_control_token.as_str() {
+        if !crate::security::constant_time_eq(
+            token.as_str().as_bytes(),
+            self.audit_control_token.as_str().as_bytes(),
+        ) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Modification of arm epoch enforcement state requires authoritative NegativeControlToken".to_string(),
             ));
@@ -1114,7 +1117,10 @@ impl ArmContainmentRing {
     }
 
     pub fn set_tool_enforcement(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
-        if token.as_str() != self.audit_control_token.as_str() {
+        if !crate::security::constant_time_eq(
+            token.as_str().as_bytes(),
+            self.audit_control_token.as_str().as_bytes(),
+        ) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Modification of arm tool enforcement state requires authoritative NegativeControlToken".to_string(),
             ));
@@ -1124,7 +1130,10 @@ impl ArmContainmentRing {
     }
 
     pub fn set_budget_enforcement(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
-        if token.as_str() != self.audit_control_token.as_str() {
+        if !crate::security::constant_time_eq(
+            token.as_str().as_bytes(),
+            self.audit_control_token.as_str().as_bytes(),
+        ) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Modification of arm budget enforcement state requires authoritative NegativeControlToken".to_string(),
             ));
@@ -1272,7 +1281,110 @@ impl ArmContainmentRing {
             )));
         }
 
+        // Enforce Tier 1 Wasmtime sanitization on the page-locked slice before any post-processing callback runs
+        let wasm_exec = crate::security::wasm_tier1::WasmTier1Executor::try_new()?;
+        let wasm_receipt = wasm_exec.execute_doc_extractor(
+            verified_slice,
+            crate::security::wasm_tier1::WasmSandboxLimits::default(),
+        )?;
+        if wasm_receipt.exit_code < 0 {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "TIER1_WASM_PREFILTER_REJECTED [{}]: exit_code={}",
+                tool, wasm_receipt.exit_code
+            )));
+        }
+
         closure(verified_slice)
+    }
+
+    /// Zero-Trust Confined Tool Execution (`AO-FIND-01` Remediation):
+    /// Eliminates arbitrary in-process `FnOnce` closure execution by requiring a structured
+    /// [`TieredToolRequest`](super::tiered_executor::TieredToolRequest) routed exclusively through
+    /// [`TieredExecutionDispatcher`](super::tiered_executor::TieredExecutionDispatcher).
+    ///
+    /// Enforces:
+    /// 1. Active generation epoch and `(tool_name, resource)` authorization against this arm's role.
+    /// 2. Cryptographic binding between declared `(tool_name, resource)` and the actual `TieredToolRequest`
+    ///    operation (`custom_wat` vs `native_command`), blocking metadata misrepresentation.
+    /// 3. Single-use Law 3 `DiracDeltaCapabilityTicket` consumption (`Cap(t)` impulse).
+    /// 4. Law 5 `ZeroCopyImmutableToolBuffer` (`PAGE_READONLY`) payload locking.
+    /// 5. 4-Category `BreakoutDefenseCoordinator` evaluation.
+    /// 6. Confined execution in Tier 1 (`WasmTier1Executor`) or Tier 2 (`AppContainer` + `WindowsJobObject` + `ExecutableIdentityVerifier`).
+    pub async fn execute_tiered_tool_confined(
+        &self,
+        ticket: &mut super::primitives::DiracDeltaCapabilityTicket,
+        resource: &str,
+        req: &super::tiered_executor::TieredToolRequest,
+        dispatcher: &super::tiered_executor::TieredExecutionDispatcher,
+        observed_canary_hash: Option<&str>,
+    ) -> Result<super::tiered_executor::TieredExecutionReceipt, OctopusSecurityError> {
+        if req.agent_id != self.agent_name || req.role != self.role {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "TIERED_REQUEST_IDENTITY_MISMATCH: Request claims ({}, {:?}) but ArmContainmentRing is ({}, {:?})",
+                req.agent_id, req.role, self.agent_name, self.role
+            )));
+        }
+
+        // Prevent declared tool_name / resource from misrepresenting a native binary invocation
+        if let Some((ref prog, ref args)) = req.native_command {
+            let full_cmd = if args.is_empty() {
+                prog.clone()
+            } else {
+                format!("{} {}", prog, args.join(" "))
+            };
+            let res_trimmed = resource.trim();
+            if res_trimmed.starts_with("s3://")
+                || res_trimmed.starts_with("sandbox://")
+                || res_trimmed.starts_with("local_scratchpad")
+            {
+                return Err(OctopusSecurityError::IsolationViolation(format!(
+                    "TOOL_METADATA_MISREPRESENTATION [{}]: Resource '{}' claims passive data access while native_command '{}' requests OS process execution",
+                    req.tool_name, resource, full_cmd
+                )));
+            }
+        }
+
+        let current_gen = self.current_generation();
+        self.validate_tool_invocation(&req.tool_name, resource, current_gen)
+            .await?;
+        let next_step = (self.step_counter.load(Ordering::SeqCst) as usize) + 1;
+        self.check_step_budget(next_step)?;
+        self.check_memory_budget(req.payload.len())?;
+
+        // Law 3: Consume single-use Dirac capability ticket
+        let _receipt = self
+            .consume_dirac_ticket(ticket, &req.tool_name, resource, observed_canary_hash)
+            .await?;
+
+        // Law 5: Hardware page-locked immutable buffer (\Delta t_TOCTOU = 0)
+        let immutable_buf =
+            super::primitives::ZeroCopyImmutableToolBuffer::create_and_lock(&req.payload)?;
+        let verified_slice = immutable_buf.as_verified_slice()?;
+
+        // 4-Category Breakout Coordinator check on both payload and any native command arguments
+        let payload_str = if let Some((ref prog, ref args)) = req.native_command {
+            format!(
+                "{} {} {}",
+                prog,
+                args.join(" "),
+                String::from_utf8_lossy(verified_slice)
+            )
+        } else {
+            String::from_utf8_lossy(verified_slice).into_owned()
+        };
+        let coordinator = crate::security::BreakoutDefenseCoordinator::default();
+        let eval =
+            coordinator.evaluate_action(&self.agent_name, &req.tool_name, resource, &payload_str);
+        if !eval.is_clean {
+            return Err(OctopusSecurityError::BreakoutDetected(format!(
+                "PRE_EXEC_BREAKOUT_VETO: {}",
+                eval.composite_verdict
+            )));
+        }
+
+        let mut locked_req = req.clone();
+        locked_req.payload = verified_slice.to_vec();
+        dispatcher.dispatch(&locked_req)
     }
 }
 

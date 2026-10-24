@@ -247,12 +247,15 @@ pub const WASM_LEDGER_VALIDATOR_WAT: &str = r#"
 "#;
 
 /// Tier 1 In-Process Wasmtime Executor with pre-compiled built-in tool modules,
+/// reusable `Linker`, SHA-256 compiled `Module` cache (`AO-FIND-10`),
 /// fuel & epoch interruption, `ResourceLimiter`, and `open_confined`-backed scratchpad bridge.
 #[derive(Clone)]
 pub struct WasmTier1Executor {
     engine: Engine,
+    linker: std::sync::Arc<Linker<WasmHostState>>,
     doc_extractor_module: Module,
     ledger_validator_module: Module,
+    module_cache: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<[u8; 32], Module>>>,
 }
 
 impl WasmTier1Executor {
@@ -267,6 +270,9 @@ impl WasmTier1Executor {
                 e
             ))
         })?;
+
+        let mut linker: Linker<WasmHostState> = Linker::new(&engine);
+        Self::bind_octopus_wasi_imports(&mut linker)?;
 
         let doc_extractor_module = Module::new(&engine, WASM_DOC_EXTRACTOR_WAT).map_err(|e| {
             OctopusSecurityError::IsolationViolation(format!(
@@ -285,8 +291,12 @@ impl WasmTier1Executor {
 
         Ok(Self {
             engine,
+            linker: std::sync::Arc::new(linker),
             doc_extractor_module,
             ledger_validator_module,
+            module_cache: std::sync::Arc::new(std::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
         })
     }
 
@@ -300,8 +310,52 @@ impl WasmTier1Executor {
         &self.engine
     }
 
-    /// Compiles and executes an arbitrary `.wat` / `.wasm` module inside the Tier 1 capability sandbox.
+    /// Compiles (with SHA-256 module caching, `AO-FIND-10`) and executes a `.wat` / `.wasm`
+    /// module inside the Tier 1 capability sandbox with a fresh per-invocation `Store`.
     pub fn execute_wat(
+        &self,
+        tool_name: &str,
+        wat_or_wasm: impl AsRef<[u8]>,
+        input_bytes: &[u8],
+        limits: WasmSandboxLimits,
+    ) -> Result<WasmExecutionReceipt, OctopusSecurityError> {
+        use sha2::{Digest, Sha256};
+
+        let cold_start_begin = Instant::now();
+        let bytes = wat_or_wasm.as_ref();
+        let mut digest_arr = [0u8; 32];
+        digest_arr.copy_from_slice(&Sha256::digest(bytes));
+
+        let cached = self
+            .module_cache
+            .read()
+            .ok()
+            .and_then(|guard| guard.get(&digest_arr).cloned());
+
+        let module = match cached {
+            Some(m) => m,
+            None => {
+                let compiled = Module::new(&self.engine, bytes).map_err(|e| {
+                    OctopusSecurityError::IsolationViolation(format!(
+                        "TIER1_WASM_COMPILE_REJECTED [{}]: {}",
+                        tool_name, e
+                    ))
+                })?;
+                if let Ok(mut guard) = self.module_cache.write() {
+                    if guard.len() >= 128 {
+                        guard.clear();
+                    }
+                    guard.insert(digest_arr, compiled.clone());
+                }
+                compiled
+            }
+        };
+
+        self.execute_compiled_module(tool_name, &module, input_bytes, limits, cold_start_begin)
+    }
+
+    /// Executes a `.wat` / `.wasm` module without module caching or Linker reuse (baseline reference for benchmarking).
+    pub fn execute_wat_uncached(
         &self,
         tool_name: &str,
         wat_or_wasm: impl AsRef<[u8]>,
@@ -315,7 +369,88 @@ impl WasmTier1Executor {
                 tool_name, e
             ))
         })?;
-        self.execute_compiled_module(tool_name, &module, input_bytes, limits, cold_start_begin)
+        for import in module.imports() {
+            if import.module() != "octopus_wasi" {
+                return Err(OctopusSecurityError::IsolationViolation(format!(
+                    "TIER1_AMBIENT_IMPORT_FORBIDDEN [{}]: guest attempted to import '{}::{}' outside 'octopus_wasi'",
+                    tool_name,
+                    import.module(),
+                    import.name()
+                )));
+            }
+        }
+        let fuel_budget = limits.fuel_budget;
+        let max_linear_memory_bytes = limits.max_linear_memory_bytes;
+        let host_state = WasmHostState::new(limits, input_bytes.to_vec());
+        let mut store = Store::new(&self.engine, host_state);
+        store.limiter(|state| state as &mut dyn ResourceLimiter);
+        store.set_fuel(fuel_budget).map_err(|e| {
+            OctopusSecurityError::ResourceQuotaExceeded(format!(
+                "Failed to configure Wasmtime fuel budget: {}",
+                e
+            ))
+        })?;
+        store.set_epoch_deadline(2);
+        let mut uncached_linker: Linker<WasmHostState> = Linker::new(&self.engine);
+        Self::bind_octopus_wasi_imports(&mut uncached_linker)?;
+        let instance = uncached_linker.instantiate(&mut store, &module).map_err(|e| {
+            if store.data().memory_limit_exceeded {
+                OctopusSecurityError::ResourceQuotaExceeded(format!(
+                    "TIER1_WASM_MEMORY_LIMIT_EXCEEDED [{}]: initial memory exceeds {} bytes ({})",
+                    tool_name, max_linear_memory_bytes, e
+                ))
+            } else {
+                OctopusSecurityError::IsolationViolation(format!(
+                    "TIER1_WASM_INSTANTIATE_FAILED [{}]: {}",
+                    tool_name, e
+                ))
+            }
+        })?;
+        let cold_start_us = cold_start_begin.elapsed().as_micros() as u64;
+        let exec_begin = Instant::now();
+        let run_fn = instance
+            .get_typed_func::<(), i32>(&mut store, "octopus_run")
+            .or_else(|_| instance.get_typed_func::<(), i32>(&mut store, "execute_step"))
+            .map_err(|e| {
+                OctopusSecurityError::IsolationViolation(format!(
+                    "TIER1_WASM_MISSING_ENTRYPOINT [{}]: {}",
+                    tool_name, e
+                ))
+            })?;
+        let exit_code = run_fn.call(&mut store, ()).map_err(|trap| {
+            OctopusSecurityError::IsolationViolation(format!(
+                "TIER1_WASM_RUNTIME_TRAP [{}]: {}",
+                tool_name, trap
+            ))
+        })?;
+        let execution_us = exec_begin.elapsed().as_micros() as u64;
+        let fuel_remaining = store.get_fuel().unwrap_or(0);
+        let fuel_consumed = fuel_budget.saturating_sub(fuel_remaining);
+        let state = store.into_data();
+        let raw_output = String::from_utf8_lossy(&state.output_buffer).to_string();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let zero_mi_projection =
+            ZeroMutualInformationProjector::project_output(&raw_output, now_ms, 100);
+        Ok(WasmExecutionReceipt {
+            tool_name: tool_name.to_string(),
+            exit_code,
+            cold_start_us,
+            execution_us,
+            fuel_budget,
+            fuel_consumed,
+            fuel_remaining,
+            peak_linear_memory_bytes: state.peak_memory_bytes,
+            max_linear_memory_bytes: state.limits.max_linear_memory_bytes,
+            memory_limit_exceeded: state.memory_limit_exceeded,
+            scratch_bytes_read: state.scratch_bytes_read,
+            scratch_bytes_written: state.scratch_bytes_written,
+            blocked_escape_attempts: state.blocked_escape_attempts,
+            raw_output,
+            zero_mi_projection,
+        })
     }
 
     /// Executes the pre-compiled `WASM_DOC_EXTRACTOR_WAT` module in Tier 1.
@@ -382,10 +517,7 @@ impl WasmTier1Executor {
         })?;
         store.set_epoch_deadline(2);
 
-        let mut linker: Linker<WasmHostState> = Linker::new(&self.engine);
-        Self::bind_octopus_wasi_imports(&mut linker)?;
-
-        let instance = linker.instantiate(&mut store, module).map_err(|e| {
+        let instance = self.linker.instantiate(&mut store, module).map_err(|e| {
             let mem_exceeded = store.data().memory_limit_exceeded;
             if mem_exceeded {
                 OctopusSecurityError::ResourceQuotaExceeded(format!(
@@ -600,8 +732,11 @@ impl WasmTier1Executor {
                         }
                     };
 
-                    let mut buf = Vec::new();
-                    if file.read_to_end(&mut buf).is_err() {
+                    let max_read = (dst_cap as usize)
+                        .min(caller.data().limits.max_linear_memory_bytes)
+                        .min(16 * 1024 * 1024);
+                    let mut buf = Vec::with_capacity(max_read.min(65_536));
+                    if (&mut file).take(max_read as u64).read_to_end(&mut buf).is_err() {
                         return WASI_ERR_IO;
                     }
                     let copy_len = buf.len().min(dst_cap as usize);

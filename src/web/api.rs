@@ -115,32 +115,7 @@ fn save_egress_domains(domains: &[String]) {
 }
 
 fn is_valid_domain(d: &str) -> bool {
-    let d = d.trim().to_ascii_lowercase();
-    if d.is_empty() || d.len() > 253 {
-        return false;
-    }
-    if d.contains('/') || d.contains(':') || d.contains('\\') || d.contains('@') {
-        return false;
-    }
-    if d.parse::<std::net::IpAddr>().is_ok() {
-        return false;
-    }
-    let parts: Vec<&str> = d.split('.').collect();
-    if parts.len() < 2 {
-        return false;
-    }
-    for part in parts {
-        if part.is_empty() || part.len() > 63 {
-            return false;
-        }
-        if part.starts_with('-') || part.ends_with('-') {
-            return false;
-        }
-        if !part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-            return false;
-        }
-    }
-    true
+    crate::containment_ring::egress_proxy::validate_egress_allowlist_domain(d).is_ok()
 }
 
 impl Default for WebState {

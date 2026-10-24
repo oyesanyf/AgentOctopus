@@ -53,7 +53,7 @@ impl CapabilityGate {
     /// Enables or deliberately disables capability token enforcement for negative-control sensitivity tests.
     /// FAIL-CLOSED: Requires presenting the cryptographically unforgeable `NegativeControlToken`.
     pub fn set_enforcement_enabled(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
-        if token.as_str() != self.audit_control_token.as_str() {
+        if !crate::security::constant_time_eq(token.as_str().as_bytes(), self.audit_control_token.as_bytes()) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Modification of capability gate enforcement state requires authoritative NegativeControlToken".to_string(),
             ));

@@ -89,6 +89,7 @@ pub mod win32 {
             NewTokenHandle: *mut HANDLE,
         ) -> BOOL;
         pub fn IsTokenRestricted(TokenHandle: HANDLE) -> BOOL;
+        pub fn EqualSid(pSid1: PSID, pSid2: PSID) -> BOOL;
         pub fn FreeSid(pSid: PSID) -> *mut c_void;
         pub fn GetTokenInformation(
             TokenHandle: HANDLE,
@@ -102,6 +103,8 @@ pub mod win32 {
     #[link(name = "kernel32")]
     extern "system" {
         pub fn LocalFree(hMem: *mut c_void) -> *mut c_void;
+        pub fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) -> DWORD;
+        pub fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *mut DWORD) -> BOOL;
         pub fn InitializeProcThreadAttributeList(
             lpAttributeList: *mut c_void,
             dwAttributeCount: DWORD,
@@ -212,6 +215,33 @@ impl WindowsJobObject {
                 unsafe { CloseHandle(handle) };
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "FAIL-CLOSED: Failed to set kernel limits on Windows Job Object '{}'",
+                    name_str
+                )));
+            }
+
+            // Enforce JOB_OBJECT_UILIMIT_ALL (0x000000FF) to block shatter, clipboard, global atom,
+            // and desktop handle access across the Job Object boundary (AO-FIND-02).
+            #[repr(C)]
+            struct JOBOBJECT_BASIC_UI_RESTRICTIONS {
+                ui_restrictions_class: u32,
+            }
+            const JOB_OBJECT_BASIC_UI_RESTRICTIONS_CLASS: i32 = 4;
+            const JOB_OBJECT_UILIMIT_ALL: u32 = 0x0000_00FF;
+            let ui_limits = JOBOBJECT_BASIC_UI_RESTRICTIONS {
+                ui_restrictions_class: JOB_OBJECT_UILIMIT_ALL,
+            };
+            let ui_ok = unsafe {
+                SetInformationJobObject(
+                    handle,
+                    JOB_OBJECT_BASIC_UI_RESTRICTIONS_CLASS,
+                    &ui_limits as *const _ as *const std::ffi::c_void,
+                    std::mem::size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+                )
+            };
+            if ui_ok == 0 {
+                unsafe { CloseHandle(handle) };
+                return Err(OctopusSecurityError::IsolationViolation(format!(
+                    "FAIL-CLOSED: Failed to set JOB_OBJECT_UILIMIT_ALL on Windows Job Object '{}'",
                     name_str
                 )));
             }
@@ -967,11 +997,11 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
 
     unsafe {
         win32::DeleteProcThreadAttributeList(attr_list);
-        win32::FreeSid(psid);
     };
 
     if create_res == 0 {
         let err = unsafe { win32::GetLastError() };
+        unsafe { win32::FreeSid(psid) };
         return Err(OctopusSecurityError::IsolationViolation(format!(
             "FAIL-CLOSED: Failed to spawn worker in AppContainer profile '{}' (OS Error {})",
             container_name, err
@@ -988,6 +1018,7 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
             win32::TerminateProcess(pi.hProcess, 1);
             windows_sys::Win32::Foundation::CloseHandle(pi.hProcess);
             windows_sys::Win32::Foundation::CloseHandle(pi.hThread);
+            win32::FreeSid(psid);
         };
         return Err(OctopusSecurityError::IsolationViolation(format!(
             "FAIL-CLOSED: AssignProcessToJobObject failed on suspended worker process (OS Error {}). Execution halted.",
@@ -995,20 +1026,16 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
         )));
     }
 
-    // Verify membership with IsProcessInJob
-    let mut in_job: i32 = 0;
-    let check_res = unsafe {
-        windows_sys::Win32::System::JobObjects::IsProcessInJob(pi.hProcess, job.handle, &mut in_job)
-    };
-    if check_res == 0 || in_job == 0 {
+    // Verify membership with IsProcessInJob AND actual child process token AppContainer identity (AO-FIND-02)
+    let ac_check = verify_process_appcontainer_token(pi.hProcess, psid, &sid_str, job);
+    unsafe { win32::FreeSid(psid) };
+    if let Err(e) = ac_check {
         unsafe {
             win32::TerminateProcess(pi.hProcess, 1);
             windows_sys::Win32::Foundation::CloseHandle(pi.hProcess);
             windows_sys::Win32::Foundation::CloseHandle(pi.hThread);
         };
-        return Err(OctopusSecurityError::IsolationViolation(
-            "FAIL-CLOSED: Suspended worker verified NOT in Windows Job Object. Execution halted.".to_string(),
-        ));
+        return Err(e);
     }
 
     // Now that kernel containment is fully verified, resume the primary thread!
@@ -1152,4 +1179,373 @@ pub fn evaluate_pre_resume_confinement_gate(
         ));
     }
     Ok(())
+}
+
+/// Kernel-verified AppContainer + Job Object token posture for a suspended Tier 2 child process (`AO-FIND-02`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AppContainerTokenVerification {
+    pub is_appcontainer: bool,
+    pub package_sid: String,
+    pub sid_matches_expected: bool,
+    pub job_membership_verified: bool,
+}
+
+/// Result of launching and waiting on a Tier 2 native binary inside a kernel-verified
+/// Windows AppContainer + Windows Job Object (`AO-FIND-02`, `AO-FIND-04`, `AO-FIND-07`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Tier2ConfinedChildResult {
+    pub pid: u32,
+    pub exit_code: i32,
+    pub token_posture: crate::security::token_posture::TokenPosture,
+    pub appcontainer_verification: AppContainerTokenVerification,
+}
+
+/// Inspects the actual kernel process token of a suspended child process BEFORE `ResumeThread`
+/// (`AO-FIND-02`) to prove:
+/// 1. `IsProcessInJob(process_handle, job.handle) == TRUE`,
+/// 2. `GetTokenInformation(TokenIsAppContainer = 29) != 0`,
+/// 3. `GetTokenInformation(TokenAppContainerSid = 31)` equals `expected_sid` via `EqualSid`.
+#[cfg(windows)]
+pub fn verify_process_appcontainer_token(
+    process_handle: HANDLE,
+    expected_sid: win32::PSID,
+    expected_sid_str: &str,
+    job: &WindowsJobObject,
+) -> Result<AppContainerTokenVerification, OctopusSecurityError> {
+    let in_job = job.verify_process_in_job(process_handle)?;
+    if !in_job {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED [AO-FIND-02]: Suspended child verified NOT in Windows Job Object".to_string(),
+        ));
+    }
+
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_IS_APP_CONTAINER_CLASS: u32 = 29;
+    const TOKEN_APP_CONTAINER_SID_CLASS: u32 = 31;
+
+    let mut token_handle: HANDLE = std::ptr::null_mut();
+    if unsafe { win32::OpenProcessToken(process_handle, TOKEN_QUERY, &mut token_handle) } == 0
+        || token_handle.is_null()
+    {
+        let err = unsafe { win32::GetLastError() };
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED [AO-FIND-02]: OpenProcessToken failed on suspended child (OS Error {})",
+            err
+        )));
+    }
+
+    // 1. Query TokenIsAppContainer (29)
+    let mut is_ac: u32 = 0;
+    let mut ret_len: u32 = 0;
+    let ac_ok = unsafe {
+        win32::GetTokenInformation(
+            token_handle,
+            TOKEN_IS_APP_CONTAINER_CLASS,
+            &mut is_ac as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+            &mut ret_len,
+        )
+    };
+    if ac_ok == 0 || is_ac == 0 {
+        unsafe { CloseHandle(token_handle) };
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED [AO-FIND-02]: Child process token has TokenIsAppContainer == 0; refusing to resume uncontained child".to_string(),
+        ));
+    }
+
+    // 2. Query TokenAppContainerSid (31) and compare with expected_sid via EqualSid
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct TOKEN_APPCONTAINER_INFORMATION {
+        TokenAppContainer: win32::PSID,
+    }
+    let mut sid_buf = vec![0u8; 128];
+    let mut sid_ret_len: u32 = 0;
+    let sid_ok = unsafe {
+        win32::GetTokenInformation(
+            token_handle,
+            TOKEN_APP_CONTAINER_SID_CLASS,
+            sid_buf.as_mut_ptr() as *mut std::ffi::c_void,
+            sid_buf.len() as u32,
+            &mut sid_ret_len,
+        )
+    };
+    if sid_ok == 0 {
+        let err = unsafe { win32::GetLastError() };
+        unsafe { CloseHandle(token_handle) };
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED [AO-FIND-02]: GetTokenInformation(TokenAppContainerSid) failed (OS Error {})",
+            err
+        )));
+    }
+
+    let info_ptr = sid_buf.as_ptr() as *const TOKEN_APPCONTAINER_INFORMATION;
+    let token_ac_sid = unsafe { (*info_ptr).TokenAppContainer };
+    let sid_matches = !token_ac_sid.is_null()
+        && !expected_sid.is_null()
+        && unsafe { win32::EqualSid(token_ac_sid, expected_sid) } != 0;
+
+    unsafe { CloseHandle(token_handle) };
+
+    if !sid_matches {
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED [AO-FIND-02]: Child TokenAppContainerSid does not match expected package SID '{}'",
+            expected_sid_str
+        )));
+    }
+
+    Ok(AppContainerTokenVerification {
+        is_appcontainer: true,
+        package_sid: expected_sid_str.to_string(),
+        sid_matches_expected: true,
+        job_membership_verified: true,
+    })
+}
+
+/// Launches a handle-locked, identity-verified native executable (`VerifiedExecutableHandle`)
+/// inside a genuine Windows AppContainer (`PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`, zero network/loopback capabilities)
+/// AND bound to `job` (`WindowsJobObject` with `JOB_OBJECT_UILIMIT_ALL`), verifying both
+/// `IsProcessInJob` and `TokenIsAppContainer` / `TokenAppContainerSid` while `CREATE_SUSPENDED`
+/// before calling `ResumeThread` (`AO-FIND-02`, `AO-FIND-04`, `AO-FIND-07`).
+#[cfg(windows)]
+pub fn spawn_tier2_appcontainer_command(
+    verified_exe: &crate::security::executable_identity::VerifiedExecutableHandle,
+    args: &[String],
+    agent_id: &str,
+    scratchpad_root: &std::path::Path,
+    job: &WindowsJobObject,
+) -> Result<Tier2ConfinedChildResult, OctopusSecurityError> {
+    let _ = std::fs::create_dir_all(scratchpad_root);
+    let sanitized_agent: String = agent_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .take(32)
+        .collect();
+    let container_name = format!("AgentOctopus.Tier2.{}", sanitized_agent);
+    let (sid_str, psid) = create_or_open_appcontainer_profile(
+        &container_name,
+        &format!("AgentOctopus Tier 2 Sandbox ({})", sanitized_agent),
+        "Zero-ambient-authority Tier 2 AppContainer for native CLI tools",
+    )?;
+
+    let mut sec_cap = win32::SECURITY_CAPABILITIES {
+        AppContainerSid: psid,
+        Capabilities: std::ptr::null_mut(),
+        CapabilityCount: 0, // Zero capabilities -> no internetClient, no privateNetworkClientServer, no loopback
+        Reserved: 0,
+    };
+
+    let mut attr_size: usize = 0;
+    unsafe {
+        win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+    }
+    if attr_size == 0 {
+        unsafe { win32::FreeSid(psid) };
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED: InitializeProcThreadAttributeList size query failed".to_string(),
+        ));
+    }
+
+    let mut attr_buf = vec![0u8; attr_size];
+    let attr_list = attr_buf.as_mut_ptr() as *mut std::ffi::c_void;
+    if unsafe { win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) } == 0 {
+        unsafe { win32::FreeSid(psid) };
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED: InitializeProcThreadAttributeList buffer init failed".to_string(),
+        ));
+    }
+
+    // PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
+    if unsafe {
+        win32::UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            0x00020009,
+            &mut sec_cap as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<win32::SECURITY_CAPABILITIES>(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        unsafe {
+            win32::DeleteProcThreadAttributeList(attr_list);
+            win32::FreeSid(psid);
+        }
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED: UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES) failed".to_string(),
+        ));
+    }
+
+    let mut si_ex: win32::STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+    si_ex.StartupInfo.cb = std::mem::size_of::<win32::STARTUPINFOEXW>() as u32;
+    si_ex.lpAttributeList = attr_list;
+
+    // Construct lpApplicationName from the handle-locked canonical path and escaped command line
+    let canonical_exe = &verified_exe.metadata.canonical_path;
+    let wide_app: Vec<u16> = canonical_exe
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let mut cmdline = format!("\"{}\"", canonical_exe);
+    for arg in args {
+        cmdline.push(' ');
+        if arg.contains(' ') || arg.contains('\t') || arg.contains('"') {
+            cmdline.push('"');
+            cmdline.push_str(&arg.replace('"', "\\\""));
+            cmdline.push('"');
+        } else {
+            cmdline.push_str(arg);
+        }
+    }
+    let mut wide_cmd: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
+
+    // Sanitized minimal Unicode environment block (prevents leaking host API keys/tokens into Tier 2)
+    let sys_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+    let scratch_str = scratchpad_root.to_string_lossy();
+    let env_entries = [
+        format!("SystemRoot={}", sys_root),
+        format!("WINDIR={}", sys_root),
+        format!("ComSpec={}\\System32\\cmd.exe", sys_root),
+        format!("PATH={}\\System32", sys_root),
+        format!("TEMP={}", scratch_str),
+        format!("TMP={}", scratch_str),
+        "AGENT_OCTOPUS_TIER2_CONFINED=1".to_string(),
+    ];
+    let mut env_block: Vec<u16> = Vec::new();
+    for entry in &env_entries {
+        env_block.extend(entry.encode_utf16());
+        env_block.push(0);
+    }
+    env_block.push(0);
+
+    let mut pi: windows_sys::Win32::System::Threading::PROCESS_INFORMATION =
+        unsafe { std::mem::zeroed() };
+
+    const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
+
+    // Launch with bInheritHandles = 0 (FALSE) while `verified_exe` holds FILE_SHARE_READ on the image
+    let created = unsafe {
+        win32::CreateProcessW(
+            wide_app.as_ptr(),
+            wide_cmd.as_mut_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0, // bInheritHandles = FALSE (zero supervisor handle inheritance)
+            EXTENDED_STARTUPINFO_PRESENT
+                | CREATE_SUSPENDED
+                | CREATE_NO_WINDOW
+                | CREATE_UNICODE_ENVIRONMENT,
+            env_block.as_mut_ptr() as *mut std::ffi::c_void,
+            std::ptr::null(),
+            &si_ex as *const _ as *const std::ffi::c_void,
+            &mut pi,
+        )
+    };
+
+    unsafe {
+        win32::DeleteProcThreadAttributeList(attr_list);
+    }
+
+    if created == 0 {
+        let err = unsafe { win32::GetLastError() };
+        unsafe { win32::FreeSid(psid) };
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: CreateProcessW in AppContainer '{}' for '{}' failed (OS Error {})",
+            container_name, canonical_exe, err
+        )));
+    }
+
+    // 1. Bind suspended process to WindowsJobObject BEFORE ResumeThread (AO-FIND-07)
+    if let Err(e) = job.assign_process(pi.hProcess) {
+        unsafe {
+            win32::TerminateProcess(pi.hProcess, 1);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            win32::FreeSid(psid);
+        }
+        return Err(e);
+    }
+
+    // 2. Verify actual child token AppContainer identity & Job Object membership BEFORE ResumeThread (AO-FIND-02)
+    let ac_verification = match verify_process_appcontainer_token(pi.hProcess, psid, &sid_str, job) {
+        Ok(v) => v,
+        Err(e) => {
+            unsafe {
+                win32::TerminateProcess(pi.hProcess, 1);
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+                win32::FreeSid(psid);
+            }
+            return Err(e);
+        }
+    };
+    unsafe { win32::FreeSid(psid) };
+
+    // 3. Query child TokenPosture while still suspended
+    let token_posture = match crate::security::token_posture::TokenPosture::of_process(pi.hProcess) {
+        Ok(p) => p,
+        Err(e) => {
+            unsafe {
+                win32::TerminateProcess(pi.hProcess, 1);
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+            }
+            return Err(e);
+        }
+    };
+
+    if let Err(reasons) = token_posture.verify_agent_safe() {
+        unsafe {
+            win32::TerminateProcess(pi.hProcess, 1);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: Child TokenPosture failed verify_agent_safe: {}",
+            reasons.join("; ")
+        )));
+    }
+
+    // 4. Resume primary thread now that Job Object + AppContainer + TokenPosture + Binary Identity are verified
+    if unsafe { win32::ResumeThread(pi.hThread) } == u32::MAX {
+        let err = unsafe { win32::GetLastError() };
+        unsafe {
+            win32::TerminateProcess(pi.hProcess, 1);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: ResumeThread failed on AppContainer Tier 2 child (OS Error {})",
+            err
+        )));
+    }
+    unsafe { CloseHandle(pi.hThread) };
+
+    // 5. Wait for completion with hard 10s wall-clock ceiling; terminate job on timeout
+    const WAIT_OBJECT_0: u32 = 0x0000_0000;
+    let wait_rc = unsafe { win32::WaitForSingleObject(pi.hProcess, 10_000) };
+    if wait_rc != WAIT_OBJECT_0 {
+        let _ = job.terminate(1);
+        unsafe { CloseHandle(pi.hProcess) };
+        return Err(OctopusSecurityError::ResourceQuotaExceeded(format!(
+            "TIER2_WALL_CLOCK_TIMEOUT: Process {} in AppContainer '{}' exceeded 10s deadline; job terminated",
+            pi.dwProcessId, container_name
+        )));
+    }
+
+    let mut exit_code: u32 = 1;
+    let _ = unsafe { win32::GetExitCodeProcess(pi.hProcess, &mut exit_code) };
+    unsafe { CloseHandle(pi.hProcess) };
+
+    Ok(Tier2ConfinedChildResult {
+        pid: pi.dwProcessId,
+        exit_code: exit_code as i32,
+        token_posture,
+        appcontainer_verification: ac_verification,
+    })
 }

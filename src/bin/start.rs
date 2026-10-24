@@ -139,6 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Spawn browser launch in background after short delay without spawning any cmd.exe shell window
     let fallback_port = selected_port;
+    let bootstrap_nonce = agent_octopus::web::request_guard::issue_bootstrap_nonce();
     tokio::spawn(async move {
         sleep(Duration::from_millis(400)).await;
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -149,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .ok()
                 .and_then(|s| s.trim().parse::<u16>().ok())
                 .unwrap_or(fallback_port);
-            let url_for_browser = format!("http://127.0.0.1:{}", active_port);
+            let url_for_browser = format!("http://127.0.0.1:{}/?bootstrap={}", active_port, bootstrap_nonce);
             #[cfg(target_os = "windows")]
             {
                 // Never execute "cmd /c start" as that opens an unwanted console window.

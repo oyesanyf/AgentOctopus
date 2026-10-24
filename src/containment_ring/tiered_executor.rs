@@ -18,13 +18,18 @@ use crate::core::types::{ArmRole, OctopusSecurityError};
 use crate::security::breakouts::{
     TechnicalBreakoutGuard, ZeroMiProjectionResult, ZeroMutualInformationProjector,
 };
+use crate::security::executable_identity::{
+    ExecutableIdentityVerifier, VerifiedExecutableMetadata,
+};
 use crate::security::mercury_guard::{
     HostActuationPore, MeasuredActuationSample, MercuryContainmentEngine, MercuryEvaluationResult,
     KERNEL_IO_COALESCENCE_BUDGET_BYTES,
 };
-use crate::security::token_posture::{spawn_deelevated, TokenPosture};
+use crate::security::token_posture::TokenPosture;
 use crate::security::wasm_tier1::{WasmExecutionReceipt, WasmSandboxLimits, WasmTier1Executor};
-use crate::security::windows_sandbox::WindowsJobObject;
+use crate::security::windows_sandbox::{
+    spawn_tier2_appcontainer_command, AppContainerTokenVerification, WindowsJobObject,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,7 +40,7 @@ use std::time::Instant;
 pub enum ExecutionTier {
     /// Tier 1: In-process Wasmtime capability sandbox (zero child processes, zero ambient OS authority).
     Tier1InProcessWasm,
-    /// Tier 2: Native Win32 confined child process (`spawn_deelevated` + `WindowsJobObject` + `AppContainer`).
+    /// Tier 2: Native Win32 confined child process (`AppContainer` + `WindowsJobObject` + `ExecutableIdentityVerifier`).
     Tier2NativeWin32Confinement,
 }
 
@@ -67,17 +72,20 @@ pub struct TieredExecutionReceipt {
     pub total_elapsed_us: u64,
     pub wasm_receipt: Option<WasmExecutionReceipt>,
     pub win32_child_token_posture: Option<TokenPosture>,
+    pub win32_appcontainer_verification: Option<AppContainerTokenVerification>,
+    pub verified_executable_metadata: Option<VerifiedExecutableMetadata>,
     pub job_io_sample: Option<MeasuredActuationSample>,
     pub mercury_evaluation: MercuryEvaluationResult,
     pub zero_mi_output: ZeroMiProjectionResult,
 }
 
 /// Pure-Rust Hybrid Execution Dispatcher routing agent tools between Tier 1 (Wasmtime)
-/// and Tier 2 (Native Win32 de-elevated + JobObject confinement).
+/// and Tier 2 (Native Win32 AppContainer + JobObject + VerifiedExecutableIdentity confinement).
 pub struct TieredExecutionDispatcher {
     wasm_tier1: WasmTier1Executor,
     mercury: Arc<MercuryContainmentEngine>,
     technical_guard: TechnicalBreakoutGuard,
+    executable_verifier: ExecutableIdentityVerifier,
 }
 
 impl TieredExecutionDispatcher {
@@ -86,11 +94,16 @@ impl TieredExecutionDispatcher {
             wasm_tier1: WasmTier1Executor::try_new()?,
             mercury,
             technical_guard: TechnicalBreakoutGuard::default(),
+            executable_verifier: ExecutableIdentityVerifier::new(),
         })
     }
 
     pub fn wasm_tier1(&self) -> &WasmTier1Executor {
         &self.wasm_tier1
+    }
+
+    pub fn executable_verifier(&self) -> &ExecutableIdentityVerifier {
+        &self.executable_verifier
     }
 
     /// Determines whether a request runs in Tier 1 (In-Process Wasmtime) or Tier 2 (Native Win32).
@@ -169,6 +182,8 @@ impl TieredExecutionDispatcher {
             total_elapsed_us: start.elapsed().as_micros() as u64,
             wasm_receipt: Some(wasm_receipt),
             win32_child_token_posture: None,
+            win32_appcontainer_verification: None,
+            verified_executable_metadata: None,
             job_io_sample: None,
             mercury_evaluation: mercury_eval,
             zero_mi_output: zero_mi,
@@ -186,7 +201,21 @@ impl TieredExecutionDispatcher {
             )
         })?;
 
-        // 1. Structural command-line inspection (Finding 1: CommandLineToArgvW + -EncodedCommand decoding)
+        // 0. Prevent operation-metadata misrepresentation (AO-FIND-01):
+        // A request claiming to be a Tier 1 document/ledger tool must not silently invoke Tier 2 native binaries.
+        let tool_lower = req.tool_name.trim().to_ascii_lowercase();
+        if matches!(
+            tool_lower.as_str(),
+            "doc_extractor" | "wasm_doc_extractor" | "extract" | "ledger_writer" | "wasm_ledger_validator" | "write"
+        ) || matches!(req.role, ArmRole::UntrustedDocIngest | ArmRole::AccountingLedgerWrite)
+        {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "TIER2_ROLE_OR_TOOL_MISMATCH [{} / {:?}]: Untrusted document or ledger tools are restricted to Tier 1 Wasmtime and may not spawn native Tier 2 processes",
+                req.tool_name, req.role
+            )));
+        }
+
+        // 1. Defense-in-depth structural command-line inspection (CommandLineToArgvW + -EncodedCommand decoding)
         let full_cmd = if args.is_empty() {
             program.clone()
         } else {
@@ -201,29 +230,45 @@ impl TieredExecutionDispatcher {
             )));
         }
 
-        // 2. Create dedicated Windows Job Object for kernel-enforced process & memory limits + I/O accounting
+        // 2. Authoritative Executable Identity Verification & Handle-Locked Open (AO-FIND-04):
+        // Opens the binary with FILE_SHARE_READ | FILE_FLAG_OPEN_REPARSE_POINT, verifies canonical path,
+        // SHA-256, and PE original identity (blocking renamed interpreters), and holds the read-lock
+        // across CreateProcessW so the binary cannot be replaced on disk (TOCTOU defense).
+        let verified_exe = self
+            .executable_verifier
+            .verify_and_lock(program, Some(&req.scratchpad_root))?;
+
+        // 3. Create dedicated Windows Job Object (KILL_ON_JOB_CLOSE + 64 MiB cap + active process limit + UILIMIT_ALL)
         let job_name = format!(
-            "OctopusTier2Job_{}_{}",
+            "OctopusTier2Job_{}_{}_{}",
             req.agent_id.replace('-', "_"),
-            std::process::id()
+            std::process::id(),
+            rand::random::<u32>()
         );
         let job = WindowsJobObject::create(job_name, 4, 64 * 1024 * 1024)?;
 
-        // 3. Spawn child under mandatory de-elevated restricted token (Finding 7: LUA_TOKEN + Admins deny-only,
-        // verified while CREATE_SUSPENDED before ResumeThread)
-        let deelevated = spawn_deelevated(&full_cmd, true)?;
-        let exit_code = deelevated.wait()? as i32;
+        // 4. Launch inside genuine Windows AppContainer + Job Object while holding `verified_exe` lock (AO-FIND-02, AO-FIND-07)
+        let confined_res = spawn_tier2_appcontainer_command(
+            &verified_exe,
+            args,
+            &req.agent_id,
+            &req.scratchpad_root,
+            &job,
+        )?;
+        let exec_meta = verified_exe.metadata.clone();
+        drop(verified_exe);
 
-        // Record in hidden-process ledger for dashboard transparency
-        let mut ledger_cmd = std::process::Command::new(program);
+        // 5. Record in hidden-process ledger for dashboard transparency
+        let mut ledger_cmd = std::process::Command::new(&exec_meta.canonical_path);
         ledger_cmd.args(args);
         let _ = crate::security::hidden_process_ledger::record_hidden_spawn(
             &ledger_cmd,
-            "TieredExecutionDispatcher::dispatch_tier2_win32",
-            Some(deelevated.pid),
+            "TieredExecutionDispatcher::dispatch_tier2_win32[AppContainer+JobObject]",
+            Some(confined_res.pid),
             None,
         );
 
+        // 6. Sample real kernel Job Object I/O and memory counters (AO-FIND-07: process was assigned to `job`!)
         let elapsed_s = start.elapsed().as_secs_f64().max(0.001);
         let job_sample =
             MeasuredActuationSample::sample_from_job(&job, HostActuationPore::SubprocessSpawn, elapsed_s)?;
@@ -243,8 +288,12 @@ impl TieredExecutionDispatcher {
             .unwrap_or_default()
             .as_millis() as u64;
         let summary_out = format!(
-            "{{\"tier\":\"Tier2NativeWin32\",\"pid\":{},\"exit_code\":{},\"elevated\":{}}}",
-            deelevated.pid, exit_code, deelevated.posture.elevated
+            "{{\"tier\":\"Tier2NativeWin32\",\"pid\":{},\"exit_code\":{},\"elevated\":{},\"is_appcontainer\":{},\"sha256\":\"{}\"}}",
+            confined_res.pid,
+            confined_res.exit_code,
+            confined_res.token_posture.elevated,
+            confined_res.appcontainer_verification.is_appcontainer,
+            exec_meta.sha256_hex
         );
         let zero_mi = ZeroMutualInformationProjector::project_output(&summary_out, now_ms, 100);
 
@@ -252,10 +301,12 @@ impl TieredExecutionDispatcher {
             agent_id: req.agent_id.clone(),
             tool_name: req.tool_name.clone(),
             selected_tier: ExecutionTier::Tier2NativeWin32Confinement,
-            exit_code,
+            exit_code: confined_res.exit_code,
             total_elapsed_us: start.elapsed().as_micros() as u64,
             wasm_receipt: None,
-            win32_child_token_posture: Some(deelevated.posture.clone()),
+            win32_child_token_posture: Some(confined_res.token_posture),
+            win32_appcontainer_verification: Some(confined_res.appcontainer_verification),
+            verified_executable_metadata: Some(exec_meta),
             job_io_sample: Some(job_sample),
             mercury_evaluation: mercury_eval,
             zero_mi_output: zero_mi,

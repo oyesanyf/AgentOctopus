@@ -565,14 +565,18 @@ async fn handle_connection(
 
     match (method, path) {
         ("GET", "/") | ("GET", "/index.html") | ("HEAD", "/") | ("HEAD", "/index.html") => {
+            let (scoped_token, set_cookie_hdr) =
+                super::request_guard::resolve_index_session_token(&guard_req);
             let index = super::request_guard::inject_token_into_index(
                 INDEX_HTML,
-                super::request_guard::dashboard_token(),
+                &scoped_token,
             );
+            let cookie_line = set_cookie_hdr.unwrap_or_default();
             let body = if method == "HEAD" { "" } else { index.as_str() };
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\n{}{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
                 super::request_guard::SECURITY_HEADERS,
+                cookie_line,
                 index.len(),
                 body
             );
@@ -2445,6 +2449,7 @@ async fn handle_sse_test_stream(
             "research_and_atlas_tests" => "research_and_atlas_tests",
             "sentinel_ring_tests" => "sentinel_ring_tests",
             "oshoosiclaw_adapted_containment_tests" => "oshoosiclaw_adapted_containment_tests",
+            "comprehensive_breakout_defense_tests" => "comprehensive_breakout_defense_tests",
             _ => {
                 let err_event = format!(
                     "data: {}\n\n",

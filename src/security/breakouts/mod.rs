@@ -285,26 +285,66 @@ pub fn open_confined(
 #[cfg(windows)]
 mod win_confined {
     use crate::core::types::OctopusSecurityError;
-    use std::ffi::c_void;
+    use std::ffi::{c_void, OsStr};
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
-    use std::path::{Component, Path, PathBuf};
+    use std::path::{Component, Path};
 
     type HANDLE = *mut c_void;
     type BOOL = i32;
     type DWORD = u32;
+    type NTSTATUS = i32;
 
     const INVALID_HANDLE_VALUE: HANDLE = -1isize as HANDLE;
     const GENERIC_READ: DWORD = 0x8000_0000;
     const GENERIC_WRITE: DWORD = 0x4000_0000;
+    const SYNCHRONIZE: DWORD = 0x0010_0000;
+    const FILE_LIST_DIRECTORY: DWORD = 0x0000_0001;
+    const FILE_TRAVERSE: DWORD = 0x0000_0020;
+    const FILE_READ_ATTRIBUTES: DWORD = 0x0000_0080;
     const FILE_SHARE_READ: DWORD = 0x0000_0001;
+    const FILE_SHARE_WRITE: DWORD = 0x0000_0002;
     const OPEN_EXISTING: DWORD = 3;
-    const OPEN_ALWAYS: DWORD = 4;
     const FILE_FLAG_BACKUP_SEMANTICS: DWORD = 0x0200_0000;
     const FILE_FLAG_OPEN_REPARSE_POINT: DWORD = 0x0020_0000;
     const FILE_ATTRIBUTE_NORMAL: DWORD = 0x0000_0080;
     const FILE_ATTRIBUTE_DIRECTORY: DWORD = 0x0000_0010;
     const FILE_ATTRIBUTE_REPARSE_POINT: DWORD = 0x0000_0400;
+
+    // Native NT (`NtCreateFile`) constants for handle-relative single-component resolution (AO-FIND-06)
+    const OBJ_CASE_INSENSITIVE: DWORD = 0x0000_0040;
+    const FILE_OPEN: DWORD = 0x0000_0001;
+    const FILE_OPEN_IF: DWORD = 0x0000_0003;
+    const FILE_DIRECTORY_FILE: DWORD = 0x0000_0001;
+    const FILE_NON_DIRECTORY_FILE: DWORD = 0x0000_0040;
+    const FILE_SYNCHRONOUS_IO_NONALERT: DWORD = 0x0000_0020;
+    const FILE_OPEN_REPARSE_POINT: DWORD = 0x0020_0000;
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct UNICODE_STRING {
+        Length: u16,
+        MaximumLength: u16,
+        Buffer: *mut u16,
+    }
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct OBJECT_ATTRIBUTES {
+        Length: DWORD,
+        RootDirectory: HANDLE,
+        ObjectName: *mut UNICODE_STRING,
+        Attributes: DWORD,
+        SecurityDescriptor: *mut c_void,
+        SecurityQualityOfService: *mut c_void,
+    }
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct IO_STATUS_BLOCK {
+        StatusOrPointer: *mut c_void,
+        Information: usize,
+    }
 
     #[repr(C)]
     #[allow(non_snake_case)]
@@ -353,6 +393,23 @@ mod win_confined {
         fn GetLastError() -> DWORD;
     }
 
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn NtCreateFile(
+            FileHandle: *mut HANDLE,
+            DesiredAccess: DWORD,
+            ObjectAttributes: *mut OBJECT_ATTRIBUTES,
+            IoStatusBlock: *mut IO_STATUS_BLOCK,
+            AllocationSize: *mut i64,
+            FileAttributes: DWORD,
+            ShareAccess: DWORD,
+            CreateDisposition: DWORD,
+            CreateOptions: DWORD,
+            EaBuffer: *mut c_void,
+            EaLength: DWORD,
+        ) -> NTSTATUS;
+    }
+
     fn to_wide(p: &Path) -> Vec<u16> {
         p.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
     }
@@ -393,16 +450,17 @@ mod win_confined {
         Ok(info)
     }
 
-    fn open_raw(path: &Path, access: DWORD, disposition: DWORD, flags: DWORD) -> Result<std::fs::File, OctopusSecurityError> {
+    fn open_root_raw(path: &Path) -> Result<std::fs::File, OctopusSecurityError> {
         let wide = to_wide(path);
+        // Omit FILE_SHARE_DELETE so the sandbox root directory cannot be renamed or unlinked while open
         let h = unsafe {
             CreateFileW(
                 wide.as_ptr(),
-                access,
-                FILE_SHARE_READ,
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
                 std::ptr::null(),
-                disposition,
-                flags,
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
                 std::ptr::null_mut(),
             )
         };
@@ -415,6 +473,87 @@ mod win_confined {
             )));
         }
         Ok(unsafe { std::fs::File::from_raw_handle(h as RawHandle) })
+    }
+
+    /// Opens a single path component strictly relative to `parent_dir_handle` via `ntdll!NtCreateFile`
+    /// with `OBJECT_ATTRIBUTES.RootDirectory = parent_dir_handle` and `FILE_OPEN_REPARSE_POINT` (AO-FIND-06).
+    fn nt_open_single_component_relative(
+        parent_dir_handle: HANDLE,
+        component: &str,
+        desired_access: DWORD,
+        share_access: DWORD,
+        create_disposition: DWORD,
+        create_options: DWORD,
+    ) -> Result<std::fs::File, OctopusSecurityError> {
+        if component.is_empty()
+            || component == "."
+            || component == ".."
+            || component.contains('\\')
+            || component.contains('/')
+            || component.contains(':')
+            || component.contains('\0')
+        {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "CONFINED_OPEN_INVALID_COMPONENT: '{}' is not a valid single relative filename component",
+                component
+            )));
+        }
+
+        let mut wide: Vec<u16> = OsStr::new(component).encode_wide().collect();
+        let byte_len = wide
+            .len()
+            .checked_mul(2)
+            .and_then(|n| u16::try_from(n).ok())
+            .ok_or_else(|| {
+                OctopusSecurityError::IsolationViolation(
+                    "CONFINED_OPEN_COMPONENT_TOO_LONG: Component exceeds UNICODE_STRING limit"
+                        .to_string(),
+                )
+            })?;
+        wide.push(0);
+
+        let mut ustr = UNICODE_STRING {
+            Length: byte_len,
+            MaximumLength: byte_len.saturating_add(2),
+            Buffer: wide.as_mut_ptr(),
+        };
+
+        let mut obj_attr = OBJECT_ATTRIBUTES {
+            Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as DWORD,
+            RootDirectory: parent_dir_handle,
+            ObjectName: &mut ustr,
+            Attributes: OBJ_CASE_INSENSITIVE,
+            SecurityDescriptor: std::ptr::null_mut(),
+            SecurityQualityOfService: std::ptr::null_mut(),
+        };
+
+        let mut io_status: IO_STATUS_BLOCK = unsafe { std::mem::zeroed() };
+        let mut out_handle: HANDLE = std::ptr::null_mut();
+
+        let status = unsafe {
+            NtCreateFile(
+                &mut out_handle,
+                desired_access | SYNCHRONIZE,
+                &mut obj_attr,
+                &mut io_status,
+                std::ptr::null_mut(),
+                FILE_ATTRIBUTE_NORMAL,
+                share_access,
+                create_disposition,
+                create_options | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+
+        if status < 0 || out_handle.is_null() || out_handle == INVALID_HANDLE_VALUE {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "CONFINED_OPEN_NTCREATEFILE_FAILED: Handle-relative open of '{}' failed (NTSTATUS 0x{:08X})",
+                component, status as u32
+            )));
+        }
+
+        Ok(unsafe { std::fs::File::from_raw_handle(out_handle as RawHandle) })
     }
 
     fn normalize_final(s: &str) -> String {
@@ -440,12 +579,7 @@ mod win_confined {
         write: bool,
     ) -> Result<std::fs::File, OctopusSecurityError> {
         // 1. Open sandbox root without following reparse points and verify it is a real directory.
-        let root_file = open_raw(
-            sandbox_root,
-            GENERIC_READ,
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-        )?;
+        let root_file = open_root_raw(sandbox_root)?;
         let root_h = root_file.as_raw_handle() as HANDLE;
         let root_info = handle_info(root_h)?;
         if root_info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
@@ -476,17 +610,18 @@ mod win_confined {
             ));
         }
 
-        // 3. Walk intermediate directories, keeping each open handle alive until the child is opened
-        // so an ancestor directory cannot be unlinked/swapped while we descend.
-        let mut cursor = PathBuf::from(&canonical_root);
+        // 3. Walk intermediate directories strictly relative to the already-validated parent HANDLE via NtCreateFile (AO-FIND-06).
+        // Each open directory handle omits FILE_SHARE_DELETE and stays alive in `_held_dirs` until the leaf is verified.
         let mut _held_dirs: Vec<std::fs::File> = vec![root_file];
         for dir_comp in &comps[..comps.len() - 1] {
-            cursor.push(dir_comp);
-            let dir_file = open_raw(
-                &cursor,
-                GENERIC_READ,
-                OPEN_EXISTING,
-                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            let parent_h = _held_dirs.last().unwrap().as_raw_handle() as HANDLE;
+            let dir_file = nt_open_single_component_relative(
+                parent_h,
+                dir_comp,
+                FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                FILE_OPEN,
+                FILE_DIRECTORY_FILE,
             )?;
             let dh = dir_file.as_raw_handle() as HANDLE;
             let dinfo = handle_info(dh)?;
@@ -509,19 +644,27 @@ mod win_confined {
                     dir_comp, dir_final, canonical_root
                 )));
             }
-            cursor = PathBuf::from(dir_final);
             _held_dirs.push(dir_file);
         }
 
-        // 4. Open the final leaf without following reparse points.
-        cursor.push(comps.last().unwrap());
-        let access = if write { GENERIC_READ | GENERIC_WRITE } else { GENERIC_READ };
-        let disposition = if write { OPEN_ALWAYS } else { OPEN_EXISTING };
-        let leaf_file = open_raw(
-            &cursor,
+        // 4. Open the final single-component leaf relative to the validated parent directory HANDLE via NtCreateFile.
+        // Writable files (`write == true`) enforce exclusive sharing (`ShareAccess = 0`) to block concurrent race mutation.
+        let parent_h = _held_dirs.last().unwrap().as_raw_handle() as HANDLE;
+        let leaf_comp = comps.last().unwrap();
+        let access = if write {
+            GENERIC_READ | GENERIC_WRITE
+        } else {
+            GENERIC_READ
+        };
+        let share_access = if write { 0 } else { FILE_SHARE_READ };
+        let disposition = if write { FILE_OPEN_IF } else { FILE_OPEN };
+        let leaf_file = nt_open_single_component_relative(
+            parent_h,
+            leaf_comp,
             access,
+            share_access,
             disposition,
-            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_NON_DIRECTORY_FILE,
         )?;
         let lh = leaf_file.as_raw_handle() as HANDLE;
         let linfo = handle_info(lh)?;

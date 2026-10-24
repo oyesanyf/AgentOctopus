@@ -118,7 +118,17 @@ pub use rl_defense::{
 pub use spider_physics::{OrbWebContainmentEngine, OrbWebEvaluationResult, SilkRegime};
 pub use windows_sandbox::{
     evaluate_pre_resume_confinement_gate, verify_windows_confinement_invariants,
-    WindowsConfinementPolicy,
+    AppContainerTokenVerification, Tier2ConfinedChildResult, WindowsConfinementPolicy,
+};
+#[cfg(windows)]
+pub use windows_sandbox::{
+    spawn_tier2_appcontainer_command, verify_process_appcontainer_token,
+};
+
+pub mod executable_identity;
+pub use executable_identity::{
+    detect_renamed_interpreter_marker, ExecutableIdentityVerifier, VerifiedExecutableHandle,
+    VerifiedExecutableMetadata, ALLOWED_TIER2_EXECUTABLE_STEMS, FORBIDDEN_TIER2_EXECUTABLE_STEMS,
 };
 
 pub mod token_posture;
@@ -127,7 +137,9 @@ pub use token_posture::{
     DEELEVATED_ENV_MARKER, INTEGRITY_HIGH, INTEGRITY_MEDIUM,
 };
 #[cfg(windows)]
-pub use token_posture::{create_deelevated_token, spawn_deelevated, DeelevatedChild, OwnedToken};
+pub use token_posture::{
+    create_deelevated_token, spawn_deelevated, spawn_deelevated_in_job, DeelevatedChild, OwnedToken,
+};
 
 pub mod hidden_process_ledger;
 pub use hidden_process_ledger::{
