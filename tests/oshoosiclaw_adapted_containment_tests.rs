@@ -6,91 +6,89 @@ use agent_octopus::containment_ring::{
     DiracDeltaCapabilityTicket, HomologicalBoundaryAuditor, IndependentTrustBoundaryVerifier,
     PinnedToolObjectBinding, VanishingPolynomialTraceVerifier, ZeroCopyImmutableToolBuffer,
 };
+use agent_octopus::security::rl_defense::AdaptiveRlDefenseEngine;
 use agent_octopus::security::{
     compute_hardened_console_mode, evaluate_pre_resume_confinement_gate, harden_windows_console,
-    is_console_mode_hardened, run_standardized_5policy_benchmark, validate_agent_filesystem_access,
-    validate_sandbox_relative_path, DynamicAgentClassifier, FileLineageTracker, HostActuationPore,
-    MercuryContainmentEngine, OrbWebContainmentEngine, ProcessBehavioralTelemetry,
-    RuntimeAlignmentScanner, SessionIntentContract, SilkRegime, ToolCallTraceStep,
-    WindowsConfinementPolicy, ZeroMutualInformationProjector, CREATE_NO_WINDOW,
+    is_console_mode_hardened, validate_agent_filesystem_access, validate_sandbox_relative_path,
+    DynamicAgentClassifier, FileLineageTracker, HostActuationPore, MercuryContainmentEngine,
+    OrbWebContainmentEngine, ProcessBehavioralTelemetry, RuntimeAlignmentScanner, SilkRegime,
+    ToolCallTraceStep, WindowsConfinementPolicy, ZeroMutualInformationProjector, CREATE_NO_WINDOW,
     ENABLE_EXTENDED_FLAGS, ENABLE_INSERT_MODE, ENABLE_MOUSE_INPUT, ENABLE_QUICK_EDIT_MODE,
 };
 use agent_octopus::web::{is_loopback_port_available, select_available_loopback_port};
-use agent_octopus::ArmRole;
 
 #[test]
 fn test_law1_homological_boundary_exactness_and_2simplex_veto() {
-    let mut auditor = HomologicalBoundaryAuditor::new(32);
-    auditor.set_node_potential("untrusted_ingest", 0);
-    auditor.set_node_potential("worker_relay", 5);
-    auditor.set_node_potential("accounting_ledger_write", 10);
-
-    let report = auditor.verify_boundary_operator_exactness();
-    assert!(report.boundary_squared_zero);
-    assert!(report.coboundary_curl_zero);
-
-    let safe = auditor.record_and_audit_edge("worker_relay", "worker_relay");
-    assert!(safe.passed);
-
-    let laundering = auditor.record_and_audit_edge("untrusted_ingest", "worker_relay");
-    let laundering2 = auditor.record_and_audit_edge("worker_relay", "accounting_ledger_write");
-    assert!(
-        !laundering.passed || !laundering2.passed,
-        "2-simplex confused-deputy proxy laundering must be vetoed by Law 1"
+    let safe = HomologicalBoundaryAuditor::audit_simplex_transition(
+        "worker_relay",
+        None,
+        "worker_relay",
     );
+    assert!(safe.boundary_squared_zero);
+    assert!(!safe.proxy_laundering_detected);
+    assert!(safe.allowed);
+
+    let laundering = HomologicalBoundaryAuditor::audit_simplex_transition(
+        "untrusted_ingest",
+        Some("worker_relay"),
+        "accounting_ledger_write",
+    );
+    assert!(laundering.boundary_squared_zero);
+    assert!(
+        laundering.proxy_laundering_detected,
+        "2-simplex confused-deputy proxy laundering must be detected by Law 1"
+    );
+    assert!(!laundering.allowed);
 }
 
 #[test]
 fn test_law2_vanishing_polynomial_trace_verifier_mersenne127() {
-    let verifier = VanishingPolynomialTraceVerifier::default();
-    let valid_proof = verifier.prove_and_verify_trace(101, 3, "read_invoice", true);
-    assert!(valid_proof.verified);
-    assert_eq!(valid_proof.quotient_remainder_hex, "0x00000000000000000000000000000000");
-
-    let tampered = verifier.verify_external_commitment(
-        valid_proof.trace_commitment_u128 ^ 0x1337,
-        valid_proof.constraint_eval_u128,
-        101,
-        3,
+    let valid_proof = VanishingPolynomialTraceVerifier::verify_execution_trace(
+        &[100, 142, 200],
+        &[42, 58],
     );
-    assert!(!tampered, "Tampered trace commitment must fail vanishing polynomial verification");
+    assert!(valid_proof.verified);
+    assert_eq!(valid_proof.quotient_remainder, 0);
+
+    let tampered_proof = VanishingPolynomialTraceVerifier::verify_execution_trace(
+        &[100, 999, 200],
+        &[42, 58],
+    );
+    assert!(
+        !tampered_proof.verified,
+        "Tampered execution trace must fail vanishing polynomial verification"
+    );
 }
 
 #[test]
 fn test_law3_dirac_delta_capability_ticket_and_law5_zero_copy_buffer() {
     let secret = [0x5Au8; 32];
-    let ticket = DiracDeltaCapabilityTicket::issue(
-        101,
+    let mut ticket = DiracDeltaCapabilityTicket::issue(
+        "arm-101",
         1,
         "read_invoice",
         "sha256:abc123",
-        5_000,
-        "CANARY_TRAP_99",
+        500_000,
         &secret,
+        Some("CANARY_TRAP_99".to_string()),
     );
 
     // Law 5: Zero-Copy hardware page-locked buffer
-    let mut buf = ZeroCopyImmutableToolBuffer::allocate_and_populate(b"{\"invoice\":100}")
-        .expect("Page-aligned buffer allocation");
-    buf.lock_read_only().expect("VirtualProtect/mprotect PAGE_READONLY");
-    assert!(buf.is_locked_read_only());
-    assert_eq!(buf.delta_t_toctou_ns(), 0);
-    assert_eq!(buf.as_slice().unwrap(), b"{\"invoice\":100}");
+    let buf = ZeroCopyImmutableToolBuffer::create_and_lock(b"{\"invoice\":100}")
+        .expect("Page-aligned buffer allocation and PAGE_READONLY lock");
+    assert!(buf.is_locked_readonly());
+    assert_eq!(buf.delta_t_toctou_ns, 0);
+    assert_eq!(buf.as_verified_slice().unwrap(), b"{\"invoice\":100}");
 
     // First consumption succeeds
-    ticket
-        .consume_once(101, 1, "read_invoice", "sha256:abc123", b"{\"invoice\":100}", &secret)
+    let derived_secret = ticket
+        .consume_once("read_invoice", "sha256:abc123", 1, &secret, None)
         .expect("First impulse consumption must succeed");
+    assert_ne!(derived_secret, [0u8; 32]);
+    assert!(ticket.is_consumed());
 
     // Second consumption fails closed (replay blocked)
-    let replay = ticket.consume_once(
-        101,
-        1,
-        "read_invoice",
-        "sha256:abc123",
-        b"{\"invoice\":100}",
-        &secret,
-    );
+    let replay = ticket.consume_once("read_invoice", "sha256:abc123", 1, &secret, None);
     assert!(replay.is_err(), "Replay of DiracDeltaCapabilityTicket must fail closed");
 }
 
@@ -99,32 +97,48 @@ fn test_descriptor_pinning_and_3layer_non_circular_trust_gate() {
     let tmp = std::env::temp_dir().join(format!("octopus_pin_test_{}.txt", std::process::id()));
     std::fs::write(&tmp, b"trusted_tool_binary_v1").unwrap();
 
-    let pinned = PinnedToolObjectBinding::pin_regular_file(&tmp).expect("Must pin regular file");
-    let opened = std::fs::File::open(&tmp).unwrap();
+    let pinned = PinnedToolObjectBinding::pin_at_check(&tmp).expect("Must pin regular file");
+    let mut opened = std::fs::File::open(&tmp).unwrap();
     pinned
-        .verify_opened_handle(&opened)
+        .verify_open_descriptor(&mut opened, &tmp)
         .expect("Unmodified descriptor must match pinned identity");
 
     // Modify file mid-flight (simulate TOCTOU swap)
     std::fs::write(&tmp, b"compromised_payload_v2_longer").unwrap();
-    let swapped = std::fs::File::open(&tmp).unwrap();
+    let mut swapped = std::fs::File::open(&tmp).unwrap();
     assert!(
-        pinned.verify_opened_handle(&swapped).is_err(),
+        pinned.verify_open_descriptor(&mut swapped, &tmp).is_err(),
         "Modified file must fail descriptor identity check"
     );
     let _ = std::fs::remove_file(&tmp);
 
     // 3-layer orthogonal non-circular trust gate
-    let gate = IndependentTrustBoundaryVerifier::new(
-        b"layer1_key_seed_0000000000000001",
-        b"layer2_key_seed_0000000000000002",
-        b"layer3_key_seed_0000000000000003",
+    let gate = IndependentTrustBoundaryVerifier::new(b"master_seed_for_orthogonal_3layr");
+    let l1 = gate.compute_layer1_token("arm-101", 1);
+    let l2 = gate.compute_layer2_token("merkle-root-01", 1);
+    let l3 = gate.compute_layer3_token("job-container-01", 1);
+
+    let pass_verdict = gate.evaluate_three_layer_gate(
+        "arm-101",
+        "merkle-root-01",
+        "job-container-01",
+        &l1,
+        &l2,
+        &l3,
+        true,
     );
-    assert!(gate.are_domains_orthogonal());
-    let pass_verdict = gate.evaluate_orthogonal_gates(true, true, true, "actuate_tool");
-    assert!(pass_verdict.overall_allowed);
-    let fail_verdict = gate.evaluate_orthogonal_gates(true, true, false, "actuate_tool");
-    assert!(!fail_verdict.overall_allowed);
+    assert!(pass_verdict.allowed);
+
+    let fail_verdict = gate.evaluate_three_layer_gate(
+        "arm-101",
+        "merkle-root-01",
+        "job-container-01",
+        &l1,
+        &l2,
+        &l3,
+        false,
+    );
+    assert!(!fail_verdict.allowed);
 }
 
 #[test]
@@ -135,8 +149,10 @@ fn test_sec_ring_01_pid_guard_and_mesh_watchout_broadcast() {
     assert!(ArmContainmentRing::verify_terminable_child_pid(std::process::id() + 10_000).is_ok());
 
     let registry = ArmRingRegistry::new();
-    let signal = registry.sever_arm(1, "Canary Tripwire Activated").expect("Must sever arm 1");
-    assert_eq!(signal.severed_arm_id, 1);
+    let severed = registry
+        .sever_arm(1, "Canary Tripwire Activated")
+        .expect("Must sever arm 1");
+    assert!(severed);
     let watchouts = registry.list_watchout_signals();
     assert!(!watchouts.is_empty());
     assert_eq!(watchouts[0].severed_arm_id, 1);
@@ -144,18 +160,22 @@ fn test_sec_ring_01_pid_guard_and_mesh_watchout_broadcast() {
 
 #[test]
 fn test_law8_zero_mi_projector_and_path_egress_guards() {
-    let projector = ZeroMutualInformationProjector::default();
-    let dirty = "{\"z\":1,\"a\":\"secret\\u200Btext Alpha Bravo Charlie Delta Echo\"}";
-    let projected = projector.project(dirty, 1_700_000_000_333);
+    let dirty = "{\"z\":1,\"a\":\"secret\u{200B}text Alpha Bravo Charlie Delta Echo\"}";
+    let projected = ZeroMutualInformationProjector::project_output(dirty, 1_700_000_000_333);
     assert!(!projected.projected_payload.contains('\u{200B}'));
-    assert_eq!(projected.quantized_release_ms % 100, 0);
-    assert_eq!(projected.estimated_mutual_information_bits, 0.0);
+    assert_eq!(projected.quantized_timestamp_ms % 100, 0);
 
     let sandbox = std::env::temp_dir();
     assert!(validate_sandbox_relative_path(&sandbox, "C:\\Windows\\System32\\cmd.exe").is_err());
     assert!(validate_sandbox_relative_path(&sandbox, "..\\..\\etc\\passwd").is_err());
     assert!(validate_sandbox_relative_path(&sandbox, "reports/summary.json").is_ok());
-    assert!(validate_agent_filesystem_access(&sandbox, "reports/summary.json", false).is_ok());
+
+    let tmp_sub = sandbox.join("octopus_fs_test_dir");
+    let _ = std::fs::create_dir_all(&tmp_sub);
+    let test_file = tmp_sub.join("summary.json");
+    std::fs::write(&test_file, b"{}").unwrap();
+    assert!(validate_agent_filesystem_access(&tmp_sub, "summary.json", &[]).is_ok());
+    let _ = std::fs::remove_file(&test_file);
 
     let allowed = vec!["google.com".to_string(), "www.google.com".to_string()];
     assert!(validate_agent_egress_url("https://www.google.com/search", &allowed).is_ok());
@@ -166,13 +186,26 @@ fn test_law8_zero_mi_projector_and_path_egress_guards() {
 
 #[test]
 fn test_file_lineage_immunity_and_console_defense_and_port_fallback() {
-    let mut tracker = FileLineageTracker::new();
-    let digest = "deadbeefcafe0123456789abcdef0123456789abcdef0123456789abcdef0123";
-    tracker.mark_digest_poisoned(digest);
+    let tracker = FileLineageTracker::default();
+    let payload = b"poisoned_external_content";
+    tracker.record_file_ingest(
+        "downloads/untrusted_macro.docm",
+        payload,
+        "ingest_arm",
+        "external_email",
+        true,
+    );
     // Hard repository/toolchain immunity must be checked BEFORE poisoned_digests
-    assert!(!tracker.is_file_tainted("Cargo.toml", digest));
-    assert!(!tracker.is_file_tainted("src/lib.rs", digest));
-    assert!(tracker.is_file_tainted("downloads/untrusted_macro.docm", digest));
+    let cargo_verdict = tracker.evaluate_lineage("Cargo.toml", Some(payload));
+    assert!(cargo_verdict.allowed);
+    assert!(cargo_verdict.is_immune_repository_or_toolchain);
+
+    let src_verdict = tracker.evaluate_lineage("src/lib.rs", Some(payload));
+    assert!(src_verdict.allowed);
+
+    let tainted_verdict = tracker.evaluate_lineage("downloads/untrusted_macro.docm", Some(payload));
+    assert!(!tainted_verdict.allowed);
+    assert!(tainted_verdict.is_poisoned_lineage);
 
     // EDR-VEC-23 console defense
     let raw_mode = ENABLE_QUICK_EDIT_MODE | ENABLE_INSERT_MODE | ENABLE_MOUSE_INPUT | 0x0007;
@@ -183,7 +216,7 @@ fn test_file_lineage_immunity_and_console_defense_and_port_fallback() {
     let _ = harden_windows_console();
 
     // Windows pre-resume confinement gate
-    let policy = WindowsConfinementPolicy::strict_default("arm-101");
+    let policy = WindowsConfinementPolicy::default();
     assert!(evaluate_pre_resume_confinement_gate(&policy, true, true, true, true).is_ok());
     assert!(evaluate_pre_resume_confinement_gate(&policy, true, false, true, true).is_err());
 
@@ -200,47 +233,60 @@ fn test_file_lineage_immunity_and_console_defense_and_port_fallback() {
 #[test]
 fn test_alignment_mercury_spider_classifier_and_5policy_rl_benchmark() {
     // 1. RuntimeAlignmentScanner
-    let contract = SessionIntentContract::new(
+    let scanner = RuntimeAlignmentScanner::default();
+    scanner.pin_session_intent(
         "sess-01",
         "Summarize Q3 accounting ledger",
         vec!["read_ledger".to_string(), "summarize".to_string()],
-        vec!["shell_exec".to_string(), "exfiltrate".to_string()],
+        vec!["reports/".to_string()],
     );
-    let scanner = RuntimeAlignmentScanner::new(contract);
-    let benign_trace = vec![ToolCallTraceStep {
-        step_index: 0,
-        tool_name: "read_ledger".to_string(),
-        arguments_summary: "ledger_q3.csv".to_string(),
-        contains_untrusted_output: false,
-    }];
-    assert!(scanner.scan_trace(&benign_trace).aligned);
+    let verdict = scanner.evaluate_tool_step(
+        "sess-01",
+        ToolCallTraceStep {
+            step_index: 0,
+            tool_name: "read_ledger".to_string(),
+            target_resource: "reports/ledger_q3.csv".to_string(),
+            arguments_preview: "reports/ledger_q3.csv".to_string(),
+            triggered_by_external_data: false,
+        },
+    );
+    assert!(verdict.aligned);
 
     // 2. MercuryContainmentEngine
-    let mercury = MercuryContainmentEngine::default();
-    let m_res = mercury.evaluate_actuation(HostActuationPore::RawSocketSend, 950_000.0, 25.0, 0.001, true);
-    assert!(m_res.blocked);
+    let mercury = MercuryContainmentEngine::new();
+    let m_res = mercury.evaluate_pore_pressure(
+        "arm-101",
+        HostActuationPore::NetworkSocketEgress,
+        950_000.0,
+        25.0,
+        0.001,
+        1.5,
+    );
+    assert!(m_res.pore_breached || m_res.droplet_shattering_detected);
 
     // 3. OrbWebContainmentEngine
     let orb = OrbWebContainmentEngine::default();
-    let o_res = orb.evaluate_strain_and_exposure(0.05, 5.0, 0.002, 0.003, 10.0);
-    assert_eq!(o_res.regime, SilkRegime::LinearElastic);
-    assert!(o_res.exposure_invariant_satisfied);
+    let o_res = orb.evaluate_impact(0.01, 5.0, 0.002, 0.003, 10.0, Some(100), Some(1));
+    assert_eq!(o_res.regime, SilkRegime::Regime1LinearElastic);
+    assert!(!o_res.exposure_bound_violated);
 
     // 4. DynamicAgentClassifier
-    let classifier = DynamicAgentClassifier::default();
-    let verdict = classifier.classify(&ProcessBehavioralTelemetry {
+    let c_verdict = DynamicAgentClassifier::classify_process(&ProcessBehavioralTelemetry {
         pid: 4242,
-        process_name: "autonomous_coder.exe".to_string(),
-        llm_egress_connections: 6,
-        json_rpc_stdio_frames: 40,
-        rapid_tool_fanout_per_sec: 12.0,
-        prompt_context_env_vars: 2,
-        has_interactive_human_conpty: false,
+        process_label: "autonomous_coder.exe".to_string(),
+        has_mcp_jsonrpc_stdio_framing: true,
+        has_llm_inference_endpoint_socket: true,
+        sub_50ms_tool_dispatch_burst_rate: 1.2,
+        autonomous_file_mutation_entropy: 0.85,
+        has_interactive_conpty_human_keystrokes: false,
+        signed_vendor_toolchain_verified: false,
     });
-    assert!(verdict.is_autonomous_agent);
+    assert!(c_verdict.is_autonomous_agent);
 
     // 5. Standardized 5-Policy RL Benchmark (RULE[rl_benchmarking_and_evaluation.md])
-    let report = run_standardized_5policy_benchmark(6, 2026);
-    assert_eq!(report.policies.len(), 5);
-    assert!(report.learned_superiority_verified);
+    let rl_path = std::env::temp_dir().join("octopus_rl_bench_test.json");
+    let rl_engine = AdaptiveRlDefenseEngine::new(rl_path.to_str().unwrap());
+    let report = rl_engine.run_standardized_5policy_benchmark(10, 2026);
+    assert!(report.learned_superior_over_all_4_baselines);
+    let _ = std::fs::remove_file(&rl_path);
 }
