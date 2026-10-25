@@ -4,7 +4,7 @@ pub mod operational;
 pub mod technical;
 
 pub use behavioral::{BehavioralBreakoutGuard, BehavioralBreakoutVerdict};
-pub use data::{AgentTrustTier, DataBreakoutGuard, DataBreakoutVerdict};
+pub use data::{AgentTrustTier, DataBreakoutGuard, DataBreakoutVerdict, DlpOperatingMode};
 pub use operational::{OperationalContainmentGuard, OperationalContainmentVerdict};
 pub use technical::{TechnicalBreakoutGuard, TechnicalBreakoutVerdict};
 

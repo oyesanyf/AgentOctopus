@@ -19,12 +19,43 @@ pub enum AgentTrustTier {
     HighExecutionPrivileged = 3,
 }
 
+/// DLP operating mode for Data Breakout Guard.
+/// In `StrictLockdown` (`QUARANTINE_ON_CROWN_JEWEL` / `zero_leakage`), zero PHI or PII
+/// (including contact PII such as email addresses and phone numbers that are loosened in
+/// normal `ActiveEnforcement` mode) is permitted to egress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DlpOperatingMode {
+    AuditMonitor,
+    ActiveEnforcement,
+    StrictLockdown,
+}
+
+impl DlpOperatingMode {
+    pub fn from_policy_str(policy_mode: &str, action_threshold: f64) -> Self {
+        let m = policy_mode.trim().to_ascii_uppercase();
+        if m == "QUARANTINE_ON_CROWN_JEWEL"
+            || m == "STRICT_LOCKDOWN"
+            || m == "ZERO_LEAKAGE"
+            || m == "ENFORCE_STRICT"
+            || action_threshold <= 0.40
+        {
+            Self::StrictLockdown
+        } else if m == "MONITOR_AND_SCRUB" || m == "AUDIT" {
+            Self::AuditMonitor
+        } else {
+            Self::ActiveEnforcement
+        }
+    }
+}
+
 /// Data Breakout Guard:
 /// Mitigates credential extraction, environment dumping, memory scraping,
-/// and cross-agent memory pollution through shared file caches and temporary disk locations.
+/// cross-agent memory pollution, and PHI/PII data exfiltration.
 pub struct DataBreakoutGuard {
     /// Agent trust tier registry
     agent_tiers: RwLock<HashMap<String, AgentTrustTier>>,
+    /// Active DLP operating mode (`ActiveEnforcement` by default; `StrictLockdown` blocks all PHI/PII)
+    operating_mode: RwLock<DlpOperatingMode>,
     /// Protected high-privilege memory/scratchpad paths
     privileged_scratchpad_paths: HashSet<&'static str>,
     data_dump_commands: Vec<&'static str>,
@@ -48,6 +79,7 @@ impl Default for DataBreakoutGuard {
 
         Self {
             agent_tiers: RwLock::new(tiers),
+            operating_mode: RwLock::new(DlpOperatingMode::ActiveEnforcement),
             privileged_scratchpad_paths: privileged_paths,
             data_dump_commands: vec![
                 "printenv",
@@ -71,7 +103,18 @@ impl DataBreakoutGuard {
         tiers.insert(agent_id.to_string(), tier);
     }
 
-    /// Evaluates cross-agent memory access and credential dumping attempts.
+    /// Updates the active DLP operating mode (`AuditMonitor`, `ActiveEnforcement`, or `StrictLockdown`).
+    pub fn set_operating_mode(&self, mode: DlpOperatingMode) {
+        let mut guard = self.operating_mode.write().unwrap();
+        *guard = mode;
+    }
+
+    /// Returns the active DLP operating mode.
+    pub fn operating_mode(&self) -> DlpOperatingMode {
+        *self.operating_mode.read().unwrap()
+    }
+
+    /// Evaluates cross-agent memory access, credential dumping, and PHI/PII exfiltration attempts.
     pub fn evaluate_data_access(
         &self,
         requesting_agent: &str,
@@ -81,6 +124,7 @@ impl DataBreakoutGuard {
         let mut detected_violations = Vec::new();
         let lower_target = target_path_or_command.to_ascii_lowercase();
         let lower_payload = payload.to_ascii_lowercase();
+        let mode = self.operating_mode();
 
         let tiers = self.agent_tiers.read().unwrap();
         let agent_tier = tiers.get(requesting_agent).copied().unwrap_or(AgentTrustTier::LowUntrustedWorker);
@@ -101,6 +145,32 @@ impl DataBreakoutGuard {
         for &cmd in &self.data_dump_commands {
             if lower_target.contains(cmd) || lower_payload.contains(cmd) {
                 detected_violations.push(format!("Credential extraction / memory scraping attempt detected: '{}'", cmd));
+            }
+        }
+
+        // 3. PHI / PII Exfiltration Check (Strict Lockdown blocks ALL PHI and PII including loosened contact info)
+        if lower_payload.contains("mrn-")
+            || lower_payload.contains("icd10-")
+            || regex::Regex::new(r"\b\d{3}-\d{2}-\d{4}\b")
+                .map(|re| re.is_match(payload))
+                .unwrap_or(false)
+        {
+            detected_violations.push(
+                "PHI/PII exfiltration blocked: clinical MRN / ICD-10 / SSN identifier detected"
+                    .to_string(),
+            );
+        } else if mode == DlpOperatingMode::StrictLockdown {
+            let has_email = regex::Regex::new(r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b")
+                .map(|re| re.is_match(payload))
+                .unwrap_or(false);
+            let has_phone = regex::Regex::new(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b")
+                .map(|re| re.is_match(payload))
+                .unwrap_or(false);
+            if has_email || has_phone {
+                detected_violations.push(
+                    "STRICT_LOCKDOWN_ZERO_PII_PHI: Contact PII (email/phone) blocked under Strict Lockdown"
+                        .to_string(),
+                );
             }
         }
 
