@@ -212,6 +212,53 @@ pub struct BackoffEvaluationReport {
     pub summary: String,
 }
 
+// ============================================================================
+// 2.5. Mathematical Backoff & RFC 6298 / RFC 9002 Formulations
+// ============================================================================
+
+/// Truncated exponential backoff with stochastic jitter formula:
+/// T_wait(attempt, T_base, T_max, jitter) = min(T_base * 2^attempt + jitter, T_max)
+pub fn calculate_exponential_backoff_ms(
+    attempt: u32,
+    base_ms: u64,
+    max_ms: u64,
+    jitter_ms: u64,
+) -> u64 {
+    let factor = 1u64.checked_shl(attempt).unwrap_or(u64::MAX);
+    let exp_val = base_ms.saturating_mul(factor);
+    let with_jitter = exp_val.saturating_add(jitter_ms);
+    with_jitter.min(max_ms)
+}
+
+/// RFC 6298 Section 5.5: TCP Retransmission Timeout doubling formula:
+/// RTO_next(RTO, RTO_max) = min(2 * RTO, RTO_max)
+pub fn rfc6298_next_rto_ms(current_rto_ms: u64, max_rto_ms: u64) -> u64 {
+    current_rto_ms.saturating_mul(2).min(max_rto_ms)
+}
+
+/// RFC 6298 Cumulative TCP RTO after N consecutive timeout expirations:
+/// RTO_n = min(RTO_base * 2^attempts, RTO_max)
+pub fn rfc6298_rto_after_attempts_ms(base_rto_ms: u64, attempts: u32, max_rto_ms: u64) -> u64 {
+    let factor = 1u64.checked_shl(attempts).unwrap_or(u64::MAX);
+    base_rto_ms.saturating_mul(factor).min(max_rto_ms)
+}
+
+/// RFC 9002 Section 6.2.1: QUIC Probe Timeout (PTO) exponential backoff formula:
+/// PTO_next(PTO, pto_count) = PTO * 2^pto_count
+pub fn rfc9002_next_pto_ms(base_pto_ms: u64, pto_count: u32, max_pto_ms: u64) -> u64 {
+    let factor = 1u64.checked_shl(pto_count).unwrap_or(u64::MAX);
+    base_pto_ms.saturating_mul(factor).min(max_pto_ms)
+}
+
+/// Result of mathematical exponential curve fitting.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CurveFitResult {
+    pub backoff_compliant: bool,
+    pub observed_jitter_present: bool,
+    pub fit_slope: f64,
+    pub avg_growth_ratio: f64,
+}
+
 /// Exponential backoff and jitter analyzer adhering to RFC 6298, RFC 9002, and Google API guidelines.
 pub struct GoogleApiBackoffAnalyzer;
 
@@ -235,6 +282,145 @@ impl GoogleApiBackoffAnalyzer {
 
         let proto = entries[0].protocol;
         Self::evaluate_protocol_stream(proto, entries)
+    }
+
+    /// Mathematically verifies that a sequence of retry intervals follows an exponential curve
+    /// T_base * 2^k within allowable stochastic jitter and 15% clock skew tolerance.
+    /// Strictly rejects flat (constant) intervals, linear progression, and collapsing intervals.
+    pub fn verify_exponential_curve(
+        intervals: &[u64],
+        base_rto_ms: u64,
+        max_backoff_ms: u64,
+    ) -> CurveFitResult {
+        if intervals.is_empty() {
+            return CurveFitResult {
+                backoff_compliant: true,
+                observed_jitter_present: false,
+                fit_slope: 0.0,
+                avg_growth_ratio: 1.0,
+            };
+        }
+
+        if intervals.len() == 1 {
+            // A single retry interval must be at least 85% of base RTO floor (15% skew tolerance)
+            let compliant = intervals[0] >= ((base_rto_ms as f64) * 0.85) as u64;
+            return CurveFitResult {
+                backoff_compliant: compliant,
+                observed_jitter_present: false,
+                fit_slope: std::f64::consts::LN_2,
+                avg_growth_ratio: 2.0,
+            };
+        }
+
+        // Observed jitter check: positive variance across intervals
+        let first = intervals[0];
+        let observed_jitter_present = intervals.iter().any(|&d| d != first);
+
+        // Filter intervals before saturation ceiling (85% of max_backoff_ms)
+        let saturation_threshold = ((max_backoff_ms as f64) * 0.85) as u64;
+        let mut pre_saturation: Vec<u64> = intervals
+            .iter()
+            .copied()
+            .take_while(|&d| d < saturation_threshold)
+            .collect();
+
+        if pre_saturation.is_empty() {
+            pre_saturation.push(intervals[0]);
+        } else if pre_saturation.len() < intervals.len() {
+            pre_saturation.push(intervals[pre_saturation.len()]);
+        }
+
+        // --- Invariant 1: Reject Flat / Constant Intervals ---
+        // If max - min is within 15% of min and not at saturation, it's flat polling, NOT backoff!
+        let min_val = *intervals.iter().min().unwrap_or(&0);
+        let max_val = *intervals.iter().max().unwrap_or(&0);
+        if max_val < saturation_threshold {
+            let spread = max_val.saturating_sub(min_val) as f64;
+            let rel_spread = spread / (min_val.max(1) as f64);
+            if rel_spread < 0.15 && !observed_jitter_present {
+                return CurveFitResult {
+                    backoff_compliant: false,
+                    observed_jitter_present: false,
+                    fit_slope: 0.0,
+                    avg_growth_ratio: 1.0,
+                };
+            }
+        }
+
+        // --- Invariant 2: Reject Collapsing Intervals ---
+        for w in pre_saturation.windows(2) {
+            let prev = w[0] as f64;
+            let next = w[1] as f64;
+            if next < prev * 0.70 {
+                return CurveFitResult {
+                    backoff_compliant: false,
+                    observed_jitter_present,
+                    fit_slope: 0.0,
+                    avg_growth_ratio: next / prev.max(1.0),
+                };
+            }
+        }
+
+        // --- Invariant 3: Growth Ratio & Arithmetic/Linear Progression Rejection ---
+        let mut growth_ratios = Vec::new();
+        for w in pre_saturation.windows(2) {
+            let prev = w[0].max(1) as f64;
+            let next = w[1] as f64;
+            growth_ratios.push(next / prev);
+        }
+
+        let avg_growth_ratio: f64 = if !growth_ratios.is_empty() {
+            growth_ratios.iter().sum::<f64>() / (growth_ratios.len() as f64)
+        } else {
+            1.0
+        };
+
+        // For exponential doubling (2^k), ideal ratio is 2.0.
+        // With 15% clock skew and stochastic jitter, avg_growth_ratio must be at least 1.40.
+        // Flat (ratio ~1.0) and linear intervals (ratio ~1.1-1.25) are strictly rejected!
+        if avg_growth_ratio < 1.40 {
+            return CurveFitResult {
+                backoff_compliant: false,
+                observed_jitter_present,
+                fit_slope: 0.0,
+                avg_growth_ratio,
+            };
+        }
+
+        // --- Invariant 4: Log-Linear Regression Slope: ln(I_k) vs k ---
+        // In exponential backoff: ln(I_k) = ln(T_0) + k * ln(2)
+        // Expected slope: ln(2) = 0.69315
+        let n = pre_saturation.len() as f64;
+        let mut sum_k = 0.0;
+        let mut sum_lnk = 0.0;
+        let mut sum_k_sq = 0.0;
+        let mut sum_k_lnk = 0.0;
+
+        for (k_idx, &interval) in pre_saturation.iter().enumerate() {
+            let k = k_idx as f64;
+            let ln_val = (interval.max(1) as f64).ln();
+            sum_k += k;
+            sum_lnk += ln_val;
+            sum_k_sq += k * k;
+            sum_k_lnk += k * ln_val;
+        }
+
+        let denom = n * sum_k_sq - sum_k * sum_k;
+        let fit_slope = if denom.abs() > 1e-9 {
+            (n * sum_k_lnk - sum_k * sum_lnk) / denom
+        } else {
+            std::f64::consts::LN_2
+        };
+
+        // Allow slope between 0.38 and 1.35 (ln(2) = 0.693 is dead center).
+        let backoff_compliant = fit_slope >= 0.38 && fit_slope <= 1.35;
+
+        CurveFitResult {
+            backoff_compliant,
+            observed_jitter_present,
+            fit_slope,
+            avg_growth_ratio,
+        }
     }
 
     /// Evaluates a multi-protocol stream for a designated `NetworkProtocol`.
@@ -295,27 +481,11 @@ impl GoogleApiBackoffAnalyzer {
             || (throttled_intervals.len() >= 3
                 && throttled_intervals.iter().all(|&d| d < base_rto / 2));
 
-        let mut backoff_compliant = !flood_detected;
-        if throttled_intervals.len() >= 2 {
-            let mut decreasing_steps = 0;
-            for w in throttled_intervals.windows(2) {
-                let prev_wait = w[0];
-                let next_wait = w[1];
-                if (next_wait as f64) < (prev_wait as f64) * 0.70 {
-                    decreasing_steps += 1;
-                }
-            }
-            if decreasing_steps > throttled_intervals.len() / 2 {
-                backoff_compliant = false;
-            }
-        }
+        // Exponential curve verification: mathematically fit exponential curve (T_base * 2^k)
+        let curve_res = Self::verify_exponential_curve(&throttled_intervals, base_rto, 60_000);
+        let mut backoff_compliant = !flood_detected && curve_res.backoff_compliant;
 
-        let observed_jitter_present = if throttled_intervals.len() >= 2 {
-            let first = throttled_intervals[0];
-            throttled_intervals.iter().any(|&d| d != first)
-        } else {
-            false
-        };
+        let observed_jitter_present = curve_res.observed_jitter_present;
 
         let honors_retry_after = if retry_after_compliances.is_empty() {
             true
@@ -327,10 +497,26 @@ impl GoogleApiBackoffAnalyzer {
             backoff_compliant = false;
         }
 
-        let calculated_rto_ms = throttled_intervals
-            .last()
-            .copied()
-            .unwrap_or(base_rto);
+        // Genuine RFC 6298 / RFC 9002 / Exponential formula calculation for calculated_rto_ms
+        let calculated_rto_ms = match proto {
+            NetworkProtocol::Tcp => {
+                let last_interval = throttled_intervals.last().copied().unwrap_or(base_rto);
+                rfc6298_next_rto_ms(last_interval.max(base_rto), 60_000)
+            }
+            NetworkProtocol::Quic => {
+                let pto_count = throttle_count as u32;
+                rfc9002_next_pto_ms(base_rto, pto_count, 60_000)
+            }
+            _ => {
+                let attempt = throttle_count as u32;
+                let base = if let Some(last_req_wait) = samples.iter().filter_map(|s| s.retry_after_ms).last() {
+                    last_req_wait
+                } else {
+                    throttled_intervals.first().copied().unwrap_or(base_rto)
+                };
+                calculate_exponential_backoff_ms(attempt, base, 60_000, 0)
+            }
+        };
 
         let summary = format!(
             "[{}] evaluated {} samples ({} throttled). Compliant: {}, Retry-After: {}, Jitter: {}, Flood: {}",
@@ -1018,4 +1204,674 @@ pub fn global_rete_engine() -> &'static ReteEngine {
 /// Returns reference to global shared RateLimitVoterEnsemble.
 pub fn global_rate_limit_ensemble() -> &'static RateLimitVoterEnsemble {
     &GLOBAL_ENSEMBLE
+}
+
+// ============================================================================
+// 8. Unit Tests for Acceptance Criteria Scenarios 1–6
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn test_scenario_1_http_google_api_backoff_allow() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        let rete = ReteEngine::new();
+
+        let samples = vec![
+            HarEntrySample {
+                timestamp_ms: 1000,
+                status: 429,
+                retry_after_ms: Some(2000),
+                url: "https://api.google.com/v1/resource".into(),
+                method: "GET".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 15,
+            },
+            HarEntrySample {
+                timestamp_ms: 3150, // 2150ms delta >= 1700ms minimum skew
+                status: 200,
+                retry_after_ms: None,
+                url: "https://api.google.com/v1/resource".into(),
+                method: "GET".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 22,
+            },
+        ];
+
+        let report = GoogleApiBackoffAnalyzer::evaluate_har_stream(&samples);
+        assert!(report.backoff_compliant, "Must be backoff compliant");
+        assert!(report.honors_retry_after, "Must honor retry-after");
+        assert!(!report.flood_detected, "Must not be flood");
+
+        let flow = HarFlowFact {
+            flow_id: "flow_s1".into(),
+            pid: 101,
+            protocol: NetworkProtocol::HttpHttps,
+            dst_host: "api.google.com".into(),
+            dst_port: 443,
+            samples,
+            backoff_compliant: report.backoff_compliant,
+            observed_jitter_present: report.observed_jitter_present,
+            honors_retry_after: report.honors_retry_after,
+            flood_detected: report.flood_detected,
+        };
+
+        let proc = OsqueryProcessFact {
+            pid: 101,
+            process_name: "curl.exe".into(),
+            cmdline: "curl https://api.google.com/v1/resource".into(),
+            is_interactive: false,
+            parent_pid: 1,
+            username: "svc_acct".into(),
+        };
+
+        let binary = ReaBinaryFact {
+            pid: 101,
+            binary_path: "C:\\Program Files\\Git\\usr\\bin\\curl.exe".into(),
+            is_packed: false,
+            direct_syscall_count: 0,
+            obfuscation_entropy: 5.1,
+            is_authenticode_signed: true,
+            yara_detections: vec![],
+        };
+
+        rete.insert_har_fact(flow);
+        rete.insert_osquery_fact(proc);
+        rete.insert_rea_fact(binary);
+
+        assert_eq!(rete.alpha_memory_sizes(), (1, 1, 1));
+
+        let bundle = rete.evaluate_beta_join(101).expect("Beta join must succeed for populated Alpha memories");
+        assert_eq!(bundle.pid, 101);
+        assert!(bundle.flow.is_some());
+        assert!(bundle.process.is_some());
+        assert!(bundle.binary.is_some());
+
+        let consensus = RateLimitVoterEnsemble.evaluate_and_vote(&bundle);
+        assert!(
+            matches!(consensus.action, EdrAction::AllowAndWhitelistWindow { .. }),
+            "Expected AllowAndWhitelistWindow, got {:?}",
+            consensus.action
+        );
+    }
+
+    #[test]
+    fn test_scenario_2_naive_dev_script_log_warning() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        let rete = ReteEngine::new();
+
+        let samples = vec![
+            HarEntrySample {
+                timestamp_ms: 1000,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://dev.api.internal/items".into(),
+                method: "POST".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 5,
+            },
+            HarEntrySample {
+                timestamp_ms: 1030,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://dev.api.internal/items".into(),
+                method: "POST".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 5,
+            },
+            HarEntrySample {
+                timestamp_ms: 1060,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://dev.api.internal/items".into(),
+                method: "POST".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 5,
+            },
+        ];
+
+        let report = GoogleApiBackoffAnalyzer::evaluate_har_stream(&samples);
+
+        let flow = HarFlowFact {
+            flow_id: "flow_s2".into(),
+            pid: 202,
+            protocol: NetworkProtocol::HttpHttps,
+            dst_host: "dev.api.internal".into(),
+            dst_port: 8080,
+            samples,
+            backoff_compliant: report.backoff_compliant,
+            observed_jitter_present: report.observed_jitter_present,
+            honors_retry_after: report.honors_retry_after,
+            flood_detected: report.flood_detected,
+        };
+
+        let proc = OsqueryProcessFact {
+            pid: 202,
+            process_name: "python.exe".into(),
+            cmdline: "python test_loop.py".into(),
+            is_interactive: true,
+            parent_pid: 1200,
+            username: "developer".into(),
+        };
+
+        let binary = ReaBinaryFact {
+            pid: 202,
+            binary_path: "C:\\Python311\\python.exe".into(),
+            is_packed: false,
+            direct_syscall_count: 0,
+            obfuscation_entropy: 5.4,
+            is_authenticode_signed: true,
+            yara_detections: vec![],
+        };
+
+        rete.insert_har_fact(flow);
+        rete.insert_osquery_fact(proc);
+        rete.insert_rea_fact(binary);
+
+        let bundle = rete.evaluate_beta_join(202).expect("Beta join must succeed for PID 202");
+        let consensus = RateLimitVoterEnsemble.evaluate_and_vote(&bundle);
+        assert!(
+            matches!(consensus.action, EdrAction::LogBenignThrottlingWarning { .. }),
+            "Expected LogBenignThrottlingWarning for interactive dev script, got {:?}",
+            consensus.action
+        );
+    }
+
+    #[test]
+    fn test_scenario_3_malicious_c2_stuffer_contain_wfp() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        let rete = ReteEngine::new();
+
+        let samples = vec![
+            HarEntrySample {
+                timestamp_ms: 1000,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://auth.target.corp/login".into(),
+                method: "POST".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 2,
+            },
+            HarEntrySample {
+                timestamp_ms: 1005,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://auth.target.corp/login".into(),
+                method: "POST".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 2,
+            },
+            HarEntrySample {
+                timestamp_ms: 1010,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://auth.target.corp/login".into(),
+                method: "POST".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 2,
+            },
+        ];
+
+        let report = GoogleApiBackoffAnalyzer::evaluate_har_stream(&samples);
+        assert!(report.flood_detected, "Must detect flood on 5ms intervals");
+
+        let flow = HarFlowFact {
+            flow_id: "flow_s3".into(),
+            pid: 666,
+            protocol: NetworkProtocol::HttpHttps,
+            dst_host: "auth.target.corp".into(),
+            dst_port: 443,
+            samples,
+            backoff_compliant: report.backoff_compliant,
+            observed_jitter_present: report.observed_jitter_present,
+            honors_retry_after: report.honors_retry_after,
+            flood_detected: report.flood_detected,
+        };
+
+        let proc = OsqueryProcessFact {
+            pid: 666,
+            process_name: "payload.exe".into(),
+            cmdline: "payload.exe --stuff-credentials --threads 50".into(),
+            is_interactive: false,
+            parent_pid: 1,
+            username: "SYSTEM".into(),
+        };
+
+        let binary = ReaBinaryFact {
+            pid: 666,
+            binary_path: "C:\\Windows\\Temp\\payload.exe".into(),
+            is_packed: true,
+            direct_syscall_count: 8,
+            obfuscation_entropy: 7.2,
+            is_authenticode_signed: false,
+            yara_detections: vec!["CredentialStuffer_Generic".into()],
+        };
+
+        rete.insert_har_fact(flow);
+        rete.insert_osquery_fact(proc);
+        rete.insert_rea_fact(binary);
+
+        let bundle = rete.evaluate_beta_join(666).expect("Beta join must succeed for PID 666");
+        let consensus = RateLimitVoterEnsemble.evaluate_and_vote(&bundle);
+        assert!(
+            consensus.final_malicious_prob >= 0.82,
+            "Expected prob >= 0.82, got {}",
+            consensus.final_malicious_prob
+        );
+        assert!(
+            matches!(consensus.action, EdrAction::ContainProcessWfpBlock { .. }),
+            "Expected ContainProcessWfpBlock, got {:?}",
+            consensus.action
+        );
+    }
+
+    #[test]
+    fn test_scenario_4_tcp_rfc6298_backoff_vs_flood() {
+        let rete = ReteEngine::new();
+
+        let compliant_tcp_samples = vec![
+            HarEntrySample {
+                timestamp_ms: 1000,
+                status: 111,
+                retry_after_ms: None,
+                url: "tcp://192.168.1.50:445".into(),
+                method: "CONNECT".into(),
+                protocol: NetworkProtocol::Tcp,
+                duration_ms: 5,
+            },
+            HarEntrySample {
+                timestamp_ms: 2050,
+                status: 111,
+                retry_after_ms: None,
+                url: "tcp://192.168.1.50:445".into(),
+                method: "CONNECT".into(),
+                protocol: NetworkProtocol::Tcp,
+                duration_ms: 5,
+            },
+            HarEntrySample {
+                timestamp_ms: 4120,
+                status: 111,
+                retry_after_ms: None,
+                url: "tcp://192.168.1.50:445".into(),
+                method: "CONNECT".into(),
+                protocol: NetworkProtocol::Tcp,
+                duration_ms: 5,
+            },
+            HarEntrySample {
+                timestamp_ms: 8200,
+                status: 200,
+                retry_after_ms: None,
+                url: "tcp://192.168.1.50:445".into(),
+                method: "CONNECT".into(),
+                protocol: NetworkProtocol::Tcp,
+                duration_ms: 10,
+            },
+        ];
+
+        let rep_a = GoogleApiBackoffAnalyzer::evaluate_protocol_stream(NetworkProtocol::Tcp, &compliant_tcp_samples);
+        assert!(rep_a.backoff_compliant, "TCP RFC 6298 exponential curve must be compliant");
+        assert!(!rep_a.flood_detected, "Must not be flood");
+
+        let flow_a = HarFlowFact {
+            flow_id: "tcp_flow_a".into(),
+            pid: 401,
+            protocol: NetworkProtocol::Tcp,
+            dst_host: "192.168.1.50".into(),
+            dst_port: 445,
+            samples: compliant_tcp_samples,
+            backoff_compliant: rep_a.backoff_compliant,
+            observed_jitter_present: rep_a.observed_jitter_present,
+            honors_retry_after: rep_a.honors_retry_after,
+            flood_detected: rep_a.flood_detected,
+        };
+        rete.insert_har_fact(flow_a);
+        let bundle_a = rete.evaluate_beta_join(401).expect("Beta join on PID 401");
+        assert_eq!(bundle_a.protocol, NetworkProtocol::Tcp);
+
+        let flood_tcp_samples = vec![
+            HarEntrySample {
+                timestamp_ms: 1000,
+                status: 111,
+                retry_after_ms: None,
+                url: "tcp://192.168.1.50:445".into(),
+                method: "CONNECT".into(),
+                protocol: NetworkProtocol::Tcp,
+                duration_ms: 1,
+            },
+            HarEntrySample {
+                timestamp_ms: 1001,
+                status: 111,
+                retry_after_ms: None,
+                url: "tcp://192.168.1.50:445".into(),
+                method: "CONNECT".into(),
+                protocol: NetworkProtocol::Tcp,
+                duration_ms: 1,
+            },
+            HarEntrySample {
+                timestamp_ms: 1002,
+                status: 111,
+                retry_after_ms: None,
+                url: "tcp://192.168.1.50:445".into(),
+                method: "CONNECT".into(),
+                protocol: NetworkProtocol::Tcp,
+                duration_ms: 1,
+            },
+        ];
+
+        let rep_b = GoogleApiBackoffAnalyzer::evaluate_protocol_stream(NetworkProtocol::Tcp, &flood_tcp_samples);
+        assert!(rep_b.flood_detected, "TCP SYN flood must be detected");
+    }
+
+    #[test]
+    fn test_scenario_5_udp_quic_dns_backoff_vs_flood() {
+        let rete = ReteEngine::new();
+
+        let dns_backoff_samples = vec![
+            HarEntrySample {
+                timestamp_ms: 1000,
+                status: 2,
+                retry_after_ms: None,
+                url: "dns://8.8.8.8:53/example.com".into(),
+                method: "QUERY".into(),
+                protocol: NetworkProtocol::Dns,
+                duration_ms: 20,
+            },
+            HarEntrySample {
+                timestamp_ms: 1500,
+                status: 2,
+                retry_after_ms: None,
+                url: "dns://8.8.8.8:53/example.com".into(),
+                method: "QUERY".into(),
+                protocol: NetworkProtocol::Dns,
+                duration_ms: 20,
+            },
+            HarEntrySample {
+                timestamp_ms: 2600,
+                status: 0,
+                retry_after_ms: None,
+                url: "dns://8.8.8.8:53/example.com".into(),
+                method: "QUERY".into(),
+                protocol: NetworkProtocol::Dns,
+                duration_ms: 15,
+            },
+        ];
+
+        let rep_dns = GoogleApiBackoffAnalyzer::evaluate_protocol_stream(NetworkProtocol::Dns, &dns_backoff_samples);
+        assert!(rep_dns.backoff_compliant, "DNS backoff must be compliant");
+
+        let flow_dns = HarFlowFact {
+            flow_id: "dns_flow".into(),
+            pid: 501,
+            protocol: NetworkProtocol::Dns,
+            dst_host: "8.8.8.8".into(),
+            dst_port: 53,
+            samples: dns_backoff_samples,
+            backoff_compliant: rep_dns.backoff_compliant,
+            observed_jitter_present: rep_dns.observed_jitter_present,
+            honors_retry_after: rep_dns.honors_retry_after,
+            flood_detected: rep_dns.flood_detected,
+        };
+        rete.insert_har_fact(flow_dns);
+        let bundle_dns = rete.evaluate_beta_join(501).expect("Beta join on PID 501");
+        assert_eq!(bundle_dns.protocol, NetworkProtocol::Dns);
+
+        let udp_flood_samples = vec![
+            HarEntrySample {
+                timestamp_ms: 5000,
+                status: 1,
+                retry_after_ms: None,
+                url: "udp://10.0.0.1:51820".into(),
+                method: "DATAGRAM".into(),
+                protocol: NetworkProtocol::Udp,
+                duration_ms: 1,
+            },
+            HarEntrySample {
+                timestamp_ms: 5005,
+                status: 1,
+                retry_after_ms: None,
+                url: "udp://10.0.0.1:51820".into(),
+                method: "DATAGRAM".into(),
+                protocol: NetworkProtocol::Udp,
+                duration_ms: 1,
+            },
+            HarEntrySample {
+                timestamp_ms: 5010,
+                status: 1,
+                retry_after_ms: None,
+                url: "udp://10.0.0.1:51820".into(),
+                method: "DATAGRAM".into(),
+                protocol: NetworkProtocol::Udp,
+                duration_ms: 1,
+            },
+        ];
+
+        let rep_udp = GoogleApiBackoffAnalyzer::evaluate_protocol_stream(NetworkProtocol::Udp, &udp_flood_samples);
+        assert!(rep_udp.flood_detected, "UDP packet flood must be detected");
+    }
+
+    #[test]
+    fn test_scenario_6_one_click_ui_rate_limit_rejection() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        let rete = ReteEngine::new();
+
+        let target_host = "test-override.cloud.corp";
+        let target_pid = 777;
+
+        let entry = RateLimitReleaseEntry {
+            destination_host: target_host.to_string(),
+            protocol: "*".to_string(),
+            pid: Some(target_pid),
+            operator: "security_analyst".to_string(),
+            reason: "One-click UI rate limit rejection".to_string(),
+            timestamp_epoch_secs: 1729864800,
+        };
+        RateLimitAllowlist::add_entry(entry).unwrap();
+
+        assert!(RateLimitAllowlist::is_released(target_host, NetworkProtocol::HttpHttps, Some(target_pid)));
+
+        let flow = HarFlowFact {
+            flow_id: "flow_s6".into(),
+            pid: target_pid,
+            protocol: NetworkProtocol::HttpHttps,
+            dst_host: target_host.into(),
+            dst_port: 443,
+            samples: vec![],
+            backoff_compliant: false,
+            observed_jitter_present: false,
+            honors_retry_after: false,
+            flood_detected: true,
+        };
+
+        rete.insert_har_fact(flow);
+        let bundle = rete.evaluate_beta_join(target_pid).expect("Beta join on target_pid");
+
+        let consensus = RateLimitVoterEnsemble.evaluate_and_vote(&bundle);
+        assert!(consensus.override_applied, "Override flag must be true");
+        assert!(
+            matches!(consensus.action, EdrAction::AllowAndWhitelistWindow { .. }),
+            "Expected AllowAndWhitelistWindow under override, got {:?}",
+            consensus.action
+        );
+
+        let _ = RateLimitAllowlist::clear();
+    }
+
+    #[test]
+    fn test_mathematical_formulas_precision() {
+        assert_eq!(calculate_exponential_backoff_ms(0, 500, 60_000, 50), 550);
+        assert_eq!(calculate_exponential_backoff_ms(1, 500, 60_000, 50), 1050);
+        assert_eq!(calculate_exponential_backoff_ms(2, 500, 60_000, 50), 2050);
+        assert_eq!(calculate_exponential_backoff_ms(3, 500, 60_000, 50), 4050);
+        assert_eq!(calculate_exponential_backoff_ms(10, 500, 60_000, 0), 60_000);
+
+        assert_eq!(rfc6298_next_rto_ms(1000, 60_000), 2000);
+        assert_eq!(rfc6298_next_rto_ms(2000, 60_000), 4000);
+        assert_eq!(rfc6298_next_rto_ms(35_000, 60_000), 60_000);
+        assert_eq!(rfc6298_rto_after_attempts_ms(1000, 3, 60_000), 8000);
+
+        assert_eq!(rfc9002_next_pto_ms(200, 0, 60_000), 200);
+        assert_eq!(rfc9002_next_pto_ms(200, 1, 60_000), 400);
+        assert_eq!(rfc9002_next_pto_ms(200, 2, 60_000), 800);
+        assert_eq!(rfc9002_next_pto_ms(200, 3, 60_000), 1600);
+    }
+
+    #[test]
+    fn test_flat_intervals_rejected_as_non_compliant() {
+        let samples = vec![
+            HarEntrySample {
+                timestamp_ms: 1000,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://api.flat.com/data".into(),
+                method: "GET".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 10,
+            },
+            HarEntrySample {
+                timestamp_ms: 1500,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://api.flat.com/data".into(),
+                method: "GET".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 10,
+            },
+            HarEntrySample {
+                timestamp_ms: 2000,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://api.flat.com/data".into(),
+                method: "GET".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 10,
+            },
+            HarEntrySample {
+                timestamp_ms: 2500,
+                status: 200,
+                retry_after_ms: None,
+                url: "https://api.flat.com/data".into(),
+                method: "GET".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 10,
+            },
+        ];
+
+        let report = GoogleApiBackoffAnalyzer::evaluate_har_stream(&samples);
+        assert!(!report.backoff_compliant, "Flat constant intervals MUST NOT be certified as exponential backoff!");
+    }
+
+    #[test]
+    fn test_linear_intervals_rejected_as_non_compliant() {
+        let samples = vec![
+            HarEntrySample {
+                timestamp_ms: 1000,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://api.linear.com/data".into(),
+                method: "GET".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 10,
+            },
+            HarEntrySample {
+                timestamp_ms: 1500,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://api.linear.com/data".into(),
+                method: "GET".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 10,
+            },
+            HarEntrySample {
+                timestamp_ms: 2100,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://api.linear.com/data".into(),
+                method: "GET".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 10,
+            },
+            HarEntrySample {
+                timestamp_ms: 2800,
+                status: 429,
+                retry_after_ms: None,
+                url: "https://api.linear.com/data".into(),
+                method: "GET".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 10,
+            },
+            HarEntrySample {
+                timestamp_ms: 3600,
+                status: 200,
+                retry_after_ms: None,
+                url: "https://api.linear.com/data".into(),
+                method: "GET".into(),
+                protocol: NetworkProtocol::HttpHttps,
+                duration_ms: 10,
+            },
+        ];
+
+        let report = GoogleApiBackoffAnalyzer::evaluate_har_stream(&samples);
+        assert!(!report.backoff_compliant, "Linear arithmetic retry intervals MUST NOT be certified as exponential backoff!");
+    }
+
+    #[test]
+    fn test_rete_pattern_matching_alpha_beta_join() {
+        let rete = ReteEngine::new();
+        assert_eq!(rete.alpha_memory_sizes(), (0, 0, 0));
+
+        let flow = HarFlowFact {
+            flow_id: "test_flow".into(),
+            pid: 999,
+            protocol: NetworkProtocol::Tcp,
+            dst_host: "10.0.0.1".into(),
+            dst_port: 80,
+            samples: vec![],
+            backoff_compliant: true,
+            observed_jitter_present: false,
+            honors_retry_after: true,
+            flood_detected: false,
+        };
+        let proc = OsqueryProcessFact {
+            pid: 999,
+            process_name: "test.exe".into(),
+            cmdline: "test.exe".into(),
+            is_interactive: true,
+            parent_pid: 1,
+            username: "tester".into(),
+        };
+        let binary = ReaBinaryFact {
+            pid: 999,
+            binary_path: "C:\\test.exe".into(),
+            is_packed: false,
+            direct_syscall_count: 0,
+            obfuscation_entropy: 4.5,
+            is_authenticode_signed: true,
+            yara_detections: vec![],
+        };
+
+        rete.insert_har_fact(flow);
+        assert_eq!(rete.alpha_memory_sizes(), (1, 0, 0));
+
+        rete.insert_osquery_fact(proc);
+        assert_eq!(rete.alpha_memory_sizes(), (1, 1, 0));
+
+        rete.insert_rea_fact(binary);
+        assert_eq!(rete.alpha_memory_sizes(), (1, 1, 1));
+
+        let joined = rete.evaluate_beta_join(999).expect("Beta join should return joined bundle");
+        assert_eq!(joined.pid, 999);
+        assert_eq!(joined.dst_host, "10.0.0.1");
+        assert_eq!(joined.protocol, NetworkProtocol::Tcp);
+        assert!(joined.flow.is_some());
+        assert!(joined.process.is_some());
+        assert!(joined.binary.is_some());
+
+        rete.clear();
+        assert_eq!(rete.alpha_memory_sizes(), (0, 0, 0));
+        assert!(rete.evaluate_beta_join(999).is_none());
+    }
 }
