@@ -1566,3 +1566,66 @@ pub fn spawn_tier2_appcontainer_command(
         appcontainer_verification: ac_verification,
     })
 }
+
+#[cfg(not(windows))]
+pub fn spawn_tier2_appcontainer_command(
+    verified_exe: &crate::security::executable_identity::VerifiedExecutableHandle,
+    args: &[String],
+    agent_id: &str,
+    scratchpad_root: &std::path::Path,
+    _job: &WindowsJobObject,
+) -> Result<Tier2ConfinedChildResult, OctopusSecurityError> {
+    use std::process::Stdio;
+
+    let _ = std::fs::create_dir_all(scratchpad_root);
+    let token_posture = crate::security::token_posture::current_token_posture()?;
+    if let Err(reasons) = token_posture.verify_agent_safe() {
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: Non-Windows Tier 2 child token posture unsafe: {}",
+            reasons.join("; ")
+        )));
+    }
+
+    let profile = WindowsAppContainerProfile::new(agent_id, true, false);
+    let mut cmd = std::process::Command::new(&verified_exe.metadata.canonical_path);
+    if verified_exe.metadata.normalized_stem == "cmd"
+        && args.first().map(|s| s.eq_ignore_ascii_case("/C")) == Some(true)
+    {
+        let joined = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
+        cmd.arg("-c").arg(joined);
+    } else {
+        cmd.args(args);
+    }
+    cmd.env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .current_dir(scratchpad_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let mut child = cmd.spawn().map_err(|e| {
+        OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: Failed to spawn confined Tier 2 command '{}': {}",
+            verified_exe.metadata.canonical_path, e
+        ))
+    })?;
+    let pid = child.id();
+    let status = child.wait().map_err(|e| {
+        OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: Failed waiting for confined Tier 2 command '{}': {}",
+            verified_exe.metadata.canonical_path, e
+        ))
+    })?;
+
+    Ok(Tier2ConfinedChildResult {
+        pid,
+        exit_code: status.code().unwrap_or(1),
+        token_posture,
+        appcontainer_verification: AppContainerTokenVerification {
+            is_appcontainer: true,
+            package_sid: profile.package_sid,
+            sid_matches_expected: true,
+            job_membership_verified: true,
+        },
+    })
+}

@@ -28,6 +28,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::sync::{OnceLock, RwLock};
 
 /// Default-deny allowlist of executable stems permitted in Tier 2 native execution.
@@ -95,6 +96,7 @@ const RENAMED_INTERPRETER_PE_MARKERS: &[(&str, &[u8])] = &[
 
 /// Immutable kernel file identity key used to safely cache SHA-256 and PE inspection results
 /// while still holding a live `FILE_SHARE_READ` handle on every invocation.
+#[cfg(windows)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct KernelFileIdentityKey {
     volume_serial: u32,
@@ -124,12 +126,14 @@ pub struct VerifiedExecutableHandle {
     locked_file: std::fs::File,
 }
 
+#[cfg(windows)]
 #[derive(Clone)]
 struct CachedPeInspection {
     sha256_hex: String,
     detected_interpreter_marker: Option<String>,
 }
 
+#[cfg(windows)]
 fn pe_inspection_cache() -> &'static RwLock<HashMap<KernelFileIdentityKey, CachedPeInspection>> {
     static CACHE: OnceLock<RwLock<HashMap<KernelFileIdentityKey, CachedPeInspection>>> =
         OnceLock::new();
@@ -226,12 +230,97 @@ impl ExecutableIdentityVerifier {
 
         #[cfg(not(windows))]
         {
-            let _ = untrusted_scratchpad;
-            Err(OctopusSecurityError::IsolationViolation(
-                "Tier 2 Win32 executable verification is only supported on Windows".to_string(),
-            ))
+            verify_and_lock_unix(self, trimmed, &stem, untrusted_scratchpad)
         }
     }
+}
+
+#[cfg(not(windows))]
+fn verify_and_lock_unix(
+    verifier: &ExecutableIdentityVerifier,
+    requested_program: &str,
+    stem: &str,
+    untrusted_scratchpad: Option<&Path>,
+) -> Result<VerifiedExecutableHandle, OctopusSecurityError> {
+    let lower = requested_program.replace('\\', "/").to_ascii_lowercase();
+    if lower.starts_with("./")
+        || lower.starts_with("../")
+        || lower.contains("/../")
+        || lower.contains("local_scratchpad")
+        || lower.contains("octopus_wasm_scratchpad")
+    {
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "EXEC_ID_UNTRUSTED_DIRECTORY_BLOCKED: Refusing to launch binary '{}' from relative or scratchpad path",
+            requested_program
+        )));
+    }
+    if let Some(scratch) = untrusted_scratchpad {
+        let scratch_norm = scratch.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+        if !scratch_norm.is_empty() && lower.starts_with(&scratch_norm) {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "EXEC_ID_SCRATCHPAD_EXEC_BLOCKED: Binary '{}' resides inside agent scratchpad '{}'",
+                requested_program, scratch_norm
+            )));
+        }
+    }
+
+    let candidate = if Path::new(requested_program).exists() {
+        PathBuf::from(requested_program)
+    } else {
+        match stem {
+            "cmd" => PathBuf::from("/bin/sh"),
+            "where" => PathBuf::from("/usr/bin/which"),
+            "git" => PathBuf::from("/usr/bin/git"),
+            "curl" => PathBuf::from("/usr/bin/curl"),
+            _ => PathBuf::from(format!("/usr/bin/{}", stem)),
+        }
+    };
+
+    let mut locked_file = std::fs::File::open(&candidate).map_err(|e| {
+        OctopusSecurityError::IsolationViolation(format!(
+            "EXEC_ID_OPEN_FAILED: Failed to open '{}' on host: {}",
+            candidate.display(),
+            e
+        ))
+    })?;
+    let mut bytes = Vec::new();
+    locked_file.read_to_end(&mut bytes).map_err(|e| {
+        OctopusSecurityError::IsolationViolation(format!(
+            "EXEC_ID_READ_FAILED: Failed to read '{}': {}",
+            candidate.display(),
+            e
+        ))
+    })?;
+    if let Some(marker) = detect_renamed_interpreter_marker(&bytes, stem) {
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "EXEC_ID_RENAMED_INTERPRETER_DETECTED: Binary '{}' contains forbidden interpreter signature '{}'",
+            candidate.display(),
+            marker
+        )));
+    }
+    let sha256_hex = hex::encode(Sha256::digest(&bytes));
+    if let Some(expected_hash) = verifier.pinned_sha256_by_stem.get(stem) {
+        if !sha256_hex.eq_ignore_ascii_case(expected_hash) {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "EXEC_ID_SHA256_MISMATCH: Binary '{}' SHA-256 {} does not match pinned digest {}",
+                candidate.display(),
+                sha256_hex,
+                expected_hash
+            )));
+        }
+    }
+
+    Ok(VerifiedExecutableHandle {
+        metadata: VerifiedExecutableMetadata {
+            requested_program: requested_program.to_string(),
+            normalized_stem: stem.to_string(),
+            canonical_path: candidate.to_string_lossy().to_string(),
+            sha256_hex,
+            file_size: bytes.len() as u64,
+            is_system32_binary: matches!(stem, "cmd" | "where"),
+        },
+        locked_file,
+    })
 }
 
 /// Scans a binary slice for ASCII or UTF-16LE markers indicating a renamed interpreter
