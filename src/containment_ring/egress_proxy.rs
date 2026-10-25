@@ -818,3 +818,20 @@ pub fn check_google_safe_browsing_v4_prefix(raw_url: &str) -> Result<String, Oct
     }
     Ok(prefix_hex)
 }
+
+/// Enforces fail-closed socket address validation immediately prior to outbound TCP connect,
+/// preventing TOCTOU DNS rebinding bypasses where a hostname resolves to a benign address during
+/// initial URL validation but a private/loopback/cloud-metadata address at connect time.
+pub fn validate_resolved_socket_addr(
+    addr: &std::net::SocketAddr,
+) -> Result<(), OctopusSecurityError> {
+    let ip = addr.ip();
+    if is_restricted_rebinding_ip(&ip) {
+        return Err(OctopusSecurityError::SsrfBlocked(format!(
+            "DNS_REBINDING_BLOCKED: Resolved socket address {} falls within restricted SSRF/rebinding range",
+            addr
+        )));
+    }
+    Ok(())
+}
+

@@ -50,7 +50,8 @@ pub use cedar_gate::{
 };
 pub use egress_proxy::{
     is_restricted_rebinding_ip, pinned_curl_command, resolve_and_pin, validate_agent_egress_url,
-    EgressProxy, EgressRequest, EgressResponse, EgressSecurityLevel, PinnedEgress,
+    validate_resolved_socket_addr, EgressProxy, EgressRequest, EgressResponse,
+    EgressSecurityLevel, PinnedEgress,
 };
 pub use identity_gate::IdentityGate;
 pub use isolation_manager::{IsolationManager, SandboxConstraints};
