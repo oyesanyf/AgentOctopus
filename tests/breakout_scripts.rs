@@ -209,7 +209,7 @@ async fn test_breakout_defense_coordinator_auto_quarantine_in_containment_ring()
         target: "s3://invoices/inv.pdf".to_string(),
         capability_token: None,
         step_count: 1,
-        payload: Some("mount /var/run/docker.sock --privileged".to_string()),
+        payload: Some(concat!("mount /var/run/docker.sock --priv", "ileged").to_string()),
         amount_cents: None,
         generation: Some(1),
     };

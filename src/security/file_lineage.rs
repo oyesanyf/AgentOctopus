@@ -77,33 +77,44 @@ impl FileLineageTracker {
     /// cannot be DoS-locked by hash collisions or adversarial taint injection.
     pub fn is_path_immune(path: &str) -> bool {
         let norm = Self::normalize_path(path);
-        let immune_markers = [
+        // Never grant immunity to agent scratchpads or temporary directories even if a subdirectory
+        // is named `src/` or `cargo.toml`.
+        if norm.contains("scratchpad")
+            || norm.contains("/temp/")
+            || norm.contains("\\temp\\")
+            || norm.contains("/tmp/")
+            || norm.starts_with("tmp/")
+            || norm.starts_with("temp/")
+        {
+            return false;
+        }
+        let exact_or_suffix = [
             "cargo.toml",
             "cargo.lock",
             "pyproject.toml",
             "package.json",
             "/src/",
-            "src/",
             "/crates/",
-            "crates/",
             "/tests/",
-            "tests/",
             "/scripts/",
-            "scripts/",
-            "git.exe",
-            "cargo.exe",
-            "rustc.exe",
-            "rustfmt.exe",
-            "clippy-driver.exe",
-            "py312.exe",
-            "python.exe",
-            "node.exe",
-            "powershell.exe",
-            "pwsh.exe",
+            "/git.exe",
+            "/cargo.exe",
+            "/rustc.exe",
+            "/rustfmt.exe",
+            "/clippy-driver.exe",
+            "/py312.exe",
+            "/python.exe",
+            "/node.exe",
+            "/powershell.exe",
+            "/pwsh.exe",
         ];
-        immune_markers
-            .iter()
-            .any(|m| norm == *m || norm.ends_with(m) || norm.contains(m))
+        norm.starts_with("src/")
+            || norm.starts_with("crates/")
+            || norm.starts_with("tests/")
+            || norm.starts_with("scripts/")
+            || exact_or_suffix
+                .iter()
+                .any(|m| norm == m.trim_start_matches('/') || norm.ends_with(m) || (m.ends_with('/') && norm.contains(m)))
     }
 
     /// Registers a synthetic canary honeyfile path and its content digest.

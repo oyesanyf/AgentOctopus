@@ -8,23 +8,23 @@ Asserts 0.0% False Positive Rate on legitimate traffic and 100.0% True Positive 
 
 import sys
 import json
-import urllib.request
-import urllib.error
+import http.client
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-ENDPOINT = "http://127.0.0.1:5005/api/protocol-analyzer/analyze"
+ENDPOINT_HOST = "127.0.0.1"
+ENDPOINT_PORT = 5005
+ENDPOINT_PATH = "/api/protocol-analyzer/analyze"
 
 def analyze_raw(raw_http: str):
     payload = json.dumps({"raw_http": raw_http}).encode("utf-8")
-    req = urllib.request.Request(
-        ENDPOINT,
-        data=payload,
-        headers={"Content-Type": "application/json"}
-    )
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    conn = http.client.HTTPConnection(ENDPOINT_HOST, ENDPOINT_PORT, timeout=5.0)
+    conn.request("POST", ENDPOINT_PATH, body=payload, headers={"Content-Type": "application/json"})
+    resp = conn.getresponse()
+    body = resp.read().decode("utf-8")
+    conn.close()
+    return json.loads(body)
 
 def build_legitimate_test_cases():
     cases = []

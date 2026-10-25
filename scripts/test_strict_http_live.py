@@ -151,19 +151,20 @@ def main():
     ]
 
     for path, method, data, expected_key in endpoints:
-        url = f"{BASE_URL}{path}"
-        req = urllib.request.Request(url, data=data, method=method)
-        if data:
-            req.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                body = resp.read().decode('utf-8')
-                if expected_key in body:
-                    print(f"[PASS] {method} {path} -> 200 OK (Contains '{expected_key}')")
-                    passed += 1
-                else:
-                    print(f"[FAIL] {method} {path} -> Missing '{expected_key}' in response: {body[:150]}")
-                    failed += 1
+            import http.client
+            conn = http.client.HTTPConnection("127.0.0.1", 5005, timeout=5)
+            headers = {"Content-Type": "application/json"} if data else {}
+            conn.request(method, path, body=data, headers=headers)
+            resp = conn.getresponse()
+            body = resp.read().decode('utf-8')
+            conn.close()
+            if expected_key in body:
+                print(f"[PASS] {method} {path} -> 200 OK (Contains '{expected_key}')")
+                passed += 1
+            else:
+                print(f"[FAIL] {method} {path} -> Missing '{expected_key}' in response: {body[:150]}")
+                failed += 1
         except Exception as e:
             print(f"[FAIL] {method} {path} -> Request error: {e}")
             failed += 1

@@ -226,11 +226,9 @@ impl TieredExecutionDispatcher {
         }
 
         // 1. Defense-in-depth structural command-line inspection (CommandLineToArgvW + -EncodedCommand decoding)
-        let full_cmd = if args.is_empty() {
-            program.clone()
-        } else {
-            format!("{} {}", program, args.join(" "))
-        };
+        // Construct the exact MSVCRT-quoted command line that CreateProcessW will receive so
+        // evaluation and execution parse identical token boundaries.
+        let full_cmd = crate::security::windows_sandbox::build_windows_command_line(program, args);
         let tech_verdict = self.technical_guard.evaluate_execution(program, &full_cmd);
         if !tech_verdict.is_clean {
             return Err(OctopusSecurityError::IsolationViolation(format!(

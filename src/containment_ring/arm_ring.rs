@@ -173,9 +173,14 @@ pub fn validate_resource_boundary(
         ));
     }
 
-    // 2. Reject ambiguous encodings and traversal tokens
+    // 2. Reject ambiguous encodings and traversal tokens (including single-dot `%2e` mixed with literal `.`)
     let lower = trimmed.to_lowercase();
-    if lower.contains("%00") || lower.contains("%2e%2e") || lower.contains("%2f") || lower.contains("%5c") || lower.contains("%25") {
+    if lower.contains("%00")
+        || lower.contains("%2e")
+        || lower.contains("%2f")
+        || lower.contains("%5c")
+        || lower.contains("%25")
+    {
         return Err(OctopusSecurityError::EnclaveViolation(
             "Ambiguous or malicious percent-encoding detected in resource identifier".to_string(),
         ));
@@ -783,6 +788,29 @@ impl ArmContainmentRing {
             )));
         }
 
+        // Verify bearer identity, permitted role, and TTL expiration before signature check
+        if !token.bearer_agent.eq_ignore_ascii_case(&self.agent_name) {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "Capability token bearer mismatch: token issued to '{}' cannot be exercised by '{}'",
+                token.bearer_agent, self.agent_name
+            )));
+        }
+        if token.permitted_role != self.role {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "Capability token role mismatch: token role {:?} != arm role {:?}",
+                token.permitted_role, self.role
+            )));
+        }
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if token.is_expired(now_secs) {
+            return Err(OctopusSecurityError::CapabilityDenied(
+                "Capability token has expired".to_string(),
+            ));
+        }
+
         // Verify cryptographic signature against epoch key
         let epoch_key = self.epoch_key(current_gen);
         let signing_content = format!(
@@ -982,8 +1010,24 @@ impl ArmContainmentRing {
             }
             let excess = taint.1.len().saturating_sub(MAX_RELAY_HOPS - 1);
             if excess > 0 {
-                // Keep newest hops for audit; the floor already records the lowest trust seen.
+                // Keep newest hops for audit while preserving any earliest Untrusted origin hop
+                // so role_chain never loses the taint-originating role across >16 hops.
+                let preserved_untrusted = taint
+                    .1
+                    .iter()
+                    .take(excess)
+                    .find(|h| role_trust_tier(&h.role) == TrustTier::Untrusted)
+                    .cloned();
                 taint.1.drain(0..excess);
+                if let Some(untrusted_hop) = preserved_untrusted {
+                    if !taint.1.iter().any(|h| role_trust_tier(&h.role) == TrustTier::Untrusted) {
+                        if !taint.1.is_empty() {
+                            taint.1[0] = untrusted_hop;
+                        } else {
+                            taint.1.push(untrusted_hop);
+                        }
+                    }
+                }
             }
         }
 

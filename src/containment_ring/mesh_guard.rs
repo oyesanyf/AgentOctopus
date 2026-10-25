@@ -318,7 +318,17 @@ impl MeshGuard {
             ));
         }
 
-        // 2. Law 1 over the authenticated role chain
+        // 2. Law 1 over the authenticated role chain AND sticky effective taint floor
+        if verified.effective_taint_floor() == TrustTier::Untrusted
+            && role_trust_tier(verified.recipient_role()) == TrustTier::PrivilegedSink
+        {
+            return Err(OctopusSecurityError::DelegationScopeViolation(format!(
+                "Inner Ring Sticky Taint Violation: arm {} -> arm {} (recipient {:?} cannot accept message with Untrusted effective taint floor)",
+                msg.sender_arm_id,
+                verified.recipient_arm_id(),
+                verified.recipient_role()
+            )));
+        }
         let report = HomologicalBoundaryAuditor::audit_role_chain(verified.role_chain());
         if !report.allowed {
             return Err(OctopusSecurityError::DelegationScopeViolation(format!(

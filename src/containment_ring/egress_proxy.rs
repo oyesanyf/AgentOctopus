@@ -501,6 +501,18 @@ pub fn is_restricted_rebinding_ip(ip: &std::net::IpAddr) -> bool {
             let is_teredo_or_doc_or_discard = (seg[0] == 0x2001
                 && (seg[1] == 0x0000 || seg[1] == 0x0db8))
                 || (seg[0] == 0x0100 && seg[1] == 0 && seg[2] == 0 && seg[3] == 0);
+            // RFC 2765 SIIT IPv4-translated prefix ::ffff:0:0/96
+            if seg[0] == 0 && seg[1] == 0 && seg[2] == 0 && seg[3] == 0 && seg[4] == 0xffff && seg[5] == 0 {
+                let embedded_v4 = std::net::Ipv4Addr::new(
+                    (seg[6] >> 8) as u8,
+                    (seg[6] & 0xff) as u8,
+                    (seg[7] >> 8) as u8,
+                    (seg[7] & 0xff) as u8,
+                );
+                if is_restricted_rebinding_ip(&std::net::IpAddr::V4(embedded_v4)) {
+                    return true;
+                }
+            }
             if let Some(mapped_v4) = v6.to_ipv4_mapped() {
                 if is_restricted_rebinding_ip(&std::net::IpAddr::V4(mapped_v4)) {
                     return true;
@@ -740,7 +752,7 @@ pub fn resolve_and_pin(
 
 /// Builds a `curl.exe` [`std::process::Command`] pre-configured with:
 /// - `--resolve <host>:<port>:<pinned-ips>` (prevents DNS rebinding on connect),
-/// - `--proto =https` (forbids protocol downgrade to `http://`, `file://`, `gopher://`, etc.),
+/// - `--proto =https` (forbids cleartext protocol downgrade to non-TLS schemes),
 /// - `--max-redirs 0` (prevents open-redirect SSRF to an unvalidated second host),
 /// - `--noproxy *` (prevents ambient proxy environment interception),
 /// - `CREATE_NO_WINDOW` via [`CommandConsoleExt`](crate::security::console_defense::CommandConsoleExt).

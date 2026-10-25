@@ -219,7 +219,11 @@ impl ExecutionMerkleTree {
 
         // Pad to power of 2 for balanced binary tree structure
         while current_layer.len() > 1 && (current_layer.len() & (current_layer.len() - 1)) != 0 {
-            current_layer.push(*current_layer.last().unwrap());
+            if let Some(&last) = current_layer.last() {
+                current_layer.push(last);
+            } else {
+                break;
+            }
         }
 
         let leaves = current_layer.clone();

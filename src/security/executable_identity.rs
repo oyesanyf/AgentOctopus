@@ -583,7 +583,10 @@ mod win_exec_id {
                 .trim_start_matches(r"\\?\")
                 .trim_end_matches('\\')
                 .to_ascii_lowercase();
-            if !scratch_norm.is_empty() && canonical_lower.starts_with(&scratch_norm) {
+            let scratch_prefix = format!("{}\\", scratch_norm);
+            if !scratch_norm.is_empty()
+                && (canonical_lower == scratch_norm || canonical_lower.starts_with(&scratch_prefix))
+            {
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "EXEC_ID_SCRATCHPAD_EXEC_BLOCKED: Binary '{}' resides inside agent scratchpad '{}'",
                     canonical_path, scratch_norm
@@ -591,7 +594,7 @@ mod win_exec_id {
             }
         }
 
-        //Verify canonical filename stem matches the requested stem (prevents symlink/hardlink stem spoofing)
+        // Verify canonical filename stem matches the requested stem (prevents symlink/hardlink stem spoofing)
         let canonical_stem = normalize_executable_stem(&canonical_path);
         if canonical_stem != stem {
             return Err(OctopusSecurityError::IsolationViolation(format!(
@@ -600,13 +603,44 @@ mod win_exec_id {
             )));
         }
 
-        // System binaries (`cmd`, `where`, `curl`) MUST reside inside `%SystemRoot%\System32`
-        let is_system32_binary = canonical_lower.contains("\\windows\\system32\\");
-        if matches!(stem, "cmd" | "where") && !is_system32_binary {
+        // System binaries (`cmd`, `where`, `curl`) MUST reside strictly inside `%SystemRoot%\System32\`
+        let sys_root_lower = std::env::var("SystemRoot")
+            .unwrap_or_else(|_| r"C:\Windows".to_string())
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_ascii_lowercase();
+        let sys32_prefix = format!("{}\\system32\\", sys_root_lower);
+        let is_system32_binary = canonical_lower.starts_with(&sys32_prefix);
+        if matches!(stem, "cmd" | "where" | "curl") && !is_system32_binary {
             return Err(OctopusSecurityError::IsolationViolation(format!(
-                "EXEC_ID_NON_SYSTEM32_SPOOF: System binary '{}' must reside in C:\\Windows\\System32, found '{}'",
-                stem, canonical_path
+                "EXEC_ID_NON_SYSTEM32_SPOOF: System binary '{}' must reside in {}, found '{}'",
+                stem, sys32_prefix, canonical_path
             )));
+        }
+
+        // Non-System32 binaries (`git`, `cargo`, etc.) must reside inside an approved installation root
+        // unless explicitly SHA-256 pinned in `verifier.pinned_sha256_by_stem`.
+        if !is_system32_binary && !verifier.pinned_sha256_by_stem.contains_key(stem) {
+            let cargo_bin_prefix = std::env::var("USERPROFILE")
+                .ok()
+                .map(|p| {
+                    format!(
+                        "{}\\.cargo\\bin\\",
+                        p.replace('/', "\\").trim_end_matches('\\').to_ascii_lowercase()
+                    )
+                });
+            let in_trusted_root = canonical_lower.starts_with(r"c:\program files\git\")
+                || canonical_lower.starts_with(r"c:\program files (x86)\git\")
+                || cargo_bin_prefix
+                    .as_ref()
+                    .map(|pfx| canonical_lower.starts_with(pfx))
+                    .unwrap_or(false);
+            if !in_trusted_root {
+                return Err(OctopusSecurityError::IsolationViolation(format!(
+                    "EXEC_ID_UNTRUSTED_INSTALL_ROOT: Binary '{}' is outside approved System32/Git/Cargo installation directories",
+                    canonical_path
+                )));
+            }
         }
 
         let file_size = ((info.nFileSizeHigh as u64) << 32) | (info.nFileSizeLow as u64);

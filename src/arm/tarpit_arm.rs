@@ -99,7 +99,12 @@ impl TarpitArm {
             .as_secs();
 
         let (violation_count, is_quarantined) = {
-            let mut map = self.adversaries.write().unwrap();
+            let mut map = self.adversaries.write().unwrap_or_else(|e| e.into_inner());
+            if map.len() >= 1024 && !map.contains_key(caller_id) {
+                if let Some(evict_key) = map.keys().next().cloned() {
+                    map.remove(&evict_key);
+                }
+            }
             let profile = map.entry(caller_id.to_string()).or_insert_with(|| {
                 self.trapped_callers_count.fetch_add(1, Ordering::SeqCst);
                 AdversaryProfile {

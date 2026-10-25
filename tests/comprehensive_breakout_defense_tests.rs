@@ -1083,3 +1083,109 @@ async fn test_phase5_6_7_invariants_and_performance_benchmark_500_iterations() {
         before_p50
     );
 }
+
+// ============================================================================
+// 11. RAPTOR & Security-Audit Deep Code Review Remediation Regression Suite
+// ============================================================================
+
+#[tokio::test]
+async fn test_security_audit_and_raptor_remediation_invariants() {
+    use agent_octopus::containment_ring::arm_ring::validate_resource_boundary;
+    use agent_octopus::containment_ring::cedar_gate::CedarGate;
+    use agent_octopus::containment_ring::egress_proxy::is_restricted_rebinding_ip;
+    use agent_octopus::security::file_lineage::FileLineageTracker;
+    use agent_octopus::security::isolation::SandboxConfinementPolicy;
+    use agent_octopus::security::windows_sandbox::{
+        build_windows_command_line, quote_windows_argv_arg,
+    };
+
+    // 1. open_confined overwrite truncation (post-verification set_len(0))
+    let scratch_dir =
+        std::env::temp_dir().join(format!("octopus_audit_trunc_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch_dir);
+    std::fs::create_dir_all(&scratch_dir).expect("create scratch dir");
+    {
+        let mut f1 = open_confined(&scratch_dir, "overwrite.txt", true).expect("open_confined 1");
+        f1.write_all(b"0123456789ABCDEF").expect("write 16 bytes");
+    }
+    {
+        let mut f2 = open_confined(&scratch_dir, "overwrite.txt", true).expect("open_confined 2");
+        f2.write_all(b"short").expect("write 5 bytes");
+    }
+    let final_bytes = std::fs::read(scratch_dir.join("overwrite.txt")).expect("read overwritten");
+    assert_eq!(
+        final_bytes, b"short",
+        "open_confined(write=true) must truncate existing file after identity verification so no trailing bytes remain"
+    );
+    let _ = std::fs::remove_dir_all(&scratch_dir);
+
+    // 2. MSVCRT backslash-doubling command-line quoting
+    let tricky_arg = r#"C:\path with spaces\trailing\"#;
+    let quoted = quote_windows_argv_arg(tricky_arg);
+    assert_eq!(
+        quoted,
+        r#""C:\path with spaces\trailing\\""#,
+        "Trailing backslash before closing quote must be doubled per MSVCRT rules"
+    );
+    let embedded_quote_arg = r#"foo\"bar"#;
+    assert_eq!(
+        quote_windows_argv_arg(embedded_quote_arg),
+        r#""foo\\\"bar""#,
+        "Backslash immediately preceding quote must be doubled before escaping the quote"
+    );
+    let full_cmd = build_windows_command_line(
+        r"C:\Windows\System32\where.exe",
+        &[tricky_arg.to_string(), "".to_string()],
+    );
+    assert!(
+        full_cmd.ends_with(r#" """#),
+        "Empty argument must be explicitly quoted as \"\" in constructed command line: {}",
+        full_cmd
+    );
+
+    // 3. Mixed single-dot percent-encoding (`.%2e` / `%2e.`) blocked at both boundaries
+    let allowed_prefixes = vec!["s3://invoices/".to_string()];
+    assert!(
+        validate_resource_boundary("s3://invoices/.%2e/secret.pdf", &allowed_prefixes).is_err(),
+        "Mixed .%2e traversal must be rejected by validate_resource_boundary"
+    );
+    let iso = SandboxConfinementPolicy::default();
+    assert!(
+        iso.validate_filesystem_confinement("scratchpad/%2e./secret.txt")
+            .is_err(),
+        "Mixed %2e. traversal must be rejected by validate_filesystem_confinement"
+    );
+
+    // 4. CedarGate principal spoofing prevention (low-trust role passing reserved `"ledger_arm"` agent_id)
+    let cedar_gate = CedarGate::new();
+    let spoof_res = cedar_gate
+        .evaluate_authorization(
+            "ledger_arm",
+            &ArmRole::ContinuousOssFuzz,
+            "write",
+            "ledger://accounts/ACC-1001-USD",
+            Some(500),
+        )
+        .await;
+    assert!(
+        spoof_res.is_err(),
+        "ContinuousOssFuzz role attempting to spoof reserved agent_id 'ledger_arm' must be denied"
+    );
+
+    // 5. FileLineageTracker path immunity anchored against scratchpad/temp spoofing
+    assert!(
+        !FileLineageTracker::is_path_immune("C:\\temp\\scratchpad\\src\\payload.exe"),
+        "Scratchpad or temp paths containing /src/ must never receive developer toolchain immunity"
+    );
+    assert!(
+        FileLineageTracker::is_path_immune("src/security/breakouts/mod.rs"),
+        "Repository src/ files must retain immunity against false-positive hash locks"
+    );
+
+    // 6. RFC 2765 SIIT IPv4-translated IPv6 range (::ffff:0:127.0.0.1) blocked by EgressProxy
+    let siit_loopback: std::net::IpAddr = "::ffff:0:127.0.0.1".parse().expect("parse SIIT");
+    assert!(
+        is_restricted_rebinding_ip(&siit_loopback),
+        "RFC 2765 SIIT IPv4-translated loopback ::ffff:0:127.0.0.1 must be blocked"
+    );
+}

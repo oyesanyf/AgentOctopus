@@ -52,8 +52,15 @@ impl SandboxConfinementPolicy {
     pub fn validate_filesystem_confinement(&self, target_path: &str) -> Result<(), OctopusSecurityError> {
         let lower = target_path.to_lowercase();
 
-        // 1. Path traversal attacks
-        if lower.contains("..") || lower.contains("%2e%2e") || lower.contains("..\\") || lower.contains("../") {
+        // 1. Path traversal attacks (including single-dot or mixed percent-encoded traversal `%2e.` / `.%2e` and `%00`)
+        if lower.contains("..")
+            || lower.contains("%2e")
+            || lower.contains("%00")
+            || lower.contains("%2f")
+            || lower.contains("%5c")
+            || lower.contains("..\\")
+            || lower.contains("../")
+        {
             return Err(OctopusSecurityError::IsolationViolation(format!(
                 "Directory traversal escape attempt '{}' blocked by filesystem sandbox",
                 target_path

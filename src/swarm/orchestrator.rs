@@ -164,9 +164,13 @@ impl SwarmManager {
                 idx % self.concurrency_size
             };
 
-            let channel = self.dispatch_table.get(&arm_id).unwrap().clone();
-            let kill_switch = self.arm_kill_switches.get(&arm_id).unwrap().clone();
-            let cancel_token = self.arm_cancel_tokens.get(&arm_id).unwrap().clone();
+            let (Some(channel), Some(kill_switch), Some(cancel_token)) = (
+                self.dispatch_table.get(&arm_id).cloned(),
+                self.arm_kill_switches.get(&arm_id).cloned(),
+                self.arm_cancel_tokens.get(&arm_id).cloned(),
+            ) else {
+                continue;
+            };
             let sem = self.semaphore.clone();
 
             let handle = tokio::spawn(async move {

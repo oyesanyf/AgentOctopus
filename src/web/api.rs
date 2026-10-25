@@ -807,7 +807,10 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
     };
 
     let mut events = state.live_events.lock().unwrap_or_else(|e| e.into_inner());
-    let event_id = events.len() + 1;
+    if events.len() >= 1000 {
+        events.remove(0);
+    }
+    let event_id = events.last().map(|e| e.id + 1).unwrap_or(1);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1920,7 +1923,7 @@ pub struct SentinelBreachSimulationRequest {
 fn extract_admin_bearer_token(headers: &str) -> Option<&str> {
     for line in headers.lines() {
         if line.to_ascii_lowercase().starts_with("authorization:") {
-            if let Some(val) = line.split(':').nth(1) {
+            if let Some((_, val)) = line.split_once(':') {
                 let trimmed = val.trim();
                 if let Some(token) = trimmed.strip_prefix("Bearer ") {
                     return Some(token.trim());
@@ -1946,7 +1949,10 @@ pub async fn handle_sentinel_simulate_breach(
             ));
         }
     };
-    if token != Some(admin_key.as_str()) {
+    let auth_ok = token
+        .map(|t| crate::security::constant_time_eq(t.as_bytes(), admin_key.as_bytes()))
+        .unwrap_or(false);
+    if !auth_ok {
         return Err(json_error_payload(
             "ADMIN_AUTH_REQUIRED",
             "Access Denied: Ring 4 administrative breach simulation requires valid bearer authorization (Authorization: Bearer <TOKEN>)",
@@ -2036,7 +2042,10 @@ pub async fn handle_sentinel_reset_lockdown(
             ));
         }
     };
-    if token != Some(admin_key.as_str()) {
+    let auth_ok = token
+        .map(|t| crate::security::constant_time_eq(t.as_bytes(), admin_key.as_bytes()))
+        .unwrap_or(false);
+    if !auth_ok {
         return Err(json_error_payload(
             "ADMIN_AUTH_REQUIRED",
             "Access Denied: Ring 4 emergency lockdown release requires valid bearer authorization (Authorization: Bearer <TOKEN>)",
@@ -2295,13 +2304,13 @@ pub async fn handle_protocol_research_status(state: &WebState) -> String {
 
 pub fn handle_protocol_research_knowledge_base(state: &WebState, query: &str) -> String {
     let mut keyword = "".to_string();
-    let mut limit = 20;
+    let mut limit = 20usize;
     for param in query.split('&') {
         if let Some((k, v)) = param.split_once('=') {
             if k == "keyword" {
-                keyword = v.replace('+', " ");
+                keyword = v.replace('+', " ").chars().take(256).collect();
             } else if k == "limit" {
-                limit = v.parse::<usize>().unwrap_or(20);
+                limit = v.parse::<usize>().unwrap_or(20).clamp(1, 200);
             }
         }
     }

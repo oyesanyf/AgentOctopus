@@ -457,12 +457,22 @@ impl RecursiveHarnessOptimizerArm {
             }
 
             // Also materialize INDEX.md and EXPERIENCE.md in Harness² on-disk layout
-            let dom_dir = data_dir
-                .join("library")
-                .join(domain.replace('/', "__").replace('\\', "__"));
-            let task_dir = dom_dir
-                .join("harnesses")
-                .join(task_id.replace('/', "__").replace('\\', "__"));
+            // Sanitize domain and task_id to strict alphanumeric/underscore/hyphen slugs to prevent
+            // `..` or `C:\` path traversal when joining to `self.library_root`.
+            let safe_domain: String = domain
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                .take(64)
+                .collect();
+            let safe_task_id: String = task_id
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                .take(64)
+                .collect();
+            let safe_domain = if safe_domain.is_empty() { "default_domain".to_string() } else { safe_domain };
+            let safe_task_id = if safe_task_id.is_empty() { "default_task".to_string() } else { safe_task_id };
+            let dom_dir = data_dir.join("library").join(&safe_domain);
+            let task_dir = dom_dir.join("harnesses").join(&safe_task_id);
             let _ = fs::create_dir_all(task_dir.join("harness"));
             let exp_md = format!(
                 "# {}\n\n- adopted: `{}`\n- components: {}\n\n## Why this was chosen\n{}\n\n## What each edit did\n{}\n\n## Transferable lesson\n- **cue**: {}\n- **lesson**: {}\n- **evidence**: {}\n- **confidence**: {}\n",

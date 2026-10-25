@@ -292,37 +292,59 @@ impl CedarGate {
             _ => serde_json::json!({}),
         };
 
-        // Authenticated Principal Mapping
+        // Authenticated Principal Mapping (Fail-Closed: prevent principal spoofing where a low-trust
+        // arm passes a reserved high-privilege `agent_id` such as `"ledger_arm"` while holding a different `ArmRole`).
+        let role_principal = match role {
+            ArmRole::UntrustedDocIngest => "document_arm",
+            ArmRole::AccountingLedgerWrite => "ledger_arm",
+            ArmRole::NetworkEgress => "network_arm",
+            ArmRole::TarpitDecoyDefense => "tarpit_arm",
+            ArmRole::KernelLevelSentinel => "kernel_sentinel_arm",
+            ArmRole::OutboundNotification => "notifier_arm",
+            ArmRole::CedarPolicyEvaluation => "cedar_arm",
+            ArmRole::AtlasThreatIntelligence => "atlas_arm",
+            ArmRole::AnomalyDetection => "anomaly_arm",
+            ArmRole::VulnerabilityResearch => "vulnerability_arm",
+            ArmRole::ContinuousOssFuzz => "oss_fuzz_arm",
+            ArmRole::ContinuousOsvScanner => "osv_scanner_arm",
+            ArmRole::DifferentialProtocolAnalyzer => "protocol_analyzer_arm",
+            ArmRole::AutonomousProtocolResearch => "protocol_research_arm",
+            ArmRole::PostQuantumAttestation => "pqc_arm",
+            ArmRole::EvolutionaryOptimizer => "evolution_arm",
+            ArmRole::DreamRsiOptimizer => "dream_rsi_arm",
+            ArmRole::RecursiveHarnessOptimizer => "harness2_arm",
+        };
+        let is_reserved_principal = matches!(
+            agent_id,
+            "document_arm"
+                | "ledger_arm"
+                | "network_arm"
+                | "tarpit_arm"
+                | "kernel_sentinel_arm"
+                | "notifier_arm"
+                | "cedar_arm"
+                | "atlas_arm"
+                | "anomaly_arm"
+                | "vulnerability_arm"
+                | "oss_fuzz_arm"
+                | "osv_scanner_arm"
+                | "protocol_analyzer_arm"
+                | "protocol_research_arm"
+                | "pqc_arm"
+                | "evolution_arm"
+                | "dream_rsi_arm"
+                | "harness2_arm"
+        );
+        if is_reserved_principal && agent_id != role_principal {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "CEDAR_PRINCIPAL_SPOOF_BLOCKED: agent_id '{}' conflicts with authenticated role {:?} (expected '{}')",
+                agent_id, role, role_principal
+            )));
+        }
         let principal_str = if agent_id == "rogue_adversary" {
             "rogue_adversary"
-        } else if agent_id == "document_arm"
-            || agent_id == "ledger_arm"
-            || agent_id == "network_arm"
-            || agent_id == "tarpit_arm"
-            || agent_id == "kernel_sentinel_arm"
-        {
-            agent_id
         } else {
-            match role {
-                ArmRole::UntrustedDocIngest => "document_arm",
-                ArmRole::AccountingLedgerWrite => "ledger_arm",
-                ArmRole::NetworkEgress => "network_arm",
-                ArmRole::TarpitDecoyDefense => "tarpit_arm",
-                ArmRole::KernelLevelSentinel => "kernel_sentinel_arm",
-                ArmRole::OutboundNotification => "notifier_arm",
-                ArmRole::CedarPolicyEvaluation => "cedar_arm",
-                ArmRole::AtlasThreatIntelligence => "atlas_arm",
-                ArmRole::AnomalyDetection => "anomaly_arm",
-                ArmRole::VulnerabilityResearch => "vulnerability_arm",
-                ArmRole::ContinuousOssFuzz => "oss_fuzz_arm",
-                ArmRole::ContinuousOsvScanner => "osv_scanner_arm",
-                ArmRole::DifferentialProtocolAnalyzer => "protocol_analyzer_arm",
-                ArmRole::AutonomousProtocolResearch => "protocol_research_arm",
-                ArmRole::PostQuantumAttestation => "pqc_arm",
-                ArmRole::EvolutionaryOptimizer => "evolution_arm",
-                ArmRole::DreamRsiOptimizer => "dream_rsi_arm",
-                ArmRole::RecursiveHarnessOptimizer => "harness2_arm",
-            }
+            role_principal
         };
 
         let gw = self.gateway.read().await;

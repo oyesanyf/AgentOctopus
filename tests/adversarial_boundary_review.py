@@ -50,20 +50,22 @@ def check_structured_error(resp_body, expected_code=None):
 
 
 def send_req(method, path, body=None, headers=None, timeout=5.0):
-    url = f"{BASE_URL}{path}"
-    req = urllib.request.Request(url, method=method)
-    if headers:
-        for k, v in headers.items():
-            req.add_header(k, v)
+    import http.client
+    import urllib.parse
+    parsed = urllib.parse.urlsplit(f"{BASE_URL}{path}")
+    req_headers = dict(headers) if headers else {}
+    body_bytes = None
     if body is not None:
-        if isinstance(body, str):
-            body = body.encode("utf-8")
-        req.data = body
+        body_bytes = body.encode("utf-8") if isinstance(body, str) else body
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", errors="replace")
+        conn = http.client.HTTPConnection(parsed.hostname or "127.0.0.1", parsed.port or 5005, timeout=timeout)
+        target = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
+        conn.request(method, target, body=body_bytes, headers=req_headers)
+        resp = conn.getresponse()
+        status = resp.status
+        resp_body = resp.read().decode("utf-8", errors="replace")
+        conn.close()
+        return status, resp_body
     except Exception as e:
         return None, str(e)
 

@@ -1,32 +1,29 @@
 #!/usr/bin/env python3
+import http.client
 import json
-import urllib.request
-import urllib.error
 import time
 import sys
+import urllib.parse
 
 BASE_URL = "http://127.0.0.1:5005"
 
 def test_endpoint(name, method, path, data=None, expected_status=200):
-    url = f"{BASE_URL}{path}"
-    req = urllib.request.Request(url, method=method)
+    parsed = urllib.parse.urlsplit(f"{BASE_URL}{path}")
+    headers = {}
+    body_bytes = None
     if data is not None:
-        req.data = data.encode("utf-8") if isinstance(data, str) else data
-        req.add_header("Content-Type", "application/json")
-    
+        body_bytes = data.encode("utf-8") if isinstance(data, str) else data
+        headers["Content-Type"] = "application/json"
+
     print(f"[*] Testing {name} ({method} {path})...", end=" ")
     try:
-        with urllib.request.urlopen(req, timeout=5.0) as resp:
-            status = resp.status
-            body = resp.read().decode("utf-8")
-            if status != expected_status:
-                print(f"FAILED (expected status {expected_status}, got {status})")
-                return False, body
-            print(f"PASSED (HTTP {status})")
-            return True, body
-    except urllib.error.HTTPError as e:
-        status = e.code
-        body = e.read().decode("utf-8")
+        conn = http.client.HTTPConnection(parsed.hostname or "127.0.0.1", parsed.port or 5005, timeout=5.0)
+        target_path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        conn.request(method, target_path, body=body_bytes, headers=headers)
+        resp = conn.getresponse()
+        status = resp.status
+        body = resp.read().decode("utf-8", errors="replace")
+        conn.close()
         if status != expected_status:
             print(f"FAILED (expected status {expected_status}, got {status})")
             return False, body

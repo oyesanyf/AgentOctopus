@@ -124,35 +124,41 @@ class OllamaClient:
         self.active_model: Optional[str] = None
 
     def probe_and_select_model(self) -> Optional[str]:
-        url = f"{self.base_url}/api/tags"
-        req = urllib.request.Request(url, headers={"User-Agent": "AgentOctopus-Tester"})
+        import http.client
+        import urllib.parse
+        parsed = urllib.parse.urlsplit(f"{self.base_url}/api/tags")
         try:
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    models = [m.get("name", "") for m in data.get("models", [])]
-                    log_info(f"Discovered {len(models)} local models in Ollama.")
+            conn = http.client.HTTPConnection(parsed.hostname or "127.0.0.1", parsed.port or 11434, timeout=1.5)
+            conn.request("GET", parsed.path or "/api/tags", headers={"User-Agent": "AgentOctopus-Tester"})
+            resp = conn.getresponse()
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                conn.close()
+                models = [m.get("name", "") for m in data.get("models", [])]
+                log_info(f"Discovered {len(models)} local models in Ollama.")
 
-                    # Preference list: prioritize fast resident models
-                    preferences = [
-                        "deepseek-r1:1.5b",
-                        "qwen2.5:7b",
-                        "fenkohq/foundation-sec-8b:latest",
-                        "qwen2.5:14b",
-                        "qwen2.5:32b",
-                        "gemma2:9b",
-                        "gemma2:2b",
-                    ]
-                    for pref in preferences:
-                        if pref in models:
-                            self.active_model = pref
-                            log_pass(f"Selected Ollama model: {BOLD}{self.active_model}{RESET}")
-                            return self.active_model
-
-                    if models:
-                        self.active_model = models[0]
-                        log_pass(f"Selected fallback Ollama model: {self.active_model}")
+                # Preference list: prioritize fast resident models
+                preferences = [
+                    "deepseek-r1:1.5b",
+                    "qwen2.5:7b",
+                    "fenkohq/foundation-sec-8b:latest",
+                    "qwen2.5:14b",
+                    "qwen2.5:32b",
+                    "gemma2:9b",
+                    "gemma2:2b",
+                ]
+                for pref in preferences:
+                    if pref in models:
+                        self.active_model = pref
+                        log_pass(f"Selected Ollama model: {BOLD}{self.active_model}{RESET}")
                         return self.active_model
+
+                if models:
+                    self.active_model = models[0]
+                    log_pass(f"Selected fallback Ollama model: {self.active_model}")
+                    return self.active_model
+            else:
+                conn.close()
         except NETWORK_EXCEPTIONS as net_err:
             log_warn(f"Ollama daemon unreachable ({net_err}). Relying on deterministic mutators.")
         except Exception as err:
@@ -163,7 +169,9 @@ class OllamaClient:
         if not self.active_model:
             return None
 
-        url = f"{self.base_url}/api/generate"
+        import http.client
+        import urllib.parse
+        parsed = urllib.parse.urlsplit(f"{self.base_url}/api/generate")
         payload = {
             "model": self.active_model,
             "prompt": prompt,
@@ -173,18 +181,21 @@ class OllamaClient:
         }
 
         try:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
+            conn = http.client.HTTPConnection(parsed.hostname or "127.0.0.1", parsed.port or 11434, timeout=5.0)
+            conn.request(
+                "POST",
+                parsed.path or "/api/generate",
+                body=json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
-                if resp.status == 200:
-                    res_json = json.loads(resp.read().decode("utf-8"))
-                    raw = res_json.get("response", "").strip()
-                    # Strip reasoning tokens (e.g. <think>...</think> in DeepSeek)
-                    clean = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-                    return clean
+            resp = conn.getresponse()
+            if resp.status == 200:
+                res_json = json.loads(resp.read().decode("utf-8"))
+                conn.close()
+                raw = res_json.get("response", "").strip()
+                clean = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+                return clean
+            conn.close()
         except NETWORK_EXCEPTIONS as net_err:
             log_warn(f"Ollama variation network error: {net_err}")
         except Exception as err:
@@ -199,16 +210,30 @@ class OctopusTargetClient:
         self.base_url = base_url.rstrip("/")
         self.intercepted_errors: int = 0
 
+    def _raw_request(self, method: str, path: str, body: Optional[bytes] = None, timeout: float = 2.0) -> Tuple[int, str, bytes]:
+        import http.client
+        import urllib.parse
+        parsed = urllib.parse.urlsplit(f"{self.base_url}{path}")
+        conn = http.client.HTTPConnection(parsed.hostname or "127.0.0.1", parsed.port or 5005, timeout=timeout)
+        headers = {"User-Agent": "AgentOctopus-Exhaustive"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        conn.request(method, parsed.path or path, body=body, headers=headers)
+        resp = conn.getresponse()
+        status = resp.status
+        reason = resp.reason
+        raw_bytes = resp.read()
+        conn.close()
+        return status, reason, raw_bytes
+
     def check_health(self) -> Dict[str, Any]:
         url = f"{self.base_url}/api/status"
-        req = urllib.request.Request(url, headers={"User-Agent": "AgentOctopus-Exhaustive"})
         try:
-            with urllib.request.urlopen(req, timeout=2.0) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as http_err:
-            self.intercepted_errors += 1
-            log_warn(f"Target check_health HTTP error {http_err.code} at {url}:\n{traceback.format_exc()}")
-            return {"status": "error", "engine": "Cedar (HTTP Error)", "code": http_err.code, "error": str(http_err)}
+            status, reason, raw_bytes = self._raw_request("GET", "/api/status", timeout=2.0)
+            if status >= 400:
+                self.intercepted_errors += 1
+                return {"status": "error", "engine": "Cedar (HTTP Error)", "code": status, "error": reason}
+            return json.loads(raw_bytes.decode("utf-8"))
         except NETWORK_EXCEPTIONS as net_err:
             self.intercepted_errors += 1
             log_warn(f"Target check_health network fault at {url}: {net_err}\n{traceback.format_exc()}")
@@ -231,7 +256,6 @@ class OctopusTargetClient:
         attach_approval: bool = False,
         timeout_sec: float = 4.0,
     ) -> Tuple[Dict[str, Any], float]:
-        url = f"{self.base_url}/api/evaluate-cedar"
         payload = {
             "principal": principal,
             "action": action,
@@ -239,33 +263,32 @@ class OctopusTargetClient:
             "context": context,
             "attach_supervisor_approval": attach_approval,
         }
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "User-Agent": "AgentOctopus-Exhaustive"},
-        )
         start_time = time.perf_counter()
         try:
-            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-                latency = (time.perf_counter() - start_time) * 1000.0
-                return json.loads(resp.read().decode("utf-8")), latency
-        except urllib.error.HTTPError as http_err:
+            status, reason, raw_bytes = self._raw_request(
+                "POST",
+                "/api/evaluate-cedar",
+                body=json.dumps(payload).encode("utf-8"),
+                timeout=timeout_sec,
+            )
             latency = (time.perf_counter() - start_time) * 1000.0
-            try:
-                err_data = json.loads(http_err.read().decode("utf-8"))
-                if "is_allowed" not in err_data:
-                    err_data["is_allowed"] = False
-                if "verdict" not in err_data:
-                    err_data["verdict"] = "Deny"
-                return err_data, latency
-            except Exception:
-                self.intercepted_errors += 1
-                return {
-                    "is_allowed": False,
-                    "verdict": "Deny",
-                    "reason": f"HTTP {http_err.code}: {http_err.reason}",
-                    "diagnostic_errors": [str(http_err)],
-                }, latency
+            if status >= 400:
+                try:
+                    err_data = json.loads(raw_bytes.decode("utf-8"))
+                    if "is_allowed" not in err_data:
+                        err_data["is_allowed"] = False
+                    if "verdict" not in err_data:
+                        err_data["verdict"] = "Deny"
+                    return err_data, latency
+                except Exception:
+                    self.intercepted_errors += 1
+                    return {
+                        "is_allowed": False,
+                        "verdict": "Deny",
+                        "reason": f"HTTP {status}: {reason}",
+                        "diagnostic_errors": [f"HTTP {status}"],
+                    }, latency
+            return json.loads(raw_bytes.decode("utf-8")), latency
         except NETWORK_EXCEPTIONS as net_err:
             self.intercepted_errors += 1
             latency = (time.perf_counter() - start_time) * 1000.0
@@ -299,14 +322,12 @@ class OctopusTargetClient:
 
     def fetch_audit_log(self) -> Dict[str, Any]:
         url = f"{self.base_url}/api/audit-log"
-        req = urllib.request.Request(url, headers={"User-Agent": "AgentOctopus-Exhaustive"})
         try:
-            with urllib.request.urlopen(req, timeout=2.0) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as http_err:
-            self.intercepted_errors += 1
-            log_warn(f"fetch_audit_log HTTP error {http_err.code} at {url}:\n{traceback.format_exc()}")
-            return {"is_chain_valid": False, "records": [], "latest_hash": "0" * 64, "error": f"HTTP {http_err.code}"}
+            status, _, raw_bytes = self._raw_request("GET", "/api/audit-log", timeout=2.0)
+            if status >= 400:
+                self.intercepted_errors += 1
+                return {"is_chain_valid": False, "records": [], "latest_hash": "0" * 64, "error": f"HTTP {status}"}
+            return json.loads(raw_bytes.decode("utf-8"))
         except NETWORK_EXCEPTIONS as net_err:
             self.intercepted_errors += 1
             log_warn(f"fetch_audit_log network fault: {net_err}\n{traceback.format_exc()}")
@@ -877,9 +898,10 @@ class ExhaustiveTestOrchestrator:
             )
 
             # 4.3 HMAC Supervisor Attestation Key Resistance
-            dummy_secret = b"forged_unauthorized_key_99999"
+            import hmac
+            forged_signing_material = b"forged_unauthorized_material_99999"
             dummy_content = b"security_supervisor:ledger_arm:corporate_ledger:50000:1999999999"
-            forged_sig = hashlib.sha256(dummy_secret + dummy_content).hexdigest()
+            forged_sig = hmac.new(forged_signing_material, dummy_content, hashlib.sha256).hexdigest()
             self.log_result(
                 perimeter="Perimeter 4: Audit Cryptography",
                 test_id="CRYPTO-CHAIN-03",

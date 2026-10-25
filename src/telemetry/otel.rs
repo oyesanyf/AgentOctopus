@@ -150,11 +150,16 @@ impl OtelSessionTelemetry {
             .unwrap_or_default()
             .as_secs();
 
-        let mut sessions = self.active_sessions.write().unwrap();
+        let mut sessions = self.active_sessions.write().unwrap_or_else(|e| e.into_inner());
         if let Some(sess) = sessions.get_mut(session_id) {
             sess.last_active_secs = now;
             sess.total_turns += 1;
             return (session_id.to_string(), sess.trace_id.clone());
+        }
+        if sessions.len() >= 1024 {
+            if let Some(oldest_key) = sessions.keys().next().cloned() {
+                sessions.remove(&oldest_key);
+            }
         }
 
         let trace_id = generate_trace_id();
@@ -258,16 +263,22 @@ impl OtelSessionTelemetry {
     /// Records an observed boundary event with detection and remediation latencies.
     pub fn record_resilience_event(&self, mttd_ms: f64, mttr_ms: f64, session_id: Option<&str>) {
         if mttd_ms > 0.0 {
-            let mut det = self.detection_latencies_ms.lock().unwrap();
+            let mut det = self.detection_latencies_ms.lock().unwrap_or_else(|e| e.into_inner());
+            if det.len() >= 1024 {
+                det.remove(0);
+            }
             det.push(mttd_ms);
         }
         if mttr_ms > 0.0 {
-            let mut rem = self.remediation_latencies_ms.lock().unwrap();
+            let mut rem = self.remediation_latencies_ms.lock().unwrap_or_else(|e| e.into_inner());
+            if rem.len() >= 1024 {
+                rem.remove(0);
+            }
             rem.push(mttr_ms);
         }
 
         if let Some(sid) = session_id {
-            let mut sessions = self.active_sessions.write().unwrap();
+            let mut sessions = self.active_sessions.write().unwrap_or_else(|e| e.into_inner());
             if let Some(sess) = sessions.get_mut(sid) {
                 sess.security_violations_detected += 1;
                 sess.mttd_ms = mttd_ms;

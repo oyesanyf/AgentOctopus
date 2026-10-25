@@ -265,6 +265,16 @@ impl ContainmentRing {
                     return (RingDecision::Deny, format!("Level 1 Arm Ring veto: {}", e));
                 }
             }
+        } else if let Some(arm_ring) = self.arm_registry.get_ring_by_name(&req.agent_id).await {
+            if arm_ring.is_severed() {
+                return (
+                    RingDecision::Deny,
+                    format!(
+                        "Level 1 Arm Ring veto: Arm '{}' is severed and cannot execute operations without epoch regeneration",
+                        req.agent_id
+                    ),
+                );
+            }
         }
 
         // 2. Outer Ring: Resource Budget & Step Limit Check
@@ -457,6 +467,20 @@ impl ContainmentRing {
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "RING_METADATA_MISREPRESENTATION: Operation '{}' cannot invoke native binary '{} {:?}'",
                     req.operation_type, prog, args
+                )));
+            }
+            let native_cmdline =
+                crate::security::windows_sandbox::build_windows_command_line(prog, args);
+            let native_verdict = self.breakout_coordinator.evaluate_action(
+                &req.agent_id,
+                &req.operation_type,
+                &req.target,
+                &native_cmdline,
+            );
+            if !native_verdict.is_clean {
+                return Err(OctopusSecurityError::IsolationViolation(format!(
+                    "RING_NATIVE_COMMAND_BREAKOUT_BLOCKED: {}",
+                    native_verdict.composite_verdict
                 )));
             }
         }

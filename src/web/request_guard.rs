@@ -138,7 +138,9 @@ pub fn resolve_index_session_token(req: &GuardRequest<'_>) -> (String, Option<St
         let csrf = hex::encode(csrf_bytes);
         if let Ok(mut sessions) = session_store().lock() {
             if sessions.len() >= 256 {
-                sessions.clear();
+                if let Some(oldest_sid) = sessions.keys().next().cloned() {
+                    sessions.remove(&oldest_sid);
+                }
             }
             sessions.insert(sid.clone(), csrf.clone());
         }

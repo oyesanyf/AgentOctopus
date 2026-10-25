@@ -8,8 +8,21 @@ on http://127.0.0.1:5005.
 import os
 import sys
 import json
-import urllib.request
-import urllib.error
+import http.client
+import urllib.parse
+
+
+def _http_request(url, method="GET", body=None, headers=None, timeout=5.0):
+    parsed = urllib.parse.urlsplit(url)
+    conn = http.client.HTTPConnection(parsed.hostname or "127.0.0.1", parsed.port or 5005, timeout=timeout)
+    target = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
+    conn.request(method, target, body=body, headers=headers or {})
+    resp = conn.getresponse()
+    status = resp.status
+    data = resp.read().decode("utf-8", errors="replace")
+    ctype = resp.getheader("Content-Type", "")
+    conn.close()
+    return status, data, ctype
 
 
 def _resolve_active_base_url():
@@ -30,9 +43,9 @@ def _resolve_active_base_url():
     for port in candidates:
         url = f"http://127.0.0.1:{port}"
         try:
-            with urllib.request.urlopen(f"{url}/", timeout=0.8) as resp:
-                if resp.getcode() == 200:
-                    return url
+            status, _, _ = _http_request(f"{url}/", timeout=0.8)
+            if status == 200:
+                return url
         except Exception:
             continue
     return f"http://127.0.0.1:{candidates[0] if candidates else 5005}"
@@ -44,8 +57,8 @@ BASE_URL = _resolve_active_base_url()
 def _fetch_dashboard_token(base_url):
     import re
     try:
-        with urllib.request.urlopen(f"{base_url}/", timeout=2.0) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
+        status, html, _ = _http_request(f"{base_url}/", timeout=2.0)
+        if status == 200:
             m = re.search(r'<meta\s+name="octopus-token"\s+content="([0-9a-fA-F]+)"', html)
             if m:
                 return m.group(1)
@@ -82,16 +95,8 @@ def http_get(path, headers=None):
         h["X-Octopus-Token"] = OCTOPUS_TOKEN
     if headers:
         h.update(headers)
-    req = urllib.request.Request(url, headers=h)
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            status = resp.getcode()
-            body = resp.read().decode('utf-8', errors='replace')
-            content_type = resp.headers.get('Content-Type', '')
-            return status, body, content_type
-    except urllib.error.HTTPError as e:
-        body = e.read().decode('utf-8', errors='replace')
-        return e.code, body, e.headers.get('Content-Type', '')
+        return _http_request(url, method="GET", headers=h, timeout=10.0)
     except Exception as e:
         return 0, str(e), ''
 
@@ -103,15 +108,8 @@ def http_post(path, data=None, headers=None):
     if headers:
         h.update(headers)
     encoded = json.dumps(data).encode('utf-8') if data is not None else b"{}"
-    req = urllib.request.Request(url, data=encoded, headers=h, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            status = resp.getcode()
-            body = resp.read().decode('utf-8', errors='replace')
-            return status, body, resp.headers.get('Content-Type', '')
-    except urllib.error.HTTPError as e:
-        body = e.read().decode('utf-8', errors='replace')
-        return e.code, body, e.headers.get('Content-Type', '')
+        return _http_request(url, method="POST", body=encoded, headers=h, timeout=15.0)
     except Exception as e:
         return 0, str(e), ''
 

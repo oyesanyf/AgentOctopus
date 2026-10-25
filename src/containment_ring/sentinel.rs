@@ -252,8 +252,16 @@ impl OctopusSentinelRing {
             .unwrap_or_default()
             .as_secs();
 
-        self.last_heartbeat_time.store(now, Ordering::SeqCst);
         let mut hb_lock = self.last_supervisor_heartbeat.write().await;
+        if let Some(ref prev) = *hb_lock {
+            if prev.heartbeat_sequence > 0 && heartbeat.heartbeat_sequence <= prev.heartbeat_sequence {
+                return Err(OctopusSecurityError::CapabilityDenied(format!(
+                    "Sentinel rejected replayed or non-monotonic supervisor heartbeat sequence ({} <= {})",
+                    heartbeat.heartbeat_sequence, prev.heartbeat_sequence
+                )));
+            }
+        }
+        self.last_heartbeat_time.store(now, Ordering::SeqCst);
         *hb_lock = Some(heartbeat);
 
         Ok(())
@@ -368,6 +376,9 @@ impl OctopusSentinelRing {
 
         let handles = self.os_process_handles.read().await;
         if let Some(&pid) = handles.get(&arm_id) {
+            if crate::containment_ring::arm_ring::ArmContainmentRing::verify_terminable_child_pid(pid).is_err() {
+                return false;
+            }
             #[cfg(windows)]
             {
                 use windows_sys::Win32::Foundation::CloseHandle;

@@ -428,30 +428,28 @@ async fn handle_connection(
         );
         let _ = stream.write_all(resp.as_bytes()).await;
         let _ = stream.flush().await;
-        let mut drain_buf = [0u8; 65536];
-        let mut drained = total_buffer.len().saturating_sub(body_start);
-        while drained < content_length {
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(150),
-                stream.read(&mut drain_buf),
-            )
-            .await
-            {
-                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
-                Ok(Ok(n)) => {
-                    drained += n;
-                }
-            }
-        }
         let _ = stream.shutdown().await;
         return Ok(());
     }
 
     let mut current_body_len = total_buffer.len().saturating_sub(body_start);
+    let body_read_started = std::time::Instant::now();
+    let max_total_body_read = std::time::Duration::from_secs(10);
     while current_body_len < content_length {
+        if body_read_started.elapsed() > max_total_body_read {
+            let resp = api_error_response(
+                "408 Request Timeout",
+                "SLOWLORIS_BODY_DEADLINE_EXCEEDED",
+                "Total HTTP request body read exceeded 10s wall-clock ceiling; socket severed",
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+            let _ = stream.shutdown().await;
+            return Ok(());
+        }
+        let max_slice = (content_length - current_body_len).min(chunk.len());
         let read_res = tokio::time::timeout(
             std::time::Duration::from_millis(1500), // Enforce strict 1.5s body read timeout against dangling-byte stall attacks
-            stream.read(&mut chunk),
+            stream.read(&mut chunk[..max_slice]),
         )
         .await;
         let n = match read_res {

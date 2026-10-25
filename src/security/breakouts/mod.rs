@@ -614,7 +614,14 @@ mod win_confined {
         // Each open directory handle omits FILE_SHARE_DELETE and stays alive in `_held_dirs` until the leaf is verified.
         let mut _held_dirs: Vec<std::fs::File> = vec![root_file];
         for dir_comp in &comps[..comps.len() - 1] {
-            let parent_h = _held_dirs.last().unwrap().as_raw_handle() as HANDLE;
+            let parent_h = _held_dirs
+                .last()
+                .ok_or_else(|| {
+                    OctopusSecurityError::IsolationViolation(
+                        "CONFINED_OPEN_MISSING_PARENT: Parent directory handle stack empty".to_string(),
+                    )
+                })?
+                .as_raw_handle() as HANDLE;
             let dir_file = nt_open_single_component_relative(
                 parent_h,
                 dir_comp,
@@ -649,8 +656,19 @@ mod win_confined {
 
         // 4. Open the final single-component leaf relative to the validated parent directory HANDLE via NtCreateFile.
         // Writable files (`write == true`) enforce exclusive sharing (`ShareAccess = 0`) to block concurrent race mutation.
-        let parent_h = _held_dirs.last().unwrap().as_raw_handle() as HANDLE;
-        let leaf_comp = comps.last().unwrap();
+        let parent_h = _held_dirs
+            .last()
+            .ok_or_else(|| {
+                OctopusSecurityError::IsolationViolation(
+                    "CONFINED_OPEN_MISSING_PARENT: Parent directory handle stack empty".to_string(),
+                )
+            })?
+            .as_raw_handle() as HANDLE;
+        let leaf_comp = comps.last().ok_or_else(|| {
+            OctopusSecurityError::IsolationViolation(
+                "CONFINED_OPEN_EMPTY_COMPONENTS: Missing leaf path component".to_string(),
+            )
+        })?;
         let access = if write {
             GENERIC_READ | GENERIC_WRITE
         } else {
@@ -698,6 +716,17 @@ mod win_confined {
             )));
         }
 
+        // 6. Truncate writable leaf file AFTER hardlink and canonical path verification succeed,
+        // preventing stale trailing bytes when overwriting with a shorter payload.
+        if write {
+            leaf_file.set_len(0).map_err(|e| {
+                OctopusSecurityError::IsolationViolation(format!(
+                    "CONFINED_OPEN_TRUNCATE_FAILED: Failed to truncate writable file '{}': {}",
+                    relative_input, e
+                ))
+            })?;
+        }
+
         Ok(leaf_file)
     }
 }
@@ -733,6 +762,11 @@ mod unix_confined {
                 _ => None,
             })
             .collect();
+        if comps.is_empty() {
+            return Err(OctopusSecurityError::IsolationViolation(
+                "CONFINED_OPEN_EMPTY_COMPONENTS: Relative path has no target component".to_string(),
+            ));
+        }
         for comp in &comps[..comps.len() - 1] {
             cursor.push(comp);
             let m = std::fs::symlink_metadata(&cursor).map_err(|e| {
@@ -744,7 +778,12 @@ mod unix_confined {
                 ));
             }
         }
-        cursor.push(comps.last().unwrap());
+        let leaf_comp = comps.last().ok_or_else(|| {
+            OctopusSecurityError::IsolationViolation(
+                "CONFINED_OPEN_EMPTY_COMPONENTS: Missing leaf path component".to_string(),
+            )
+        })?;
+        cursor.push(leaf_comp);
         if let Ok(m) = std::fs::symlink_metadata(&cursor) {
             if m.file_type().is_symlink() {
                 return Err(OctopusSecurityError::IsolationViolation(
@@ -775,6 +814,14 @@ mod unix_confined {
             return Err(OctopusSecurityError::IsolationViolation(
                 "CONFINED_OPEN_ESCAPE_DETECTED".to_string(),
             ));
+        }
+        if write {
+            file.set_len(0).map_err(|e| {
+                OctopusSecurityError::IsolationViolation(format!(
+                    "CONFINED_OPEN_TRUNCATE_FAILED: {}",
+                    e
+                ))
+            })?;
         }
         Ok(file)
     }

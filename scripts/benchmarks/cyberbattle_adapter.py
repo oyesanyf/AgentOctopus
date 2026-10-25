@@ -493,6 +493,7 @@ class EnterpriseNetworkEnvironment:
     """
 
     def __init__(self, num_nodes: int = 16, seed: Optional[int] = 42):
+        self._rng = random.Random(seed if seed is not None else 42)
         if seed is not None:
             random.seed(seed)
         self.num_nodes = max(8, num_nodes)
@@ -651,7 +652,7 @@ class EnterpriseNetworkEnvironment:
             return attacker_event
 
         # Attacker tries to discover or exploit a neighbor
-        src, dst = random.choice(candidate_edges)
+        src, dst = self._rng.choice(candidate_edges)
         target = self.nodes[dst]
 
         if not target.is_discovered:
@@ -665,7 +666,7 @@ class EnterpriseNetworkEnvironment:
             elif "svc_app_token" in self.attacker_known_credentials:
                 chance = 0.65
 
-            if random.random() < chance:
+            if self._rng.random() < chance:
                 target.is_compromised = True
                 self.attacker_current_nodes.add(dst)
                 for cred in target.credentials_stored:
@@ -844,8 +845,13 @@ class PassiveDisabledDefender(BaseDefenderPolicy):
 
 class RandomDefender(BaseDefenderPolicy):
     """Uniform random defense action."""
+    def __init__(self, seed: int = 42):
+        self._rng = random.Random(seed)
+
     def select_action(self, state: AdaptiveStateVector) -> int:
-        return random.randint(0, 4)
+        if not hasattr(self, "_rng"):
+            self._rng = random.Random(42)
+        return self._rng.randint(0, 4)
 
 
 class HeuristicDefender(BaseDefenderPolicy):
@@ -901,17 +907,26 @@ class OctopusLearnedDefender(BaseDefenderPolicy):
             self.use_api = False
             return
         try:
-            req = urllib.request.Request(f"{self.api_base_url}/api/rl-defense/status")
-            with urllib.request.urlopen(req, timeout=1.0) as resp:
-                if resp.status == 200:
-                    self.use_api = True
-                    return
+            import http.client
+            import urllib.parse
+            parsed = urllib.parse.urlsplit(f"{self.api_base_url}/api/rl-defense/status")
+            conn = http.client.HTTPConnection(parsed.hostname or "127.0.0.1", parsed.port or 5005, timeout=1.0)
+            conn.request("GET", parsed.path or "/api/rl-defense/status")
+            resp = conn.getresponse()
+            status = resp.status
+            _ = resp.read()
+            conn.close()
+            if status == 200:
+                self.use_api = True
+                return
         except Exception:
             self.use_api = False
 
     def select_action(self, state: AdaptiveStateVector) -> int:
         if self.use_api:
             try:
+                import http.client
+                import urllib.parse
                 payload = json.dumps({
                     "principal": "CyberBattleSim::Defender",
                     "action": "AutonomousActiveDefense",
@@ -919,18 +934,22 @@ class OctopusLearnedDefender(BaseDefenderPolicy):
                     "payload": json.dumps({"state_vector": asdict(state)}),
                     "state_vector": asdict(state),
                 }).encode("utf-8")
-                req = urllib.request.Request(
-                    f"{self.api_base_url}/api/rl-defense/evaluate-action",
-                    data=payload,
+                parsed = urllib.parse.urlsplit(f"{self.api_base_url}/api/rl-defense/evaluate-action")
+                conn = http.client.HTTPConnection(parsed.hostname or "127.0.0.1", parsed.port or 5005, timeout=1.0)
+                conn.request(
+                    "POST",
+                    parsed.path or "/api/rl-defense/evaluate-action",
+                    body=payload,
                     headers={"Content-Type": "application/json"},
-                    method="POST",
                 )
-                with urllib.request.urlopen(req, timeout=1.0) as resp:
-                    if resp.status == 200:
-                        data = json.loads(resp.read().decode("utf-8"))
-                        action_str = data.get("rl_action_selected", "")
-                        if action_str in AdaptiveDefenseAction.NAMES:
-                            return AdaptiveDefenseAction.NAMES.index(action_str)
+                resp = conn.getresponse()
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    conn.close()
+                    action_str = data.get("rl_action_selected", "")
+                    if action_str in AdaptiveDefenseAction.NAMES:
+                        return AdaptiveDefenseAction.NAMES.index(action_str)
+                conn.close()
             except Exception:
                 self.use_api = False
 

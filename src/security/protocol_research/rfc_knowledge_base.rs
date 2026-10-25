@@ -351,9 +351,9 @@ impl RfcKnowledgeBase {
     /// Inserts a batch of structured chunks for an RFC.
     pub fn insert_fragments_batch(&self, rfc_number: u32, title: &str, chunks: &[(usize, String, bool)]) {
         let mut cmds = Vec::with_capacity(chunks.len());
-        let clean_title = title.replace('\'', "''");
+        let clean_title = Self::sanitize_sql_literal(title);
         for (idx, content, is_norm) in chunks {
-            let clean_content = content.replace('\'', "''");
+            let clean_content = Self::sanitize_sql_literal(content);
             cmds.push(format!(
                 "INSERT OR REPLACE INTO fragments (rfc_number, title, chunk_index, content, is_normative) VALUES ({}, '{}', {}, '{}', {});",
                 rfc_number, clean_title, idx, clean_content, if *is_norm { 1 } else { 0 }
@@ -364,7 +364,7 @@ impl RfcKnowledgeBase {
 
     /// Retrieves synchronization metadata by key (e.g. etag, last_sync).
     pub fn get_metadata(&self, key: &str) -> Option<String> {
-        let clean_key = key.replace('\'', "''");
+        let clean_key = Self::sanitize_sql_literal(key);
         let query = format!("SELECT value FROM sync_metadata WHERE key = '{}';", clean_key);
         let output = self.sqlite_cmd()
             .arg(&query)
@@ -380,8 +380,8 @@ impl RfcKnowledgeBase {
 
     /// Updates or inserts synchronization metadata.
     pub fn set_metadata(&self, key: &str, value: &str) {
-        let clean_key = key.replace('\'', "''");
-        let clean_val = value.replace('\'', "''");
+        let clean_key = Self::sanitize_sql_literal(key);
+        let clean_val = Self::sanitize_sql_literal(value);
         let query = format!(
             "INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('{}', '{}', datetime('now'));",
             clean_key, clean_val

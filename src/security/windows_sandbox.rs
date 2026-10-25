@@ -478,7 +478,10 @@ pub fn create_or_open_appcontainer_profile(
     let mut str_sid_ptr: win32::PWSTR = std::ptr::null_mut();
     let conv_res = unsafe { win32::ConvertSidToStringSidW(psid, &mut str_sid_ptr) };
     if conv_res == 0 || str_sid_ptr.is_null() {
-        unsafe { win32::FreeSid(psid) };
+        unsafe {
+            win32::FreeSid(psid);
+            win32::DeleteAppContainerProfile(wide_name.as_ptr());
+        };
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: ConvertSidToStringSidW failed to format AppContainer SID".to_string(),
         ));
@@ -491,6 +494,58 @@ pub fn create_or_open_appcontainer_profile(
     };
 
     Ok((sid_str, psid))
+}
+
+#[cfg(windows)]
+fn rollback_appcontainer_profile(name: &str) {
+    let wide_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let _ = win32::DeleteAppContainerProfile(wide_name.as_ptr());
+    }
+}
+
+/// Quotes a single Windows command-line argument according to the Microsoft C/C++ runtime
+/// (`CommandLineToArgvW` / MSVCRT) parsing rules, preventing quote-escape and trailing-backslash
+/// argument injection.
+pub fn quote_windows_argv_arg(arg: &str) -> String {
+    if !arg.is_empty() && !arg.chars().any(|c| c == ' ' || c == '\t' || c == '\n' || c == '\x0b' || c == '"') {
+        return arg.to_string();
+    }
+    let mut quoted = String::with_capacity(arg.len() + 4);
+    quoted.push('"');
+    let mut backslashes = 0usize;
+    for ch in arg.chars() {
+        if ch == '\\' {
+            backslashes += 1;
+        } else if ch == '"' {
+            for _ in 0..(backslashes * 2 + 1) {
+                quoted.push('\\');
+            }
+            quoted.push('"');
+            backslashes = 0;
+        } else {
+            for _ in 0..backslashes {
+                quoted.push('\\');
+            }
+            backslashes = 0;
+            quoted.push(ch);
+        }
+    }
+    for _ in 0..(backslashes * 2) {
+        quoted.push('\\');
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// Builds a complete MSVCRT-quoted command line from an executable path and argument vector.
+pub fn build_windows_command_line(program: &str, args: &[String]) -> String {
+    let mut cmdline = format!("\"{}\"", program.replace('"', ""));
+    for arg in args {
+        cmdline.push(' ');
+        cmdline.push_str(&quote_windows_argv_arg(arg));
+    }
+    cmdline
 }
 
 impl WindowsAppContainerProfile {
@@ -524,7 +579,7 @@ impl WindowsAppContainerProfile {
         let hash = sha2::Sha256::digest(container_name.as_bytes());
         let mut sub_authorities = Vec::with_capacity(7);
         for chunk in hash[..28].chunks_exact(4) {
-            let val = u32::from_le_bytes(chunk.try_into().unwrap());
+            let val = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             sub_authorities.push(val.to_string());
         }
         let derived_sid = format!("S-1-15-2-{}", sub_authorities.join("-"));
@@ -925,6 +980,7 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
     }
     if attr_size == 0 {
         unsafe { win32::FreeSid(psid) };
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: InitializeProcThreadAttributeList failed to calculate attribute size".to_string(),
         ));
@@ -937,6 +993,7 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
     };
     if init_ok == 0 {
         unsafe { win32::FreeSid(psid) };
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: InitializeProcThreadAttributeList failed to initialize attribute buffer".to_string(),
         ));
@@ -959,6 +1016,7 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
             win32::DeleteProcThreadAttributeList(attr_list);
             win32::FreeSid(psid);
         };
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(format!(
             "FAIL-CLOSED: UpdateProcThreadAttribute failed with error {}",
             unsafe { win32::GetLastError() }
@@ -1002,6 +1060,7 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
     if create_res == 0 {
         let err = unsafe { win32::GetLastError() };
         unsafe { win32::FreeSid(psid) };
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(format!(
             "FAIL-CLOSED: Failed to spawn worker in AppContainer profile '{}' (OS Error {})",
             container_name, err
@@ -1020,6 +1079,7 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
             windows_sys::Win32::Foundation::CloseHandle(pi.hThread);
             win32::FreeSid(psid);
         };
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(format!(
             "FAIL-CLOSED: AssignProcessToJobObject failed on suspended worker process (OS Error {}). Execution halted.",
             err
@@ -1035,6 +1095,7 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
             windows_sys::Win32::Foundation::CloseHandle(pi.hProcess);
             windows_sys::Win32::Foundation::CloseHandle(pi.hThread);
         };
+        rollback_appcontainer_profile(&container_name);
         return Err(e);
     }
 
@@ -1047,6 +1108,7 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
             windows_sys::Win32::Foundation::CloseHandle(pi.hProcess);
             windows_sys::Win32::Foundation::CloseHandle(pi.hThread);
         };
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(format!(
             "FAIL-CLOSED: ResumeThread failed on sandboxed worker process (OS Error {})",
             err
@@ -1341,6 +1403,7 @@ pub fn spawn_tier2_appcontainer_command(
     }
     if attr_size == 0 {
         unsafe { win32::FreeSid(psid) };
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: InitializeProcThreadAttributeList size query failed".to_string(),
         ));
@@ -1350,6 +1413,7 @@ pub fn spawn_tier2_appcontainer_command(
     let attr_list = attr_buf.as_mut_ptr() as *mut std::ffi::c_void;
     if unsafe { win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) } == 0 {
         unsafe { win32::FreeSid(psid) };
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: InitializeProcThreadAttributeList buffer init failed".to_string(),
         ));
@@ -1372,6 +1436,7 @@ pub fn spawn_tier2_appcontainer_command(
             win32::DeleteProcThreadAttributeList(attr_list);
             win32::FreeSid(psid);
         }
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES) failed".to_string(),
         ));
@@ -1388,17 +1453,7 @@ pub fn spawn_tier2_appcontainer_command(
         .chain(std::iter::once(0))
         .collect();
 
-    let mut cmdline = format!("\"{}\"", canonical_exe);
-    for arg in args {
-        cmdline.push(' ');
-        if arg.contains(' ') || arg.contains('\t') || arg.contains('"') {
-            cmdline.push('"');
-            cmdline.push_str(&arg.replace('"', "\\\""));
-            cmdline.push('"');
-        } else {
-            cmdline.push_str(arg);
-        }
-    }
+    let cmdline = build_windows_command_line(canonical_exe, args);
     let mut wide_cmd: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
 
     // Sanitized minimal Unicode environment block (prevents leaking host API keys/tokens into Tier 2).
@@ -1471,6 +1526,7 @@ pub fn spawn_tier2_appcontainer_command(
     if created == 0 {
         let err = unsafe { win32::GetLastError() };
         unsafe { win32::FreeSid(psid) };
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(format!(
             "FAIL-CLOSED: CreateProcessW in AppContainer '{}' for '{}' failed (OS Error {})",
             container_name, canonical_exe, err
@@ -1485,6 +1541,7 @@ pub fn spawn_tier2_appcontainer_command(
             CloseHandle(pi.hThread);
             win32::FreeSid(psid);
         }
+        rollback_appcontainer_profile(&container_name);
         return Err(e);
     }
 
@@ -1498,6 +1555,7 @@ pub fn spawn_tier2_appcontainer_command(
                 CloseHandle(pi.hThread);
                 win32::FreeSid(psid);
             }
+            rollback_appcontainer_profile(&container_name);
             return Err(e);
         }
     };
@@ -1512,6 +1570,7 @@ pub fn spawn_tier2_appcontainer_command(
                 CloseHandle(pi.hProcess);
                 CloseHandle(pi.hThread);
             }
+            rollback_appcontainer_profile(&container_name);
             return Err(e);
         }
     };
@@ -1522,6 +1581,7 @@ pub fn spawn_tier2_appcontainer_command(
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
         }
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(format!(
             "FAIL-CLOSED: Child TokenPosture failed verify_agent_safe: {}",
             reasons.join("; ")
@@ -1536,6 +1596,7 @@ pub fn spawn_tier2_appcontainer_command(
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
         }
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(format!(
             "FAIL-CLOSED: ResumeThread failed on AppContainer Tier 2 child (OS Error {})",
             err
@@ -1549,6 +1610,7 @@ pub fn spawn_tier2_appcontainer_command(
     if wait_rc != WAIT_OBJECT_0 {
         let _ = job.terminate(1);
         unsafe { CloseHandle(pi.hProcess) };
+        rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::ResourceQuotaExceeded(format!(
             "TIER2_WALL_CLOCK_TIMEOUT: Process {} in AppContainer '{}' exceeded 10s deadline; job terminated",
             pi.dwProcessId, container_name
@@ -1558,6 +1620,7 @@ pub fn spawn_tier2_appcontainer_command(
     let mut exit_code: u32 = 1;
     let _ = unsafe { win32::GetExitCodeProcess(pi.hProcess, &mut exit_code) };
     unsafe { CloseHandle(pi.hProcess) };
+    rollback_appcontainer_profile(&container_name);
 
     Ok(Tier2ConfinedChildResult {
         pid: pi.dwProcessId,
