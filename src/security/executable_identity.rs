@@ -124,7 +124,13 @@ pub struct VerifiedExecutableMetadata {
 pub struct VerifiedExecutableHandle {
     pub metadata: VerifiedExecutableMetadata,
     #[allow(dead_code)]
-    locked_file: std::fs::File,
+    pub locked_file: std::fs::File,
+}
+
+impl VerifiedExecutableHandle {
+    pub fn locked_file(&self) -> &std::fs::File {
+        &self.locked_file
+    }
 }
 
 #[cfg(windows)]
@@ -569,6 +575,7 @@ mod win_exec_id {
             || canonical_lower.contains("\\windows\\temp\\")
             || canonical_lower.contains("local_scratchpad")
             || canonical_lower.contains("octopus_wasm_scratchpad")
+            || canonical_lower.contains("osoosi_tier1_scratch")
         {
             return Err(OctopusSecurityError::IsolationViolation(format!(
                 "EXEC_ID_UNTRUSTED_DIRECTORY_BLOCKED: Refusing to launch binary '{}' from temporary or scratchpad directory",
