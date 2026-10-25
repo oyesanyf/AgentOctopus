@@ -777,6 +777,15 @@ impl WasmTier1Executor {
                     if path_ptr < 0 || path_len <= 0 || src_ptr < 0 || src_len < 0 {
                         return WASI_ERR_FAULT;
                     }
+                    let max_write_quota = caller.data().limits.max_output_bytes as u64;
+                    let cur_written = caller.data().scratch_bytes_written;
+                    if cur_written.saturating_add(src_len as u64) > max_write_quota {
+                        caller.data_mut().blocked_escape_attempts.push(format!(
+                            "scratch_write denied: write quota exceeded ({} + {} > {})",
+                            cur_written, src_len, max_write_quota
+                        ));
+                        return WASI_ERR_ACCESS_DENIED;
+                    }
                     let Some(wasmtime::Extern::Memory(mem)) = caller.get_export("memory") else {
                         return WASI_ERR_FAULT;
                     };

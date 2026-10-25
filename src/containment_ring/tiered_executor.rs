@@ -215,6 +215,16 @@ impl TieredExecutionDispatcher {
             )));
         }
 
+        if program.trim().is_empty()
+            || program.chars().any(|c| c < ' ' || c == '\x7f')
+            || args.iter().any(|a| a.chars().any(|c| c < ' ' || c == '\x7f'))
+        {
+            return Err(OctopusSecurityError::IsolationViolation(
+                "Tier 2 command rejected: program or arguments contain NUL or control characters"
+                    .to_string(),
+            ));
+        }
+
         // 1. Defense-in-depth structural command-line inspection (CommandLineToArgvW + -EncodedCommand decoding)
         let full_cmd = if args.is_empty() {
             program.clone()
