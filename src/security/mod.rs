@@ -160,3 +160,13 @@ pub use wasm_tier1::{
     WASI_ERR_ACCESS_DENIED, WASI_ERR_FAULT, WASI_ERR_IO, WASM_DOC_EXTRACTOR_WAT,
     WASM_LEDGER_VALIDATOR_WAT,
 };
+
+pub mod rate_limit_backoff;
+pub use rate_limit_backoff::{
+    global_rate_limit_ensemble, global_rete_engine, BackoffEvaluationReport,
+    CorrelatedEvidenceBundle, DeterministicPhysicsVoter, EdrAction, GenerativeLlmVoter,
+    GoogleApiBackoffAnalyzer, HarEntrySample, HarFlowFact, NetworkProtocol,
+    OpenJevDecisionVoter, OsqueryProcessFact, RateLimitAllowlist, RateLimitReleaseEntry,
+    RateLimitVoterEnsemble, ReaBinaryFact, ReteEngine, VoterConsensus, VoterVerdict,
+};
+
