@@ -120,6 +120,7 @@ pub struct VerifiedExecutableMetadata {
 /// Holds a read-locked (`FILE_SHARE_READ` only) OS file handle to the verified executable.
 /// Keeping this guard alive across `CreateProcessW` prevents any concurrent process from
 /// modifying, overwriting, or renaming the binary between verification and process creation.
+#[derive(Debug)]
 pub struct VerifiedExecutableHandle {
     pub metadata: VerifiedExecutableMetadata,
     #[allow(dead_code)]
