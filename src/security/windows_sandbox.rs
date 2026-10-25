@@ -1401,20 +1401,37 @@ pub fn spawn_tier2_appcontainer_command(
     }
     let mut wide_cmd: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
 
-    // Sanitized minimal Unicode environment block (prevents leaking host API keys/tokens into Tier 2)
+    // Sanitized minimal Unicode environment block (prevents leaking host API keys/tokens into Tier 2).
+    // NOTE: Windows `RtlQueryEnvironmentVariable_U` (`BasepCreateLowBox`) binary-searches the environment
+    // block by uppercase variable name; if entries are not sorted case-insensitively or omit USERPROFILE /
+    // LOCALAPPDATA / SystemRoot, CreateProcessW in AppContainer fails with ERROR_ENVVAR_NOT_FOUND (203).
     let sys_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+    let sys_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+    let user_profile = std::env::var("USERPROFILE").unwrap_or_else(|_| scratchpad_root.to_string_lossy().to_string());
+    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| scratchpad_root.to_string_lossy().to_string());
+    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| scratchpad_root.to_string_lossy().to_string());
+    let program_data = std::env::var("ProgramData").unwrap_or_else(|_| format!("{}\\ProgramData", sys_drive));
     let scratch_str = scratchpad_root.to_string_lossy();
-    let env_entries = [
-        format!("SystemRoot={}", sys_root),
-        format!("WINDIR={}", sys_root),
-        format!("ComSpec={}\\System32\\cmd.exe", sys_root),
-        format!("PATH={}\\System32", sys_root),
-        format!("TEMP={}", scratch_str),
-        format!("TMP={}", scratch_str),
-        "AGENT_OCTOPUS_TIER2_CONFINED=1".to_string(),
+    let mut env_pairs: Vec<(String, String)> = vec![
+        ("AGENT_OCTOPUS_TIER2_CONFINED".to_string(), "1".to_string()),
+        ("ALLUSERSPROFILE".to_string(), program_data.clone()),
+        ("APPDATA".to_string(), app_data),
+        ("ComSpec".to_string(), format!("{}\\System32\\cmd.exe", sys_root)),
+        ("LOCALAPPDATA".to_string(), local_app_data),
+        ("PATH".to_string(), format!("{}\\System32", sys_root)),
+        ("PATHEXT".to_string(), ".COM;.EXE".to_string()),
+        ("ProgramData".to_string(), program_data),
+        ("SystemDrive".to_string(), sys_drive),
+        ("SystemRoot".to_string(), sys_root.clone()),
+        ("TEMP".to_string(), scratch_str.to_string()),
+        ("TMP".to_string(), scratch_str.to_string()),
+        ("USERPROFILE".to_string(), user_profile),
+        ("WINDIR".to_string(), sys_root),
     ];
+    env_pairs.sort_by(|a, b| a.0.to_ascii_uppercase().cmp(&b.0.to_ascii_uppercase()));
     let mut env_block: Vec<u16> = Vec::new();
-    for entry in &env_entries {
+    for (k, v) in &env_pairs {
+        let entry = format!("{}={}", k, v);
         env_block.extend(entry.encode_utf16());
         env_block.push(0);
     }
