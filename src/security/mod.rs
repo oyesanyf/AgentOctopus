@@ -86,6 +86,7 @@ pub use harness2::{
 pub mod agent_classifier;
 pub mod alignment_scanner;
 pub mod console_defense;
+pub mod dlp_lineage;
 pub mod file_lineage;
 pub mod mercury_guard;
 pub mod spider_physics;
@@ -104,6 +105,10 @@ pub use console_defense::{
     compute_hardened_console_mode, harden_windows_console, is_console_mode_hardened,
     CommandConsoleExt, CREATE_NO_WINDOW, ENABLE_EXTENDED_FLAGS, ENABLE_INSERT_MODE,
     ENABLE_MOUSE_INPUT, ENABLE_QUICK_EDIT_MODE,
+};
+pub use dlp_lineage::{
+    ArtifactKey, ClassificationLattice, DlpBaggage, DlpLineageEngine, PolicyLattice,
+    ProcessInstanceKey,
 };
 pub use file_lineage::{
     FileLineageRecord, FileLineageTracker, LineageCheckVerdict, MAX_LINEAGE_RECORDS,
@@ -169,4 +174,3 @@ pub use rate_limit_backoff::{
     OpenJevDecisionVoter, OsqueryProcessFact, RateLimitAllowlist, RateLimitReleaseEntry,
     RateLimitVoterEnsemble, ReaBinaryFact, ReteEngine, VoterConsensus, VoterVerdict,
 };
-

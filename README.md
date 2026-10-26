@@ -691,6 +691,47 @@ Agent Octopus features a dedicated research arm pair providing autonomous novel 
 
 ---
 
+## 🚀 NASA JPL F Prime (`F'`) Flight-Software Backbone
+
+Agent Octopus embeds a production-grade implementation of the **NASA JPL F Prime (`F'`) Flight-Software Architecture** (`src/fprime_flight.rs`) for mission-critical real-time autonomy, deterministic fault containment, and anti-priority-inversion execution across decentralized agent swarms.
+
+### 4 Foundational Flight-Software Primitives:
+1. **`Fw::Comp` & `Fw::Port` Declarative Dual-Priority Component-Port Topology**:
+   - Replaces shared locks (`Arc<Mutex<T>>`) with typed asynchronous channels and non-blocking deterministic port envelopes (`PortEnvelope<T>`).
+   - Implements **Dual-Priority Bounded QoS Lanes (`PortQosLane`)**: `CriticalSecurityLane` (QoS Tier 0: process creations, `CreateRemoteThread`, LSASS/SAM access, driver loads, WFP/DLP violations) and `BulkTelemetryLane` (QoS Tier 1: high-frequency file/network read telemetry). Eliminates single-queue backpressure priority inversion where noise floods (e.g. `cmd.exe /c dir /s`) starve critical security alerts.
+   - 5 isolated components: `EbpfPmuTelemetryComponent`, `ReaMagikaInspectorComponent` (with `catch_unwind` panic containment & auto-recovery), `RecoilLikelihoodScorerComponent`, `BftMeshConsensusComponent`, and `WfpNetworkIsolatorComponent`.
+2. **`Fw::BufferManager` Post-Init Sealed Static Memory Pool (`StaticArenaPool`)**:
+   - 3 pre-allocated fixed-size bins at boot: `SyscallEventBin` (512B), `PacketCaptureBin` (2048B), and `YaraReaScanBin` (16KB).
+   - Once sealed via `seal_post_init()`, dynamic heap allocation is strictly forbidden, guaranteeing CWE-770 OOM immunity.
+   - Enforces **Reserved Critical Quota** (25% reserved exclusively for `CriticalSecurityLane`), preventing bulk telemetry floods from exhausting static memory.
+3. **`Svc::Health` Liveness Ping-Pong & Hardware Watchdog Monitor (`SvcHealthMonitor`)**:
+   - Sub-millisecond ping-pong protocol (`warn_deadline: 25ms`, `fatal_deadline: 100ms`).
+   - Automatically aborts hung worker tasks, zero-scrubs all leased arena slots via `reclaim_component_leases()`, and increments the generation respawn epoch.
+   - Validates TPM 2.0 PCR 16 cryptographic attestation before stroking hardware watchdog timers.
+4. **`Svc::CmdSequencer` Deterministic Safe-Mode Demotion Playbooks (`SvcCmdSequencer`)**:
+   - Deterministic binary playbooks (`FSEQ`) signed with Ed25519 and verified with pure-Rust Castagnoli CRC32-C and SHA-256.
+   - Executes 4 microsecond safe-mode demotion operations (`LockdownWfpAndEbpfFilters`, `IsolateHostRecoveryVlan`, `SnapForensicMemoryState`, `HoldHardenedSafeModeUntilQuorumPromotion`) without LLM or cloud dependency.
+   - Enforces a cryptographic multi-signature BFT quorum promotion gate to return to `NominalFlightMode`.
+
+```mermaid
+graph TD
+    subgraph "NASA JPL F Prime Dual-Priority Topology"
+        PMU["Fw::Comp::EbpfPmuTelemetry"] -->|CriticalSecurityLane QoS Tier 0| REA["Fw::Comp::ReaMagikaInspector<br/>std::panic::catch_unwind"]
+        PMU -.->|BulkTelemetryLane QoS Tier 1| REA
+        REA -->|Verdict| REC["Fw::Comp::RecoilLikelihoodScorer<br/>Bayesian Score 0.0..=1.0"]
+        REC -->|Assessment| BFT["Fw::Comp::BftMeshConsensus<br/>BFT Quorum Gate"]
+        BFT -->|Directive| WFP["Fw::Comp::WfpNetworkIsolator<br/>WFP/VLAN Quarantine"]
+    end
+    subgraph "Flight Infrastructure"
+        BM["Fw::BufferManager<br/>StaticArenaPool Sealed"] -.->|Reserved Critical Quota| PMU
+        BM -.->|Zero-Scrub Slot Leasing| REA
+        HLTH["Svc::Health<br/>Ping-Pong 25ms/100ms"] ==>|Hardware Watchdog Stroke| TPM["TPM 2.0 PCR 16<br/>ACPI MSFT0101 1"]
+        SEQ["Svc::CmdSequencer<br/>SafeModePlaybook FSEQ"] ==>|Ed25519 + CRC32C| BFT
+    end
+```
+
+---
+
 ## 📜 Security Policy & Disclosure
 
 Agent Octopus is developed under zero-mock, production-grade security invariants. All cryptographic hash chains use genuine SHA-256 primitives, all policy checks route through AWS Cedar v4.13, and all memory constraints bind directly to Windows Job Objects and Ring-0 kernel drivers.
