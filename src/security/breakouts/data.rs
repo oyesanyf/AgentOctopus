@@ -148,17 +148,29 @@ impl DataBreakoutGuard {
             }
         }
 
-        // 3. PHI / PII Exfiltration Check (Strict Lockdown blocks ALL PHI and PII including loosened contact info)
+        // 3. PHI / PII Exfiltration Check
+        // - AuditMonitor: detects & logs PHI/PII for telemetry scrubbing, but does not block (`is_clean = true` unless memory/credential dump).
+        // - ActiveEnforcement: blocks clinical PHI / SSN while allowing standalone contact PII (email/phone).
+        // - StrictLockdown: blocks ALL PHI and ALL PII (including standalone contact PII).
+        let mut phi_pii_blocked = false;
         if lower_payload.contains("mrn-")
             || lower_payload.contains("icd10-")
             || regex::Regex::new(r"\b\d{3}-\d{2}-\d{4}\b")
                 .map(|re| re.is_match(payload))
                 .unwrap_or(false)
         {
-            detected_violations.push(
-                "PHI/PII exfiltration blocked: clinical MRN / ICD-10 / SSN identifier detected"
-                    .to_string(),
-            );
+            if mode == DlpOperatingMode::AuditMonitor {
+                detected_violations.push(
+                    "MONITOR_AND_SCRUB: clinical MRN / ICD-10 / SSN identifier logged & ZK-scrubbed (Monitor Mode)"
+                        .to_string(),
+                );
+            } else {
+                phi_pii_blocked = true;
+                detected_violations.push(
+                    "PHI/PII exfiltration blocked: clinical MRN / ICD-10 / SSN identifier detected"
+                        .to_string(),
+                );
+            }
         } else if mode == DlpOperatingMode::StrictLockdown {
             let has_email = regex::Regex::new(r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b")
                 .map(|re| re.is_match(payload))
@@ -167,6 +179,7 @@ impl DataBreakoutGuard {
                 .map(|re| re.is_match(payload))
                 .unwrap_or(false);
             if has_email || has_phone {
+                phi_pii_blocked = true;
                 detected_violations.push(
                     "STRICT_LOCKDOWN_ZERO_PII_PHI: Contact PII (email/phone) blocked under Strict Lockdown"
                         .to_string(),
@@ -174,9 +187,15 @@ impl DataBreakoutGuard {
             }
         }
 
-        let is_clean = detected_violations.is_empty();
-        let memory_isolation_breached = !is_clean;
-        let description = if is_clean {
+        let has_hard_violation = detected_violations
+            .iter()
+            .any(|v| !v.starts_with("MONITOR_AND_SCRUB:"))
+            || phi_pii_blocked;
+        let is_clean = !has_hard_violation;
+        let memory_isolation_breached = has_hard_violation;
+        let description = if is_clean && !detected_violations.is_empty() {
+            "Monitor Mode: PHI/PII logged & ZK-scrubbed in telemetry (allowed on wire)".to_string()
+        } else if is_clean {
             "Data boundary verified: strict cross-agent isolation & zero memory leakage".to_string()
         } else {
             format!("Data breakout intercepted: {} isolation breach(es) detected", detected_violations.len())
