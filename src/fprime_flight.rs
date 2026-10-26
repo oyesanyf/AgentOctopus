@@ -1137,6 +1137,21 @@ pub struct SafeModePlaybook {
     pub signature: [u8; 64],
 }
 
+impl Default for SafeModePlaybook {
+    fn default() -> Self {
+        Self {
+            magic: *b"FSEQ",
+            version: 1,
+            playbook_id: "FSEQ-DEFAULT".to_string(),
+            operations: Vec::new(),
+            crc32c: 0,
+            sha256_digest: [0u8; 32],
+            verifying_key: [0u8; 32],
+            signature: [0u8; 64],
+        }
+    }
+}
+
 impl SafeModePlaybook {
     pub fn serialize_payload(playbook_id: &str, ops: &[SequencerOp]) -> Vec<u8> {
         let mut bytes = Vec::new();
