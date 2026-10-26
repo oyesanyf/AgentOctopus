@@ -5,6 +5,7 @@ pub mod containment_ring;
 pub mod core;
 pub mod deterministic;
 pub mod enclave;
+pub mod edr_bench;
 pub mod fprime_flight;
 pub mod ledger;
 pub mod neural_mesh;
@@ -49,6 +50,11 @@ pub use fprime_flight::{
     RecoilLikelihoodScorerComponent, SafeModeExecutionReport, SafeModePlaybook, SequencerOp,
     StaticArenaPool, SvcCmdSequencer, SvcHealthMonitor, TelemetryFrame, WatchdogStrokeReceipt,
     WfpNetworkIsolatorComponent,
+};
+pub use edr_bench::{
+    resolve_fixture_path, BenchmarkReport, BenignBaselineAssertion, EdrBenchHarness, EdrBenchTask,
+    ExpectedVerdict, HarnessBounds, ParsedYaraRule, StringPattern, TargetArch, TelemetryContext,
+    ThreatAssertion,
 };
 pub use ledger::{
     InclusionProof, LedgerError, LogCheckpoint, PolicyAttestation, PolicyProposal,

@@ -732,6 +732,32 @@ graph TD
 
 ---
 
+## 🎯 EDR-Bench: Autonomous Benchmark Harness for Agentic Detection Rules
+
+To evaluate autonomous agent rule synthesis without brittle manual grading or reward hacking, Agent Octopus incorporates **EDR-Bench**, an objective execution-based verification harness (`src/edr_bench.rs`):
+
+1. **Two-Gate Verification Invariants**:
+   - **GATE 1 (`FAIL_TO_PASS`)**: The candidate detection rule (e.g. YARA/eBPF) must match the real adversarial sample (`benchmarks/artifacts/threats/`), enforce the required tag (e.g. `container_escape`), and evaluate within strict scan latency (<50ms) and static arena memory capacity bounds (CWE-770 immunity).
+   - **GATE 2 (`PASS_TO_PASS`)**: The rule is evaluated against a golden corpus of signed OS and developer binaries (`benchmarks/artifacts/golden_baseline/usr_bin_signed/`). It must trigger **zero false positives** (<= allowed threshold).
+2. **Compiler-in-the-Loop Iterative Refinement**:
+   - When candidate rules fail either gate or compiler syntax checks, the harness provides structured diagnostic feedback, guiding automated rule refinement until convergence.
+3. **Cryptographic TPM 2.0 PCR 16 & Ed25519 BFT Promotion Gate**:
+   - Only rules satisfying both gates within resource bounds receive a hardware TPM 2.0 PCR 16 watchdog stroke and an Ed25519 cryptographic BFT promotion signature (`EDR_BENCH_BFT_V1`) for peer-to-peer threat mesh synchronization.
+
+```mermaid
+flowchart TD
+    Candidate["Candidate Detection Rule (YARA / eBPF)"] --> Gate1{"Gate 1: FAIL_TO_PASS - Detects Target Threat?"}
+    Gate1 -- "No Match / Tag Missing / Timeout" --> Feedback["Diagnostic Feedback - Compiler-in-the-Loop Refinement"]
+    Feedback --> Candidate
+    Gate1 -- "Passed" --> Gate2{"Gate 2: PASS_TO_PASS - Zero False Positives on Golden Corpus?"}
+    Gate2 -- "False Positive Detected" --> Feedback
+    Gate2 -- "0 False Positives" --> TPM["Silicon TPM 2.0 PCR 16 - Watchdog Stroke"]
+    TPM --> BFT["Ed25519 BFT Promotion Gate - Signed EDR_BENCH_BFT_V1 Receipt"]
+    BFT --> Mesh["Peer-to-Peer Threat Mesh Sync"]
+```
+
+---
+
 ## 📜 Security Policy & Disclosure
 
 Agent Octopus is developed under zero-mock, production-grade security invariants. All cryptographic hash chains use genuine SHA-256 primitives, all policy checks route through AWS Cedar v4.13, and all memory constraints bind directly to Windows Job Objects and Ring-0 kernel drivers.
