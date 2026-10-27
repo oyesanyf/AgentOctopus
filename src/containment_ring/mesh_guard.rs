@@ -153,11 +153,14 @@ impl HomologicalBoundaryAuditor {
 
         // Sticky taint: lowest-trust upstream hop determines the effective origin.
         let origin_floor = potentials[..n - 1].iter().copied().min().unwrap_or(phi_s);
-        let direct_violation = n == 2 && phi_s <= TrustTier::Untrusted.potential() && phi_r >= TrustTier::PrivilegedSink.potential();
+        let direct_violation = n == 2
+            && phi_s <= TrustTier::Untrusted.potential()
+            && phi_r >= TrustTier::PrivilegedSink.potential();
         let transitive_laundering = n > 2
             && origin_floor <= TrustTier::Untrusted.potential()
             && phi_r >= TrustTier::PrivilegedSink.potential();
-        let proxy_laundering_detected = direct_violation || transitive_laundering || !boundary_squared_zero;
+        let proxy_laundering_detected =
+            direct_violation || transitive_laundering || !boundary_squared_zero;
         let allowed = !proxy_laundering_detected;
 
         let chain_str = chain.iter().map(describe).collect::<Vec<_>>().join(" -> ");
@@ -185,7 +188,13 @@ impl HomologicalBoundaryAuditor {
             allowed,
             sender: describe(&chain[0]),
             intermediary: if n > 2 {
-                Some(chain[1..n - 1].iter().map(describe).collect::<Vec<_>>().join(" -> "))
+                Some(
+                    chain[1..n - 1]
+                        .iter()
+                        .map(describe)
+                        .collect::<Vec<_>>()
+                        .join(" -> "),
+                )
             } else {
                 None
             },
@@ -289,7 +298,12 @@ impl MeshGuard {
     }
 
     /// Allows a specific route (by authenticated arm id) and message kind between two arms.
-    pub async fn allow_route(&self, sender_arm_id: usize, recipient_arm_id: usize, kind: Option<MessageKind>) {
+    pub async fn allow_route(
+        &self,
+        sender_arm_id: usize,
+        recipient_arm_id: usize,
+        kind: Option<MessageKind>,
+    ) {
         let mut routes = self.allowed_routes.write().await;
         routes.insert((sender_arm_id, recipient_arm_id, kind));
     }
@@ -341,8 +355,12 @@ impl MeshGuard {
 
         // 3. Route authorization (fail-closed on empty table)
         let routes = self.allowed_routes.read().await;
-        let permitted = routes.contains(&(msg.sender_arm_id, verified.recipient_arm_id(), Some(msg.kind.clone())))
-            || routes.contains(&(msg.sender_arm_id, verified.recipient_arm_id(), None));
+        let permitted =
+            routes.contains(&(
+                msg.sender_arm_id,
+                verified.recipient_arm_id(),
+                Some(msg.kind.clone()),
+            )) || routes.contains(&(msg.sender_arm_id, verified.recipient_arm_id(), None));
         if !permitted {
             return Err(OctopusSecurityError::CapabilityDenied(format!(
                 "Inner Ring Route Veto: route arm {} -> arm {} for kind {:?} is not authorized",
@@ -375,7 +393,13 @@ impl VerifiedMeshMessage {
         role_chain: Vec<ArmRole>,
         effective_taint_floor: TrustTier,
     ) -> Self {
-        Self { message, recipient_arm_id, recipient_role, role_chain, effective_taint_floor }
+        Self {
+            message,
+            recipient_arm_id,
+            recipient_role,
+            role_chain,
+            effective_taint_floor,
+        }
     }
     pub fn message(&self) -> &crate::containment_ring::arm_ring::ArmRingMeshMessage {
         &self.message

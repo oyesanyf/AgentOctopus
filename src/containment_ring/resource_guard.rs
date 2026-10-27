@@ -78,12 +78,16 @@ impl ResourceGuard {
 
         // Prune calls older than 60s
         let now = Instant::now();
-        tracker.call_timestamps.retain(|&t| now.duration_since(t) < Duration::from_secs(60));
+        tracker
+            .call_timestamps
+            .retain(|&t| now.duration_since(t) < Duration::from_secs(60));
 
         if tracker.call_timestamps.len() >= quota.max_calls_per_minute {
             return Err(OctopusSecurityError::ResourceQuotaExceeded(format!(
                 "Rate limit exceeded for agent '{}': {} calls in past 60s exceeds quota of {}",
-                agent_id, tracker.call_timestamps.len(), quota.max_calls_per_minute
+                agent_id,
+                tracker.call_timestamps.len(),
+                quota.max_calls_per_minute
             )));
         }
 

@@ -70,11 +70,9 @@ impl DualSpeedSecurityEngine {
             payload_entropy,
         );
 
-        let reasoning_report = self.reasoning_auditor.audit_intent_alignment(
-            directive,
-            tool_name,
-            raw_arguments,
-        );
+        let reasoning_report =
+            self.reasoning_auditor
+                .audit_intent_alignment(directive, tool_name, raw_arguments);
 
         let mut composite_score = behavioral_report.anomaly_score;
         if reasoning_report.deceptive_alignment_detected {

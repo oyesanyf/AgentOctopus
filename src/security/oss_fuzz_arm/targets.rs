@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::str::FromStr;
 use std::time::Instant;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FuzzStatus {
@@ -386,7 +386,10 @@ impl OssFuzzTarget for MerkleProofFuzzTarget {
         let result = catch_unwind(AssertUnwindSafe(|| {
             use crate::core::merkle::{MerkleLeaf, MerkleTree};
             if bytes_len >= 8 {
-                let seq = usize::try_from(u64::from_le_bytes(data[0..8].try_into().unwrap_or([0u8; 8]))).unwrap_or(0);
+                let seq = usize::try_from(u64::from_le_bytes(
+                    data[0..8].try_into().unwrap_or([0u8; 8]),
+                ))
+                .unwrap_or(0);
                 let payload = String::from_utf8_lossy(&data[8..]);
                 let leaf = MerkleLeaf::new(seq, "fuzz_arm", "action", &*payload);
                 let tree = MerkleTree::from_leaves(vec![leaf]);

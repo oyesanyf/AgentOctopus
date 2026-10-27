@@ -201,8 +201,13 @@ impl GuardRejection {
     }
     pub fn message(&self) -> String {
         match self {
-            Self::BadHost(h) => format!("Host '{}' is not an allowed loopback authority for this dashboard", h),
-            Self::CrossOrigin(o) => format!("Cross-origin request rejected (origin/fetch-site: {})", o),
+            Self::BadHost(h) => format!(
+                "Host '{}' is not an allowed loopback authority for this dashboard",
+                h
+            ),
+            Self::CrossOrigin(o) => {
+                format!("Cross-origin request rejected (origin/fetch-site: {})", o)
+            }
             Self::Unauthorized => "Missing or invalid X-Octopus-Token".to_string(),
         }
     }
@@ -269,12 +274,17 @@ pub fn authorize_request(req: &GuardRequest<'_>, token: &str) -> Result<(), Guar
     if is_api || is_state_changing {
         if let Some(site) = header_value(req.headers, "sec-fetch-site") {
             if site.eq_ignore_ascii_case("cross-site") {
-                return Err(GuardRejection::CrossOrigin(format!("sec-fetch-site={}", site)));
+                return Err(GuardRejection::CrossOrigin(format!(
+                    "sec-fetch-site={}",
+                    site
+                )));
             }
         }
         if let Some(origin) = header_value(req.headers, "origin") {
             let origin_lc = origin.to_ascii_lowercase();
-            let ok = authorities.iter().any(|a| origin_lc == format!("http://{}", a));
+            let ok = authorities
+                .iter()
+                .any(|a| origin_lc == format!("http://{}", a));
             if !ok {
                 return Err(GuardRejection::CrossOrigin(origin.to_string()));
             }
@@ -340,25 +350,41 @@ mod tests {
     use super::*;
 
     fn req<'a>(method: &'a str, path: &'a str, headers: &'a str) -> GuardRequest<'a> {
-        GuardRequest { method, path, query: "", headers, local_port: 5005 }
+        GuardRequest {
+            method,
+            path,
+            query: "",
+            headers,
+            local_port: 5005,
+        }
     }
 
     #[test]
     fn rejects_rebinding_host() {
-        let h = "POST /api/run-rust-tests HTTP/1.1\r\nHost: evil.example:5005\r\nX-Octopus-Token: abc";
-        assert!(matches!(authorize_request(&req("POST", "/api/run-rust-tests", h), "abc"), Err(GuardRejection::BadHost(_))));
+        let h =
+            "POST /api/run-rust-tests HTTP/1.1\r\nHost: evil.example:5005\r\nX-Octopus-Token: abc";
+        assert!(matches!(
+            authorize_request(&req("POST", "/api/run-rust-tests", h), "abc"),
+            Err(GuardRejection::BadHost(_))
+        ));
     }
 
     #[test]
     fn rejects_cross_origin() {
         let h = "POST /api/x HTTP/1.1\r\nHost: 127.0.0.1:5005\r\nOrigin: https://evil.example\r\nX-Octopus-Token: abc";
-        assert!(matches!(authorize_request(&req("POST", "/api/x", h), "abc"), Err(GuardRejection::CrossOrigin(_))));
+        assert!(matches!(
+            authorize_request(&req("POST", "/api/x", h), "abc"),
+            Err(GuardRejection::CrossOrigin(_))
+        ));
     }
 
     #[test]
     fn rejects_missing_token() {
         let h = "POST /api/x HTTP/1.1\r\nHost: localhost:5005\r\nOrigin: http://localhost:5005";
-        assert_eq!(authorize_request(&req("POST", "/api/x", h), "abc"), Err(GuardRejection::Unauthorized));
+        assert_eq!(
+            authorize_request(&req("POST", "/api/x", h), "abc"),
+            Err(GuardRejection::Unauthorized)
+        );
     }
 
     #[test]

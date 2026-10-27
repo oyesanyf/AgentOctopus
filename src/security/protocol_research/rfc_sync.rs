@@ -60,10 +60,16 @@ impl RfcIndexSynchronizer {
         }
 
         // Priority 2: Managed workspace vendor directory
-        let vendor_index = PathBuf::from("vendor").join("rfchunt").join("rfcs").join("rfc-index.txt");
+        let vendor_index = PathBuf::from("vendor")
+            .join("rfchunt")
+            .join("rfcs")
+            .join("rfc-index.txt");
         if vendor_index.exists() {
             if let Ok(content) = std::fs::read_to_string(&vendor_index) {
-                return (content, format!("Managed RFC Editor Index ({})", vendor_index.display()));
+                return (
+                    content,
+                    format!("Managed RFC Editor Index ({})", vendor_index.display()),
+                );
             }
         }
 
@@ -74,19 +80,27 @@ impl RfcIndexSynchronizer {
         ] {
             if candidate.exists() {
                 if let Ok(content) = std::fs::read_to_string(candidate) {
-                    return (content, format!("Local Cache RFC Index ({})", candidate.display()));
+                    return (
+                        content,
+                        format!("Local Cache RFC Index ({})", candidate.display()),
+                    );
                 }
             }
         }
 
         // Fallback: Embedded core baseline index
-        (self.get_core_protocol_index_text(), "Embedded Core Protocol Baseline Index".to_string())
+        (
+            self.get_core_protocol_index_text(),
+            "Embedded Core Protocol Baseline Index".to_string(),
+        )
     }
 
     /// Fetches authoritative RFC index directly from rfc-editor.org over TLS with freshness verification.
     pub fn fetch_live_rfc_editor_index(&self) -> Result<(String, String), OctopusSecurityError> {
         let cache_path = PathBuf::from("data").join("rfcs").join("rfc-index.txt");
-        if cache_path.exists() && std::env::var("OCTOPUS_FORCE_LIVE_RFC_SYNC").unwrap_or_default() != "1" {
+        if cache_path.exists()
+            && std::env::var("OCTOPUS_FORCE_LIVE_RFC_SYNC").unwrap_or_default() != "1"
+        {
             if let Ok(meta) = std::fs::metadata(&cache_path) {
                 if meta.len() > 1024 {
                     if let Ok(modified) = meta.modified() {
@@ -105,10 +119,16 @@ impl RfcIndexSynchronizer {
             }
         }
 
-        let last_etag = self.knowledge_base.get_metadata("rfc_index_etag").unwrap_or_default();
+        let last_etag = self
+            .knowledge_base
+            .get_metadata("rfc_index_etag")
+            .unwrap_or_default();
 
         use crate::security::hidden_process_ledger::LedgeredCommandExt;
-        let allowed = vec!["www.rfc-editor.org".to_string(), "rfc-editor.org".to_string()];
+        let allowed = vec![
+            "www.rfc-editor.org".to_string(),
+            "rfc-editor.org".to_string(),
+        ];
         let mut extra_args = vec!["-s".to_string(), "-i".to_string()];
         if !last_etag.is_empty() {
             extra_args.push("-H".to_string());
@@ -121,13 +141,18 @@ impl RfcIndexSynchronizer {
             &extra_refs,
         )?;
 
-        let output = cmd.output_logged("rfc_sync::fetch_rfc_index").map_err(|e| {
-            OctopusSecurityError::DeterministicLayerViolation(format!("Live RFC Editor TLS request failed: {}", e))
-        })?;
+        let output = cmd
+            .output_logged("rfc_sync::fetch_rfc_index")
+            .map_err(|e| {
+                OctopusSecurityError::DeterministicLayerViolation(format!(
+                    "Live RFC Editor TLS request failed: {}",
+                    e
+                ))
+            })?;
 
         if !output.status.success() {
             return Err(OctopusSecurityError::DeterministicLayerViolation(
-                "curl command exited with non-zero status during RFC Editor retrieval".to_string()
+                "curl command exited with non-zero status during RFC Editor retrieval".to_string(),
             ));
         }
 
@@ -147,7 +172,9 @@ impl RfcIndexSynchronizer {
         }
 
         // Validate content authenticity (HTTP 200 OK)
-        if status_code == 200 && (body.contains("RFC INDEX") || body.contains("RFC Index") || body.contains("0001 ")) {
+        if status_code == 200
+            && (body.contains("RFC INDEX") || body.contains("RFC Index") || body.contains("0001 "))
+        {
             if let Some(etag) = headers.get("etag") {
                 self.knowledge_base.set_metadata("rfc_index_etag", etag);
             }
@@ -160,7 +187,8 @@ impl RfcIndexSynchronizer {
 
             return Ok((
                 body,
-                "Live RFC Editor (https://www.rfc-editor.org/rfc-index.txt - TLS Verified)".to_string(),
+                "Live RFC Editor (https://www.rfc-editor.org/rfc-index.txt - TLS Verified)"
+                    .to_string(),
             ));
         }
 
@@ -192,7 +220,10 @@ impl RfcIndexSynchronizer {
             added_or_updated += 1;
 
             // Transactional deduplication: purge stale fragments before reinserting
-            sql_batch.push(format!("DELETE FROM fragments WHERE rfc_number = {};", entry.rfc_number));
+            sql_batch.push(format!(
+                "DELETE FROM fragments WHERE rfc_number = {};",
+                entry.rfc_number
+            ));
 
             // Index normative RFC fragments with unique chunk indexing
             for (idx, fragment) in entry.normative_fragments.iter().enumerate() {
@@ -231,7 +262,10 @@ impl RfcIndexSynchronizer {
 
         // Search local files for genuine normative passages
         let candidates = [
-            PathBuf::from("vendor").join("rfchunt").join("rfcs").join(format!("rfc{}.txt", rfc_number)),
+            PathBuf::from("vendor")
+                .join("rfchunt")
+                .join("rfcs")
+                .join(format!("rfc{}.txt", rfc_number)),
             PathBuf::from("rfcs").join(format!("rfc{}.txt", rfc_number)),
         ];
 
@@ -241,15 +275,15 @@ impl RfcIndexSynchronizer {
                     for line in content.lines() {
                         let trimmed = line.trim();
                         // Scan for RFC 2119 normative keywords
-                        if trimmed.len() > 30 && (
-                            trimmed.contains(" MUST NOT ") ||
-                            trimmed.contains(" MUST ") ||
-                            trimmed.contains(" SHALL NOT ") ||
-                            trimmed.contains(" SHALL ") ||
-                            trimmed.contains(" REQUIRED ") ||
-                            trimmed.contains(" SHOULD NOT ") ||
-                            trimmed.contains(" SHOULD ")
-                        ) {
+                        if trimmed.len() > 30
+                            && (trimmed.contains(" MUST NOT ")
+                                || trimmed.contains(" MUST ")
+                                || trimmed.contains(" SHALL NOT ")
+                                || trimmed.contains(" SHALL ")
+                                || trimmed.contains(" REQUIRED ")
+                                || trimmed.contains(" SHOULD NOT ")
+                                || trimmed.contains(" SHOULD "))
+                        {
                             if !fragments.iter().any(|f: &String| f == trimmed) {
                                 fragments.push(trimmed.to_string());
                                 if fragments.len() >= 8 {
@@ -299,7 +333,12 @@ impl RfcIndexSynchronizer {
 
             // An entry line starts with digits at indentation or beginning of line
             let is_start = line.chars().next().map_or(false, |c| c.is_ascii_digit())
-                || (line.starts_with("   ") && line.trim_start().chars().next().map_or(false, |c| c.is_ascii_digit()));
+                || (line.starts_with("   ")
+                    && line
+                        .trim_start()
+                        .chars()
+                        .next()
+                        .map_or(false, |c| c.is_ascii_digit()));
 
             if is_start && !current_block.is_empty() {
                 if let Some(entry) = self.parse_single_entry(&current_block) {
@@ -342,7 +381,11 @@ impl RfcIndexSynchronizer {
         let rfc_num: u32 = first_token.parse().ok()?;
 
         let remainder = trimmed[first_token.len()..].trim();
-        let title = remainder.split('.').next().unwrap_or("Protocol Specification").trim();
+        let title = remainder
+            .split('.')
+            .next()
+            .unwrap_or("Protocol Specification")
+            .trim();
 
         let title_upper = title.to_uppercase();
         let remainder_upper = remainder.to_uppercase();
@@ -438,7 +481,9 @@ impl RfcIndexSynchronizer {
 /// Reliably parses raw HTTP wire response streams, handling multiple header blocks
 /// (e.g. 100 Continue or 301/302 redirects), case-insensitive headers, chunked transfer
 /// decoding (`Transfer-Encoding: chunked`), and Content-Length slicing.
-pub fn parse_http_wire_response(raw: &str) -> (u16, std::collections::HashMap<String, String>, String) {
+pub fn parse_http_wire_response(
+    raw: &str,
+) -> (u16, std::collections::HashMap<String, String>, String) {
     if raw.is_empty() {
         return (0, std::collections::HashMap::new(), String::new());
     }
@@ -565,7 +610,12 @@ pub fn decode_chunked_body(mut chunked_data: &str) -> String {
 
 /// Splits RFC specification text into structured, indexed chunks while preserving
 /// paragraph integrity and tagging normative statements (RFC 2119 keywords).
-pub fn chunk_rfc_content(_rfc_number: u32, _title: &str, content: &str, max_chunk_chars: usize) -> Vec<(usize, String, bool)> {
+pub fn chunk_rfc_content(
+    _rfc_number: u32,
+    _title: &str,
+    content: &str,
+    max_chunk_chars: usize,
+) -> Vec<(usize, String, bool)> {
     let mut chunks = Vec::new();
     let mut current_chunk = String::new();
     let mut current_is_normative = false;
@@ -586,7 +636,11 @@ pub fn chunk_rfc_content(_rfc_number: u32, _title: &str, content: &str, max_chun
             || trimmed.contains(" SHOULD NOT ");
 
         if current_chunk.len() + trimmed.len() + 2 > max_chunk_chars && !current_chunk.is_empty() {
-            chunks.push((chunk_idx, current_chunk.trim().to_string(), current_is_normative));
+            chunks.push((
+                chunk_idx,
+                current_chunk.trim().to_string(),
+                current_is_normative,
+            ));
             chunk_idx += 1;
             current_chunk = String::new();
             current_is_normative = false;
@@ -602,7 +656,11 @@ pub fn chunk_rfc_content(_rfc_number: u32, _title: &str, content: &str, max_chun
     }
 
     if !current_chunk.trim().is_empty() {
-        chunks.push((chunk_idx, current_chunk.trim().to_string(), current_is_normative));
+        chunks.push((
+            chunk_idx,
+            current_chunk.trim().to_string(),
+            current_is_normative,
+        ));
     }
 
     chunks

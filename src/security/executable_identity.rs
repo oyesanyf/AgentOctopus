@@ -32,13 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
 /// Default-deny allowlist of executable stems permitted in Tier 2 native execution.
-pub const ALLOWED_TIER2_EXECUTABLE_STEMS: &[&str] = &[
-    "cmd",
-    "where",
-    "git",
-    "cargo",
-    "curl",
-];
+pub const ALLOWED_TIER2_EXECUTABLE_STEMS: &[&str] = &["cmd", "where", "git", "cargo", "curl"];
 
 /// Forbidden interpreter, script host, and LOLBin stems that may never execute in Tier 2,
 /// whether invoked directly or disguised by renaming the binary on disk.
@@ -177,8 +171,10 @@ impl ExecutableIdentityVerifier {
 
     /// Pins an exact expected SHA-256 hex digest for a given executable stem.
     pub fn pin_executable_sha256(&mut self, stem: &str, sha256_hex: impl Into<String>) {
-        self.pinned_sha256_by_stem
-            .insert(normalize_executable_stem(stem), sha256_hex.into().to_ascii_lowercase());
+        self.pinned_sha256_by_stem.insert(
+            normalize_executable_stem(stem),
+            sha256_hex.into().to_ascii_lowercase(),
+        );
     }
 
     /// Adds an explicitly approved executable stem to this verifier instance.
@@ -227,12 +223,7 @@ impl ExecutableIdentityVerifier {
 
         #[cfg(windows)]
         {
-            win_exec_id::verify_and_lock_windows(
-                self,
-                trimmed,
-                &stem,
-                untrusted_scratchpad,
-            )
+            win_exec_id::verify_and_lock_windows(self, trimmed, &stem, untrusted_scratchpad)
         }
 
         #[cfg(not(windows))]
@@ -262,7 +253,10 @@ fn verify_and_lock_unix(
         )));
     }
     if let Some(scratch) = untrusted_scratchpad {
-        let scratch_norm = scratch.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+        let scratch_norm = scratch
+            .to_string_lossy()
+            .replace('\\', "/")
+            .to_ascii_lowercase();
         if !scratch_norm.is_empty() && lower.starts_with(&scratch_norm) {
             return Err(OctopusSecurityError::IsolationViolation(format!(
                 "EXEC_ID_SCRATCHPAD_EXEC_BLOCKED: Binary '{}' resides inside agent scratchpad '{}'",
@@ -344,10 +338,7 @@ pub fn detect_renamed_interpreter_marker(bytes: &[u8], claimed_stem: &str) -> Op
             return Some(label.to_string());
         }
         // Also check UTF-16LE encoding of the marker (used in PE VS_VERSION_INFO resources)
-        let utf16_marker: Vec<u8> = ascii_marker
-            .iter()
-            .flat_map(|&b| [b, 0u8])
-            .collect();
+        let utf16_marker: Vec<u8> = ascii_marker.iter().flat_map(|&b| [b, 0u8]).collect();
         if utf16_marker.len() >= 8
             && bytes
                 .windows(utf16_marker.len())
@@ -628,14 +619,14 @@ mod win_exec_id {
         // Non-System32 binaries (`git`, `cargo`, etc.) must reside inside an approved installation root
         // unless explicitly SHA-256 pinned in `verifier.pinned_sha256_by_stem`.
         if !is_system32_binary && !verifier.pinned_sha256_by_stem.contains_key(stem) {
-            let cargo_bin_prefix = std::env::var("USERPROFILE")
-                .ok()
-                .map(|p| {
-                    format!(
-                        "{}\\.cargo\\bin\\",
-                        p.replace('/', "\\").trim_end_matches('\\').to_ascii_lowercase()
-                    )
-                });
+            let cargo_bin_prefix = std::env::var("USERPROFILE").ok().map(|p| {
+                format!(
+                    "{}\\.cargo\\bin\\",
+                    p.replace('/', "\\")
+                        .trim_end_matches('\\')
+                        .to_ascii_lowercase()
+                )
+            });
             let in_trusted_root = canonical_lower.starts_with(r"c:\program files\git\")
                 || canonical_lower.starts_with(r"c:\program files (x86)\git\")
                 || cargo_bin_prefix
@@ -689,8 +680,7 @@ mod win_exec_id {
                     )));
                 }
                 let sha256_hex = hex::encode(Sha256::digest(&bytes));
-                let detected_interpreter_marker =
-                    detect_renamed_interpreter_marker(&bytes, stem);
+                let detected_interpreter_marker = detect_renamed_interpreter_marker(&bytes, stem);
                 let entry = CachedPeInspection {
                     sha256_hex,
                     detected_interpreter_marker,

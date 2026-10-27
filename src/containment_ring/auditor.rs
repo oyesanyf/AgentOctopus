@@ -85,9 +85,8 @@ impl ContainmentAuditor {
         let (restored_decision, _) = ring.evaluate_operation(&attack_req).await;
         let restored_control_passed = restored_decision == RingDecision::Deny;
 
-        let mathematical_proof_valid = positive_control_passed
-            && negative_control_breach_detected
-            && restored_control_passed;
+        let mathematical_proof_valid =
+            positive_control_passed && negative_control_breach_detected && restored_control_passed;
 
         DefenseAuditReport {
             defense_name,
@@ -147,24 +146,29 @@ impl ContainmentAuditor {
         }
 
         // 1. Positive Control: Enforcement ENABLED
-        let _ = ring.capability_gate.set_enforcement_enabled(true, cap_token);
+        let _ = ring
+            .capability_gate
+            .set_enforcement_enabled(true, cap_token);
         let (pos_decision, pos_reason) = ring.evaluate_operation(&ambient_req).await;
         let positive_control_passed = pos_decision == RingDecision::Deny
             && pos_reason.contains("Zero Ambient Authority Veto");
 
         // 2. Negative Control: Enforcement DELIBERATELY DISABLED
-        let _ = ring.capability_gate.set_enforcement_enabled(false, cap_token);
+        let _ = ring
+            .capability_gate
+            .set_enforcement_enabled(false, cap_token);
         let (neg_decision, _) = ring.evaluate_operation(&ambient_req).await;
         let negative_control_breach_detected = neg_decision == RingDecision::Allow;
 
         // 3. Restoration: Enforcement RE-ENABLED
-        let _ = ring.capability_gate.set_enforcement_enabled(true, cap_token);
+        let _ = ring
+            .capability_gate
+            .set_enforcement_enabled(true, cap_token);
         let (restored_decision, _) = ring.evaluate_operation(&ambient_req).await;
         let restored_control_passed = restored_decision == RingDecision::Deny;
 
-        let mathematical_proof_valid = positive_control_passed
-            && negative_control_breach_detected
-            && restored_control_passed;
+        let mathematical_proof_valid =
+            positive_control_passed && negative_control_breach_detected && restored_control_passed;
 
         DefenseAuditReport {
             defense_name,
@@ -239,9 +243,8 @@ impl ContainmentAuditor {
         // Restore prior CedarGate state
         let _ = ring.cedar_gate.set_enabled(prior_cedar_state, cedar_token);
 
-        let mathematical_proof_valid = positive_control_passed
-            && negative_control_breach_detected
-            && restored_control_passed;
+        let mathematical_proof_valid =
+            positive_control_passed && negative_control_breach_detected && restored_control_passed;
 
         DefenseAuditReport {
             defense_name,
@@ -286,19 +289,20 @@ impl ContainmentAuditor {
         let positive_control_passed = pos_decision == RingDecision::Allow;
 
         // 2. Negative Control: Deliberately Tampered Attestation Signature
-        ring.attestation.tamper_with_signature("FORGED_HEX_SIG_CORRUPTED_POLICY").await;
+        ring.attestation
+            .tamper_with_signature("FORGED_HEX_SIG_CORRUPTED_POLICY")
+            .await;
         let (neg_decision, neg_reason) = ring.evaluate_operation(&normal_req).await;
-        let negative_control_breach_detected = neg_decision == RingDecision::Terminate
-            && neg_reason.contains("Attestation failure");
+        let negative_control_breach_detected =
+            neg_decision == RingDecision::Terminate && neg_reason.contains("Attestation failure");
 
         // 3. Restoration: Authentic Attestation Restored
         ring.attestation.restore_authentic_attestation().await;
         let (restored_decision, _) = ring.evaluate_operation(&normal_req).await;
         let restored_control_passed = restored_decision == RingDecision::Allow;
 
-        let mathematical_proof_valid = positive_control_passed
-            && negative_control_breach_detected
-            && restored_control_passed;
+        let mathematical_proof_valid =
+            positive_control_passed && negative_control_breach_detected && restored_control_passed;
 
         DefenseAuditReport {
             defense_name,
@@ -321,7 +325,12 @@ impl ContainmentAuditor {
         vec![
             Self::audit_cedar_authorization(ring, &harness.cedar_control_token).await,
             Self::audit_capability_gate(ring, &harness.capability_control_token).await,
-            Self::audit_egress_allowlist(ring, &harness.cedar_control_token, &harness.egress_control_token).await,
+            Self::audit_egress_allowlist(
+                ring,
+                &harness.cedar_control_token,
+                &harness.egress_control_token,
+            )
+            .await,
             Self::audit_attestation_integrity(ring).await,
         ]
     }

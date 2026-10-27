@@ -46,7 +46,11 @@ impl Default for TechnicalBreakoutGuard {
 
 impl TechnicalBreakoutGuard {
     /// Evaluates a command, file path, or execution context against technical breakout signatures.
-    pub fn evaluate_execution(&self, command_or_path: &str, raw_payload: &str) -> TechnicalBreakoutVerdict {
+    pub fn evaluate_execution(
+        &self,
+        command_or_path: &str,
+        raw_payload: &str,
+    ) -> TechnicalBreakoutVerdict {
         let mut detected_vectors = Vec::new();
         let lower_cmd = command_or_path.to_ascii_lowercase();
         let lower_payload = raw_payload.to_ascii_lowercase();
@@ -54,14 +58,20 @@ impl TechnicalBreakoutGuard {
         // 1. Unmasked Docker / Container Daemon Socket Mounts & Requests
         for &pattern in &self.docker_socket_patterns {
             if lower_cmd.contains(pattern) || lower_payload.contains(pattern) {
-                detected_vectors.push(format!("Unmasked container daemon socket probe detected: '{}'", pattern));
+                detected_vectors.push(format!(
+                    "Unmasked container daemon socket probe detected: '{}'",
+                    pattern
+                ));
             }
         }
 
         // 2. Wasm / MicroVM Sandbox Escape & Memory Corruption Indicators
         for &indicator in &self.wasm_escape_indicators {
             if lower_cmd.contains(indicator) || lower_payload.contains(indicator) {
-                detected_vectors.push(format!("Sandbox virtualization escape indicator detected: '{}'", indicator));
+                detected_vectors.push(format!(
+                    "Sandbox virtualization escape indicator detected: '{}'",
+                    indicator
+                ));
             }
         }
 
@@ -70,9 +80,8 @@ impl TechnicalBreakoutGuard {
             || lower_cmd.contains("unshare")
             || lower_cmd.contains("--privileged")
         {
-            detected_vectors.push(
-                "Host namespace access or privileged container spawn attempt".to_string(),
-            );
+            detected_vectors
+                .push("Host namespace access or privileged container spawn attempt".to_string());
         }
 
         // 4. Structural command-line parsing (Finding 1): Windows argv tokenization, recursive
@@ -85,7 +94,10 @@ impl TechnicalBreakoutGuard {
         } else {
             let cmd_parsed = analyze_command_line(command_or_path);
             let pay_parsed = analyze_command_line(raw_payload);
-            if pay_parsed.is_powershell || pay_parsed.is_cmd_wrapper || pay_parsed.has_breakout_signals() {
+            if pay_parsed.is_powershell
+                || pay_parsed.is_cmd_wrapper
+                || pay_parsed.has_breakout_signals()
+            {
                 raw_payload.to_string()
             } else if cmd_parsed.is_cmd_wrapper {
                 format!("{} /c {}", command_or_path.trim(), raw_payload.trim())
@@ -105,7 +117,10 @@ impl TechnicalBreakoutGuard {
         let description = if is_clean {
             "Hardware-isolated sandbox containment intact (read-only root verified)".to_string()
         } else {
-            format!("Technical breakout intercepted: {} vector(s) identified", detected_vectors.len())
+            format!(
+                "Technical breakout intercepted: {} vector(s) identified",
+                detected_vectors.len()
+            )
         };
 
         TechnicalBreakoutVerdict {

@@ -22,10 +22,16 @@ fn test_sentinel_guard_step_budget_and_memory_clamping() {
 
     // Step 4 exceeds budget (max 3)
     let res = sentinel.record_heartbeat("arm_doc", 100_000);
-    assert!(matches!(res, Err(OctopusSecurityError::ResourceQuotaExceeded(_))));
+    assert!(matches!(
+        res,
+        Err(OctopusSecurityError::ResourceQuotaExceeded(_))
+    ));
 
     // Subsequent call fails because arm was marked dead
-    assert!(matches!(sentinel.record_heartbeat("arm_doc", 10), Err(OctopusSecurityError::LimbKilled)));
+    assert!(matches!(
+        sentinel.record_heartbeat("arm_doc", 10),
+        Err(OctopusSecurityError::LimbKilled)
+    ));
 }
 
 #[test]
@@ -41,13 +47,19 @@ fn test_identity_guard_signature_and_replay_rejection() {
     // 2. Replay attack with same nonce should fail
     let replay_msg = identity.sign_message("supervisor", 1, "extract_doc");
     let replay_res = guard.verify_message(&replay_msg);
-    assert!(matches!(replay_res, Err(OctopusSecurityError::IdentitySpoofingDetected(_))));
+    assert!(matches!(
+        replay_res,
+        Err(OctopusSecurityError::IdentitySpoofingDetected(_))
+    ));
 
     // 3. Forged sender ID should fail
     let mut forged_msg = identity.sign_message("supervisor", 2, "extract_doc");
     forged_msg.sender_id = "agent_2".to_string();
     let forged_res = guard.verify_message(&forged_msg);
-    assert!(matches!(forged_res, Err(OctopusSecurityError::IdentitySpoofingDetected(_))));
+    assert!(matches!(
+        forged_res,
+        Err(OctopusSecurityError::IdentitySpoofingDetected(_))
+    ));
 }
 
 #[test]
@@ -63,7 +75,9 @@ fn test_capability_guard_least_privilege_and_revocation() {
     );
 
     // 1. Legitimate invocation passes
-    assert!(guard.verify_capability(&token, "doc_agent", "doc_extractor", "s3://invoices/batch1").is_ok());
+    assert!(guard
+        .verify_capability(&token, "doc_agent", "doc_extractor", "s3://invoices/batch1")
+        .is_ok());
 
     // 2. Unauthorized tool access fails
     assert!(matches!(
@@ -92,7 +106,9 @@ fn test_network_guard_google_egress_and_ssrf_blocking() {
     // Permitted Google destinations
     assert!(guard.validate_egress("https://google.com").is_ok());
     assert!(guard.validate_egress("https://www.google.com").is_ok());
-    assert!(guard.validate_egress("https://www.google.com/search?q=rust").is_ok());
+    assert!(guard
+        .validate_egress("https://www.google.com/search?q=rust")
+        .is_ok());
     assert!(guard.validate_egress("s3://invoices/2026/").is_ok());
 
     // Blocked: Substring bypasses
@@ -182,38 +198,56 @@ fn test_containment_guard_appcontainer_and_job_object_boundaries() {
 fn test_guard_coordinator_peer_mutual_supervision_and_quorum_isolation() {
     let mut coordinator = GuardCoordinator::new(b"coordinator_seed_555", "policy_v1");
 
-    assert_eq!(coordinator.get_guard_status("guard_network"), Some(&GuardStatus::Healthy));
+    assert_eq!(
+        coordinator.get_guard_status("guard_network"),
+        Some(&GuardStatus::Healthy)
+    );
 
     // First accusation: suspected status
-    let isolated = coordinator.report_peer_anomaly(
-        "guard_sentinel",
-        "guard_network",
-        "Inconsistent egress log detected",
-        100,
-    ).unwrap();
+    let isolated = coordinator
+        .report_peer_anomaly(
+            "guard_sentinel",
+            "guard_network",
+            "Inconsistent egress log detected",
+            100,
+        )
+        .unwrap();
     assert!(!isolated);
-    assert_eq!(coordinator.get_guard_status("guard_network"), Some(&GuardStatus::Suspected));
+    assert_eq!(
+        coordinator.get_guard_status("guard_network"),
+        Some(&GuardStatus::Suspected)
+    );
 
     // Second accusation
-    let isolated2 = coordinator.report_peer_anomaly(
-        "guard_identity",
-        "guard_network",
-        "Unauthenticated network token",
-        101,
-    ).unwrap();
+    let isolated2 = coordinator
+        .report_peer_anomaly(
+            "guard_identity",
+            "guard_network",
+            "Unauthenticated network token",
+            101,
+        )
+        .unwrap();
     assert!(!isolated2);
 
     // Third accusation reaches strict majority quorum (> 50% of 5 peers = 3)
-    let isolated3 = coordinator.report_peer_anomaly(
-        "guard_capability",
-        "guard_network",
-        "Bypassed capability authorization",
-        102,
-    ).unwrap();
+    let isolated3 = coordinator
+        .report_peer_anomaly(
+            "guard_capability",
+            "guard_network",
+            "Bypassed capability authorization",
+            102,
+        )
+        .unwrap();
     assert!(isolated3);
-    assert_eq!(coordinator.get_guard_status("guard_network"), Some(&GuardStatus::IsolatedByPeerQuorum));
+    assert_eq!(
+        coordinator.get_guard_status("guard_network"),
+        Some(&GuardStatus::IsolatedByPeerQuorum)
+    );
 
     // Pre-execution guard check now fails closed because guard_network is isolated!
     let res = coordinator.pre_execution_swarm_guard_check(Some("https://google.com"), 1024);
-    assert!(matches!(res, Err(OctopusSecurityError::IsolationViolation(_))));
+    assert!(matches!(
+        res,
+        Err(OctopusSecurityError::IsolationViolation(_))
+    ));
 }

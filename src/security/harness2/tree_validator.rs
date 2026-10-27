@@ -40,7 +40,10 @@ impl HarnessTreeValidator {
             normalized = normalized[2..].to_string();
         }
         normalized = normalized.trim_matches('/').to_string();
-        if normalized.split('/').any(|seg| seg == ".." || seg.is_empty()) {
+        if normalized
+            .split('/')
+            .any(|seg| seg == ".." || seg.is_empty())
+        {
             return Err(format!("path escapes the harness: {:?}", rel));
         }
         Ok(normalized)
@@ -101,7 +104,10 @@ impl HarnessTreeValidator {
     }
 
     /// Extracts skill names present in the tree (`skills/<name>/SKILL.md`).
-    pub fn skill_names(surface: &HarnessSurfaceSpec, tree: &BTreeMap<String, String>) -> Vec<String> {
+    pub fn skill_names(
+        surface: &HarnessSurfaceSpec,
+        tree: &BTreeMap<String, String>,
+    ) -> Vec<String> {
         let mut names = Vec::new();
         for key in tree.keys() {
             let parts: Vec<&str> = key.split('/').collect();
@@ -119,10 +125,7 @@ impl HarnessTreeValidator {
     }
 
     /// Concatenates the always-on c1..c4 files.
-    pub fn always_on_text(
-        surface: &HarnessSurfaceSpec,
-        tree: &BTreeMap<String, String>,
-    ) -> String {
+    pub fn always_on_text(surface: &HarnessSurfaceSpec, tree: &BTreeMap<String, String>) -> String {
         surface
             .always_on
             .iter()
@@ -148,7 +151,10 @@ impl HarnessTreeValidator {
             let fm = tree.get(&skill_path).cloned().unwrap_or_default();
             let desc = fm
                 .lines()
-                .find_map(|line| line.strip_prefix("description:").map(|d| d.trim().trim_end_matches('.')))
+                .find_map(|line| {
+                    line.strip_prefix("description:")
+                        .map(|d| d.trim().trim_end_matches('.'))
+                })
                 .unwrap_or("the workflow applies");
             let trigger_line = format!("- When {}, load the `{}` skill.", desc, name);
             let cur = tree
@@ -312,8 +318,15 @@ mod tests {
         );
 
         let report = HarnessTreeValidator::validate_tree(&surface, &mut tree);
-        assert!(report.valid, "Expected valid tree, got errors: {:?}", report.errors);
-        assert_eq!(report.auto_triggered_skills, vec!["ledger_audit".to_string()]);
+        assert!(
+            report.valid,
+            "Expected valid tree, got errors: {:?}",
+            report.errors
+        );
+        assert_eq!(
+            report.auto_triggered_skills,
+            vec!["ledger_audit".to_string()]
+        );
         assert!(tree["guardrails.md"].contains("load the `ledger_audit` skill"));
     }
 

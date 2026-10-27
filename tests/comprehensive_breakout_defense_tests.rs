@@ -62,8 +62,7 @@ fn new_dispatcher() -> TieredExecutionDispatcher {
 async fn test_ao_find_01_closure_escape_elimination_and_metadata_binding() {
     let ring = ArmContainmentRing::new(1, ArmRole::UntrustedDocIngest, 1, MASTER_SEED);
     let dispatcher = new_dispatcher();
-    let scratch_dir =
-        std::env::temp_dir().join(format!("octopus_find01_{}", std::process::id()));
+    let scratch_dir = std::env::temp_dir().join(format!("octopus_find01_{}", std::process::id()));
 
     // 1A. Legitimate Tier 1 Wasm execution via execute_tiered_tool_confined (zero host closure)
     let mut ticket = ring
@@ -183,8 +182,7 @@ async fn test_ao_find_01_closure_escape_elimination_and_metadata_binding() {
 #[tokio::test]
 async fn test_ao_find_02_and_07_tier2_genuine_appcontainer_job_object_and_ui_isolation() {
     let dispatcher = new_dispatcher();
-    let scratch_dir =
-        std::env::temp_dir().join(format!("octopus_find02_{}", std::process::id()));
+    let scratch_dir = std::env::temp_dir().join(format!("octopus_find02_{}", std::process::id()));
 
     // 2A. Execute an allowlisted native binary (`where.exe`) in Tier 2 AppContainer + Job Object
     let req = TieredToolRequest {
@@ -320,10 +318,7 @@ async fn test_ao_find_03_and_12_egress_proxy_nonstandard_ip_dns_rebinding_and_do
 
     // 3B. DNS Rebinding defense in EgressProxy::dispatch_egress
     proxy
-        .set_dns_override(
-            "api.github.com",
-            vec!["169.254.169.254".parse().unwrap()],
-        )
+        .set_dns_override("api.github.com", vec!["169.254.169.254".parse().unwrap()])
         .await;
     let rebind_req = EgressRequest {
         agent_id: "net_arm".to_string(),
@@ -383,10 +378,7 @@ async fn test_ao_find_03_and_12_egress_proxy_nonstandard_ip_dns_rebinding_and_do
         );
     }
     assert!(
-        proxy
-            .try_add_allowed_domain("api.openai.com")
-            .await
-            .is_ok(),
+        proxy.try_add_allowed_domain("api.openai.com").await.is_ok(),
         "Valid public FQDN api.openai.com must be accepted"
     );
 }
@@ -423,9 +415,8 @@ fn test_ao_find_04_executable_identity_verifier_and_renamed_interpreter_blocking
 
     // 4B. Renamed interpreter detection: a binary named `git.exe` containing PowerShell or Python PE markers
     let mut fake_pe = b"MZ\x90\x00\x03\x00\x00\x00".to_vec();
-    fake_pe.extend_from_slice(
-        b"Padding bytes before marker System.Management.Automation.dll after",
-    );
+    fake_pe
+        .extend_from_slice(b"Padding bytes before marker System.Management.Automation.dll after");
     assert!(
         detect_renamed_interpreter_marker(&fake_pe, "git")
             .as_deref()
@@ -453,7 +444,8 @@ fn test_ao_find_04_executable_identity_verifier_and_renamed_interpreter_blocking
     let disguised_git = temp_dir.join("git.exe");
     std::fs::write(&disguised_git, &fake_pe).expect("write disguised git.exe");
 
-    let verify_disguised = verifier.verify_and_lock(disguised_git.to_str().unwrap(), Some(&temp_dir));
+    let verify_disguised =
+        verifier.verify_and_lock(disguised_git.to_str().unwrap(), Some(&temp_dir));
     assert!(
         verify_disguised.is_err(),
         "Disguised git.exe in temp directory with PowerShell PE markers must be rejected"
@@ -839,7 +831,10 @@ async fn test_phase4_all_four_multi_stage_chained_attack_scenarios() {
     let mut forged_replay = msg_epoch1.clone();
     forged_replay.sender_generation = 2; // Forged epoch claim without epoch 2 key
     assert!(
-        ledger_ring.verify_incoming_message(&forged_replay).await.is_err(),
+        ledger_ring
+            .verify_incoming_message(&forged_replay)
+            .await
+            .is_err(),
         "Chain 3 Stage 1 (Stale epoch signature replay with forged generation) must fail HMAC"
     );
 
@@ -857,11 +852,15 @@ async fn test_phase4_all_four_multi_stage_chained_attack_scenarios() {
     "#;
     let mut loop_limits = WasmSandboxLimits::default();
     loop_limits.fuel_budget = 50_000;
-    let trap_res = dispatcher
-        .wasm_tier1()
-        .execute_wat("chain4_inf_loop", inf_loop_wat, &[], loop_limits);
+    let trap_res =
+        dispatcher
+            .wasm_tier1()
+            .execute_wat("chain4_inf_loop", inf_loop_wat, &[], loop_limits);
     assert!(
-        matches!(trap_res, Err(OctopusSecurityError::ResourceQuotaExceeded(_))),
+        matches!(
+            trap_res,
+            Err(OctopusSecurityError::ResourceQuotaExceeded(_))
+        ),
         "Chain 4 infinite loop must deterministically trap on fuel exhaustion"
     );
 }
@@ -1123,8 +1122,7 @@ async fn test_security_audit_and_raptor_remediation_invariants() {
     let tricky_arg = r#"C:\path with spaces\trailing\"#;
     let quoted = quote_windows_argv_arg(tricky_arg);
     assert_eq!(
-        quoted,
-        r#""C:\path with spaces\trailing\\""#,
+        quoted, r#""C:\path with spaces\trailing\\""#,
         "Trailing backslash before closing quote must be doubled per MSVCRT rules"
     );
     let embedded_quote_arg = r#"foo\"bar"#;

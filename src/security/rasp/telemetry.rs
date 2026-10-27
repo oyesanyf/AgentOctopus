@@ -58,7 +58,8 @@ impl RaspTelemetryRegistry {
     /// Records an interceptor event into the telemetry registry.
     pub fn record_event(&self, event: RaspInterceptionEvent) {
         self.total_inspections.fetch_add(1, Ordering::Relaxed);
-        self.total_latency_micros.fetch_add(event.latency_micros as usize, Ordering::Relaxed);
+        self.total_latency_micros
+            .fetch_add(event.latency_micros as usize, Ordering::Relaxed);
 
         match &event.decision {
             RaspDecision::Allow { .. } => {
@@ -114,7 +115,8 @@ impl RaspTelemetryRegistry {
 
         // Health score: 100% minus penalty for uncontained breaches
         let health_score = if inspections > 0 {
-            let blocked_ratio = (denied + tarpitted + sanitized + quarantined) as f64 / inspections as f64;
+            let blocked_ratio =
+                (denied + tarpitted + sanitized + quarantined) as f64 / inspections as f64;
             (1.0 - (blocked_ratio * 0.1)).clamp(0.0, 1.0) * 100.0
         } else {
             100.0

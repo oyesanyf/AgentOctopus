@@ -120,7 +120,10 @@ impl std::fmt::Debug for WasmArmSandbox {
             .field("config", &self.config)
             .field("fuel_remaining", &self.fuel_remaining)
             .field("wall_clock_timeout", &self.wall_clock_timeout)
-            .field("supervisor_terminated", &self.supervisor_terminated.load(Ordering::SeqCst))
+            .field(
+                "supervisor_terminated",
+                &self.supervisor_terminated.load(Ordering::SeqCst),
+            )
             .finish()
     }
 }
@@ -129,7 +132,11 @@ pub type WindowsAgentContainmentRuntime = WasmArmSandbox;
 
 impl WasmArmSandbox {
     /// Attempts to initialize the sandbox with fail-closed kernel boundaries and a real Wasmtime engine.
-    pub fn try_new(instance_id: impl Into<String>, arm_role: ArmRole, fuel_limit: u64) -> Result<Self, OctopusSecurityError> {
+    pub fn try_new(
+        instance_id: impl Into<String>,
+        arm_role: ArmRole,
+        fuel_limit: u64,
+    ) -> Result<Self, OctopusSecurityError> {
         let id_str = instance_id.into();
         let config = OpenShellConfig::default();
         let wall_clock_timeout = Duration::from_millis(config.wall_clock_timeout_ms);
@@ -138,7 +145,7 @@ impl WasmArmSandbox {
         // 1. Fail-Closed Windows Job Object creation
         let job_object = WindowsJobObject::create(
             format!("AgentOctopus.Job.{}", id_str),
-            1, // Max 1 active process (zero child processes allowed to spawn)
+            1,                // Max 1 active process (zero child processes allowed to spawn)
             64 * 1024 * 1024, // 64 MB memory ceiling enforced by NT kernel
         )?;
 
@@ -151,8 +158,9 @@ impl WasmArmSandbox {
         let mut wasm_config = Config::new();
         wasm_config.consume_fuel(true);
 
-        let wasm_engine = Engine::new(&wasm_config)
-            .map_err(|e| OctopusSecurityError::IsolationViolation(format!("Wasmtime Engine Init Failed: {}", e)))?;
+        let wasm_engine = Engine::new(&wasm_config).map_err(|e| {
+            OctopusSecurityError::IsolationViolation(format!("Wasmtime Engine Init Failed: {}", e))
+        })?;
 
         // Compiled WebAssembly step execution module
         let wat_code = r#"
@@ -164,8 +172,12 @@ impl WasmArmSandbox {
             )
         )
         "#;
-        let wasm_module = Module::new(&wasm_engine, wat_code)
-            .map_err(|e| OctopusSecurityError::IsolationViolation(format!("WASM Module Compilation Failed: {}", e)))?;
+        let wasm_module = Module::new(&wasm_engine, wat_code).map_err(|e| {
+            OctopusSecurityError::IsolationViolation(format!(
+                "WASM Module Compilation Failed: {}",
+                e
+            ))
+        })?;
 
         Ok(Self {
             instance_id: id_str,
@@ -189,7 +201,8 @@ impl WasmArmSandbox {
 
     /// Convenience constructor enforcing fail-closed invariant.
     pub fn new(instance_id: impl Into<String>, arm_role: ArmRole, fuel_limit: u64) -> Self {
-        Self::try_new(instance_id, arm_role, fuel_limit).expect("FAIL-CLOSED: Sandbox initialization failed")
+        Self::try_new(instance_id, arm_role, fuel_limit)
+            .expect("FAIL-CLOSED: Sandbox initialization failed")
     }
 
     pub fn with_config(mut self, config: OpenShellConfig) -> Self {
@@ -266,18 +279,38 @@ impl WasmArmSandbox {
         }
 
         let mut store = Store::new(&self.wasm_engine, ());
-        store.set_fuel(self.fuel_remaining)
-            .map_err(|e| OctopusSecurityError::ResourceQuotaExceeded(format!("Failed to set Wasmtime fuel: {}", e)))?;
+        store.set_fuel(self.fuel_remaining).map_err(|e| {
+            OctopusSecurityError::ResourceQuotaExceeded(format!(
+                "Failed to set Wasmtime fuel: {}",
+                e
+            ))
+        })?;
 
         let linker = Linker::new(&self.wasm_engine);
-        let instance = linker.instantiate(&mut store, &self.wasm_module)
-            .map_err(|e| OctopusSecurityError::IsolationViolation(format!("WASM instantiation failed: {}", e)))?;
+        let instance = linker
+            .instantiate(&mut store, &self.wasm_module)
+            .map_err(|e| {
+                OctopusSecurityError::IsolationViolation(format!(
+                    "WASM instantiation failed: {}",
+                    e
+                ))
+            })?;
 
-        let execute_step = instance.get_typed_func::<i32, i32>(&mut store, "execute_step")
-            .map_err(|e| OctopusSecurityError::IsolationViolation(format!("WASM export lookup failed: {}", e)))?;
+        let execute_step = instance
+            .get_typed_func::<i32, i32>(&mut store, "execute_step")
+            .map_err(|e| {
+                OctopusSecurityError::IsolationViolation(format!(
+                    "WASM export lookup failed: {}",
+                    e
+                ))
+            })?;
 
-        let _res = execute_step.call(&mut store, 42)
-            .map_err(|e| OctopusSecurityError::ResourceQuotaExceeded(format!("Wasmtime execution trapped: {}", e)))?;
+        let _res = execute_step.call(&mut store, 42).map_err(|e| {
+            OctopusSecurityError::ResourceQuotaExceeded(format!(
+                "Wasmtime execution trapped: {}",
+                e
+            ))
+        })?;
 
         let actual_consumed = step_cost;
         self.fuel_remaining = self.fuel_remaining.saturating_sub(step_cost);
@@ -295,11 +328,13 @@ impl WasmArmSandbox {
         // 4. Windows AppContainer / LPAC Security Profile Access Verification
         let is_network = directive.source_uri.starts_with("http://")
             || directive.source_uri.starts_with("https://");
-        self.app_container.verify_access(&directive.source_uri, is_network)?;
+        self.app_container
+            .verify_access(&directive.source_uri, is_network)?;
 
         // 5. Windows Process Confinement (max child processes = 0 via Job Object & Policy)
         if self.config.enforce_process_confinement {
-            self.confinement.validate_process_confinement(&directive.instruction)?;
+            self.confinement
+                .validate_process_confinement(&directive.instruction)?;
             if let Some(ref payload) = directive.raw_payload {
                 self.confinement.validate_process_confinement(payload)?;
             }
@@ -307,7 +342,8 @@ impl WasmArmSandbox {
 
         // 6. Filesystem Traversal & System Directory Confinement
         if self.config.enforce_filesystem_confinement {
-            self.confinement.validate_filesystem_confinement(&directive.source_uri)?;
+            self.confinement
+                .validate_filesystem_confinement(&directive.source_uri)?;
         }
 
         // 7. External Authorization Engine & Capability Token Verification
@@ -321,7 +357,11 @@ impl WasmArmSandbox {
 
         // 8. Runtime Attribution Description
         let mode_desc = match &self.config.mode {
-            OpenShellMode::WindowsExperimental { pipe_name, enforce_no_wsl, .. } => {
+            OpenShellMode::WindowsExperimental {
+                pipe_name,
+                enforce_no_wsl,
+                ..
+            } => {
                 format!(
                     "Windows Agent Octopus Containment Runtime (JobObject + AppContainer [{}], pipe: {}, No-WSL: {}, WasmtimeFuelConsumed: {})",
                     self.app_container.package_sid, pipe_name, enforce_no_wsl, actual_consumed

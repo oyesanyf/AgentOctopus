@@ -54,7 +54,9 @@ impl PostQuantumAttestation {
     /// Verifies the post-quantum attestation signature against the subject digest and public key.
     pub fn verify(&self) -> Result<(), LedgerError> {
         if self.public_key_bytes.is_empty() || self.signature_bytes.is_empty() {
-            return Err(LedgerError::PqcVerificationFailed("Empty key or signature".to_string()));
+            return Err(LedgerError::PqcVerificationFailed(
+                "Empty key or signature".to_string(),
+            ));
         }
 
         let challenge = self.compute_challenge();
@@ -145,7 +147,11 @@ impl PqcKeypair {
     }
 
     /// Signs an audit subject digest producing a verified PostQuantumAttestation.
-    pub fn sign_attestation(&self, subject_digest: [u8; 32], context: &str) -> PostQuantumAttestation {
+    pub fn sign_attestation(
+        &self,
+        subject_digest: [u8; 32],
+        context: &str,
+    ) -> PostQuantumAttestation {
         let timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -165,7 +171,14 @@ impl PqcKeypair {
         // Generate algorithmic signature bytes
         match self.algorithm {
             PqcAlgorithm::MlDsa65 | PqcAlgorithm::MlDsa87 => {
-                let commitment_hash = Sha256::digest([b"ML_DSA_COMMITMENT:", self.secret_seed.as_slice(), &challenge].concat());
+                let commitment_hash = Sha256::digest(
+                    [
+                        b"ML_DSA_COMMITMENT:",
+                        self.secret_seed.as_slice(),
+                        &challenge,
+                    ]
+                    .concat(),
+                );
 
                 let mut v_hasher = Sha256::new();
                 v_hasher.update(b"ML_DSA_VERIFY_CHALLENGE:");
@@ -180,7 +193,14 @@ impl PqcKeypair {
                 attestation.signature_bytes = sig;
             }
             PqcAlgorithm::SlhDsaSha2_128s | PqcAlgorithm::SlhDsaSha2_256s => {
-                let wots_reveal = Sha256::digest([b"SLH_DSA_WOTS_REVEAL:", self.secret_seed.as_slice(), &challenge].concat());
+                let wots_reveal = Sha256::digest(
+                    [
+                        b"SLH_DSA_WOTS_REVEAL:",
+                        self.secret_seed.as_slice(),
+                        &challenge,
+                    ]
+                    .concat(),
+                );
 
                 let mut auth_hasher = Sha256::new();
                 auth_hasher.update(b"SLH_DSA_AUTH_PATH:");

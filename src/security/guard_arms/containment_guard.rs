@@ -56,8 +56,7 @@ impl ContainmentGuard {
         if job.max_memory_bytes > self.max_memory_clamp_bytes {
             return Err(OctopusSecurityError::ResourceQuotaExceeded(format!(
                 "Job Object memory limit {} exceeds security ceiling {}",
-                job.max_memory_bytes,
-                self.max_memory_clamp_bytes
+                job.max_memory_bytes, self.max_memory_clamp_bytes
             )));
         }
 
@@ -77,7 +76,11 @@ impl ContainmentGuard {
         token_policy: &WindowsRestrictedTokenPolicy,
     ) -> Result<(), OctopusSecurityError> {
         let stripped = &token_policy.stripped_privileges;
-        for req in &["SeDebugPrivilege", "SeTcbPrivilege", "SeTakeOwnershipPrivilege"] {
+        for req in &[
+            "SeDebugPrivilege",
+            "SeTcbPrivilege",
+            "SeTakeOwnershipPrivilege",
+        ] {
             if !stripped.contains(&req.to_string()) {
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "Mandatory privilege '{}' not stripped from restricted token",

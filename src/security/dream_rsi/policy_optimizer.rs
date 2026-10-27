@@ -45,15 +45,22 @@ impl DreamRsiPolicyOptimizer {
 
     /// Run offline Dream-RSI policy optimization iterations.
     /// Evaluates candidate policy mutations across simulated rollouts in the world model.
-    pub fn optimize_policy(&mut self, iterations: usize, steps_per_candidate: usize) -> ResearchPolicy {
+    pub fn optimize_policy(
+        &mut self,
+        iterations: usize,
+        steps_per_candidate: usize,
+    ) -> ResearchPolicy {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
         let mut best_policy = self.active_policy.clone();
-        let baseline_report = self.world_model.simulate_rollout(&best_policy, steps_per_candidate);
-        let mut best_fitness = Self::calculate_fitness(&baseline_report, best_policy.default_trial_budget);
+        let baseline_report = self
+            .world_model
+            .simulate_rollout(&best_policy, steps_per_candidate);
+        let mut best_fitness =
+            Self::calculate_fitness(&baseline_report, best_policy.default_trial_budget);
         best_policy.fitness_score = best_fitness;
 
         let rfc_list: Vec<u32> = best_policy.rfc_weights.keys().cloned().collect();
@@ -61,7 +68,9 @@ impl DreamRsiPolicyOptimizer {
 
         let mut rng_seed: u64 = 0x5DEECE66D ^ (iterations as u64);
         let mut next_rand = || -> f64 {
-            rng_seed = rng_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng_seed = rng_seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((rng_seed >> 32) as f64) / (u32::MAX as f64)
         };
 
@@ -91,11 +100,15 @@ impl DreamRsiPolicyOptimizer {
                 candidate.default_trial_budget = if next_rand() < 0.5 { 3 } else { 4 };
             }
             let temp_delta = (next_rand() - 0.5) * 0.1;
-            candidate.exploration_temperature = (candidate.exploration_temperature + temp_delta).clamp(0.05, 0.60);
+            candidate.exploration_temperature =
+                (candidate.exploration_temperature + temp_delta).clamp(0.05, 0.60);
 
             // Evaluate in dream simulation
-            let report = self.world_model.simulate_rollout(&candidate, steps_per_candidate);
-            let candidate_fitness = Self::calculate_fitness(&report, candidate.default_trial_budget);
+            let report = self
+                .world_model
+                .simulate_rollout(&candidate, steps_per_candidate);
+            let candidate_fitness =
+                Self::calculate_fitness(&report, candidate.default_trial_budget);
             candidate.fitness_score = candidate_fitness;
 
             if candidate_fitness > best_fitness {
@@ -126,17 +139,74 @@ impl DreamRsiPolicyOptimizer {
             .as_secs();
 
         let titles: HashMap<u32, (&str, Vec<&str>)> = [
-            (9112, ("HTTP/1.1 Framing and Delimiting", vec!["3.2 Header Fields", "6.1 Chunked Transfer Coding", "9.3 Protocol Smuggling"])),
-            (9110, ("HTTP Semantics & Field Parsing", vec!["5.6 Header Format", "7.1 Request Modifiers", "8.8 Caching Preconditions"])),
-            (7230, ("Legacy HTTP/1.1 Message Syntax", vec!["3.3.3 Message Body Length", "4.1 Chunked Extension", "5.4 Host Header"])),
-            (7540, ("Hypertext Transfer Protocol Version 2", vec!["4.1 Frame Format", "8.1 HTTP Message Frames", "10.3 Framing Abuse"])),
-            (9113, ("HTTP/2 Protocol Specification", vec!["4.3 Header Compression", "6.2 HEADERS Frames", "10.5 Denial of Service"])),
-        ].into_iter().collect();
+            (
+                9112,
+                (
+                    "HTTP/1.1 Framing and Delimiting",
+                    vec![
+                        "3.2 Header Fields",
+                        "6.1 Chunked Transfer Coding",
+                        "9.3 Protocol Smuggling",
+                    ],
+                ),
+            ),
+            (
+                9110,
+                (
+                    "HTTP Semantics & Field Parsing",
+                    vec![
+                        "5.6 Header Format",
+                        "7.1 Request Modifiers",
+                        "8.8 Caching Preconditions",
+                    ],
+                ),
+            ),
+            (
+                7230,
+                (
+                    "Legacy HTTP/1.1 Message Syntax",
+                    vec![
+                        "3.3.3 Message Body Length",
+                        "4.1 Chunked Extension",
+                        "5.4 Host Header",
+                    ],
+                ),
+            ),
+            (
+                7540,
+                (
+                    "Hypertext Transfer Protocol Version 2",
+                    vec![
+                        "4.1 Frame Format",
+                        "8.1 HTTP Message Frames",
+                        "10.3 Framing Abuse",
+                    ],
+                ),
+            ),
+            (
+                9113,
+                (
+                    "HTTP/2 Protocol Specification",
+                    vec![
+                        "4.3 Header Compression",
+                        "6.2 HEADERS Frames",
+                        "10.5 Denial of Service",
+                    ],
+                ),
+            ),
+        ]
+        .into_iter()
+        .collect();
 
-        let mut prioritized_rfcs: Vec<RfcPriorityItem> = self.active_policy.rfc_weights
+        let mut prioritized_rfcs: Vec<RfcPriorityItem> = self
+            .active_policy
+            .rfc_weights
             .iter()
             .map(|(rfc, w)| {
-                let (title, sections) = titles.get(rfc).cloned().unwrap_or(("HTTP Specification", vec!["General Normative Requirements"]));
+                let (title, sections) = titles
+                    .get(rfc)
+                    .cloned()
+                    .unwrap_or(("HTTP Specification", vec!["General Normative Requirements"]));
                 RfcPriorityItem {
                     rfc_number: *rfc,
                     title: title.to_string(),
@@ -145,12 +215,20 @@ impl DreamRsiPolicyOptimizer {
                 }
             })
             .collect();
-        prioritized_rfcs.sort_by(|a, b| b.priority_score.partial_cmp(&a.priority_score).unwrap_or(std::cmp::Ordering::Equal));
+        prioritized_rfcs.sort_by(|a, b| {
+            b.priority_score
+                .partial_cmp(&a.priority_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        let mut prioritized_mutations: Vec<MutationPriorityItem> = self.active_policy.mutation_weights
+        let mut prioritized_mutations: Vec<MutationPriorityItem> = self
+            .active_policy
+            .mutation_weights
             .iter()
             .map(|(m, w)| {
-                let trans_rate = self.world_model.get_transition(9112, m)
+                let trans_rate = self
+                    .world_model
+                    .get_transition(9112, m)
                     .map(|t| t.predicted_divergence)
                     .unwrap_or(0.20);
                 MutationPriorityItem {
@@ -160,10 +238,20 @@ impl DreamRsiPolicyOptimizer {
                 }
             })
             .collect();
-        prioritized_mutations.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap_or(std::cmp::Ordering::Equal));
+        prioritized_mutations.sort_by(|a, b| {
+            b.weight
+                .partial_cmp(&a.weight)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        let top_rfc = prioritized_rfcs.first().map(|r| r.rfc_number).unwrap_or(9112);
-        let top_mut = prioritized_mutations.first().map(|m| m.mutation_type.as_str()).unwrap_or("header_smuggling");
+        let top_rfc = prioritized_rfcs
+            .first()
+            .map(|r| r.rfc_number)
+            .unwrap_or(9112);
+        let top_mut = prioritized_mutations
+            .first()
+            .map(|m| m.mutation_type.as_str())
+            .unwrap_or("header_smuggling");
 
         let rationale = format!(
             "Dream-RSI Rollout Gen {} prioritized RFC-{} ({:.2}x) and mutation '{}' ({:.2}x) based on offline world-model yield and entropy optimization without live egress.",

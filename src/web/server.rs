@@ -1,39 +1,36 @@
 use super::api::{
-    handle_audit_log, handle_breakout_guards_status, handle_evaluate_cedar,
-    handle_get_egress_domains, handle_governor_inject_sample, handle_governor_reset,
-    handle_governor_status, handle_kernel_stats, handle_live_tests, handle_otel_sessions,
-    handle_otel_spans, handle_rasp_create_canary, handle_rasp_intercept_memory,
-    handle_rasp_intercept_prompt, handle_rasp_intercept_tool, handle_rasp_set_mitigation_tier,
-    handle_rasp_status, handle_rasp_telemetry, handle_resilience_metrics, handle_rl_defense_status,
-    handle_rl_defense_train_cycle, handle_rl_defense_latest_cycle, handle_rl_evaluate_action, handle_status,
-    handle_update_egress_domains, handle_validate_sisyphean, handle_vassilev_proof,
-    handle_atlas_status, handle_atlas_sync, handle_atlas_dynamic_tests,
-    handle_oss_fuzz_status, handle_oss_fuzz_burst, handle_oss_fuzz_sarif,
-    handle_osv_scanner_status, handle_osv_scanner_scan_now, handle_osv_scanner_sarif,
-    handle_runtime_activity_stream,
-    handle_containment_rings, handle_containment_ring_sever, handle_containment_ring_regenerate,
-    handle_containment_ring_stale_replay, handle_sentinel_simulate_breach, handle_sentinel_reset_lockdown,
-    handle_protocol_analyzer_status, handle_protocol_analyzer_events, handle_protocol_analyzer_analyze,
-    handle_dogwood_evaluate, handle_dogwood_trace, handle_dogwood_simulate_trace, handle_dogwood_presets,
-    handle_protocol_research_status, handle_protocol_research_knowledge_base,
-    handle_protocol_research_evaluate, handle_protocol_research_validate_arm106,
-    handle_protocol_research_hypotheses, handle_protocol_research_sync_rfc,
-    handle_protocol_research_swarm_status,
-    handle_pqc_status, handle_pqc_generate_keypair, handle_pqc_encapsulate,
-    handle_pqc_decapsulate, handle_pqc_sign, handle_pqc_verify, handle_pqc_audit_cbom,
-    handle_evolution_status, handle_evolution_start, handle_evolution_stop,
-    handle_evolution_candidates, handle_evolution_evaluate, handle_evolution_approve,
-    handle_evolution_rollback, handle_evolution_auto_fix,
-    handle_dream_rsi_status, handle_dream_rsi_policy, handle_dream_rsi_train,
-    handle_dream_rsi_rollout, handle_dream_rsi_recommend_priorities,
-    handle_dream_rsi_feed_trajectories,
-    handle_harness2_status, handle_harness2_run, handle_harness2_library,
-    handle_harness2_validate_tree,
-    handle_oshoosiclaw_containment_status, handle_oshoosiclaw_containment_evaluate,
-    WebState,
+    handle_atlas_dynamic_tests, handle_atlas_status, handle_atlas_sync, handle_audit_log,
+    handle_breakout_guards_status, handle_containment_ring_regenerate,
+    handle_containment_ring_sever, handle_containment_ring_stale_replay, handle_containment_rings,
+    handle_dogwood_evaluate, handle_dogwood_presets, handle_dogwood_simulate_trace,
+    handle_dogwood_trace, handle_dream_rsi_feed_trajectories, handle_dream_rsi_policy,
+    handle_dream_rsi_recommend_priorities, handle_dream_rsi_rollout, handle_dream_rsi_status,
+    handle_dream_rsi_train, handle_evaluate_cedar, handle_evolution_approve,
+    handle_evolution_auto_fix, handle_evolution_candidates, handle_evolution_evaluate,
+    handle_evolution_rollback, handle_evolution_start, handle_evolution_status,
+    handle_evolution_stop, handle_get_egress_domains, handle_governor_inject_sample,
+    handle_governor_reset, handle_governor_status, handle_harness2_library, handle_harness2_run,
+    handle_harness2_status, handle_harness2_validate_tree, handle_kernel_stats, handle_live_tests,
+    handle_oshoosiclaw_containment_evaluate, handle_oshoosiclaw_containment_status,
+    handle_oss_fuzz_burst, handle_oss_fuzz_sarif, handle_oss_fuzz_status, handle_osv_scanner_sarif,
+    handle_osv_scanner_scan_now, handle_osv_scanner_status, handle_otel_sessions,
+    handle_otel_spans, handle_pqc_audit_cbom, handle_pqc_decapsulate, handle_pqc_encapsulate,
+    handle_pqc_generate_keypair, handle_pqc_sign, handle_pqc_status, handle_pqc_verify,
+    handle_protocol_analyzer_analyze, handle_protocol_analyzer_events,
+    handle_protocol_analyzer_status, handle_protocol_research_evaluate,
+    handle_protocol_research_hypotheses, handle_protocol_research_knowledge_base,
+    handle_protocol_research_status, handle_protocol_research_swarm_status,
+    handle_protocol_research_sync_rfc, handle_protocol_research_validate_arm106,
+    handle_rasp_create_canary, handle_rasp_intercept_memory, handle_rasp_intercept_prompt,
+    handle_rasp_intercept_tool, handle_rasp_set_mitigation_tier, handle_rasp_status,
+    handle_rasp_telemetry, handle_resilience_metrics, handle_rl_defense_latest_cycle,
+    handle_rl_defense_status, handle_rl_defense_train_cycle, handle_rl_evaluate_action,
+    handle_runtime_activity_stream, handle_sentinel_reset_lockdown,
+    handle_sentinel_simulate_breach, handle_status, handle_update_egress_domains,
+    handle_validate_sisyphean, handle_vassilev_proof, WebState,
 };
 use super::static_files::INDEX_HTML;
-use super::strict_http::{validate_header, validate_complete_body};
+use super::strict_http::{validate_complete_body, validate_header};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -120,7 +117,9 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
                     selected_port = local_v4.port();
                     listeners.push(v4_listener);
                     if ipv6_supported {
-                        if let Ok(v6_listener) = TcpListener::bind(format!("[::1]:{}", selected_port)).await {
+                        if let Ok(v6_listener) =
+                            TcpListener::bind(format!("[::1]:{}", selected_port)).await
+                        {
                             listeners.push(v6_listener);
                         }
                     }
@@ -182,7 +181,10 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
 
     for listener in &listeners {
         if let Ok(local) = listener.local_addr() {
-            println!("🐙 Agent Octopus Web Dashboard running on: http://{}", local);
+            println!(
+                "🐙 Agent Octopus Web Dashboard running on: http://{}",
+                local
+            );
         }
     }
 
@@ -202,14 +204,20 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(8));
         loop {
             interval.tick().await;
-            let report = state_auto.continuous_eval.run_continuous_training_cycle().await;
+            let report = state_auto
+                .continuous_eval
+                .run_continuous_training_cycle()
+                .await;
             tracing::info!(
                 "[AUTONOMOUS-24/7] Cycle #{}: Passed: {}/{} | Breaches: {} | RL Posture: {} | MTTD: {:.2}ms | MTTR: {:.2}ms | Survival: {:.2}%",
                 report.cycle_id, report.passed_invariants, report.total_probes, report.defensive_breaches,
                 if report.epsilon_after_cycle < 0.1 { "CONVERGED" } else { "TUNING" },
                 report.mttd_ms, report.mttr_ms, report.cumulative_survival_prob * 100.0
             );
-            if std::env::var("OCTOPUS_CONSOLE").map(|v| v == "1" || v == "true").unwrap_or(false) {
+            if std::env::var("OCTOPUS_CONSOLE")
+                .map(|v| v == "1" || v == "true")
+                .unwrap_or(false)
+            {
                 eprintln!(
                     "[AUTONOMOUS-24/7] Cycle #{}: Passed: {}/{} | Breaches: {} | RL Posture: {} | MTTD: {:.2}ms | MTTR: {:.2}ms | Survival: {:.2}%",
                     report.cycle_id, report.passed_invariants, report.total_probes, report.defensive_breaches,
@@ -220,12 +228,18 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
 
             // Continuous Google OSS-Fuzz dynamic runtime fuzzing pass
             let fuzz_rep = state_auto.oss_fuzz_arm.run_continuous_fuzz_cycle(10);
-            if fuzz_rep.crashes_prevented > 0 || fuzz_rep.hangs_intercepted > 0 || fuzz_rep.cycle_id % 10 == 0 {
+            if fuzz_rep.crashes_prevented > 0
+                || fuzz_rep.hangs_intercepted > 0
+                || fuzz_rep.cycle_id % 10 == 0
+            {
                 tracing::info!(
                     "[OSS-FUZZ] Executed: {} total | Exec/s: {:.1} | Crashes Contained: {} | Hangs Intercepted: {}",
                     fuzz_rep.total_executions, fuzz_rep.execs_per_sec, fuzz_rep.crashes_prevented, fuzz_rep.hangs_intercepted
                 );
-                if std::env::var("OCTOPUS_CONSOLE").map(|v| v == "1" || v == "true").unwrap_or(false) {
+                if std::env::var("OCTOPUS_CONSOLE")
+                    .map(|v| v == "1" || v == "true")
+                    .unwrap_or(false)
+                {
                     eprintln!(
                         "[OSS-FUZZ] Executed: {} total | Exec/s: {:.1} | Crashes Contained: {} | Hangs Intercepted: {}",
                         fuzz_rep.total_executions, fuzz_rep.execs_per_sec, fuzz_rep.crashes_prevented, fuzz_rep.hangs_intercepted
@@ -255,7 +269,10 @@ async fn run_listener(listener: TcpListener, state: Arc<WebState>) {
                             eprintln!("[WEB] Connection error: {}", err);
                         }
                         Err(join_err) => {
-                            eprintln!("[WEB] Panic in connection handler caught by boundary: {}", join_err);
+                            eprintln!(
+                                "[WEB] Panic in connection handler caught by boundary: {}",
+                                join_err
+                            );
                         }
                     }
                 });
@@ -278,7 +295,8 @@ pub fn api_error_payload(code: &str, message: &str) -> String {
         "code": code,
         "message": message,
         "timestamp": format!("{}", now),
-    }).to_string()
+    })
+    .to_string()
 }
 
 pub fn api_error_response(status_code: &str, code: &str, message: &str) -> String {
@@ -303,21 +321,29 @@ async fn handle_connection(
 
     // Buffer headers up to 64KB max header boundary with timeout protection against Slowloris attacks
     while total_buffer.len() < 65536 {
-        let read_res = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut chunk)).await;
+        let read_res =
+            tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut chunk)).await;
         let n = match read_res {
             Ok(Ok(n)) => n,
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => {
                 // Header read timed out (Slowloris / stalled client)
                 if !total_buffer.is_empty() {
-                    let _ = state.tarpit.engage_adversary(&client_ip, "slowloris_timeout", "").await;
+                    let _ = state
+                        .tarpit
+                        .engage_adversary(&client_ip, "slowloris_timeout", "")
+                        .await;
                     state.audit_log.record_event(
                         "HTTP_SLOWLORIS_TIMEOUT",
                         &format!("recon_{}", client_ip),
                         &format!("Socket header read timed out for {} (Dangling-Byte/Slowloris clamp triggered)", client_ip),
                         "REQUEST_TIMEOUT",
                     );
-                    let resp = api_error_response("408 Request Timeout", "REQUEST_TIMEOUT", "Timed out waiting for HTTP request headers");
+                    let resp = api_error_response(
+                        "408 Request Timeout",
+                        "REQUEST_TIMEOUT",
+                        "Timed out waiting for HTTP request headers",
+                    );
                     let _ = stream.write_all(resp.as_bytes()).await;
                     let _ = stream.flush().await;
                     let _ = stream.shutdown().await;
@@ -341,20 +367,35 @@ async fn handle_connection(
             if total_buffer.is_empty() {
                 return Ok(());
             }
-            let _ = state.tarpit.engage_adversary(&client_ip, "malformed_header_boundary", "").await;
+            let _ = state
+                .tarpit
+                .engage_adversary(&client_ip, "malformed_header_boundary", "")
+                .await;
             state.audit_log.record_event(
                 "HTTP_MALFORMED_HEADER_BOUNDARY",
                 &format!("recon_{}", client_ip),
-                &format!("Malformed HTTP request header boundary without CRLF CRLF from {}", client_ip),
+                &format!(
+                    "Malformed HTTP request header boundary without CRLF CRLF from {}",
+                    client_ip
+                ),
                 "REJECTED",
             );
-            let resp = api_error_response("400 Bad Request", "INVALID_REQUEST", "Malformed HTTP request header boundary");
+            let resp = api_error_response(
+                "400 Bad Request",
+                "INVALID_REQUEST",
+                "Malformed HTTP request header boundary",
+            );
             let _ = stream.write_all(resp.as_bytes()).await;
             let _ = stream.flush().await;
             // Drain remaining in-flight bytes into stack buffer so Windows TCP does not send RST (WinError 10054)
             let mut drain_buf = [0u8; 8192];
             for _ in 0..16 {
-                match tokio::time::timeout(std::time::Duration::from_millis(50), stream.read(&mut drain_buf)).await {
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(50),
+                    stream.read(&mut drain_buf),
+                )
+                .await
+                {
                     Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
                     Ok(Ok(_)) => {}
                 }
@@ -372,14 +413,25 @@ async fn handle_connection(
                 rejection.signal.code(),
                 rejection.details
             );
-            let _ = state.tarpit.engage_adversary(&client_ip, rejection.signal.code(), "").await;
+            let _ = state
+                .tarpit
+                .engage_adversary(&client_ip, rejection.signal.code(), "")
+                .await;
             state.audit_log.record_event(
                 "HTTP_FRAMING_REJECTED",
                 &format!("recon_{}", client_ip),
-                &format!("Signal: {} | Details: {} (Origin: {})", rejection.signal.code(), rejection.details, client_ip),
+                &format!(
+                    "Signal: {} | Details: {} (Origin: {})",
+                    rejection.signal.code(),
+                    rejection.details,
+                    client_ip
+                ),
                 "REJECTED",
             );
-            let _ = state.protocol_analyzer.evaluate_raw_stream(&total_buffer[..pos]).await;
+            let _ = state
+                .protocol_analyzer
+                .evaluate_raw_stream(&total_buffer[..pos])
+                .await;
             let resp = api_error_response(
                 "400 Bad Request",
                 "HTTP_PROTOCOL_REJECTED",
@@ -392,14 +444,16 @@ async fn handle_connection(
     };
 
     for signal in &frame.signals {
-        eprintln!(
-            "[HTTP-SECURITY] anomaly={} action=observe",
-            signal.code()
-        );
+        eprintln!("[HTTP-SECURITY] anomaly={} action=observe", signal.code());
     }
 
-    let diff_report = state.protocol_analyzer.evaluate_raw_stream(&total_buffer[..pos]).await;
-    if diff_report.action == crate::security::differential_protocol::DifferentialAction::QuarantineAndSever {
+    let diff_report = state
+        .protocol_analyzer
+        .evaluate_raw_stream(&total_buffer[..pos])
+        .await;
+    if diff_report.action
+        == crate::security::differential_protocol::DifferentialAction::QuarantineAndSever
+    {
         eprintln!(
             "[DIFFERENTIAL-SECURITY] blocked={} verdict={} score={:.2} arm_quarantine={:?}",
             diff_report.report_id,
@@ -461,11 +515,15 @@ async fn handle_connection(
                     content_length, current_body_len
                 );
                 let conn_id = state.protocol_analyzer.correlator().next_connection_id();
-                state.protocol_analyzer.correlator().record_residue(
-                    conn_id,
-                    content_length.saturating_sub(current_body_len),
-                    b"DANGLING_BYTE_STALL_INCOMPLETE_STREAM",
-                ).await;
+                state
+                    .protocol_analyzer
+                    .correlator()
+                    .record_residue(
+                        conn_id,
+                        content_length.saturating_sub(current_body_len),
+                        b"DANGLING_BYTE_STALL_INCOMPLETE_STREAM",
+                    )
+                    .await;
                 let resp = api_error_response(
                     "408 Request Timeout",
                     "DANGLING_BYTE_TIMEOUT_SEVERED",
@@ -482,11 +540,15 @@ async fn handle_connection(
                 content_length, current_body_len
             );
             let conn_id = state.protocol_analyzer.correlator().next_connection_id();
-            state.protocol_analyzer.correlator().record_residue(
-                conn_id,
-                content_length.saturating_sub(current_body_len),
-                b"PREMATURE_EOF_INCOMPLETE_STREAM",
-            ).await;
+            state
+                .protocol_analyzer
+                .correlator()
+                .record_residue(
+                    conn_id,
+                    content_length.saturating_sub(current_body_len),
+                    b"PREMATURE_EOF_INCOMPLETE_STREAM",
+                )
+                .await;
             let resp = api_error_response(
                 "400 Bad Request",
                 "PREMATURE_STREAM_EOF",
@@ -552,10 +614,20 @@ async fn handle_connection(
         state.audit_log.record_event(
             "DASHBOARD_REQUEST_REJECTED",
             &format!("recon_{}", client_ip),
-            &format!("{} {} -> {} ({})", method, path, rejection.code(), rejection.message()),
+            &format!(
+                "{} {} -> {} ({})",
+                method,
+                path,
+                rejection.code(),
+                rejection.message()
+            ),
             "REJECTED",
         );
-        let resp = api_error_response(rejection.status_line(), rejection.code(), &rejection.message());
+        let resp = api_error_response(
+            rejection.status_line(),
+            rejection.code(),
+            &rejection.message(),
+        );
         let _ = stream.write_all(resp.as_bytes()).await;
         let _ = stream.shutdown().await;
         return Ok(());
@@ -565,10 +637,7 @@ async fn handle_connection(
         ("GET", "/") | ("GET", "/index.html") | ("HEAD", "/") | ("HEAD", "/index.html") => {
             let (scoped_token, set_cookie_hdr) =
                 super::request_guard::resolve_index_session_token(&guard_req);
-            let index = super::request_guard::inject_token_into_index(
-                INDEX_HTML,
-                &scoped_token,
-            );
+            let index = super::request_guard::inject_token_into_index(INDEX_HTML, &scoped_token);
             let cookie_line = set_cookie_hdr.unwrap_or_default();
             let body = if method == "HEAD" { "" } else { index.as_str() };
             let response = format!(
@@ -581,7 +650,10 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
-        ("GET", "/logo.png") | ("GET", "/assets/logo.png") | ("GET", "/favicon.png") | ("GET", "/favicon.ico") => {
+        ("GET", "/logo.png")
+        | ("GET", "/assets/logo.png")
+        | ("GET", "/favicon.png")
+        | ("GET", "/favicon.ico") => {
             let logo_path = std::path::Path::new("assets/logo.png");
             if let Ok(bytes) = tokio::fs::read(logo_path).await {
                 let header = format!(
@@ -601,7 +673,8 @@ async fn handle_connection(
             }
         }
 
-        ("GET", "/breakout_containment_architecture.png") | ("GET", "/assets/breakout_containment_architecture.png") => {
+        ("GET", "/breakout_containment_architecture.png")
+        | ("GET", "/assets/breakout_containment_architecture.png") => {
             let img_path = std::path::Path::new("assets/breakout_containment_architecture.png");
             if let Ok(bytes) = tokio::fs::read(img_path).await {
                 let header = format!(
@@ -611,12 +684,17 @@ async fn handle_connection(
                 stream.write_all(header.as_bytes()).await?;
                 stream.write_all(&bytes).await?;
             } else {
-                let resp = api_error_response("404 Not Found", "IMAGE_NOT_FOUND", "Architecture diagram not found");
+                let resp = api_error_response(
+                    "404 Not Found",
+                    "IMAGE_NOT_FOUND",
+                    "Architecture diagram not found",
+                );
                 stream.write_all(resp.as_bytes()).await?;
             }
         }
 
-        ("GET", "/compromised_arm_containment_flow.png") | ("GET", "/assets/compromised_arm_containment_flow.png") => {
+        ("GET", "/compromised_arm_containment_flow.png")
+        | ("GET", "/assets/compromised_arm_containment_flow.png") => {
             let img_path = std::path::Path::new("assets/compromised_arm_containment_flow.png");
             if let Ok(bytes) = tokio::fs::read(img_path).await {
                 let header = format!(
@@ -626,7 +704,11 @@ async fn handle_connection(
                 stream.write_all(header.as_bytes()).await?;
                 stream.write_all(&bytes).await?;
             } else {
-                let resp = api_error_response("404 Not Found", "IMAGE_NOT_FOUND", "Compromised arm containment diagram not found");
+                let resp = api_error_response(
+                    "404 Not Found",
+                    "IMAGE_NOT_FOUND",
+                    "Compromised arm containment diagram not found",
+                );
                 stream.write_all(resp.as_bytes()).await?;
             }
         }
@@ -641,11 +723,20 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
-        ("GET", "/api/status") | ("GET", "/api/system/status") | ("GET", "/api/health") | ("GET", "/health") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_status(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/status")),
-            };
+        ("GET", "/api/status")
+        | ("GET", "/api/system/status")
+        | ("GET", "/api/health")
+        | ("GET", "/health") => {
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_status(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/status"),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -656,10 +747,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/audit-log") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_audit_log(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/audit-log")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_audit_log(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/audit-log",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -678,10 +778,19 @@ async fn handle_connection(
                     }
                 }
             }
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_live_tests(&state, since_id))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/live-tests")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_live_tests(&state, since_id)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/live-tests",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -693,7 +802,12 @@ async fn handle_connection(
 
         ("GET", "/api/download-run-log") => {
             let log_path = std::path::Path::new("logs/adversarial_execution.log");
-            let raw_str = tokio::fs::read_to_string(log_path).await.unwrap_or_else(|_| "(No adversarial run log found on disk yet. Run a test suite first.)".to_string());
+            let raw_str = tokio::fs::read_to_string(log_path)
+                .await
+                .unwrap_or_else(|_| {
+                    "(No adversarial run log found on disk yet. Run a test suite first.)"
+                        .to_string()
+                });
             let sanitized = crate::security::LogSanitizer::sanitize_text(&raw_str);
             let content = sanitized.into_bytes();
             let header = format!(
@@ -706,7 +820,9 @@ async fn handle_connection(
 
         ("GET", "/api/download-test-json") => {
             let json_path = std::path::Path::new("logs/adversarial_audit.json");
-            let raw_str = tokio::fs::read_to_string(json_path).await.unwrap_or_else(|_| "{}".to_string());
+            let raw_str = tokio::fs::read_to_string(json_path)
+                .await
+                .unwrap_or_else(|_| "{}".to_string());
             let sanitized = crate::security::LogSanitizer::sanitize_text(&raw_str);
             let content = sanitized.into_bytes();
             let header = format!(
@@ -719,7 +835,9 @@ async fn handle_connection(
 
         ("GET", "/api/download-audit-log") => {
             let log_path = std::path::Path::new("logs/audit.log");
-            let raw_str = tokio::fs::read_to_string(log_path).await.unwrap_or_else(|_| "(No security audit log entries yet)".to_string());
+            let raw_str = tokio::fs::read_to_string(log_path)
+                .await
+                .unwrap_or_else(|_| "(No security audit log entries yet)".to_string());
             let sanitized = crate::security::LogSanitizer::sanitize_text(&raw_str);
             let content = sanitized.into_bytes();
             let header = format!(
@@ -733,9 +851,8 @@ async fn handle_connection(
         ("POST", "/api/evaluate-cedar") => {
             let state_eval = Arc::clone(&state);
             let body_eval = body.to_string();
-            let eval_task = tokio::spawn(async move {
-                handle_evaluate_cedar(&state_eval, &body_eval).await
-            });
+            let eval_task =
+                tokio::spawn(async move { handle_evaluate_cedar(&state_eval, &body_eval).await });
             let (status_code, response_body) = match eval_task.await {
                 Ok(Ok(resp)) => ("200 OK", resp),
                 Ok(Err(err_json)) => ("400 Bad Request", err_json),
@@ -745,7 +862,10 @@ async fn handle_connection(
                     } else {
                         "Cedar evaluation task aborted"
                     };
-                    ("500 Internal Server Error", api_error_payload("CEDAR_EVALUATION_FAULT", msg))
+                    (
+                        "500 Internal Server Error",
+                        api_error_payload("CEDAR_EVALUATION_FAULT", msg),
+                    )
                 }
             };
 
@@ -772,10 +892,11 @@ async fn handle_connection(
         ("POST", "/api/containment-rings/sever") => {
             let state_cl = Arc::clone(&state);
             let body_str = body.to_string();
-            let (status_code, resp_body) = match handle_containment_ring_sever(&state_cl, &body_str).await {
-                Ok(res) => ("200 OK", res),
-                Err(err) => ("400 Bad Request", err),
-            };
+            let (status_code, resp_body) =
+                match handle_containment_ring_sever(&state_cl, &body_str).await {
+                    Ok(res) => ("200 OK", res),
+                    Err(err) => ("400 Bad Request", err),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -788,10 +909,11 @@ async fn handle_connection(
         ("POST", "/api/containment-rings/regenerate") => {
             let state_cl = Arc::clone(&state);
             let body_str = body.to_string();
-            let (status_code, resp_body) = match handle_containment_ring_regenerate(&state_cl, &body_str).await {
-                Ok(res) => ("200 OK", res),
-                Err(err) => ("400 Bad Request", err),
-            };
+            let (status_code, resp_body) =
+                match handle_containment_ring_regenerate(&state_cl, &body_str).await {
+                    Ok(res) => ("200 OK", res),
+                    Err(err) => ("400 Bad Request", err),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -804,10 +926,11 @@ async fn handle_connection(
         ("POST", "/api/containment-rings/stale-replay") => {
             let state_cl = Arc::clone(&state);
             let body_str = body.to_string();
-            let (status_code, resp_body) = match handle_containment_ring_stale_replay(&state_cl, &body_str).await {
-                Ok(res) => ("200 OK", res),
-                Err(err) => ("400 Bad Request", err),
-            };
+            let (status_code, resp_body) =
+                match handle_containment_ring_stale_replay(&state_cl, &body_str).await {
+                    Ok(res) => ("200 OK", res),
+                    Err(err) => ("400 Bad Request", err),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -821,13 +944,18 @@ async fn handle_connection(
             let state_cl = Arc::clone(&state);
             let body_str = body.to_string();
             let headers_copy = headers_str.to_string();
-            let (status_code, resp_body) = match handle_sentinel_simulate_breach(&state_cl, &headers_copy, &body_str).await {
-                Ok(res) => ("200 OK", res),
-                Err(err) => {
-                    let code = if err.contains("ADMIN_AUTH_REQUIRED") { "401 Unauthorized" } else { "400 Bad Request" };
-                    (code, err)
-                }
-            };
+            let (status_code, resp_body) =
+                match handle_sentinel_simulate_breach(&state_cl, &headers_copy, &body_str).await {
+                    Ok(res) => ("200 OK", res),
+                    Err(err) => {
+                        let code = if err.contains("ADMIN_AUTH_REQUIRED") {
+                            "401 Unauthorized"
+                        } else {
+                            "400 Bad Request"
+                        };
+                        (code, err)
+                    }
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -841,13 +969,18 @@ async fn handle_connection(
             let state_cl = Arc::clone(&state);
             let body_str = body.to_string();
             let headers_copy = headers_str.to_string();
-            let (status_code, resp_body) = match handle_sentinel_reset_lockdown(&state_cl, &headers_copy, &body_str).await {
-                Ok(res) => ("200 OK", res),
-                Err(err) => {
-                    let code = if err.contains("ADMIN_AUTH_REQUIRED") { "401 Unauthorized" } else { "400 Bad Request" };
-                    (code, err)
-                }
-            };
+            let (status_code, resp_body) =
+                match handle_sentinel_reset_lockdown(&state_cl, &headers_copy, &body_str).await {
+                    Ok(res) => ("200 OK", res),
+                    Err(err) => {
+                        let code = if err.contains("ADMIN_AUTH_REQUIRED") {
+                            "401 Unauthorized"
+                        } else {
+                            "400 Bad Request"
+                        };
+                        (code, err)
+                    }
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -858,13 +991,20 @@ async fn handle_connection(
         }
 
         ("GET", "/api/tarpit-stats") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let stats = state.tarpit.stats();
-                serde_json::to_string(&stats).unwrap_or_default()
-            })) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/tarpit-stats")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let stats = state.tarpit.stats();
+                    serde_json::to_string(&stats).unwrap_or_default()
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/tarpit-stats",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -875,10 +1015,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/kernel-stats") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_kernel_stats(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/kernel-stats")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_kernel_stats(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/kernel-stats",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -917,10 +1066,11 @@ async fn handle_connection(
         }
 
         ("POST", "/api/protocol-analyzer/analyze") => {
-            let (status_code, json_body) = match handle_protocol_analyzer_analyze(&state, body).await {
-                Ok(body) => ("200 OK", body),
-                Err(err) => ("400 Bad Request", err),
-            };
+            let (status_code, json_body) =
+                match handle_protocol_analyzer_analyze(&state, body).await {
+                    Ok(body) => ("200 OK", body),
+                    Err(err) => ("400 Bad Request", err),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -951,10 +1101,11 @@ async fn handle_connection(
         }
 
         ("POST", "/api/protocol-research/evaluate") => {
-            let (status_code, json_body) = match handle_protocol_research_evaluate(&state, body).await {
-                Ok(body) => ("200 OK", body),
-                Err(err) => ("400 Bad Request", err),
-            };
+            let (status_code, json_body) =
+                match handle_protocol_research_evaluate(&state, body).await {
+                    Ok(body) => ("200 OK", body),
+                    Err(err) => ("400 Bad Request", err),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -965,10 +1116,11 @@ async fn handle_connection(
         }
 
         ("POST", "/api/protocol-research/validate-arm106") => {
-            let (status_code, json_body) = match handle_protocol_research_validate_arm106(&state, body).await {
-                Ok(body) => ("200 OK", body),
-                Err(err) => ("400 Bad Request", err),
-            };
+            let (status_code, json_body) =
+                match handle_protocol_research_validate_arm106(&state, body).await {
+                    Ok(body) => ("200 OK", body),
+                    Err(err) => ("400 Bad Request", err),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1258,7 +1410,8 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
-        ("GET", "/api/dream-rsi/recommend-priorities") | ("POST", "/api/dream-rsi/recommend-priorities") => {
+        ("GET", "/api/dream-rsi/recommend-priorities")
+        | ("POST", "/api/dream-rsi/recommend-priorities") => {
             let json_body = handle_dream_rsi_recommend_priorities(&state).await;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1269,10 +1422,11 @@ async fn handle_connection(
         }
 
         ("POST", "/api/dream-rsi/feed-trajectories") => {
-            let (status_code, json_body) = match handle_dream_rsi_feed_trajectories(&state, body).await {
-                Ok(body) => ("200 OK", body),
-                Err(err) => ("400 Bad Request", err),
-            };
+            let (status_code, json_body) =
+                match handle_dream_rsi_feed_trajectories(&state, body).await {
+                    Ok(body) => ("200 OK", body),
+                    Err(err) => ("400 Bad Request", err),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1379,10 +1533,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/egress-domains") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_get_egress_domains(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/egress-domains")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_get_egress_domains(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/egress-domains",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1393,11 +1556,20 @@ async fn handle_connection(
         }
 
         ("POST", "/api/egress-domains") => {
-            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_update_egress_domains(&state, body))) {
-                Ok(Ok(resp)) => ("200 OK", resp),
-                Ok(Err(err_json)) => ("400 Bad Request", err_json),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault updating egress domains")),
-            };
+            let (status_code, response_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_update_egress_domains(&state, body)
+                })) {
+                    Ok(Ok(resp)) => ("200 OK", resp),
+                    Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault updating egress domains",
+                        ),
+                    ),
+                };
 
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1409,10 +1581,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/rl-defense/status") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_rl_defense_status(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rl-defense/status")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_rl_defense_status(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/rl-defense/status",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1424,9 +1605,8 @@ async fn handle_connection(
 
         ("POST", "/api/rl-defense/train-cycle") => {
             let state_train = Arc::clone(&state);
-            let train_task = tokio::spawn(async move {
-                handle_rl_defense_train_cycle(&state_train).await
-            });
+            let train_task =
+                tokio::spawn(async move { handle_rl_defense_train_cycle(&state_train).await });
             let (status_code, response_body) = match train_task.await {
                 Ok(resp) => ("200 OK", resp),
                 Err(join_err) => {
@@ -1435,7 +1615,10 @@ async fn handle_connection(
                     } else {
                         "RL continuous training task aborted"
                     };
-                    ("500 Internal Server Error", api_error_payload("TRAIN_CYCLE_FAULT", msg))
+                    (
+                        "500 Internal Server Error",
+                        api_error_payload("TRAIN_CYCLE_FAULT", msg),
+                    )
                 }
             };
             let response = format!(
@@ -1449,12 +1632,17 @@ async fn handle_connection(
 
         ("GET", "/api/rl-defense/latest-cycle") => {
             let state_latest = Arc::clone(&state);
-            let latest_task = tokio::spawn(async move {
-                handle_rl_defense_latest_cycle(&state_latest).await
-            });
+            let latest_task =
+                tokio::spawn(async move { handle_rl_defense_latest_cycle(&state_latest).await });
             let (status_code, response_body) = match latest_task.await {
                 Ok(resp) => ("200 OK", resp),
-                Err(_) => ("500 Internal Server Error", api_error_payload("CYCLE_FETCH_FAULT", "Failed to retrieve latest continuous evaluation report")),
+                Err(_) => (
+                    "500 Internal Server Error",
+                    api_error_payload(
+                        "CYCLE_FETCH_FAULT",
+                        "Failed to retrieve latest continuous evaluation report",
+                    ),
+                ),
             };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1466,11 +1654,20 @@ async fn handle_connection(
         }
 
         ("POST", "/api/rl-defense/evaluate-action") => {
-            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_rl_evaluate_action(&state, body))) {
-                Ok(Ok(resp)) => ("200 OK", resp),
-                Ok(Err(err_json)) => ("400 Bad Request", err_json),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rl-defense/evaluate-action")),
-            };
+            let (status_code, response_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_rl_evaluate_action(&state, body)
+                })) {
+                    Ok(Ok(resp)) => ("200 OK", resp),
+                    Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/rl-defense/evaluate-action",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1481,10 +1678,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/atlas/status") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_atlas_status(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/atlas/status")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_atlas_status(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/atlas/status",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1495,11 +1701,20 @@ async fn handle_connection(
         }
 
         ("POST", "/api/atlas/sync") | ("GET", "/api/atlas/sync") => {
-            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_atlas_sync(&state))) {
-                Ok(Ok(resp)) => ("200 OK", resp),
-                Ok(Err(err_json)) => ("400 Bad Request", err_json),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/atlas/sync")),
-            };
+            let (status_code, response_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_atlas_sync(&state)
+                })) {
+                    Ok(Ok(resp)) => ("200 OK", resp),
+                    Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/atlas/sync",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1510,11 +1725,20 @@ async fn handle_connection(
         }
 
         ("POST", "/api/atlas/dynamic-tests") | ("GET", "/api/atlas/dynamic-tests") => {
-            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_atlas_dynamic_tests(&state))) {
-                Ok(Ok(resp)) => ("200 OK", resp),
-                Ok(Err(err_json)) => ("400 Bad Request", err_json),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/atlas/dynamic-tests")),
-            };
+            let (status_code, response_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_atlas_dynamic_tests(&state)
+                })) {
+                    Ok(Ok(resp)) => ("200 OK", resp),
+                    Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/atlas/dynamic-tests",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1525,10 +1749,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/oss-fuzz/status") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_oss_fuzz_status(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/oss-fuzz/status")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_oss_fuzz_status(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/oss-fuzz/status",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1539,10 +1772,19 @@ async fn handle_connection(
         }
 
         ("POST", "/api/oss-fuzz/run-burst") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_oss_fuzz_burst(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/oss-fuzz/run-burst")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_oss_fuzz_burst(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/oss-fuzz/run-burst",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1553,10 +1795,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/oss-fuzz/sarif") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_oss_fuzz_sarif(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/oss-fuzz/sarif")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_oss_fuzz_sarif(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/oss-fuzz/sarif",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1567,10 +1818,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/osv-scanner/status") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_osv_scanner_status(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/osv-scanner/status")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_osv_scanner_status(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/osv-scanner/status",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1581,10 +1841,19 @@ async fn handle_connection(
         }
 
         ("POST", "/api/osv-scanner/scan-now") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_osv_scanner_scan_now(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/osv-scanner/scan-now")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_osv_scanner_scan_now(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/osv-scanner/scan-now",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1595,10 +1864,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/osv-scanner/sarif") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_osv_scanner_sarif(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/osv-scanner/sarif")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_osv_scanner_sarif(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/osv-scanner/sarif",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1609,10 +1887,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/otel/sessions") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_otel_sessions(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/otel/sessions")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_otel_sessions(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/otel/sessions",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1623,10 +1910,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/otel/spans") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_otel_spans(&state, 50))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/otel/spans")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_otel_spans(&state, 50)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/otel/spans",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1637,10 +1933,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/runtime-activity/stream") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_runtime_activity_stream(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/runtime-activity/stream")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_runtime_activity_stream(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/runtime-activity/stream",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1651,10 +1956,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/resilience/metrics") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_resilience_metrics(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/resilience/metrics")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_resilience_metrics(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/resilience/metrics",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1665,10 +1979,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/breakout-guards/status") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_breakout_guards_status(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/breakout-guards/status")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_breakout_guards_status(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/breakout-guards/status",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1679,11 +2002,20 @@ async fn handle_connection(
         }
 
         ("POST", "/api/math/validate-sisyphean") => {
-            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_validate_sisyphean(&state, body))) {
-                Ok(Ok(resp)) => ("200 OK", resp),
-                Ok(Err(err_json)) => ("400 Bad Request", err_json),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/math/validate-sisyphean")),
-            };
+            let (status_code, response_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_validate_sisyphean(&state, body)
+                })) {
+                    Ok(Ok(resp)) => ("200 OK", resp),
+                    Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/math/validate-sisyphean",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1694,10 +2026,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/math/vassilev-proof") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_vassilev_proof(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/math/vassilev-proof")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_vassilev_proof(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/math/vassilev-proof",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1708,10 +2049,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/governor/status") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_governor_status(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/governor/status")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_governor_status(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/governor/status",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1722,11 +2072,20 @@ async fn handle_connection(
         }
 
         ("POST", "/api/governor/inject-sample") => {
-            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_governor_inject_sample(&state, body))) {
-                Ok(Ok(resp)) => ("200 OK", resp),
-                Ok(Err(err_json)) => ("400 Bad Request", err_json),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/governor/inject-sample")),
-            };
+            let (status_code, response_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_governor_inject_sample(&state, body)
+                })) {
+                    Ok(Ok(resp)) => ("200 OK", resp),
+                    Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/governor/inject-sample",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1737,10 +2096,19 @@ async fn handle_connection(
         }
 
         ("POST", "/api/governor/reset") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_governor_reset(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/governor/reset")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_governor_reset(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/governor/reset",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1751,10 +2119,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/rasp/status") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_rasp_status(&state))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/status")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_rasp_status(&state)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/rasp/status",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1773,10 +2150,19 @@ async fn handle_connection(
                     }
                 }
             }
-            let (status_code, json_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_rasp_telemetry(&state, limit))) {
-                Ok(body) => ("200 OK", body),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/telemetry")),
-            };
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_rasp_telemetry(&state, limit)
+                })) {
+                    Ok(body) => ("200 OK", body),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/rasp/telemetry",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1787,11 +2173,20 @@ async fn handle_connection(
         }
 
         ("POST", "/api/rasp/intercept-prompt") => {
-            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_rasp_intercept_prompt(&state, body))) {
-                Ok(Ok(resp)) => ("200 OK", resp),
-                Ok(Err(err_json)) => ("400 Bad Request", err_json),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/intercept-prompt")),
-            };
+            let (status_code, response_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_rasp_intercept_prompt(&state, body)
+                })) {
+                    Ok(Ok(resp)) => ("200 OK", resp),
+                    Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/rasp/intercept-prompt",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1802,11 +2197,20 @@ async fn handle_connection(
         }
 
         ("POST", "/api/rasp/intercept-tool") => {
-            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_rasp_intercept_tool(&state, body))) {
-                Ok(Ok(resp)) => ("200 OK", resp),
-                Ok(Err(err_json)) => ("400 Bad Request", err_json),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/intercept-tool")),
-            };
+            let (status_code, response_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_rasp_intercept_tool(&state, body)
+                })) {
+                    Ok(Ok(resp)) => ("200 OK", resp),
+                    Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/rasp/intercept-tool",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1817,11 +2221,20 @@ async fn handle_connection(
         }
 
         ("POST", "/api/rasp/intercept-memory") => {
-            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_rasp_intercept_memory(&state, body))) {
-                Ok(Ok(resp)) => ("200 OK", resp),
-                Ok(Err(err_json)) => ("400 Bad Request", err_json),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/intercept-memory")),
-            };
+            let (status_code, response_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_rasp_intercept_memory(&state, body)
+                })) {
+                    Ok(Ok(resp)) => ("200 OK", resp),
+                    Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/rasp/intercept-memory",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1832,11 +2245,20 @@ async fn handle_connection(
         }
 
         ("POST", "/api/rasp/canary") => {
-            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_rasp_create_canary(&state, body))) {
-                Ok(Ok(resp)) => ("200 OK", resp),
-                Ok(Err(err_json)) => ("400 Bad Request", err_json),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/canary")),
-            };
+            let (status_code, response_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_rasp_create_canary(&state, body)
+                })) {
+                    Ok(Ok(resp)) => ("200 OK", resp),
+                    Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/rasp/canary",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1847,11 +2269,20 @@ async fn handle_connection(
         }
 
         ("POST", "/api/rasp/mitigation-tier") => {
-            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_rasp_set_mitigation_tier(&state, body))) {
-                Ok(Ok(resp)) => ("200 OK", resp),
-                Ok(Err(err_json)) => ("400 Bad Request", err_json),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/rasp/mitigation-tier")),
-            };
+            let (status_code, response_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_rasp_set_mitigation_tier(&state, body)
+                })) {
+                    Ok(Ok(resp)) => ("200 OK", resp),
+                    Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/rasp/mitigation-tier",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1874,11 +2305,20 @@ async fn handle_connection(
         }
 
         ("POST", "/api/containment/oshoosiclaw-evaluate") => {
-            let (status_code, response_body) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_oshoosiclaw_containment_evaluate(&state, body))) {
-                Ok(Ok(resp)) => ("200 OK", resp),
-                Ok(Err(err_json)) => ("400 Bad Request", err_json),
-                Err(_) => ("500 Internal Server Error", api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/containment/oshoosiclaw-evaluate")),
-            };
+            let (status_code, response_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_oshoosiclaw_containment_evaluate(&state, body)
+                })) {
+                    Ok(Ok(resp)) => ("200 OK", resp),
+                    Ok(Err(err_json)) => ("400 Bad Request", err_json),
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/containment/oshoosiclaw-evaluate",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -1930,7 +2370,11 @@ async fn handle_connection(
 
         _ => {
             if path.starts_with("/api/") {
-                let response = api_error_response("404 Not Found", "ENDPOINT_NOT_FOUND", &format!("API endpoint not found: {}", path));
+                let response = api_error_response(
+                    "404 Not Found",
+                    "ENDPOINT_NOT_FOUND",
+                    &format!("API endpoint not found: {}", path),
+                );
                 stream.write_all(response.as_bytes()).await?;
             } else {
                 let body = "404 Not Found";
@@ -2172,21 +2616,42 @@ async fn handle_sse_test_stream(
     suite_name: &str,
     state: &Arc<WebState>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    state.breakout_coordinator.behavioral.record_harness_baseline("tests/strix_llm_adversarial_tester.py");
-    state.breakout_coordinator.behavioral.record_harness_baseline("tests/exhaustive_adversarial_tester.py");
+    state
+        .breakout_coordinator
+        .behavioral
+        .record_harness_baseline("tests/strix_llm_adversarial_tester.py");
+    state
+        .breakout_coordinator
+        .behavioral
+        .record_harness_baseline("tests/exhaustive_adversarial_tester.py");
 
     let sse_header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache, no-transform\r\nConnection: keep-alive\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nX-Accel-Buffering: no\r\n\r\n";
     stream.write_all(sse_header.as_bytes()).await?;
     stream.flush().await?;
 
     let python_suites = [
-        "strix_llm_adversarial", "adversarial", "multi_framework", "pyrit",
-        "garak", "deepeval", "inspect_ai", "promptfoo", "pentestgpt", "redamon",
-        "caido", "astra", "restler", "multimodal", "multilingual", "collusion"
+        "strix_llm_adversarial",
+        "adversarial",
+        "multi_framework",
+        "pyrit",
+        "garak",
+        "deepeval",
+        "inspect_ai",
+        "promptfoo",
+        "pentestgpt",
+        "redamon",
+        "caido",
+        "astra",
+        "restler",
+        "multimodal",
+        "multilingual",
+        "collusion",
     ];
     let is_all = suite_name == "all";
     let is_python = is_all || python_suites.contains(&suite_name);
-    let is_strix = suite_name == "strix_llm_adversarial" || suite_name == "adversarial" || suite_name == "multi_framework";
+    let is_strix = suite_name == "strix_llm_adversarial"
+        || suite_name == "adversarial"
+        || suite_name == "multi_framework";
     let is_pyrit = suite_name == "pyrit";
 
     let estimated_total = match suite_name {
@@ -2242,9 +2707,16 @@ async fn handle_sse_test_stream(
     } else if is_strix {
         format!("[SPAWN] Starting Multi-Framework Comprehensive Suite (1,436+ variations)...")
     } else if is_python {
-        format!("[SPAWN] Starting {} Suite (Estimated variations: {})...", suite_name.to_uppercase(), estimated_total)
+        format!(
+            "[SPAWN] Starting {} Suite (Estimated variations: {})...",
+            suite_name.to_uppercase(),
+            estimated_total
+        )
     } else {
-        format!("[SPAWN] Starting cargo test for suite '{}' (Estimated tests: {})...", suite_name, estimated_total)
+        format!(
+            "[SPAWN] Starting cargo test for suite '{}' (Estimated tests: {})...",
+            suite_name, estimated_total
+        )
     };
     let init_event = format!(
         "data: {}\n\n",
@@ -2260,9 +2732,16 @@ async fn handle_sse_test_stream(
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let root = if exe_dir.ends_with("target/release") || exe_dir.ends_with("target\\release")
-        || exe_dir.ends_with("target/debug") || exe_dir.ends_with("target\\debug") {
-        exe_dir.parent().and_then(|p| p.parent()).unwrap_or(&exe_dir).to_path_buf()
+    let root = if exe_dir.ends_with("target/release")
+        || exe_dir.ends_with("target\\release")
+        || exe_dir.ends_with("target/debug")
+        || exe_dir.ends_with("target\\debug")
+    {
+        exe_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap_or(&exe_dir)
+            .to_path_buf()
     } else {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     };
@@ -2299,7 +2778,8 @@ async fn handle_sse_test_stream(
             &mut passed,
             &mut failed,
             state,
-        ).await;
+        )
+        .await;
 
         // Transition announcement between Phase 1 and Phase 2
         let phase2_banner = format!(
@@ -2365,7 +2845,8 @@ async fn handle_sse_test_stream(
             &mut passed,
             &mut failed,
             state,
-        ).await;
+        )
+        .await;
 
         // `--lib` unit tests (inline #[cfg(test)] modules) are NOT executed from the dashboard:
         // Windows Smart App Control blocks the freshly-built unsigned lib test binary (os error 4551).
@@ -2413,7 +2894,8 @@ async fn handle_sse_test_stream(
             &mut passed,
             &mut failed,
             state,
-        ).await;
+        )
+        .await;
     } else {
         let cargo_target = match suite_name {
             "continuous_rl" | "continuous_security_rl_tests" => "continuous_security_rl_tests",
@@ -2436,7 +2918,9 @@ async fn handle_sse_test_stream(
             "google_anomaly_detection_tests" => "google_anomaly_detection_tests",
             "governor_tests" => "governor_tests",
             "guard_arms_network_tests" => "guard_arms_network_tests",
-            "http_terminator_defense_tests" | "strict_http_terminator_tests" => "http_terminator_defense_tests",
+            "http_terminator_defense_tests" | "strict_http_terminator_tests" => {
+                "http_terminator_defense_tests"
+            }
             "kernel_sentinel_tests" => "kernel_sentinel_tests",
             "ledger_transparency_tests" => "ledger_transparency_tests",
             "math_validator_tests" => "math_validator_tests",
@@ -2463,7 +2947,14 @@ async fn handle_sse_test_stream(
         };
         let mut cargo_cmd = Command::new("cargo");
         cargo_cmd.current_dir(&root);
-        cargo_cmd.args(["test", "--offline", "--test", cargo_target, "--", "--nocapture"]);
+        cargo_cmd.args([
+            "test",
+            "--offline",
+            "--test",
+            cargo_target,
+            "--",
+            "--nocapture",
+        ]);
 
         let _ = stream_command_output(
             stream,
@@ -2474,7 +2965,8 @@ async fn handle_sse_test_stream(
             &mut passed,
             &mut failed,
             state,
-        ).await;
+        )
+        .await;
     }
 
     if passed == 0 && failed == 0 {
@@ -2518,7 +3010,10 @@ fn latest_ci_lib_test_status(root: &std::path::Path) -> String {
         "--json",
         "workflowName,conclusion,status,headSha,url",
     ]);
-    match crate::security::output_hidden(&mut cmd, "dashboard: latest CI status for --lib unit tests") {
+    match crate::security::output_hidden(
+        &mut cmd,
+        "dashboard: latest CI status for --lib unit tests",
+    ) {
         Ok(out) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout);
             match serde_json::from_str::<serde_json::Value>(&text) {
@@ -2529,7 +3024,10 @@ fn latest_ci_lib_test_status(root: &std::path::Path) -> String {
                         r["workflowName"].as_str().unwrap_or("?"),
                         r["status"].as_str().unwrap_or("?"),
                         r["conclusion"].as_str().unwrap_or("pending"),
-                        r["headSha"].as_str().map(|s| &s[..s.len().min(7)]).unwrap_or("?"),
+                        r["headSha"]
+                            .as_str()
+                            .map(|s| &s[..s.len().min(7)])
+                            .unwrap_or("?"),
                         r["url"].as_str().unwrap_or("")
                     )
                 }

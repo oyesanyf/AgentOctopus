@@ -14,17 +14,29 @@ impl PqcKemEngine {
         match algorithm {
             PqcAlgorithm::MlKem512 => {
                 let (dk, ek) = MlKem512::generate_keypair();
-                Ok((hex::encode(dk.to_bytes().as_slice()), hex::encode(ek.to_bytes().as_slice())))
+                Ok((
+                    hex::encode(dk.to_bytes().as_slice()),
+                    hex::encode(ek.to_bytes().as_slice()),
+                ))
             }
             PqcAlgorithm::MlKem768 | PqcAlgorithm::HybridX25519MlKem768 => {
                 let (dk, ek) = MlKem768::generate_keypair();
-                Ok((hex::encode(dk.to_bytes().as_slice()), hex::encode(ek.to_bytes().as_slice())))
+                Ok((
+                    hex::encode(dk.to_bytes().as_slice()),
+                    hex::encode(ek.to_bytes().as_slice()),
+                ))
             }
             PqcAlgorithm::MlKem1024 => {
                 let (dk, ek) = MlKem1024::generate_keypair();
-                Ok((hex::encode(dk.to_bytes().as_slice()), hex::encode(ek.to_bytes().as_slice())))
+                Ok((
+                    hex::encode(dk.to_bytes().as_slice()),
+                    hex::encode(ek.to_bytes().as_slice()),
+                ))
             }
-            _ => Err(format!("Algorithm {:?} is not a Key Encapsulation Mechanism", algorithm)),
+            _ => Err(format!(
+                "Algorithm {:?} is not a Key Encapsulation Mechanism",
+                algorithm
+            )),
         }
     }
 
@@ -41,7 +53,10 @@ impl PqcKemEngine {
         let (ct_hex, ss_hex) = match algorithm {
             PqcAlgorithm::MlKem512 => {
                 if pk_bytes.len() != 800 {
-                    return Err(format!("Invalid ML-KEM-512 public key length: expected 800 bytes, got {}", pk_bytes.len()));
+                    return Err(format!(
+                        "Invalid ML-KEM-512 public key length: expected 800 bytes, got {}",
+                        pk_bytes.len()
+                    ));
                 }
                 let key_array = Array::try_from(pk_bytes.as_slice())
                     .map_err(|_| "Failed to convert ML-KEM-512 public key to Array")?;
@@ -52,7 +67,10 @@ impl PqcKemEngine {
             }
             PqcAlgorithm::MlKem768 | PqcAlgorithm::HybridX25519MlKem768 => {
                 if pk_bytes.len() != 1184 {
-                    return Err(format!("Invalid ML-KEM-768 public key length: expected 1184 bytes, got {}", pk_bytes.len()));
+                    return Err(format!(
+                        "Invalid ML-KEM-768 public key length: expected 1184 bytes, got {}",
+                        pk_bytes.len()
+                    ));
                 }
                 let key_array = Array::try_from(pk_bytes.as_slice())
                     .map_err(|_| "Failed to convert ML-KEM-768 public key to Array")?;
@@ -63,7 +81,10 @@ impl PqcKemEngine {
             }
             PqcAlgorithm::MlKem1024 => {
                 if pk_bytes.len() != 1568 {
-                    return Err(format!("Invalid ML-KEM-1024 public key length: expected 1568 bytes, got {}", pk_bytes.len()));
+                    return Err(format!(
+                        "Invalid ML-KEM-1024 public key length: expected 1568 bytes, got {}",
+                        pk_bytes.len()
+                    ));
                 }
                 let key_array = Array::try_from(pk_bytes.as_slice())
                     .map_err(|_| "Failed to convert ML-KEM-1024 public key to Array")?;
@@ -93,7 +114,10 @@ impl PqcKemEngine {
             .map_err(|e| format!("Invalid ciphertext hex: {}", e))?;
 
         if sk_bytes.len() != 64 {
-            return Err(format!("Invalid ML-KEM secret seed length: expected 64 bytes, got {}", sk_bytes.len()));
+            return Err(format!(
+                "Invalid ML-KEM secret seed length: expected 64 bytes, got {}",
+                sk_bytes.len()
+            ));
         }
         let seed = Array::try_from(sk_bytes.as_slice())
             .map_err(|_| "Failed to convert ML-KEM secret seed to Array")?;
@@ -101,7 +125,10 @@ impl PqcKemEngine {
         let ss_hex = match algorithm {
             PqcAlgorithm::MlKem512 => {
                 if ct_bytes.len() != 768 {
-                    return Err(format!("Invalid ML-KEM-512 ciphertext length: expected 768 bytes, got {}", ct_bytes.len()));
+                    return Err(format!(
+                        "Invalid ML-KEM-512 ciphertext length: expected 768 bytes, got {}",
+                        ct_bytes.len()
+                    ));
                 }
                 let dk = DecapsulationKey::<MlKem512>::from_seed(seed);
                 let ct = Array::try_from(ct_bytes.as_slice())
@@ -111,7 +138,10 @@ impl PqcKemEngine {
             }
             PqcAlgorithm::MlKem768 | PqcAlgorithm::HybridX25519MlKem768 => {
                 if ct_bytes.len() != 1088 {
-                    return Err(format!("Invalid ML-KEM-768 ciphertext length: expected 1088 bytes, got {}", ct_bytes.len()));
+                    return Err(format!(
+                        "Invalid ML-KEM-768 ciphertext length: expected 1088 bytes, got {}",
+                        ct_bytes.len()
+                    ));
                 }
                 let dk = DecapsulationKey::<MlKem768>::from_seed(seed);
                 let ct = Array::try_from(ct_bytes.as_slice())
@@ -121,7 +151,10 @@ impl PqcKemEngine {
             }
             PqcAlgorithm::MlKem1024 => {
                 if ct_bytes.len() != 1568 {
-                    return Err(format!("Invalid ML-KEM-1024 ciphertext length: expected 1568 bytes, got {}", ct_bytes.len()));
+                    return Err(format!(
+                        "Invalid ML-KEM-1024 ciphertext length: expected 1568 bytes, got {}",
+                        ct_bytes.len()
+                    ));
                 }
                 let dk = DecapsulationKey::<MlKem1024>::from_seed(seed);
                 let ct = Array::try_from(ct_bytes.as_slice())

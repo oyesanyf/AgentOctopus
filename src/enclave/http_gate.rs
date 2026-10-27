@@ -67,7 +67,8 @@ impl HttpEgressGate {
         if parsed.scheme() != "https" && parsed.scheme() != "http" {
             return Err(OctopusSecurityError::EnclaveViolation(format!(
                 "Outbound target '{}' blocked: scheme '{}' is prohibited",
-                target_url, parsed.scheme()
+                target_url,
+                parsed.scheme()
             )));
         }
 
@@ -142,6 +143,9 @@ impl SafeTool for HttpEgressGate {
 
     fn execute(&self, raw_input: &str) -> Result<String, OctopusSecurityError> {
         self.validate_target(raw_input)?;
-        Ok(format!("Validated target '{}' within authorized perimeter", raw_input))
+        Ok(format!(
+            "Validated target '{}' within authorized perimeter",
+            raw_input
+        ))
     }
 }

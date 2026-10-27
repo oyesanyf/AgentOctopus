@@ -1,8 +1,7 @@
 use agent_octopus::{
-    AgentIdentity, ArmRole, ArmRuntime, DelegationScopeGuard,
-    ExternalAuthorizationEngine, KillSwitch,
-    OctopusSecurityError, SandboxConfinementPolicy, SecurityAuditLog, StrategicDirective,
-    TelemetryPacket,
+    AgentIdentity, ArmRole, ArmRuntime, DelegationScopeGuard, ExternalAuthorizationEngine,
+    KillSwitch, OctopusSecurityError, SandboxConfinementPolicy, SecurityAuditLog,
+    StrategicDirective, TelemetryPacket,
 };
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -90,12 +89,21 @@ fn test_tool_privilege_escalation_blocked_by_capability_engine() {
 
     // 1. Authorized action succeeds
     assert!(auth_engine
-        .verify_capability(&valid_token, "arm-ingest-01", "doc_extractor", "s3://invoices/inv1.pdf")
+        .verify_capability(
+            &valid_token,
+            "arm-ingest-01",
+            "doc_extractor",
+            "s3://invoices/inv1.pdf"
+        )
         .is_ok());
 
     // 2. Privilege escalation attempt: Agent tries to use the token to call ledger_writer
-    let tool_escalation =
-        auth_engine.verify_capability(&valid_token, "arm-ingest-01", "ledger_writer", "s3://invoices/inv1.pdf");
+    let tool_escalation = auth_engine.verify_capability(
+        &valid_token,
+        "arm-ingest-01",
+        "ledger_writer",
+        "s3://invoices/inv1.pdf",
+    );
     assert!(tool_escalation.is_err());
     match tool_escalation.unwrap_err() {
         OctopusSecurityError::CapabilityDenied(msg) => {
@@ -105,8 +113,12 @@ fn test_tool_privilege_escalation_blocked_by_capability_engine() {
     }
 
     // 3. Resource scope breach: Agent tries to access an unassigned resource path
-    let scope_breach =
-        auth_engine.verify_capability(&valid_token, "arm-ingest-01", "doc_extractor", "s3://financial_secrets/keys.pem");
+    let scope_breach = auth_engine.verify_capability(
+        &valid_token,
+        "arm-ingest-01",
+        "doc_extractor",
+        "s3://financial_secrets/keys.pem",
+    );
     assert!(scope_breach.is_err());
     match scope_breach.unwrap_err() {
         OctopusSecurityError::CapabilityDenied(msg) => {
@@ -116,8 +128,12 @@ fn test_tool_privilege_escalation_blocked_by_capability_engine() {
     }
 
     // 4. Token transfer breach: Another agent attempts to present the token
-    let transfer_breach =
-        auth_engine.verify_capability(&valid_token, "rogue-agent-99", "doc_extractor", "s3://invoices/inv1.pdf");
+    let transfer_breach = auth_engine.verify_capability(
+        &valid_token,
+        "rogue-agent-99",
+        "doc_extractor",
+        "s3://invoices/inv1.pdf",
+    );
     assert!(transfer_breach.is_err());
 }
 
@@ -126,21 +142,41 @@ fn test_operating_system_process_and_filesystem_confinement() {
     let sandbox = SandboxConfinementPolicy::default();
 
     // 1. OS Process execution attempts must be blocked (max_child_processes = 0)
-    assert!(sandbox.validate_process_confinement("cmd.exe /c whoami").is_err());
-    assert!(sandbox.validate_process_confinement("powershell.exe -enc AAAA").is_err());
-    assert!(sandbox.validate_process_confinement("bash -c 'cat /etc/shadow'").is_err());
+    assert!(sandbox
+        .validate_process_confinement("cmd.exe /c whoami")
+        .is_err());
+    assert!(sandbox
+        .validate_process_confinement("powershell.exe -enc AAAA")
+        .is_err());
+    assert!(sandbox
+        .validate_process_confinement("bash -c 'cat /etc/shadow'")
+        .is_err());
     assert!(sandbox.validate_process_confinement("/bin/sh").is_err());
 
     // 2. Path traversal attempts must be blocked
-    assert!(sandbox.validate_filesystem_confinement("../../../etc/shadow").is_err());
-    assert!(sandbox.validate_filesystem_confinement("..\\..\\Windows\\System32").is_err());
-    assert!(sandbox.validate_filesystem_confinement("/etc/passwd").is_err());
-    assert!(sandbox.validate_filesystem_confinement("C:\\Windows\\System32\\cmd.exe").is_err());
-    assert!(sandbox.validate_filesystem_confinement("file:///root/.ssh/id_rsa").is_err());
+    assert!(sandbox
+        .validate_filesystem_confinement("../../../etc/shadow")
+        .is_err());
+    assert!(sandbox
+        .validate_filesystem_confinement("..\\..\\Windows\\System32")
+        .is_err());
+    assert!(sandbox
+        .validate_filesystem_confinement("/etc/passwd")
+        .is_err());
+    assert!(sandbox
+        .validate_filesystem_confinement("C:\\Windows\\System32\\cmd.exe")
+        .is_err());
+    assert!(sandbox
+        .validate_filesystem_confinement("file:///root/.ssh/id_rsa")
+        .is_err());
 
     // 3. Authorized sandbox paths pass
-    assert!(sandbox.validate_filesystem_confinement("s3://invoices/january.pdf").is_ok());
-    assert!(sandbox.validate_filesystem_confinement("sandbox://scratchpad/temp.txt").is_ok());
+    assert!(sandbox
+        .validate_filesystem_confinement("s3://invoices/january.pdf")
+        .is_ok());
+    assert!(sandbox
+        .validate_filesystem_confinement("sandbox://scratchpad/temp.txt")
+        .is_ok());
 }
 
 #[tokio::test]
@@ -177,7 +213,10 @@ async fn test_persistence_prevented_on_termination() {
 
     // Verify task terminates immediately and does NOT persist in background
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(handle.is_finished(), "Terminated agent must not persist in background");
+    assert!(
+        handle.is_finished(),
+        "Terminated agent must not persist in background"
+    );
 
     // Any subsequent attempt to communicate with terminated agent fails (channel severed)
     let (resp_tx2, _resp_rx2) = tokio::sync::oneshot::channel();
@@ -195,8 +234,18 @@ async fn test_persistence_prevented_on_termination() {
 fn test_security_audit_log_hash_chain() {
     let log = SecurityAuditLog::new();
 
-    let h1 = log.record_event("AUTH_CHECK", "arm-ingest-01", "Tool: doc_extractor", "PERMIT");
-    let h2 = log.record_event("DELEGATION_CHECK", "arm-egress-01", "Laundering attempt", "DENY");
+    let h1 = log.record_event(
+        "AUTH_CHECK",
+        "arm-ingest-01",
+        "Tool: doc_extractor",
+        "PERMIT",
+    );
+    let h2 = log.record_event(
+        "DELEGATION_CHECK",
+        "arm-egress-01",
+        "Laundering attempt",
+        "DENY",
+    );
 
     assert_eq!(log.total_records(), 2);
     assert_ne!(h1, h2);
@@ -207,7 +256,8 @@ fn test_security_audit_log_hash_chain() {
 fn test_openshell_wasm_fuel_metering_and_confinement() {
     let auth_engine = ExternalAuthorizationEngine::new(b"master_secret_2026", 30, "POL-V1-ACTIVE");
 
-    let mut wasm_arm = agent_octopus::WasmArmSandbox::new("arm-ingest-01", ArmRole::UntrustedDocIngest, 100_000);
+    let mut wasm_arm =
+        agent_octopus::WasmArmSandbox::new("arm-ingest-01", ArmRole::UntrustedDocIngest, 100_000);
     assert_eq!(wasm_arm.fuel_remaining(), 100_000);
 
     let capability = auth_engine.issue_capability(
@@ -227,18 +277,21 @@ fn test_openshell_wasm_fuel_metering_and_confinement() {
         max_step_budget: 5,
     };
 
-    let result = wasm_arm.execute_sandboxed(&valid_directive, &auth_engine, &capability, "doc_extractor");
+    let result =
+        wasm_arm.execute_sandboxed(&valid_directive, &auth_engine, &capability, "doc_extractor");
     assert!(result.is_ok());
     assert_eq!(wasm_arm.fuel_remaining(), 50_000);
 
     // 2. Fuel exhaustion (infinite loop / recursion bomb) blocks execution
     // Running second task consumes remaining 50,000
-    let res2 = wasm_arm.execute_sandboxed(&valid_directive, &auth_engine, &capability, "doc_extractor");
+    let res2 =
+        wasm_arm.execute_sandboxed(&valid_directive, &auth_engine, &capability, "doc_extractor");
     assert!(res2.is_ok());
     assert_eq!(wasm_arm.fuel_remaining(), 0);
 
     // Third task attempts execution with 0 fuel remaining -> Blocked by fuel limiter!
-    let res3 = wasm_arm.execute_sandboxed(&valid_directive, &auth_engine, &capability, "doc_extractor");
+    let res3 =
+        wasm_arm.execute_sandboxed(&valid_directive, &auth_engine, &capability, "doc_extractor");
     assert!(res3.is_err());
     match res3.unwrap_err() {
         OctopusSecurityError::ResourceQuotaExceeded(msg) => {
@@ -256,7 +309,12 @@ fn test_openshell_wasm_fuel_metering_and_confinement() {
         raw_payload: Some("cmd.exe /c calc".to_string()),
         max_step_budget: 5,
     };
-    let escape_result = wasm_arm.execute_sandboxed(&escape_directive, &auth_engine, &capability, "doc_extractor");
+    let escape_result = wasm_arm.execute_sandboxed(
+        &escape_directive,
+        &auth_engine,
+        &capability,
+        "doc_extractor",
+    );
     assert!(escape_result.is_err());
     match escape_result.unwrap_err() {
         OctopusSecurityError::IsolationViolation(msg) => {
@@ -290,8 +348,12 @@ fn test_openshell_windows_experimental_mode() {
         ],
     };
 
-    let mut sandbox = agent_octopus::WasmArmSandbox::new("arm-ingest-win01", ArmRole::UntrustedDocIngest, 500_000)
-        .with_config(windows_config);
+    let mut sandbox = agent_octopus::WasmArmSandbox::new(
+        "arm-ingest-win01",
+        ArmRole::UntrustedDocIngest,
+        500_000,
+    )
+    .with_config(windows_config);
 
     let capability = auth_engine.issue_capability(
         "central_brain",
@@ -309,7 +371,8 @@ fn test_openshell_windows_experimental_mode() {
         raw_payload: Some("INVOICE: INV-WIN-01\nVendor: SafeWin\nTotal: $100.00".to_string()),
         max_step_budget: 5,
     };
-    let win_res = sandbox.execute_sandboxed(&valid_directive, &auth_engine, &capability, "doc_extractor");
+    let win_res =
+        sandbox.execute_sandboxed(&valid_directive, &auth_engine, &capability, "doc_extractor");
     assert!(win_res.is_ok());
     let desc = win_res.unwrap();
     assert!(desc.contains("Windows Agent Octopus Containment Runtime"));
@@ -319,11 +382,13 @@ fn test_openshell_windows_experimental_mode() {
     let ps_directive = StrategicDirective {
         directive_id: "WIN-EXP-PS".to_string(),
         source_uri: "s3://invoices/win_invoice.pdf".to_string(),
-        instruction: "powershell.exe -ExecutionPolicy Bypass -Command Invoke-WebRequest".to_string(),
+        instruction: "powershell.exe -ExecutionPolicy Bypass -Command Invoke-WebRequest"
+            .to_string(),
         raw_payload: Some("powershell.exe -Command Get-Process".to_string()),
         max_step_budget: 5,
     };
-    let ps_res = sandbox.execute_sandboxed(&ps_directive, &auth_engine, &capability, "doc_extractor");
+    let ps_res =
+        sandbox.execute_sandboxed(&ps_directive, &auth_engine, &capability, "doc_extractor");
     assert!(ps_res.is_err());
     match ps_res.unwrap_err() {
         OctopusSecurityError::IsolationViolation(msg) => {
@@ -340,11 +405,14 @@ fn test_openshell_windows_experimental_mode() {
         raw_payload: None,
         max_step_budget: 5,
     };
-    let sam_res = sandbox.execute_sandboxed(&sam_directive, &auth_engine, &capability, "doc_extractor");
+    let sam_res =
+        sandbox.execute_sandboxed(&sam_directive, &auth_engine, &capability, "doc_extractor");
     assert!(sam_res.is_err());
     match sam_res.unwrap_err() {
         OctopusSecurityError::IsolationViolation(msg) => {
-            assert!(msg.contains("Host filesystem access denied") || msg.contains("kernel ACL blocked"));
+            assert!(
+                msg.contains("Host filesystem access denied") || msg.contains("kernel ACL blocked")
+            );
         }
         other => panic!("Expected IsolationViolation, got {:?}", other),
     }
@@ -357,13 +425,19 @@ fn test_windows_job_object_and_appcontainer_kernel_isolation() {
     };
 
     // 1. Verify Windows Job Object creation and limits
-    let job = WindowsJobObject::create("TestJob-Octopus", 5, 64 * 1024 * 1024).expect("Job creation");
+    let job =
+        WindowsJobObject::create("TestJob-Octopus", 5, 64 * 1024 * 1024).expect("Job creation");
     assert_eq!(job.max_processes, 5);
     assert_eq!(job.max_memory_bytes, 64 * 1024 * 1024);
 
     // 2. Breakaway containment verification: verify kernel limits block process breakaway
-    let breakaway_contained = job.verify_breakaway_contained().expect("Breakaway containment check");
-    assert!(breakaway_contained, "Job Object must enforce breakaway containment and kill-on-close");
+    let breakaway_contained = job
+        .verify_breakaway_contained()
+        .expect("Breakaway containment check");
+    assert!(
+        breakaway_contained,
+        "Job Object must enforce breakaway containment and kill-on-close"
+    );
 
     // 3. Real Job Object membership verification using Win32 IsProcessInJob (positive & negative controls)
     #[cfg(windows)]
@@ -377,9 +451,18 @@ fn test_windows_job_object_and_appcontainer_kernel_isolation() {
             .expect("Spawn test child process");
         let child_handle = child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
         let assign_res = job.assign_process(child_handle);
-        assert!(assign_res.is_ok(), "Process must be assigned to Job Object: {:?}", assign_res);
-        let in_job = job.verify_process_in_job(child_handle).expect("IsProcessInJob check");
-        assert!(in_job, "Child process must be kernel-verified inside Job Object via IsProcessInJob");
+        assert!(
+            assign_res.is_ok(),
+            "Process must be assigned to Job Object: {:?}",
+            assign_res
+        );
+        let in_job = job
+            .verify_process_in_job(child_handle)
+            .expect("IsProcessInJob check");
+        assert!(
+            in_job,
+            "Child process must be kernel-verified inside Job Object via IsProcessInJob"
+        );
         let _ = child.kill();
         let _ = child.wait();
 
@@ -389,9 +472,15 @@ fn test_windows_job_object_and_appcontainer_kernel_isolation() {
             .args(["/c", "ping -n 5 127.0.0.1 > nul"])
             .spawn()
             .expect("Spawn unassigned child process");
-        let unassigned_handle = unassigned_child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
-        let unassigned_in_job = job.verify_process_in_job(unassigned_handle).expect("IsProcessInJob check on unassigned child");
-        assert!(!unassigned_in_job, "Unassigned process must NOT be reported as inside Job Object");
+        let unassigned_handle =
+            unassigned_child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+        let unassigned_in_job = job
+            .verify_process_in_job(unassigned_handle)
+            .expect("IsProcessInJob check on unassigned child");
+        assert!(
+            !unassigned_in_job,
+            "Unassigned process must NOT be reported as inside Job Object"
+        );
         let _ = unassigned_child.kill();
         let _ = unassigned_child.wait();
     }
@@ -402,7 +491,9 @@ fn test_windows_job_object_and_appcontainer_kernel_isolation() {
     assert!(app_container.package_sid.starts_with("S-1-15-2-"));
 
     // Google egress permitted under AppContainer policy
-    assert!(app_container.verify_access("https://www.google.com/search?q=test", true).is_ok());
+    assert!(app_container
+        .verify_access("https://www.google.com/search?q=test", true)
+        .is_ok());
 
     // Non-Google external egress blocked by AppContainer policy
     let blocked_egress = app_container.verify_access("https://attacker-c2.com/exfil", true);
@@ -414,8 +505,12 @@ fn test_windows_job_object_and_appcontainer_kernel_isolation() {
 
     // 5. Verify Windows Restricted Token privilege stripping and genuine token creation
     let token_policy = WindowsRestrictedTokenPolicy::default();
-    assert!(token_policy.stripped_privileges.contains(&"SeDebugPrivilege".to_string()));
-    assert!(token_policy.stripped_privileges.contains(&"SeTcbPrivilege".to_string()));
+    assert!(token_policy
+        .stripped_privileges
+        .contains(&"SeDebugPrivilege".to_string()));
+    assert!(token_policy
+        .stripped_privileges
+        .contains(&"SeTcbPrivilege".to_string()));
     assert_eq!(token_policy.token_integrity_level, "Low");
 
     #[cfg(windows)]
@@ -430,23 +525,43 @@ fn test_windows_job_object_and_appcontainer_kernel_isolation() {
                 &mut current_token,
             );
         }
-        let original_restricted = unsafe { agent_octopus::security::windows_sandbox::win32::IsTokenRestricted(current_token) };
-        unsafe { CloseHandle(current_token); }
-        assert_eq!(original_restricted, 0, "Primary process token should not be restricted initially");
+        let original_restricted = unsafe {
+            agent_octopus::security::windows_sandbox::win32::IsTokenRestricted(current_token)
+        };
+        unsafe {
+            CloseHandle(current_token);
+        }
+        assert_eq!(
+            original_restricted, 0,
+            "Primary process token should not be restricted initially"
+        );
 
-        let restricted_token = token_policy.create_restricted_token().expect("Real Win32 restricted token creation");
+        let restricted_token = token_policy
+            .create_restricted_token()
+            .expect("Real Win32 restricted token creation");
         assert!(!restricted_token.is_null());
         assert_ne!(restricted_token, INVALID_HANDLE_VALUE);
-        let is_restricted = unsafe { agent_octopus::security::windows_sandbox::win32::IsTokenRestricted(restricted_token) };
-        assert_ne!(is_restricted, 0, "Restricted token must be confirmed restricted via IsTokenRestricted");
-        unsafe { CloseHandle(restricted_token); }
+        let is_restricted = unsafe {
+            agent_octopus::security::windows_sandbox::win32::IsTokenRestricted(restricted_token)
+        };
+        assert_ne!(
+            is_restricted, 0,
+            "Restricted token must be confirmed restricted via IsTokenRestricted"
+        );
+        unsafe {
+            CloseHandle(restricted_token);
+        }
     }
 }
 
 #[test]
 fn test_supervisor_independent_termination_and_wallclock_timeout() {
     let auth_engine = ExternalAuthorizationEngine::new(b"master_secret_2026", 30, "POL-V1-ACTIVE");
-    let mut sandbox = agent_octopus::WasmArmSandbox::new("arm-supervised-01", ArmRole::UntrustedDocIngest, 500_000);
+    let mut sandbox = agent_octopus::WasmArmSandbox::new(
+        "arm-supervised-01",
+        ArmRole::UntrustedDocIngest,
+        500_000,
+    );
 
     let capability = auth_engine.issue_capability(
         "central_brain",
@@ -469,7 +584,9 @@ fn test_supervisor_independent_termination_and_wallclock_timeout() {
     assert!(res1.is_ok());
 
     // Supervisor executes independent emergency abort
-    sandbox.terminate_sandbox(1).expect("Termination must succeed");
+    sandbox
+        .terminate_sandbox(1)
+        .expect("Termination must succeed");
 
     // After supervisor termination, all subsequent execution is immediately rejected
     let res2 = sandbox.execute_sandboxed(&directive, &auth_engine, &capability, "doc_extractor");
@@ -478,7 +595,10 @@ fn test_supervisor_independent_termination_and_wallclock_timeout() {
         OctopusSecurityError::IsolationViolation(msg) => {
             assert!(msg.contains("terminated by independent supervisor"));
         }
-        other => panic!("Expected IsolationViolation for terminated sandbox, got {:?}", other),
+        other => panic!(
+            "Expected IsolationViolation for terminated sandbox, got {:?}",
+            other
+        ),
     }
 }
 
@@ -489,18 +609,32 @@ fn test_windows_runtime_token_privileges_and_integrity_audit() {
     use windows_sys::Win32::Foundation::CloseHandle;
 
     let token_policy = WindowsRestrictedTokenPolicy::default();
-    let restricted_token = token_policy.create_restricted_token().expect("Real Win32 restricted token creation");
+    let restricted_token = token_policy
+        .create_restricted_token()
+        .expect("Real Win32 restricted token creation");
     assert!(!restricted_token.is_null());
 
     let is_restricted = unsafe { win32::IsTokenRestricted(restricted_token) };
-    assert_ne!(is_restricted, 0, "Restricted token must be confirmed restricted via Win32 IsTokenRestricted");
+    assert_ne!(
+        is_restricted, 0,
+        "Restricted token must be confirmed restricted via Win32 IsTokenRestricted"
+    );
 
     // Query TokenPrivileges (TokenInformationClass = 3 in Win32: TokenUser=1, TokenGroups=2, TokenPrivileges=3)
     let mut return_length: u32 = 0;
     unsafe {
-        win32::GetTokenInformation(restricted_token, 3, std::ptr::null_mut(), 0, &mut return_length);
+        win32::GetTokenInformation(
+            restricted_token,
+            3,
+            std::ptr::null_mut(),
+            0,
+            &mut return_length,
+        );
     }
-    assert!(return_length > 0, "GetTokenInformation must return positive required buffer length");
+    assert!(
+        return_length > 0,
+        "GetTokenInformation must return positive required buffer length"
+    );
 
     let mut buf: Vec<u8> = vec![0u8; return_length as usize];
     let ok = unsafe {
@@ -512,16 +646,31 @@ fn test_windows_runtime_token_privileges_and_integrity_audit() {
             &mut return_length,
         )
     };
-    assert_ne!(ok, 0, "GetTokenInformation for TokenPrivileges must succeed");
+    assert_ne!(
+        ok, 0,
+        "GetTokenInformation for TokenPrivileges must succeed"
+    );
 
     let priv_count = unsafe { *(buf.as_ptr() as *const u32) };
-    println!("[WINDOWS RUNTIME] Verified restricted token privileges count: {}", priv_count);
-    assert!(priv_count <= 1, "Restricted token must have all dangerous privileges stripped (privilege count <= 1)");
+    println!(
+        "[WINDOWS RUNTIME] Verified restricted token privileges count: {}",
+        priv_count
+    );
+    assert!(
+        priv_count <= 1,
+        "Restricted token must have all dangerous privileges stripped (privilege count <= 1)"
+    );
 
     // Query TokenGroups (TokenInformationClass = 2) to verify S-1-5-32-544 (Administrators) restriction
     let mut groups_len: u32 = 0;
     unsafe {
-        win32::GetTokenInformation(restricted_token, 2, std::ptr::null_mut(), 0, &mut groups_len);
+        win32::GetTokenInformation(
+            restricted_token,
+            2,
+            std::ptr::null_mut(),
+            0,
+            &mut groups_len,
+        );
     }
     if groups_len > 0 {
         let mut gbuf: Vec<u8> = vec![0u8; groups_len as usize];
@@ -537,7 +686,9 @@ fn test_windows_runtime_token_privileges_and_integrity_audit() {
         assert_ne!(gok, 0, "GetTokenInformation for TokenGroups must succeed");
     }
 
-    unsafe { CloseHandle(restricted_token); }
+    unsafe {
+        CloseHandle(restricted_token);
+    }
 }
 
 #[cfg(windows)]
@@ -559,16 +710,22 @@ fn test_windows_runtime_job_object_limits_and_escape_prevention() {
         .expect("Spawn test child process");
 
     let child_handle = child.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
-    job.assign_process(child_handle).expect("Assign child to Job Object");
+    job.assign_process(child_handle)
+        .expect("Assign child to Job Object");
 
     // 3. Confirm kernel membership via IsProcessInJob
-    let in_job = job.verify_process_in_job(child_handle).expect("Verify child in job");
+    let in_job = job
+        .verify_process_in_job(child_handle)
+        .expect("Verify child in job");
     assert!(in_job, "Child process must reside in Job Object");
 
     // 4. Verify Breakaway Escape Prevention and kernel limits:
     // When JOB_OBJECT_LIMIT_BREAKAWAY_OK is NOT set on the job, child processes cannot break away.
     let breakaway_contained = job.verify_breakaway_contained().expect("Breakaway check");
-    assert!(breakaway_contained, "Job Object must enforce breakaway containment and kill-on-close");
+    assert!(
+        breakaway_contained,
+        "Job Object must enforce breakaway containment and kill-on-close"
+    );
 
     // 5. Clean up child process
     let _ = child.kill();
@@ -582,27 +739,48 @@ fn test_windows_runtime_appcontainer_mandatory_isolation() {
 
     let agent_id = format!("test_runtime_{:08x}", rand::random::<u32>());
     let profile_res = WindowsAppContainerProfile::create_mandatory(&agent_id, true, true);
-    assert!(profile_res.is_ok(), "Mandatory AppContainer profile creation must succeed on Windows: {:?}", profile_res.err());
+    assert!(
+        profile_res.is_ok(),
+        "Mandatory AppContainer profile creation must succeed on Windows: {:?}",
+        profile_res.err()
+    );
 
     let profile = profile_res.unwrap();
-    assert!(profile.package_sid.starts_with("S-1-15-2-"), "AppContainer SID must have S-1-15-2- prefix");
+    assert!(
+        profile.package_sid.starts_with("S-1-15-2-"),
+        "AppContainer SID must have S-1-15-2- prefix"
+    );
 
     let sid_parts: Vec<&str> = profile.package_sid.split('-').collect();
-    assert_eq!(sid_parts.len(), 11, "AppContainer SID must have 11 dash-separated components");
+    assert_eq!(
+        sid_parts.len(),
+        11,
+        "AppContainer SID must have 11 dash-separated components"
+    );
 
     // Verify filesystem restriction enforcement
-    assert!(profile.verify_access(r"C:\Windows\System32\config\SAM", false).is_err());
-    assert!(profile.verify_access(r"C:\Users\Administrator\NTUSER.DAT", false).is_err());
+    assert!(profile
+        .verify_access(r"C:\Windows\System32\config\SAM", false)
+        .is_err());
+    assert!(profile
+        .verify_access(r"C:\Users\Administrator\NTUSER.DAT", false)
+        .is_err());
 
     // Verify network restriction enforcement
-    assert!(profile.verify_access("https://www.google.com/search?q=test", true).is_ok());
-    assert!(profile.verify_access("https://malicious-c2.attacker.com/exfil", true).is_err());
+    assert!(profile
+        .verify_access("https://www.google.com/search?q=test", true)
+        .is_ok());
+    assert!(profile
+        .verify_access("https://malicious-c2.attacker.com/exfil", true)
+        .is_err());
 
     // Clean up created profile
-    let wide_name: Vec<u16> = profile.container_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_name: Vec<u16> = profile
+        .container_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     unsafe {
         win32::DeleteAppContainerProfile(wide_name.as_ptr());
     }
 }
-
-

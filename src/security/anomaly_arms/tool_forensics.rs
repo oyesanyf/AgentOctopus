@@ -40,7 +40,10 @@ impl ToolForensicsArm {
         // 1. Shell Metacharacter Injection Detection
         for meta in &['|', ';', '&', '$', '`', '\n', '\r'] {
             if raw_arguments.contains(*meta) {
-                flags.push(format!("Shell metacharacter '{}' detected in parameters", meta));
+                flags.push(format!(
+                    "Shell metacharacter '{}' detected in parameters",
+                    meta
+                ));
             }
         }
 
@@ -50,14 +53,21 @@ impl ToolForensicsArm {
         }
 
         // 3. Environment Variable Mutation / Expansion Attempts
-        if raw_arguments.contains("%PATH%") || raw_arguments.contains("$env:PATH") || raw_arguments.contains("PATH=") {
-            flags.push("Potentially dangerous PATH environment access attempt detected".to_string());
+        if raw_arguments.contains("%PATH%")
+            || raw_arguments.contains("$env:PATH")
+            || raw_arguments.contains("PATH=")
+        {
+            flags
+                .push("Potentially dangerous PATH environment access attempt detected".to_string());
         }
 
         // 4. Executable binary / script extension references
         for ext in &[".exe", ".bat", ".cmd", ".ps1", ".vbs", ".dll", ".so"] {
             if raw_arguments.to_ascii_lowercase().contains(ext) {
-                flags.push(format!("Executable extension '{}' referenced in tool payload", ext));
+                flags.push(format!(
+                    "Executable extension '{}' referenced in tool payload",
+                    ext
+                ));
             }
         }
 

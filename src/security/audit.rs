@@ -34,8 +34,18 @@ pub struct SecurityAuditLog {
 impl Clone for SecurityAuditLog {
     fn clone(&self) -> Self {
         Self {
-            records: Mutex::new(self.records.lock().unwrap_or_else(|e| e.into_inner()).clone()),
-            last_hash: Mutex::new(self.last_hash.lock().unwrap_or_else(|e| e.into_inner()).clone()),
+            records: Mutex::new(
+                self.records
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            ),
+            last_hash: Mutex::new(
+                self.last_hash
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            ),
             log_file_path: self.log_file_path.clone(),
         }
     }
@@ -51,7 +61,9 @@ impl SecurityAuditLog {
     pub fn new() -> Self {
         Self {
             records: Mutex::new(Vec::new()),
-            last_hash: Mutex::new("GENESIS_AUDIT_ROOT_000000000000000000000000000000000000000000000000".to_string()),
+            last_hash: Mutex::new(
+                "GENESIS_AUDIT_ROOT_000000000000000000000000000000000000000000000000".to_string(),
+            ),
             log_file_path: None,
         }
     }
@@ -65,7 +77,9 @@ impl SecurityAuditLog {
         }
         Self {
             records: Mutex::new(Vec::new()),
-            last_hash: Mutex::new("GENESIS_AUDIT_ROOT_000000000000000000000000000000000000000000000000".to_string()),
+            last_hash: Mutex::new(
+                "GENESIS_AUDIT_ROOT_000000000000000000000000000000000000000000000000".to_string(),
+            ),
             log_file_path: Some(path),
         }
     }
@@ -124,7 +138,11 @@ impl SecurityAuditLog {
 
         // 2. External Append-Only Disk Persistence (non-blocking flush without per-request FlushFileBuffers stall)
         if let Some(ref path) = self.log_file_path {
-            if total_records <= 50 || total_records % 10 == 0 || decision == "DENY" || decision == "FORBID" {
+            if total_records <= 50
+                || total_records % 10 == 0
+                || decision == "DENY"
+                || decision == "FORBID"
+            {
                 if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
                     if let Ok(serialized) = serde_json::to_string(&record) {
                         let _ = writeln!(file, "{}", serialized);
@@ -140,7 +158,8 @@ impl SecurityAuditLog {
     /// Verifies the cryptographic integrity of the entire audit chain.
     pub fn verify_integrity(&self) -> bool {
         let records = self.records.lock().unwrap_or_else(|e| e.into_inner());
-        let mut current_expected_prev = "GENESIS_AUDIT_ROOT_000000000000000000000000000000000000000000000000".to_string();
+        let mut current_expected_prev =
+            "GENESIS_AUDIT_ROOT_000000000000000000000000000000000000000000000000".to_string();
 
         for record in records.iter() {
             if record.prev_hash != current_expected_prev {
@@ -175,10 +194,16 @@ impl SecurityAuditLog {
     }
 
     pub fn latest_hash(&self) -> String {
-        self.last_hash.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.last_hash
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn get_entries(&self) -> Vec<AuditRecord> {
-        self.records.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.records
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }

@@ -18,7 +18,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("============================================================");
 
     let config = SentinelConfig::default();
-    let secret_seed = agent_octopus::security::cedar_arm::authorization::load_or_generate_cedar_secret();
+    let secret_seed =
+        agent_octopus::security::cedar_arm::authorization::load_or_generate_cedar_secret();
     let sentinel = OctopusSentinelRing::new(config, &secret_seed);
 
     let pid = std::process::id();
@@ -49,7 +50,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match sentinel.evaluate_and_enforce(&obs).await {
             Ok(SentinelAction::Continue) => {
                 if cycle % 5 == 0 {
-                    println!("[SENTINEL] Cycle #{}: All 4 containment rings verified intact.", cycle);
+                    println!(
+                        "[SENTINEL] Cycle #{}: All 4 containment rings verified intact.",
+                        cycle
+                    );
                 }
             }
             Ok(action) => {

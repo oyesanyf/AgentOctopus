@@ -76,12 +76,18 @@ impl PythonWorkerBridge {
         }
 
         // Verify key modular dependencies are packaged
-        for dep in &["database.py", "rfc_chunker.py", "rfc_fetcher.py", "rfc_hunt_swarm.py"] {
+        for dep in &[
+            "database.py",
+            "rfc_chunker.py",
+            "rfc_fetcher.py",
+            "rfc_hunt_swarm.py",
+        ] {
             let dep_path = worker_dir.join(dep);
             if !dep_path.exists() {
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "FAIL-CLOSED: Missing required research worker module '{}' in '{}'",
-                    dep, worker_dir.display()
+                    dep,
+                    worker_dir.display()
                 )));
             }
         }
@@ -112,10 +118,13 @@ impl PythonWorkerBridge {
         {
             use crate::security::windows_sandbox::{create_or_open_appcontainer_profile, win32};
             use windows_sys::Win32::Foundation::CloseHandle;
-            use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, IsProcessInJob};
+            use windows_sys::Win32::System::JobObjects::{
+                AssignProcessToJobObject, IsProcessInJob,
+            };
 
             // AppContainer execution is MANDATORY in production. Non-bypassable.
-            let container_name = format!("AgentOctopus.Arm107.Worker_{:08x}", rand::random::<u32>());
+            let container_name =
+                format!("AgentOctopus.Arm107.Worker_{:08x}", rand::random::<u32>());
             let (sid_str, psid) = match create_or_open_appcontainer_profile(
                 &container_name,
                 "Arm 107 Protocol Research Worker",
@@ -134,11 +143,17 @@ impl PythonWorkerBridge {
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x00080000;
 
-            let mut pi: windows_sys::Win32::System::Threading::PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-            let wide_worker_dir: Vec<u16> = worker_dir.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+            let mut pi: windows_sys::Win32::System::Threading::PROCESS_INFORMATION =
+                unsafe { std::mem::zeroed() };
+            let wide_worker_dir: Vec<u16> = worker_dir
+                .to_string_lossy()
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
 
             let cmdline = format!("python \"{}\"", script.display());
-            let mut wide_cmdline: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut wide_cmdline: Vec<u16> =
+                cmdline.encode_utf16().chain(std::iter::once(0)).collect();
 
             let mut sec_cap = win32::SECURITY_CAPABILITIES {
                 AppContainerSid: psid,
@@ -148,11 +163,20 @@ impl PythonWorkerBridge {
             };
 
             let mut attr_size: usize = 0;
-            unsafe { win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size); }
+            unsafe {
+                win32::InitializeProcThreadAttributeList(
+                    std::ptr::null_mut(),
+                    1,
+                    0,
+                    &mut attr_size,
+                );
+            }
             let mut attr_buf: Vec<u8> = vec![0u8; attr_size.max(1)];
             let attr_list = attr_buf.as_mut_ptr() as *mut std::ffi::c_void;
 
-            let init_ok = unsafe { win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) };
+            let init_ok = unsafe {
+                win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size)
+            };
             let create_res = if init_ok != 0 {
                 let update_ok = unsafe {
                     win32::UpdateProcThreadAttribute(
@@ -185,23 +209,34 @@ impl PythonWorkerBridge {
                             &mut pi,
                         )
                     };
-                    unsafe { win32::DeleteProcThreadAttributeList(attr_list); }
+                    unsafe {
+                        win32::DeleteProcThreadAttributeList(attr_list);
+                    }
                     res
                 } else {
-                    unsafe { win32::DeleteProcThreadAttributeList(attr_list); }
+                    unsafe {
+                        win32::DeleteProcThreadAttributeList(attr_list);
+                    }
                     0
                 }
             } else {
                 0
             };
 
-            unsafe { win32::FreeSid(psid); }
+            unsafe {
+                win32::FreeSid(psid);
+            }
 
             // FAIL-CLOSED: AppContainer execution is non-bypassable. Zero unconstrained fallback permitted.
             if create_res == 0 {
                 let err = unsafe { win32::GetLastError() };
-                let wide_name: Vec<u16> = container_name.encode_utf16().chain(std::iter::once(0)).collect();
-                unsafe { win32::DeleteAppContainerProfile(wide_name.as_ptr()); }
+                let wide_name: Vec<u16> = container_name
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+                unsafe {
+                    win32::DeleteAppContainerProfile(wide_name.as_ptr());
+                }
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "FAIL-CLOSED: Failed to spawn research worker under mandatory AppContainer isolation (OS Error {}). Unconstrained execution prohibited.",
                     err
@@ -216,7 +251,10 @@ impl PythonWorkerBridge {
                     win32::TerminateProcess(pi.hProcess, 1);
                     CloseHandle(pi.hProcess);
                     CloseHandle(pi.hThread);
-                    let wide_name: Vec<u16> = container_name.encode_utf16().chain(std::iter::once(0)).collect();
+                    let wide_name: Vec<u16> = container_name
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect();
                     win32::DeleteAppContainerProfile(wide_name.as_ptr());
                 };
                 return Err(OctopusSecurityError::IsolationViolation(format!(
@@ -233,7 +271,10 @@ impl PythonWorkerBridge {
                     win32::TerminateProcess(pi.hProcess, 1);
                     CloseHandle(pi.hProcess);
                     CloseHandle(pi.hThread);
-                    let wide_name: Vec<u16> = container_name.encode_utf16().chain(std::iter::once(0)).collect();
+                    let wide_name: Vec<u16> = container_name
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect();
                     win32::DeleteAppContainerProfile(wide_name.as_ptr());
                 };
                 return Err(OctopusSecurityError::IsolationViolation(
@@ -249,7 +290,10 @@ impl PythonWorkerBridge {
                     win32::TerminateProcess(pi.hProcess, 1);
                     CloseHandle(pi.hProcess);
                     CloseHandle(pi.hThread);
-                    let wide_name: Vec<u16> = container_name.encode_utf16().chain(std::iter::once(0)).collect();
+                    let wide_name: Vec<u16> = container_name
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect();
                     win32::DeleteAppContainerProfile(wide_name.as_ptr());
                 };
                 return Err(OctopusSecurityError::IsolationViolation(format!(
@@ -258,7 +302,9 @@ impl PythonWorkerBridge {
                 )));
             }
 
-            unsafe { CloseHandle(pi.hThread); }
+            unsafe {
+                CloseHandle(pi.hThread);
+            }
 
             Ok(Self {
                 job_object: job,
@@ -290,7 +336,10 @@ impl PythonWorkerBridge {
             use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
             if !self.process_handle.is_null() && self.process_handle != INVALID_HANDLE_VALUE {
                 unsafe {
-                    crate::security::windows_sandbox::win32::TerminateProcess(self.process_handle, 1);
+                    crate::security::windows_sandbox::win32::TerminateProcess(
+                        self.process_handle,
+                        1,
+                    );
                     CloseHandle(self.process_handle);
                     self.process_handle = std::ptr::null_mut();
                 }
@@ -298,7 +347,9 @@ impl PythonWorkerBridge {
             if let Some(ref name) = self.container_name {
                 let wide_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
                 unsafe {
-                    crate::security::windows_sandbox::win32::DeleteAppContainerProfile(wide_name.as_ptr());
+                    crate::security::windows_sandbox::win32::DeleteAppContainerProfile(
+                        wide_name.as_ptr(),
+                    );
                 }
             }
         }

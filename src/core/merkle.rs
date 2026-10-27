@@ -265,7 +265,11 @@ impl ExecutionMerkleTree {
 
         for layer in &self.layers[..self.layers.len() - 1] {
             let is_right_sibling = index % 2 == 0;
-            let sibling_index = if is_right_sibling { index + 1 } else { index - 1 };
+            let sibling_index = if is_right_sibling {
+                index + 1
+            } else {
+                index - 1
+            };
 
             if sibling_index < layer.len() {
                 proof.push((layer[sibling_index], is_right_sibling));
@@ -278,11 +282,7 @@ impl ExecutionMerkleTree {
 
 /// Out-of-band verification performed by Central Brain or Supervisory Watchdog.
 /// Validates in O(log N) that raw_step was executed at the claimed position without reading scratchpad.
-pub fn verify_execution_step(
-    root: &Hash32,
-    raw_step: &str,
-    proof: &[(Hash32, bool)],
-) -> bool {
+pub fn verify_execution_step(root: &Hash32, raw_step: &str, proof: &[(Hash32, bool)]) -> bool {
     let mut current_hash = hash_leaf(raw_step.as_bytes());
 
     for (sibling, is_right) in proof {
@@ -336,7 +336,11 @@ impl PolicyMerkleTree {
     }
 
     /// Host-level enclave gate: verifies that action signature is cryptographically permitted
-    pub fn verify_action(policy_root: &Hash32, action_signature: &str, proof: &[(Hash32, bool)]) -> bool {
+    pub fn verify_action(
+        policy_root: &Hash32,
+        action_signature: &str,
+        proof: &[(Hash32, bool)],
+    ) -> bool {
         verify_execution_step(policy_root, action_signature, proof)
     }
 }
@@ -376,7 +380,12 @@ impl DatasetMerkleTree {
             .map(|idx| self.tree.generate_proof(idx))
     }
 
-    pub fn verify_slice(dataset_root: &Hash32, key: &str, value: &str, proof: &[(Hash32, bool)]) -> bool {
+    pub fn verify_slice(
+        dataset_root: &Hash32,
+        key: &str,
+        value: &str,
+        proof: &[(Hash32, bool)],
+    ) -> bool {
         let target = format!("{}={}", key, value);
         verify_execution_step(dataset_root, &target, proof)
     }

@@ -3,7 +3,9 @@ use agent_octopus::containment_ring::{
     ContainmentRing, Operation, RingDecision, RingError, RingOperationRequest, RingRequest,
 };
 use agent_octopus::core::circuit_breaker::KillSwitch;
-use agent_octopus::core::types::{ArmRole, OctopusSecurityError, StrategicDirective, TelemetryPacket};
+use agent_octopus::core::types::{
+    ArmRole, OctopusSecurityError, StrategicDirective, TelemetryPacket,
+};
 use agent_octopus::neural_mesh::MessageKind;
 use agent_octopus::security::windows_sandbox::WindowsJobObject;
 use std::collections::HashSet;
@@ -91,15 +93,26 @@ async fn test_inner_ring_detects_impersonation_and_role_spoofing() {
     let ring = ContainmentRing::default();
 
     // Enroll Arm A as UntrustedDocIngest
-    ring.identity_gate.enroll("arm-doc-001", ArmRole::UntrustedDocIngest, b"seed_a").await;
+    ring.identity_gate
+        .enroll("arm-doc-001", ArmRole::UntrustedDocIngest, b"seed_a")
+        .await;
 
     // Verify legitimate role passes
-    let ok_res = ring.identity_gate.assert_role("arm-doc-001", &ArmRole::UntrustedDocIngest).await;
+    let ok_res = ring
+        .identity_gate
+        .assert_role("arm-doc-001", &ArmRole::UntrustedDocIngest)
+        .await;
     assert!(ok_res.is_ok());
 
     // Impersonation: Arm A claiming to be AccountingLedgerWrite
-    let spoof_res = ring.identity_gate.assert_role("arm-doc-001", &ArmRole::AccountingLedgerWrite).await;
-    assert!(matches!(spoof_res, Err(OctopusSecurityError::IdentitySpoofingDetected(_))));
+    let spoof_res = ring
+        .identity_gate
+        .assert_role("arm-doc-001", &ArmRole::AccountingLedgerWrite)
+        .await;
+    assert!(matches!(
+        spoof_res,
+        Err(OctopusSecurityError::IdentitySpoofingDetected(_))
+    ));
 }
 
 #[tokio::test]
@@ -116,25 +129,34 @@ async fn test_capability_gate_rejects_revoked_tokens() {
     );
 
     // Initial verification succeeds
-    let verify_res = ring.capability_gate.verify_capability(
-        &token,
-        "arm-ledger-001",
-        "ledger_writer",
-        "s3://accounting/ledger.json",
-    ).await;
+    let verify_res = ring
+        .capability_gate
+        .verify_capability(
+            &token,
+            "arm-ledger-001",
+            "ledger_writer",
+            "s3://accounting/ledger.json",
+        )
+        .await;
     assert!(verify_res.is_ok());
 
     // Revoke the token
     ring.capability_gate.revoke_token(&token.token_id).await;
 
     // Subsequent verification must fail
-    let post_revoke = ring.capability_gate.verify_capability(
-        &token,
-        "arm-ledger-001",
-        "ledger_writer",
-        "s3://accounting/ledger.json",
-    ).await;
-    assert!(matches!(post_revoke, Err(OctopusSecurityError::CapabilityDenied(_))));
+    let post_revoke = ring
+        .capability_gate
+        .verify_capability(
+            &token,
+            "arm-ledger-001",
+            "ledger_writer",
+            "s3://accounting/ledger.json",
+        )
+        .await;
+    assert!(matches!(
+        post_revoke,
+        Err(OctopusSecurityError::CapabilityDenied(_))
+    ));
 }
 
 #[tokio::test]
@@ -156,10 +178,12 @@ async fn test_atomic_binding_prevents_unauthorized_ledger_write() {
     };
 
     let ledger_flag = ledger_modified.clone();
-    let exec_res = ring.execute_with_containment(&req, || async move {
-        ledger_flag.store(true, Ordering::SeqCst);
-        Ok(())
-    }).await;
+    let exec_res = ring
+        .execute_with_containment(&req, || async move {
+            ledger_flag.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
 
     // Operation must be denied
     assert!(exec_res.is_err());
@@ -172,15 +196,30 @@ async fn test_non_cooperative_autotomy_halts_terminated_arm() {
     let ring = ContainmentRing::default();
     let kill_switch = KillSwitch::new();
 
-    ring.isolation_manager.register_kill_switch("arm-compromised-001", kill_switch.clone()).await;
-    assert_eq!(ring.isolation_manager.is_arm_active("arm-compromised-001").await, true);
+    ring.isolation_manager
+        .register_kill_switch("arm-compromised-001", kill_switch.clone())
+        .await;
+    assert_eq!(
+        ring.isolation_manager
+            .is_arm_active("arm-compromised-001")
+            .await,
+        true
+    );
 
     // Supervisor terminates the arm without arm cooperation
-    ring.isolation_manager.terminate_arm("arm-compromised-001", "Detected memory manipulation").await.unwrap();
+    ring.isolation_manager
+        .terminate_arm("arm-compromised-001", "Detected memory manipulation")
+        .await
+        .unwrap();
 
     // Verify kill switch tripped instantly
     assert_eq!(kill_switch.is_tripped(), true);
-    assert_eq!(ring.isolation_manager.is_arm_active("arm-compromised-001").await, false);
+    assert_eq!(
+        ring.isolation_manager
+            .is_arm_active("arm-compromised-001")
+            .await,
+        false
+    );
 
     // Subsequent operation through the ring must be rejected
     let req = RingOperationRequest {
@@ -223,14 +262,18 @@ async fn test_negative_control_policy_tampering_triggers_failure() {
     assert_eq!(decision_ok, RingDecision::Allow);
 
     // 2. NEGATIVE CONTROL: Simulate an adversary tampering with active policies / attestation signature
-    ring.attestation.tamper_with_signature("corrupted_forged_signature_0xDEAD").await;
+    ring.attestation
+        .tamper_with_signature("corrupted_forged_signature_0xDEAD")
+        .await;
 
     // The ring must detect the attestation mismatch and reject execution with Terminate
     let (decision_tampered, reason) = ring.evaluate_operation(&req).await;
     assert_eq!(decision_tampered, RingDecision::Terminate);
     assert!(reason.contains("Attestation failure"));
 
-    let exec_res = ring.execute_with_containment(&req, || async { Ok(()) }).await;
+    let exec_res = ring
+        .execute_with_containment(&req, || async { Ok(()) })
+        .await;
     assert!(matches!(exec_res, Err(OctopusSecurityError::LimbKilled)));
 
     // 3. Restoration: Restoring authentic attestation restores normal containment operation for active arms
@@ -260,14 +303,19 @@ async fn test_mesh_guard_prevents_ambient_privilege_inheritance() {
     let atlas_ring = ArmContainmentRing::new(2, ArmRole::AnomalyDetection, 1, master_seed);
 
     // Allow Finding message from arm 0 (doc ingest) to arm 2 (atlas)
-    ring.mesh_guard.allow_route(0, 2, Some(MessageKind::Finding)).await;
+    ring.mesh_guard
+        .allow_route(0, 2, Some(MessageKind::Finding))
+        .await;
 
     // Doc ingest sending HMAC-authenticated finding to atlas is permitted when route is registered
     let signed_valid = doc_ring
         .sign_mesh_message(2, 1, MessageKind::Finding, "corr-1", "found line items")
         .await
         .unwrap();
-    let verified_valid = atlas_ring.verify_incoming_message(&signed_valid).await.unwrap();
+    let verified_valid = atlas_ring
+        .verify_incoming_message(&signed_valid)
+        .await
+        .unwrap();
     let valid_msg = ring.mesh_guard.validate_message(&verified_valid).await;
     assert!(valid_msg.is_ok());
 
@@ -278,7 +326,10 @@ async fn test_mesh_guard_prevents_ambient_privilege_inheritance() {
         .await
         .unwrap();
     let lateral_verify = ledger_ring.verify_incoming_message(&signed_lateral).await;
-    assert!(matches!(lateral_verify, Err(OctopusSecurityError::DelegationScopeViolation(_))));
+    assert!(matches!(
+        lateral_verify,
+        Err(OctopusSecurityError::DelegationScopeViolation(_))
+    ));
 }
 
 #[tokio::test]
@@ -286,11 +337,15 @@ async fn test_end_to_end_cedar_trusted_arm_handle_authorization_and_revocation()
     let ring = ContainmentRing::default();
 
     // 1. Enroll document ingestion arm with DocumentRead operation
-    let doc_arm = ring.trusted_controller.enroll(
-        "arm-doc-e2e".to_string(),
-        "ingest".to_string(),
-        HashSet::from([Operation::DocumentRead]),
-    ).await.expect("Arm enrolled");
+    let doc_arm = ring
+        .trusted_controller
+        .enroll(
+            "arm-doc-e2e".to_string(),
+            "ingest".to_string(),
+            HashSet::from([Operation::DocumentRead]),
+        )
+        .await
+        .expect("Arm enrolled");
 
     // Legitimate DocumentRead: Cedar authorizes extraction, broker executes safe enclave extractor
     let valid_doc_req = RingRequest {
@@ -299,7 +354,10 @@ async fn test_end_to_end_cedar_trusted_arm_handle_authorization_and_revocation()
         body: b"INVOICE: INV-100\nVendor: Acme\nTotal: $150.00".to_vec(),
     };
     let doc_res = doc_arm.request(valid_doc_req.clone()).await;
-    assert!(doc_res.is_ok(), "Authorized tool invocation through ring must succeed");
+    assert!(
+        doc_res.is_ok(),
+        "Authorized tool invocation through ring must succeed"
+    );
 
     // Unauthorized Tool Call: Document arm attempting privileged LedgerWrite must fail with RingError::Denied
     let illegal_ledger_req = RingRequest {
@@ -311,11 +369,15 @@ async fn test_end_to_end_cedar_trusted_arm_handle_authorization_and_revocation()
     assert_eq!(ledger_res.unwrap_err(), RingError::Denied);
 
     // 2. Enroll network egress arm with HttpEgress operation
-    let net_arm = ring.trusted_controller.enroll(
-        "arm-net-e2e".to_string(),
-        "egress".to_string(),
-        HashSet::from([Operation::HttpEgress]),
-    ).await.expect("Network arm enrolled");
+    let net_arm = ring
+        .trusted_controller
+        .enroll(
+            "arm-net-e2e".to_string(),
+            "egress".to_string(),
+            HashSet::from([Operation::HttpEgress]),
+        )
+        .await
+        .expect("Network arm enrolled");
 
     // Unapproved destination (unauthorized domain) fails with RingError::Denied
     let unapproved_egress = RingRequest {
@@ -336,7 +398,10 @@ async fn test_end_to_end_cedar_trusted_arm_handle_authorization_and_revocation()
     assert!(approved_res.is_ok(), "Approved Google egress must succeed");
 
     // 3. Supervisor non-cooperatively revokes the arm
-    ring.trusted_controller.revoke("arm-net-e2e").await.expect("Arm revoked");
+    ring.trusted_controller
+        .revoke("arm-net-e2e")
+        .await
+        .expect("Arm revoked");
 
     // Subsequent request on revoked handle fails immediately with RingError::Revoked
     let post_revoke_res = net_arm.request(approved_egress).await;
@@ -351,11 +416,15 @@ async fn test_end_to_end_arm_runtime_forced_containment_routing() {
     let ring = Arc::new(ContainmentRing::default());
 
     // Enroll with ring to get a TrustedArmHandle
-    let handle = ring.trusted_controller.enroll(
-        "arm-doc-routed".to_string(),
-        "ingest".to_string(),
-        HashSet::from([Operation::DocumentRead]),
-    ).await.expect("Handle enrolled");
+    let handle = ring
+        .trusted_controller
+        .enroll(
+            "arm-doc-routed".to_string(),
+            "ingest".to_string(),
+            HashSet::from([Operation::DocumentRead]),
+        )
+        .await
+        .expect("Handle enrolled");
 
     let arm = ArmRuntime::new(
         ArmRole::UntrustedDocIngest,
@@ -378,7 +447,10 @@ async fn test_end_to_end_arm_runtime_forced_containment_routing() {
         raw_payload: Some("INVOICE: INV-500\nVendor: SafeCorp\nTotal: $250.00".to_string()),
         max_step_budget: 5,
     };
-    directive_tx.send((valid_directive, resp_tx1)).await.unwrap();
+    directive_tx
+        .send((valid_directive, resp_tx1))
+        .await
+        .unwrap();
     let rep1 = resp_rx1.await.unwrap();
     if let Err(ref e) = rep1 {
         panic!("Tool routed through ring failed with error: {:?}", e);
@@ -388,9 +460,15 @@ async fn test_end_to_end_arm_runtime_forced_containment_routing() {
     assert!(report.verified_data.is_some());
 
     // 2. Non-cooperative Autotomy: Supervisor terminates the arm in the isolation manager
-    ring.isolation_manager.terminate_arm("arm-doc-routed", "Supervisor triggered quarantine").await.unwrap();
+    ring.isolation_manager
+        .terminate_arm("arm-doc-routed", "Supervisor triggered quarantine")
+        .await
+        .unwrap();
     assert_eq!(kill_switch.is_tripped(), true);
-    assert_eq!(ring.isolation_manager.is_arm_active("arm-doc-routed").await, false);
+    assert_eq!(
+        ring.isolation_manager.is_arm_active("arm-doc-routed").await,
+        false
+    );
 
     // 3. Send subsequent directive: arm must reject with LimbKilled and halt loop
     let (resp_tx2, resp_rx2) = tokio::sync::oneshot::channel();
@@ -406,14 +484,20 @@ async fn test_end_to_end_arm_runtime_forced_containment_routing() {
     assert_eq!(rep2.unwrap_err(), OctopusSecurityError::LimbKilled);
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(arm_handle.is_finished(), "Terminated arm must not persist in background");
+    assert!(
+        arm_handle.is_finished(),
+        "Terminated arm must not persist in background"
+    );
 }
 
 #[tokio::test]
 async fn test_end_to_end_independent_os_process_and_token_revocation() {
     let ring = ContainmentRing::default();
     let kill_switch = KillSwitch::new();
-    let job_object = Arc::new(WindowsJobObject::create("OctopusE2ETestJob", 2, 64 * 1024 * 1024).expect("Job object created"));
+    let job_object = Arc::new(
+        WindowsJobObject::create("OctopusE2ETestJob", 2, 64 * 1024 * 1024)
+            .expect("Job object created"),
+    );
 
     // Issue capability token to arm
     let token = ring.capability_gate.issue_capability(
@@ -425,26 +509,49 @@ async fn test_end_to_end_independent_os_process_and_token_revocation() {
     );
 
     // Enroll in trusted controller
-    let _handle = ring.trusted_controller.enroll(
-        "arm-sandbox-victim".to_string(),
-        "ledger".to_string(),
-        HashSet::from([Operation::LedgerWrite]),
-    ).await.expect("Arm enrolled in ring controller");
+    let _handle = ring
+        .trusted_controller
+        .enroll(
+            "arm-sandbox-victim".to_string(),
+            "ledger".to_string(),
+            HashSet::from([Operation::LedgerWrite]),
+        )
+        .await
+        .expect("Arm enrolled in ring controller");
 
     // Register with IsolationManager
-    ring.isolation_manager.register_arm(
-        "arm-sandbox-victim",
-        kill_switch.clone(),
-        Some(job_object.clone()),
-    ).await;
+    ring.isolation_manager
+        .register_arm(
+            "arm-sandbox-victim",
+            kill_switch.clone(),
+            Some(job_object.clone()),
+        )
+        .await;
 
     // Verify initially active and authorized
-    assert_eq!(ring.isolation_manager.is_arm_active("arm-sandbox-victim").await, true);
+    assert_eq!(
+        ring.isolation_manager
+            .is_arm_active("arm-sandbox-victim")
+            .await,
+        true
+    );
     assert_eq!(job_object.is_terminated.load(Ordering::SeqCst), false);
-    assert!(ring.capability_gate.verify_capability(&token, "arm-sandbox-victim", "ledger_writer", "s3://accounting/ledger.json").await.is_ok());
+    assert!(ring
+        .capability_gate
+        .verify_capability(
+            &token,
+            "arm-sandbox-victim",
+            "ledger_writer",
+            "s3://accounting/ledger.json"
+        )
+        .await
+        .is_ok());
 
     // Non-cooperative Autotomy Triggered by Supervisor
-    ring.isolation_manager.terminate_arm("arm-sandbox-victim", "Kernel anomaly detected").await.unwrap();
+    ring.isolation_manager
+        .terminate_arm("arm-sandbox-victim", "Kernel anomaly detected")
+        .await
+        .unwrap();
 
     // 1. Hardware/atomic kill switch tripped
     assert_eq!(kill_switch.is_tripped(), true);
@@ -453,12 +560,34 @@ async fn test_end_to_end_independent_os_process_and_token_revocation() {
     assert_eq!(job_object.is_terminated.load(Ordering::SeqCst), true);
 
     // 3. Isolation manager records arm as inactive
-    assert_eq!(ring.isolation_manager.is_arm_active("arm-sandbox-victim").await, false);
+    assert_eq!(
+        ring.isolation_manager
+            .is_arm_active("arm-sandbox-victim")
+            .await,
+        false
+    );
 
     // 4. Capability tokens instantly revoked without agent consent
-    let cap_res = ring.capability_gate.verify_capability(&token, "arm-sandbox-victim", "ledger_writer", "s3://accounting/ledger.json").await;
-    assert!(matches!(cap_res, Err(OctopusSecurityError::CapabilityDenied(_))));
+    let cap_res = ring
+        .capability_gate
+        .verify_capability(
+            &token,
+            "arm-sandbox-victim",
+            "ledger_writer",
+            "s3://accounting/ledger.json",
+        )
+        .await;
+    assert!(matches!(
+        cap_res,
+        Err(OctopusSecurityError::CapabilityDenied(_))
+    ));
 
     // 5. Ring controller handle revoked
-    assert_eq!(ring.trusted_controller.is_revoked("arm-sandbox-victim").await.unwrap(), true);
+    assert_eq!(
+        ring.trusted_controller
+            .is_revoked("arm-sandbox-victim")
+            .await
+            .unwrap(),
+        true
+    );
 }

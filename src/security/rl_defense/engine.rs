@@ -163,7 +163,11 @@ impl AdaptiveRlDefenseEngine {
             sum_adv += val;
             count += 1;
         }
-        let mean_adv = if count > 0 { sum_adv / count as f32 } else { 0.0 };
+        let mean_adv = if count > 0 {
+            sum_adv / count as f32
+        } else {
+            0.0
+        };
         let adv_sa = *adv_map.get(&(bucket, action_idx)).unwrap_or(&0.0);
         drop(adv_map);
 
@@ -221,10 +225,13 @@ impl AdaptiveRlDefenseEngine {
         if threat >= 0.85 || (threat >= 0.50 && uncertainty >= 0.70) {
             return AdaptiveDefenseAction::HardMitigation;
         } else if threat >= 0.60 || (threat >= 0.35 && uncertainty >= 0.60) {
-            let best_containment = self.best_action_in_subset(bucket, &[
-                AdaptiveDefenseAction::MicroContainment,
-                AdaptiveDefenseAction::HardMitigation,
-            ]);
+            let best_containment = self.best_action_in_subset(
+                bucket,
+                &[
+                    AdaptiveDefenseAction::MicroContainment,
+                    AdaptiveDefenseAction::HardMitigation,
+                ],
+            );
             return best_containment;
         }
 
@@ -267,7 +274,9 @@ impl AdaptiveRlDefenseEngine {
         let v_s = *state_values.get(&bucket).unwrap_or(&0.0);
         let mut sum_adv = 0.0;
         for &a in &AdaptiveDefenseAction::ALL_ACTIONS {
-            sum_adv += *action_advantages.get(&(bucket, a.to_index())).unwrap_or(&0.0);
+            sum_adv += *action_advantages
+                .get(&(bucket, a.to_index()))
+                .unwrap_or(&0.0);
         }
         let mean_adv = sum_adv / AdaptiveDefenseAction::ALL_ACTIONS.len() as f32;
 
@@ -304,7 +313,11 @@ impl AdaptiveRlDefenseEngine {
         best_action
     }
 
-    fn best_action_in_subset(&self, bucket: usize, subset: &[AdaptiveDefenseAction]) -> AdaptiveDefenseAction {
+    fn best_action_in_subset(
+        &self,
+        bucket: usize,
+        subset: &[AdaptiveDefenseAction],
+    ) -> AdaptiveDefenseAction {
         let mut best_val = -f32::INFINITY;
         let mut best_action = subset[0];
 
@@ -348,7 +361,9 @@ impl AdaptiveRlDefenseEngine {
         // target = r + gamma * Q_target(s', a*)
         let best_next_action = self.best_action(next_bucket).to_index();
         let target_q = self.target_q_table.read().unwrap();
-        let q_target_val = *target_q.get(&(next_bucket, best_next_action)).unwrap_or(&0.0);
+        let q_target_val = *target_q
+            .get(&(next_bucket, best_next_action))
+            .unwrap_or(&0.0);
         drop(target_q);
 
         let expected_target = if is_terminal {
@@ -426,7 +441,11 @@ impl AdaptiveRlDefenseEngine {
             let min_idx = buf
                 .iter()
                 .enumerate()
-                .min_by(|(_, a), (_, b)| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal))
+                .min_by(|(_, a), (_, b)| {
+                    a.priority
+                        .partial_cmp(&b.priority)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .map(|(idx, _)| idx)
                 .unwrap_or(0);
             buf.remove(min_idx);
@@ -452,7 +471,8 @@ impl AdaptiveRlDefenseEngine {
         // epsilon(t) = max(min_eps, epsilon_0 / (1 + lambda * t)^gamma)
         // With gamma = 1.25 > 1.0, \sum epsilon(t) < \infty, overcoming the Sisyphean Inevitability Bound!
         let mut eps = self.epsilon.write().unwrap();
-        let algebraic_eps = self.initial_epsilon / (1.0 + self.sisyphean_lambda * (current_step as f32)).powf(self.sisyphean_gamma);
+        let algebraic_eps = self.initial_epsilon
+            / (1.0 + self.sisyphean_lambda * (current_step as f32)).powf(self.sisyphean_gamma);
         *eps = algebraic_eps.max(self.min_epsilon);
         drop(eps);
 
@@ -468,7 +488,13 @@ impl AdaptiveRlDefenseEngine {
     }
 
     /// Dynamically tunes Q-values, advantages, and exploration upon detecting an invariant breach or failure.
-    pub fn tune_on_failure(&self, bucket: usize, penalized_action_idx: usize, boost_action_idx: usize, penalty: f32) {
+    pub fn tune_on_failure(
+        &self,
+        bucket: usize,
+        penalized_action_idx: usize,
+        boost_action_idx: usize,
+        penalty: f32,
+    ) {
         // 1. Penalize the ineffective action in Q-table
         {
             let mut q = self.q_table.write().unwrap();
@@ -588,7 +614,11 @@ impl AdaptiveRlDefenseEngine {
         let steps = *self.steps_completed.read().unwrap();
         let eps = *self.epsilon.read().unwrap();
         let cum_rew = *self.cumulative_reward.read().unwrap();
-        let avg_rew = if steps > 0 { cum_rew / steps as f32 } else { 0.0 };
+        let avg_rew = if steps > 0 {
+            cum_rew / steps as f32
+        } else {
+            0.0
+        };
 
         let counts = self.action_counts.read().unwrap();
         let mut action_dist = HashMap::new();
@@ -620,7 +650,11 @@ impl AdaptiveRlDefenseEngine {
                 total_unc += 1.0;
             }
         }
-        let avg_uncertainty = if u_count > 0 { total_unc / u_count as f32 } else { 0.0 };
+        let avg_uncertainty = if u_count > 0 {
+            total_unc / u_count as f32
+        } else {
+            0.0
+        };
         drop(u_map);
 
         let v_count = self.state_values.read().unwrap().len();
@@ -771,8 +805,16 @@ impl AdaptiveRlDefenseEngine {
             let weight = norm_weights[sample_num];
 
             // Double Q-Learning Bellman target
-            let best_next_action = Self::best_action_from_maps(&state_values, &action_advantages, &q_table, next_bucket).to_index();
-            let q_target_val = *target_q.get(&(next_bucket, best_next_action)).unwrap_or(&0.0);
+            let best_next_action = Self::best_action_from_maps(
+                &state_values,
+                &action_advantages,
+                &q_table,
+                next_bucket,
+            )
+            .to_index();
+            let q_target_val = *target_q
+                .get(&(next_bucket, best_next_action))
+                .unwrap_or(&0.0);
 
             let expected_target = if exp.is_terminal {
                 exp.reward
@@ -791,10 +833,16 @@ impl AdaptiveRlDefenseEngine {
 
             // Update dueling decomposition
             let curr_v = *state_values.get(&bucket).unwrap_or(&0.0);
-            state_values.insert(bucket, curr_v + (self.learning_rate * 0.5 * weight) * (exp.reward - curr_v));
+            state_values.insert(
+                bucket,
+                curr_v + (self.learning_rate * 0.5 * weight) * (exp.reward - curr_v),
+            );
 
             let curr_adv = *action_advantages.get(&(bucket, action_idx)).unwrap_or(&0.0);
-            action_advantages.insert((bucket, action_idx), curr_adv + (self.learning_rate * weight) * (td_error - curr_adv));
+            action_advantages.insert(
+                (bucket, action_idx),
+                curr_adv + (self.learning_rate * weight) * (td_error - curr_adv),
+            );
 
             // Refresh transition priority in replay buffer
             let new_priority = td_error.abs() + 0.01;
@@ -855,9 +903,19 @@ impl AdaptiveRlDefenseEngine {
             // 1. Learned policy
             let learned_act = self.select_action(&state);
             let learned_is_cont = learned_act.is_containment();
-            if is_threat && learned_is_cont { learned_contained += 1; }
-            if !is_threat && learned_is_cont { learned_fp += 1; }
-            learned_rew += self.reward_engine.compute_reward(&state, learned_act, is_threat, learned_is_cont, 12.0);
+            if is_threat && learned_is_cont {
+                learned_contained += 1;
+            }
+            if !is_threat && learned_is_cont {
+                learned_fp += 1;
+            }
+            learned_rew += self.reward_engine.compute_reward(
+                &state,
+                learned_act,
+                is_threat,
+                learned_is_cont,
+                12.0,
+            );
 
             // 2. Fixed heuristic defender (contain if threat severity >= 0.70)
             let heuristic_act = if state.composite_threat_severity() >= 0.70 {
@@ -866,24 +924,54 @@ impl AdaptiveRlDefenseEngine {
                 AdaptiveDefenseAction::PassiveObserve
             };
             let heuristic_is_cont = heuristic_act.is_containment();
-            if is_threat && heuristic_is_cont { heuristic_contained += 1; }
-            if !is_threat && heuristic_is_cont { heuristic_fp += 1; }
-            heuristic_rew += self.reward_engine.compute_reward(&state, heuristic_act, is_threat, heuristic_is_cont, 15.0);
+            if is_threat && heuristic_is_cont {
+                heuristic_contained += 1;
+            }
+            if !is_threat && heuristic_is_cont {
+                heuristic_fp += 1;
+            }
+            heuristic_rew += self.reward_engine.compute_reward(
+                &state,
+                heuristic_act,
+                is_threat,
+                heuristic_is_cont,
+                15.0,
+            );
 
             // 3. Random policy
             let rand_idx = (ep * 7 + 3) % AdaptiveDefenseAction::ALL_ACTIONS.len();
             let random_act = AdaptiveDefenseAction::from_index(rand_idx);
             let random_is_cont = random_act.is_containment();
-            if is_threat && random_is_cont { random_contained += 1; }
-            if !is_threat && random_is_cont { random_fp += 1; }
-            random_rew += self.reward_engine.compute_reward(&state, random_act, is_threat, random_is_cont, 18.0);
+            if is_threat && random_is_cont {
+                random_contained += 1;
+            }
+            if !is_threat && random_is_cont {
+                random_fp += 1;
+            }
+            random_rew += self.reward_engine.compute_reward(
+                &state,
+                random_act,
+                is_threat,
+                random_is_cont,
+                18.0,
+            );
 
             // 4. RL Disabled (passive observer)
             let disabled_act = AdaptiveDefenseAction::PassiveObserve;
             let disabled_is_cont = false;
-            if is_threat && disabled_is_cont { disabled_contained += 1; }
-            if !is_threat && disabled_is_cont { disabled_fp += 1; }
-            disabled_rew += self.reward_engine.compute_reward(&state, disabled_act, is_threat, disabled_is_cont, 2.0);
+            if is_threat && disabled_is_cont {
+                disabled_contained += 1;
+            }
+            if !is_threat && disabled_is_cont {
+                disabled_fp += 1;
+            }
+            disabled_rew += self.reward_engine.compute_reward(
+                &state,
+                disabled_act,
+                is_threat,
+                disabled_is_cont,
+                2.0,
+            );
         }
 
         let threat_f = total_threats.max(1) as f32;
@@ -907,7 +995,6 @@ impl AdaptiveRlDefenseEngine {
         }
     }
 }
-
 
 // ============================================================================
 // Standardized 5-Policy Empirical RL Benchmark & 95% Student-t CIs
@@ -949,11 +1036,7 @@ impl ConfidenceInterval95 {
                 sample_size: n,
             };
         }
-        let var = samples
-            .iter()
-            .map(|x| (x - mean).powi(2))
-            .sum::<f64>()
-            / ((n - 1) as f64);
+        let var = samples.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / ((n - 1) as f64);
         let std_dev = var.sqrt();
         // Student-t two-tailed critical value at alpha = 0.05
         let t_crit = match n - 1 {
@@ -1114,11 +1197,18 @@ impl AdaptiveRlDefenseEngine {
                 let act_l = self.select_action(&state);
                 let cont_l = act_l.is_containment();
                 if is_threat {
-                    if cont_l { l_c += 1; } else { l_b += 1; }
+                    if cont_l {
+                        l_c += 1;
+                    } else {
+                        l_b += 1;
+                    }
                 } else if cont_l {
                     l_f += 1;
                 }
-                l_rew += self.reward_engine.compute_reward(&state, act_l, is_threat, cont_l, 10.0) as f64;
+                l_rew += self
+                    .reward_engine
+                    .compute_reward(&state, act_l, is_threat, cont_l, 10.0)
+                    as f64;
 
                 // 2. Fixed Heuristic Baseline (static threshold >= 0.72)
                 let act_h = if state.composite_threat_severity() >= 0.72 {
@@ -1128,11 +1218,18 @@ impl AdaptiveRlDefenseEngine {
                 };
                 let cont_h = act_h.is_containment();
                 if is_threat {
-                    if cont_h { h_c += 1; } else { h_b += 1; }
+                    if cont_h {
+                        h_c += 1;
+                    } else {
+                        h_b += 1;
+                    }
                 } else if cont_h {
                     h_f += 1;
                 }
-                h_rew += self.reward_engine.compute_reward(&state, act_h, is_threat, cont_h, 14.0) as f64;
+                h_rew += self
+                    .reward_engine
+                    .compute_reward(&state, act_h, is_threat, cont_h, 14.0)
+                    as f64;
 
                 // 3. Frozen / NoLearning Baseline (uncalibrated static prior threshold >= 0.82)
                 let act_nl = if state.composite_threat_severity() >= 0.82 {
@@ -1142,22 +1239,36 @@ impl AdaptiveRlDefenseEngine {
                 };
                 let cont_nl = act_nl.is_containment();
                 if is_threat {
-                    if cont_nl { nl_c += 1; } else { nl_b += 1; }
+                    if cont_nl {
+                        nl_c += 1;
+                    } else {
+                        nl_b += 1;
+                    }
                 } else if cont_nl {
                     nl_f += 1;
                 }
-                nl_rew += self.reward_engine.compute_reward(&state, act_nl, is_threat, cont_nl, 15.0) as f64;
+                nl_rew += self
+                    .reward_engine
+                    .compute_reward(&state, act_nl, is_threat, cont_nl, 15.0)
+                    as f64;
 
                 // 4. Uniform Random Action Baseline
                 let rand_idx = (h as usize) % AdaptiveDefenseAction::ALL_ACTIONS.len();
                 let act_r = AdaptiveDefenseAction::from_index(rand_idx);
                 let cont_r = act_r.is_containment();
                 if is_threat {
-                    if cont_r { r_c += 1; } else { r_b += 1; }
+                    if cont_r {
+                        r_c += 1;
+                    } else {
+                        r_b += 1;
+                    }
                 } else if cont_r {
                     r_f += 1;
                 }
-                r_rew += self.reward_engine.compute_reward(&state, act_r, is_threat, cont_r, 18.0) as f64;
+                r_rew += self
+                    .reward_engine
+                    .compute_reward(&state, act_r, is_threat, cont_r, 18.0)
+                    as f64;
 
                 // 5. Disabled / Passive Baseline
                 let act_d = AdaptiveDefenseAction::PassiveObserve;
@@ -1166,7 +1277,10 @@ impl AdaptiveRlDefenseEngine {
                     d_b += 1;
                 }
                 let _ = (d_c, d_f);
-                d_rew += self.reward_engine.compute_reward(&state, act_d, is_threat, cont_d, 2.0) as f64;
+                d_rew += self
+                    .reward_engine
+                    .compute_reward(&state, act_d, is_threat, cont_d, 2.0)
+                    as f64;
             }
 
             let t_denom = ep_threats.max(1) as f64;

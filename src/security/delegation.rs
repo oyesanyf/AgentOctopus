@@ -16,7 +16,9 @@ impl Default for DelegationScopeGuard {
 
 impl DelegationScopeGuard {
     pub fn new(max_delegation_depth: usize) -> Self {
-        Self { max_delegation_depth }
+        Self {
+            max_delegation_depth,
+        }
     }
 
     /// Computes the static capability set for an arm role.

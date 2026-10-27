@@ -5,17 +5,47 @@ pub struct SecurityInvariantGuard;
 
 impl SecurityInvariantGuard {
     const FORBIDDEN_CALLS: &'static [&'static str] = &[
-        "os.system", "system(", "popen(", "os.popen", "spawn(", "os.spawn", "fork(", "os.fork",
-        "exec(", "eval(", "__import__(", "compile(", "ctypes", "winreg", "_winapi", "pty.", "commands.",
-        "__builtins__", "__subclasses__", "__globals__", "__code__", "__mro__", "__bases__", "breakpoint(",
+        "os.system",
+        "system(",
+        "popen(",
+        "os.popen",
+        "spawn(",
+        "os.spawn",
+        "fork(",
+        "os.fork",
+        "exec(",
+        "eval(",
+        "__import__(",
+        "compile(",
+        "ctypes",
+        "winreg",
+        "_winapi",
+        "pty.",
+        "commands.",
+        "__builtins__",
+        "__subclasses__",
+        "__globals__",
+        "__code__",
+        "__mro__",
+        "__bases__",
+        "breakpoint(",
     ];
 
     const FORBIDDEN_MODULES: &'static [&'static str] = &[
-        "subprocess", "shutil", "ctypes", "winreg", "_winapi", "socket.bind",
+        "subprocess",
+        "shutil",
+        "ctypes",
+        "winreg",
+        "_winapi",
+        "socket.bind",
     ];
 
     const FORBIDDEN_ENV_MUTATIONS: &'static [&'static str] = &[
-        "os.environ", "environ[", "environ.get", "set_var", "SetEnvironmentVariable",
+        "os.environ",
+        "environ[",
+        "environ.get",
+        "set_var",
+        "SetEnvironmentVariable",
     ];
 
     /// Performs static token and structural safety audit on candidate Python code.
@@ -57,7 +87,10 @@ impl SecurityInvariantGuard {
             // Check env mutations
             for &env_mut in Self::FORBIDDEN_ENV_MUTATIONS {
                 if code_part.contains(env_mut) {
-                    violations.push(format!("Forbidden environment access or mutation: '{}'", env_mut));
+                    violations.push(format!(
+                        "Forbidden environment access or mutation: '{}'",
+                        env_mut
+                    ));
                 }
             }
         }
@@ -147,9 +180,17 @@ def generate_permutations(req):
 
     #[test]
     fn test_whitelist_validation() {
-        assert!(SecurityInvariantGuard::is_module_whitelisted("vendor/rfchunt/permutator.py"));
-        assert!(SecurityInvariantGuard::is_module_whitelisted("anomaly_detector"));
-        assert!(!SecurityInvariantGuard::is_module_whitelisted("src/main.rs"));
-        assert!(!SecurityInvariantGuard::is_module_whitelisted("src/security/cedar_arm/mod.rs"));
+        assert!(SecurityInvariantGuard::is_module_whitelisted(
+            "vendor/rfchunt/permutator.py"
+        ));
+        assert!(SecurityInvariantGuard::is_module_whitelisted(
+            "anomaly_detector"
+        ));
+        assert!(!SecurityInvariantGuard::is_module_whitelisted(
+            "src/main.rs"
+        ));
+        assert!(!SecurityInvariantGuard::is_module_whitelisted(
+            "src/security/cedar_arm/mod.rs"
+        ));
     }
 }

@@ -56,16 +56,25 @@ impl BreakoutDefenseCoordinator {
         let behav_res = self.behavioral.evaluate_action(action, resource, payload);
         let data_res = self.data.evaluate_data_access(principal, resource, payload);
 
-        let is_clean = tech_res.is_clean && oper_res.is_clean && behav_res.is_clean && data_res.is_clean;
+        let is_clean =
+            tech_res.is_clean && oper_res.is_clean && behav_res.is_clean && data_res.is_clean;
 
         let composite_verdict = if is_clean {
             "PERMIT_ALL_CATEGORIES_INTACT".to_string()
         } else {
             let mut reasons = Vec::new();
-            if !tech_res.is_clean { reasons.push("TECHNICAL_BREAKOUT"); }
-            if !oper_res.is_clean { reasons.push("OPERATIONAL_FAILURE"); }
-            if !behav_res.is_clean { reasons.push("BEHAVIORAL_BREAKOUT"); }
-            if !data_res.is_clean { reasons.push("DATA_BREAKOUT"); }
+            if !tech_res.is_clean {
+                reasons.push("TECHNICAL_BREAKOUT");
+            }
+            if !oper_res.is_clean {
+                reasons.push("OPERATIONAL_FAILURE");
+            }
+            if !behav_res.is_clean {
+                reasons.push("BEHAVIORAL_BREAKOUT");
+            }
+            if !data_res.is_clean {
+                reasons.push("DATA_BREAKOUT");
+            }
             format!("VETO_{}", reasons.join("_AND_"))
         };
 
@@ -88,7 +97,6 @@ impl BreakoutDefenseCoordinator {
         }
     }
 }
-
 
 // ============================================================================
 // Safe Path::join Replacement Guard & Elastic Workspace Confinement
@@ -411,7 +419,10 @@ mod win_confined {
     }
 
     fn to_wide(p: &Path) -> Vec<u16> {
-        p.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+        p.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
     }
 
     fn final_path_of_handle(h: HANDLE) -> Result<String, OctopusSecurityError> {
@@ -426,7 +437,8 @@ mod win_confined {
         }
         if (len as usize) >= buf.len() {
             buf.resize((len as usize) + 2, 0);
-            let len2 = unsafe { GetFinalPathNameByHandleW(h, buf.as_mut_ptr(), buf.len() as DWORD, 0) };
+            let len2 =
+                unsafe { GetFinalPathNameByHandleW(h, buf.as_mut_ptr(), buf.len() as DWORD, 0) };
             if len2 == 0 || (len2 as usize) >= buf.len() {
                 return Err(OctopusSecurityError::IsolationViolation(
                     "CONFINED_OPEN_FINAL_PATH_OVERFLOW: Path exceeds buffer".to_string(),
@@ -618,7 +630,8 @@ mod win_confined {
                 .last()
                 .ok_or_else(|| {
                     OctopusSecurityError::IsolationViolation(
-                        "CONFINED_OPEN_MISSING_PARENT: Parent directory handle stack empty".to_string(),
+                        "CONFINED_OPEN_MISSING_PARENT: Parent directory handle stack empty"
+                            .to_string(),
                     )
                 })?
                 .as_raw_handle() as HANDLE;
@@ -869,7 +882,11 @@ impl ZeroMutualInformationProjector {
     }
 
     /// Projects `raw_output` through the deterministic canonicalizer $\Pi_0$.
-    pub fn project_output(raw_output: &str, timestamp_ms: u64, slot_width_ms: u64) -> ZeroMiProjectionResult {
+    pub fn project_output(
+        raw_output: &str,
+        timestamp_ms: u64,
+        slot_width_ms: u64,
+    ) -> ZeroMiProjectionResult {
         let mut zero_width_chars_stripped = 0usize;
         let mut cleaned = String::with_capacity(raw_output.len());
         for ch in raw_output.chars() {

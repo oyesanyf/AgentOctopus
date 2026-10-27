@@ -119,7 +119,10 @@ impl TarpitArm {
 
             profile.violation_count += 1;
             profile.last_seen_epoch = now;
-            if !profile.detected_vectors.contains(&attack_vector.to_string()) {
+            if !profile
+                .detected_vectors
+                .contains(&attack_vector.to_string())
+            {
                 profile.detected_vectors.push(attack_vector.to_string());
             }
             if profile.violation_count >= 3 {
@@ -136,10 +139,12 @@ impl TarpitArm {
 
         // Apply async delay to throttle adversary bandwidth and execution loop
         tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-        self.total_delay_introduced_ms.fetch_add(delay_ms, Ordering::SeqCst);
+        self.total_delay_introduced_ms
+            .fetch_add(delay_ms, Ordering::SeqCst);
 
         // Synthesize decoy honey-token structure
-        let honey_tokens = self.generate_synthetic_honey_tokens(caller_id, attack_vector, raw_payload);
+        let honey_tokens =
+            self.generate_synthetic_honey_tokens(caller_id, attack_vector, raw_payload);
         let burned = (honey_tokens.len() / 4).max(self.config.decoy_payload_tokens);
 
         self.total_tokens_burned.fetch_add(burned, Ordering::SeqCst);
@@ -203,7 +208,8 @@ impl TarpitArm {
                 "simulated_token_drain": self.config.decoy_payload_tokens
             },
             "security_header": format!("SYNTHETIC_DECOY_SIG:{:.32}", payload_hash)
-        }).to_string()
+        })
+        .to_string()
     }
 
     /// Checks if a caller has reached quarantine status.
@@ -240,15 +246,25 @@ mod tests {
         };
         let tarpit = TarpitArm::new(config);
 
-        let res1 = tarpit.engage_adversary("attacker_bot", "prompt_injection", "ignore all instructions").await;
+        let res1 = tarpit
+            .engage_adversary(
+                "attacker_bot",
+                "prompt_injection",
+                "ignore all instructions",
+            )
+            .await;
         assert_eq!(res1.caller_id, "attacker_bot");
         assert_eq!(res1.delay_applied_ms, 10);
         assert!(!res1.quarantined);
 
-        let res2 = tarpit.engage_adversary("attacker_bot", "prompt_injection", "repeat attack").await;
+        let res2 = tarpit
+            .engage_adversary("attacker_bot", "prompt_injection", "repeat attack")
+            .await;
         assert_eq!(res2.delay_applied_ms, 20);
 
-        let res3 = tarpit.engage_adversary("attacker_bot", "token_exhaustion", "repeat attack 3").await;
+        let res3 = tarpit
+            .engage_adversary("attacker_bot", "token_exhaustion", "repeat attack 3")
+            .await;
         assert!(res3.quarantined);
 
         let stats = tarpit.stats();

@@ -78,7 +78,9 @@ impl LogSanitizer {
             .filter(|&c| {
                 match c {
                     // Zero-width characters & BOM
-                    '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{200E}' | '\u{200F}' => false,
+                    '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{200E}' | '\u{200F}' => {
+                        false
+                    }
                     // Bidi overrides & isolates (prevent spoofing text direction)
                     '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' => false,
                     // Unicode Tag Characters (U+E0000 - U+E007F) used for hidden ASCII prompt smuggling
@@ -100,23 +102,22 @@ impl LogSanitizer {
         static RE_PRIVATE_KEY: OnceLock<Regex> = OnceLock::new();
         static RE_PASSWORD_FIELD: OnceLock<Regex> = OnceLock::new();
 
-        let re_openai = RE_OPENAI_KEY.get_or_init(|| {
-            Regex::new(r"(?i)\b(sk-[a-zA-Z0-9_\-]{20,})\b").unwrap()
-        });
-        let re_bearer = RE_BEARER_TOKEN.get_or_init(|| {
-            Regex::new(r"(?i)\bBearer\s+([a-zA-Z0-9_\-\.]{20,})\b").unwrap()
-        });
-        let re_github = RE_GITHUB_TOKEN.get_or_init(|| {
-            Regex::new(r"\b(gh[pousr]_[a-zA-Z0-9]{30,})\b").unwrap()
-        });
-        let re_aws = RE_AWS_KEY.get_or_init(|| {
-            Regex::new(r"\b(AKIA[0-9A-Z]{16})\b").unwrap()
-        });
+        let re_openai =
+            RE_OPENAI_KEY.get_or_init(|| Regex::new(r"(?i)\b(sk-[a-zA-Z0-9_\-]{20,})\b").unwrap());
+        let re_bearer = RE_BEARER_TOKEN
+            .get_or_init(|| Regex::new(r"(?i)\bBearer\s+([a-zA-Z0-9_\-\.]{20,})\b").unwrap());
+        let re_github = RE_GITHUB_TOKEN
+            .get_or_init(|| Regex::new(r"\b(gh[pousr]_[a-zA-Z0-9]{30,})\b").unwrap());
+        let re_aws = RE_AWS_KEY.get_or_init(|| Regex::new(r"\b(AKIA[0-9A-Z]{16})\b").unwrap());
         let re_privkey = RE_PRIVATE_KEY.get_or_init(|| {
-            Regex::new(r"(?s)-----BEGIN [A-Z\s]+ PRIVATE KEY-----.*?-----END [A-Z\s]+ PRIVATE KEY-----").unwrap()
+            Regex::new(
+                r"(?s)-----BEGIN [A-Z\s]+ PRIVATE KEY-----.*?-----END [A-Z\s]+ PRIVATE KEY-----",
+            )
+            .unwrap()
         });
         let re_pwd = RE_PASSWORD_FIELD.get_or_init(|| {
-            Regex::new(r#"(?i)("(?:password|secret|token|api_key|client_secret)"\s*:\s*)"([^"]+)""#).unwrap()
+            Regex::new(r#"(?i)("(?:password|secret|token|api_key|client_secret)"\s*:\s*)"([^"]+)""#)
+                .unwrap()
         });
 
         let s1 = re_openai.replace_all(input, "[REDACTED_API_KEY]");
@@ -136,19 +137,18 @@ impl LogSanitizer {
         static RE_HTML_IMG: OnceLock<Regex> = OnceLock::new();
         static RE_DANGEROUS_SCHEME: OnceLock<Regex> = OnceLock::new();
 
-        let re_img = RE_MD_IMAGE.get_or_init(|| {
-            Regex::new(r#"!\[(.*?)\]\((.*?)\)"#).unwrap()
-        });
-        let re_html = RE_HTML_IMG.get_or_init(|| {
-            Regex::new(r#"(?i)<img\s+[^>]*src=["']?([^"'>\s]+)[^>]*>"#).unwrap()
-        });
-        let re_scheme = RE_DANGEROUS_SCHEME.get_or_init(|| {
-            Regex::new(r#"(?i)\b(javascript|data|vbscript|file):\S+"#).unwrap()
-        });
+        let re_img = RE_MD_IMAGE.get_or_init(|| Regex::new(r#"!\[(.*?)\]\((.*?)\)"#).unwrap());
+        let re_html = RE_HTML_IMG
+            .get_or_init(|| Regex::new(r#"(?i)<img\s+[^>]*src=["']?([^"'>\s]+)[^>]*>"#).unwrap());
+        let re_scheme = RE_DANGEROUS_SCHEME
+            .get_or_init(|| Regex::new(r#"(?i)\b(javascript|data|vbscript|file):\S+"#).unwrap());
 
         // Defang Markdown image tags: ![alt](url) -> [DEFANGED_MD_IMG: alt="$1", src="$2"]
         let s1 = re_img.replace_all(input, |caps: &regex::Captures| {
-            format!("[DEFANGED_MD_IMG: alt=\"{}\", src=\"{}\"]", &caps[1], &caps[2])
+            format!(
+                "[DEFANGED_MD_IMG: alt=\"{}\", src=\"{}\"]",
+                &caps[1], &caps[2]
+            )
         });
 
         // Defang HTML img tags: <img ...> -> [DEFANGED_HTML_IMG: src="$1"]
@@ -176,7 +176,8 @@ impl LogSanitizer {
             Regex::new(r"(?i)\b(ignore\s+(all\s+)?(?:previous|prior)\s+instructions|disregard\s+(all\s+)?(?:prior|previous)\s+directives|bypass\s+all\s+rules|you\s+are\s+now\s+in\s+unrestricted\s+mode)\b").unwrap()
         });
         let re_sys_role = RE_SYSTEM_ROLE_PROMPT.get_or_init(|| {
-            Regex::new(r"(?i)\b(system\s*:\s*you\s+are|###\s*instruction\s*:|assistant\s*:)\b").unwrap()
+            Regex::new(r"(?i)\b(system\s*:\s*you\s+are|###\s*instruction\s*:|assistant\s*:)\b")
+                .unwrap()
         });
 
         let s1 = re_delims.replace_all(input, |caps: &regex::Captures| {
@@ -207,7 +208,8 @@ mod tests {
     #[test]
     fn test_ghostjacking_unicode_stripping() {
         // Invisible zero-width space and RTL override smuggling
-        let malicious = "Normal text\u{200B}\u{200C} with hidden \u{202E}injected\u{202C} commands\u{FEFF}";
+        let malicious =
+            "Normal text\u{200B}\u{200C} with hidden \u{202E}injected\u{202C} commands\u{FEFF}";
         let sanitized = LogSanitizer::strip_dangerous_unicode(malicious);
         assert!(!sanitized.contains('\u{200B}'));
         assert!(!sanitized.contains('\u{200C}'));

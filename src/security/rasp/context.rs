@@ -135,13 +135,18 @@ pub enum RaspDecision {
 
 impl RaspDecision {
     pub fn is_allowed(&self) -> bool {
-        matches!(self, RaspDecision::Allow { .. } | RaspDecision::Sanitize { .. })
+        matches!(
+            self,
+            RaspDecision::Allow { .. } | RaspDecision::Sanitize { .. }
+        )
     }
 
     pub fn is_blocked(&self) -> bool {
         matches!(
             self,
-            RaspDecision::Deny { .. } | RaspDecision::Quarantine { .. } | RaspDecision::Tarpit { .. }
+            RaspDecision::Deny { .. }
+                | RaspDecision::Quarantine { .. }
+                | RaspDecision::Tarpit { .. }
         )
     }
 

@@ -69,7 +69,11 @@ impl TokenPosture {
     pub fn dangerous_privileges_present(&self) -> Vec<String> {
         self.present_privileges
             .iter()
-            .filter(|p| DANGEROUS_PRIVILEGES.iter().any(|d| d.eq_ignore_ascii_case(p)))
+            .filter(|p| {
+                DANGEROUS_PRIVILEGES
+                    .iter()
+                    .any(|d| d.eq_ignore_ascii_case(p))
+            })
             .cloned()
             .collect()
     }
@@ -104,7 +108,10 @@ impl TokenPosture {
         }
         let dangerous = self.dangerous_privileges_present();
         if !dangerous.is_empty() {
-            reasons.push(format!("dangerous privileges present: {}", dangerous.join(", ")));
+            reasons.push(format!(
+                "dangerous privileges present: {}",
+                dangerous.join(", ")
+            ));
         }
         if reasons.is_empty() {
             Ok(())
@@ -183,7 +190,11 @@ mod sys {
     #[allow(clashing_extern_declarations)]
     #[link(name = "advapi32")]
     extern "system" {
-        pub fn OpenProcessToken(ProcessHandle: HANDLE, DesiredAccess: u32, TokenHandle: *mut HANDLE) -> BOOL;
+        pub fn OpenProcessToken(
+            ProcessHandle: HANDLE,
+            DesiredAccess: u32,
+            TokenHandle: *mut HANDLE,
+        ) -> BOOL;
         pub fn GetTokenInformation(
             TokenHandle: HANDLE,
             TokenInformationClass: u32,
@@ -277,7 +288,10 @@ impl Drop for OwnedToken {
 #[cfg(windows)]
 fn last_err(ctx: &str) -> OctopusSecurityError {
     let code = unsafe { sys::GetLastError() };
-    OctopusSecurityError::IsolationViolation(format!("FAIL-CLOSED: {} failed (OS Error {})", ctx, code))
+    OctopusSecurityError::IsolationViolation(format!(
+        "FAIL-CLOSED: {} failed (OS Error {})",
+        ctx, code
+    ))
 }
 
 /// SID allocated by `ConvertStringSidToSidW`, freed with `LocalFree`.
@@ -311,7 +325,10 @@ fn query_token_buffer(token: sys::HANDLE, class: u32) -> Result<Vec<u64>, Octopu
     let mut needed: u32 = 0;
     unsafe { sys::GetTokenInformation(token, class, std::ptr::null_mut(), 0, &mut needed) };
     if needed == 0 {
-        return Err(last_err(&format!("GetTokenInformation(class={}) size probe", class)));
+        return Err(last_err(&format!(
+            "GetTokenInformation(class={}) size probe",
+            class
+        )));
     }
     // u64-backed buffer guarantees 8-byte alignment for SID_AND_ATTRIBUTES arrays.
     let mut buf: Vec<u64> = vec![0u64; (needed as usize + 7) / 8];
@@ -350,7 +367,8 @@ fn sid_integrity_rid(sid: sys::PSID) -> u32 {
 fn privilege_name(luid: &sys::LUID) -> String {
     let mut buf = [0u16; 128];
     let mut len: u32 = buf.len() as u32;
-    let ok = unsafe { sys::LookupPrivilegeNameW(std::ptr::null(), luid, buf.as_mut_ptr(), &mut len) };
+    let ok =
+        unsafe { sys::LookupPrivilegeNameW(std::ptr::null(), luid, buf.as_mut_ptr(), &mut len) };
     if ok == 0 {
         return format!("LUID({},{})", luid.HighPart, luid.LowPart);
     }
@@ -375,7 +393,8 @@ impl TokenPosture {
         let groups = query_token_buffer(token, sys::TOKEN_GROUPS_CLASS)?;
         let group_count = unsafe { *(groups.as_ptr() as *const u32) } as usize;
         let groups_ptr = unsafe {
-            (groups.as_ptr() as *const u8).add(std::mem::size_of::<usize>()) as *const sys::SID_AND_ATTRIBUTES
+            (groups.as_ptr() as *const u8).add(std::mem::size_of::<usize>())
+                as *const sys::SID_AND_ATTRIBUTES
         };
         let mut admins_enabled = false;
         let mut admins_deny_only = false;
@@ -393,7 +412,8 @@ impl TokenPosture {
         // 4. TokenPrivileges
         let privs = query_token_buffer(token, sys::TOKEN_PRIVILEGES_CLASS)?;
         let priv_count = unsafe { *(privs.as_ptr() as *const u32) } as usize;
-        let priv_ptr = unsafe { (privs.as_ptr() as *const u8).add(4) as *const sys::LUID_AND_ATTRIBUTES };
+        let priv_ptr =
+            unsafe { (privs.as_ptr() as *const u8).add(4) as *const sys::LUID_AND_ATTRIBUTES };
         let mut present_privileges = Vec::with_capacity(priv_count);
         let mut enabled_privileges = Vec::new();
         for i in 0..priv_count {
@@ -439,7 +459,11 @@ pub fn current_token_posture() -> Result<TokenPosture, OctopusSecurityError> {
     let euid = unsafe { libc::geteuid() };
     Ok(TokenPosture {
         elevated: euid == 0,
-        integrity_rid: if euid == 0 { INTEGRITY_SYSTEM } else { INTEGRITY_MEDIUM },
+        integrity_rid: if euid == 0 {
+            INTEGRITY_SYSTEM
+        } else {
+            INTEGRITY_MEDIUM
+        },
         admins_enabled: euid == 0,
         admins_deny_only: false,
         present_privileges: Vec::new(),
@@ -460,7 +484,10 @@ pub fn create_deelevated_token() -> Result<OwnedToken, OctopusSecurityError> {
     let ok = unsafe {
         sys::OpenProcessToken(
             sys::GetCurrentProcess(),
-            sys::TOKEN_DUPLICATE | sys::TOKEN_QUERY | sys::TOKEN_ASSIGN_PRIMARY | sys::TOKEN_ADJUST_DEFAULT,
+            sys::TOKEN_DUPLICATE
+                | sys::TOKEN_QUERY
+                | sys::TOKEN_ASSIGN_PRIMARY
+                | sys::TOKEN_ADJUST_DEFAULT,
             &mut current,
         )
     };
@@ -470,7 +497,10 @@ pub fn create_deelevated_token() -> Result<OwnedToken, OctopusSecurityError> {
     let current = OwnedToken(current);
 
     let admins = LocalSid::from_str("S-1-5-32-544")?;
-    let disable = [sys::SID_AND_ATTRIBUTES { Sid: admins.0, Attributes: 0 }];
+    let disable = [sys::SID_AND_ATTRIBUTES {
+        Sid: admins.0,
+        Attributes: 0,
+    }];
 
     let mut restricted: sys::HANDLE = std::ptr::null_mut();
     let ok = unsafe {
@@ -487,7 +517,9 @@ pub fn create_deelevated_token() -> Result<OwnedToken, OctopusSecurityError> {
         )
     };
     if ok == 0 || restricted.is_null() {
-        return Err(last_err("CreateRestrictedToken(DISABLE_MAX_PRIVILEGE|LUA_TOKEN)"));
+        return Err(last_err(
+            "CreateRestrictedToken(DISABLE_MAX_PRIVILEGE|LUA_TOKEN)",
+        ));
     }
     let restricted = OwnedToken(restricted);
 
@@ -495,9 +527,13 @@ pub fn create_deelevated_token() -> Result<OwnedToken, OctopusSecurityError> {
     if posture_before.integrity_rid > INTEGRITY_MEDIUM {
         let medium = LocalSid::from_str("S-1-16-8192")?;
         let label = sys::TOKEN_MANDATORY_LABEL {
-            Label: sys::SID_AND_ATTRIBUTES { Sid: medium.0, Attributes: sys::SE_GROUP_INTEGRITY },
+            Label: sys::SID_AND_ATTRIBUTES {
+                Sid: medium.0,
+                Attributes: sys::SE_GROUP_INTEGRITY,
+            },
         };
-        let size = std::mem::size_of::<sys::TOKEN_MANDATORY_LABEL>() as u32 + unsafe { sys::GetLengthSid(medium.0) };
+        let size = std::mem::size_of::<sys::TOKEN_MANDATORY_LABEL>() as u32
+            + unsafe { sys::GetLengthSid(medium.0) };
         let ok = unsafe {
             sys::SetTokenInformation(
                 restricted.raw(),
@@ -561,13 +597,19 @@ impl Drop for DeelevatedChild {
 /// `OpenProcessToken`, and if [`TokenPosture::verify_agent_safe`] fails it is terminated without
 /// `ResumeThread` ever being called.
 #[cfg(windows)]
-pub fn spawn_deelevated(command_line: &str, hide_window: bool) -> Result<DeelevatedChild, OctopusSecurityError> {
+pub fn spawn_deelevated(
+    command_line: &str,
+    hide_window: bool,
+) -> Result<DeelevatedChild, OctopusSecurityError> {
     let token = create_deelevated_token()?;
 
     let mut si: sys::STARTUPINFOW = unsafe { std::mem::zeroed() };
     si.cb = std::mem::size_of::<sys::STARTUPINFOW>() as u32;
     let mut pi: sys::PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-    let mut wide_cmd: Vec<u16> = command_line.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut wide_cmd: Vec<u16> = command_line
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     let mut flags = sys::CREATE_SUSPENDED | sys::CREATE_UNICODE_ENVIRONMENT;
     if hide_window {
@@ -590,7 +632,9 @@ pub fn spawn_deelevated(command_line: &str, hide_window: bool) -> Result<Deeleva
         )
     };
     if ok == 0 {
-        return Err(last_err("CreateProcessAsUserW(de-elevated, CREATE_SUSPENDED)"));
+        return Err(last_err(
+            "CreateProcessAsUserW(de-elevated, CREATE_SUSPENDED)",
+        ));
     }
 
     let terminate = |reason: String| -> OctopusSecurityError {
@@ -604,7 +648,12 @@ pub fn spawn_deelevated(command_line: &str, hide_window: bool) -> Result<Deeleva
 
     let posture = match TokenPosture::of_process(pi.hProcess) {
         Ok(p) => p,
-        Err(e) => return Err(terminate(format!("FAIL-CLOSED: child token inspection failed: {}", e))),
+        Err(e) => {
+            return Err(terminate(format!(
+                "FAIL-CLOSED: child token inspection failed: {}",
+                e
+            )))
+        }
     };
     if let Err(reasons) = posture.verify_agent_safe() {
         return Err(terminate(format!(
@@ -614,11 +663,17 @@ pub fn spawn_deelevated(command_line: &str, hide_window: bool) -> Result<Deeleva
     }
 
     if unsafe { sys::ResumeThread(pi.hThread) } == u32::MAX {
-        return Err(terminate("FAIL-CLOSED: ResumeThread failed on verified child".to_string()));
+        return Err(terminate(
+            "FAIL-CLOSED: ResumeThread failed on verified child".to_string(),
+        ));
     }
     unsafe { sys::CloseHandle(pi.hThread) };
 
-    Ok(DeelevatedChild { pid: pi.dwProcessId, posture, process: pi.hProcess })
+    Ok(DeelevatedChild {
+        pid: pi.dwProcessId,
+        posture,
+        process: pi.hProcess,
+    })
 }
 
 /// Spawns `command_line` under [`create_deelevated_token`] AND binds the suspended child
@@ -635,7 +690,10 @@ pub fn spawn_deelevated_in_job(
     let mut si: sys::STARTUPINFOW = unsafe { std::mem::zeroed() };
     si.cb = std::mem::size_of::<sys::STARTUPINFOW>() as u32;
     let mut pi: sys::PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-    let mut wide_cmd: Vec<u16> = command_line.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut wide_cmd: Vec<u16> = command_line
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     let mut flags = sys::CREATE_SUSPENDED | sys::CREATE_UNICODE_ENVIRONMENT;
     if hide_window {
@@ -658,7 +716,9 @@ pub fn spawn_deelevated_in_job(
         )
     };
     if ok == 0 {
-        return Err(last_err("CreateProcessAsUserW(de-elevated+job, CREATE_SUSPENDED)"));
+        return Err(last_err(
+            "CreateProcessAsUserW(de-elevated+job, CREATE_SUSPENDED)",
+        ));
     }
 
     let terminate = |reason: String| -> OctopusSecurityError {
@@ -671,7 +731,10 @@ pub fn spawn_deelevated_in_job(
     };
 
     if let Err(e) = job.assign_process(pi.hProcess) {
-        return Err(terminate(format!("FAIL-CLOSED: job.assign_process failed: {}", e)));
+        return Err(terminate(format!(
+            "FAIL-CLOSED: job.assign_process failed: {}",
+            e
+        )));
     }
     match job.verify_process_in_job(pi.hProcess) {
         Ok(true) => {}
@@ -680,12 +743,22 @@ pub fn spawn_deelevated_in_job(
                 "FAIL-CLOSED: IsProcessInJob returned FALSE on suspended child".to_string(),
             ))
         }
-        Err(e) => return Err(terminate(format!("FAIL-CLOSED: verify_process_in_job failed: {}", e))),
+        Err(e) => {
+            return Err(terminate(format!(
+                "FAIL-CLOSED: verify_process_in_job failed: {}",
+                e
+            )))
+        }
     }
 
     let posture = match TokenPosture::of_process(pi.hProcess) {
         Ok(p) => p,
-        Err(e) => return Err(terminate(format!("FAIL-CLOSED: child token inspection failed: {}", e))),
+        Err(e) => {
+            return Err(terminate(format!(
+                "FAIL-CLOSED: child token inspection failed: {}",
+                e
+            )))
+        }
     };
     if let Err(reasons) = posture.verify_agent_safe() {
         return Err(terminate(format!(
@@ -695,11 +768,17 @@ pub fn spawn_deelevated_in_job(
     }
 
     if unsafe { sys::ResumeThread(pi.hThread) } == u32::MAX {
-        return Err(terminate("FAIL-CLOSED: ResumeThread failed on verified child".to_string()));
+        return Err(terminate(
+            "FAIL-CLOSED: ResumeThread failed on verified child".to_string(),
+        ));
     }
     unsafe { sys::CloseHandle(pi.hThread) };
 
-    Ok(DeelevatedChild { pid: pi.dwProcessId, posture, process: pi.hProcess })
+    Ok(DeelevatedChild {
+        pid: pi.dwProcessId,
+        posture,
+        process: pi.hProcess,
+    })
 }
 
 /// Called first thing in `main` of every long-running Agent Octopus binary.
@@ -708,7 +787,9 @@ pub fn spawn_deelevated_in_job(
 /// - Elevated and not yet relaunched → relaunches the exact same command line under a verified
 ///   de-elevated token and **exits the elevated process** (`std::process::exit`).
 /// - Elevated even after relaunch (marker present) → `Err`, the caller must refuse to start.
-pub fn relaunch_deelevated_or_fail(hide_window: bool) -> Result<TokenPosture, OctopusSecurityError> {
+pub fn relaunch_deelevated_or_fail(
+    hide_window: bool,
+) -> Result<TokenPosture, OctopusSecurityError> {
     let posture = current_token_posture()?;
     if posture.verify_agent_safe().is_ok() {
         return Ok(posture);

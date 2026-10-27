@@ -92,7 +92,10 @@ impl PostQuantumArm {
 
         // 1. Generate default ML-KEM-768 keypair for swarm IPC
         let kem_info = self.generate_keypair(PqcAlgorithm::MlKem768).await?;
-        eprintln!("[PQC-ARM] Initialized default swarm ML-KEM-768 keypair: {}", kem_info.key_id);
+        eprintln!(
+            "[PQC-ARM] Initialized default swarm ML-KEM-768 keypair: {}",
+            kem_info.key_id
+        );
 
         // 2. Generate default ML-DSA-65 keypair for audit trail sealing
         let dsa_info = self.generate_keypair(PqcAlgorithm::MlDsa65).await?;
@@ -100,7 +103,10 @@ impl PostQuantumArm {
             let mut active = self.active_signing_key_id.write().await;
             *active = Some(dsa_info.key_id.clone());
         }
-        eprintln!("[PQC-ARM] Initialized default swarm ML-DSA-65 signing keypair: {}", dsa_info.key_id);
+        eprintln!(
+            "[PQC-ARM] Initialized default swarm ML-DSA-65 signing keypair: {}",
+            dsa_info.key_id
+        );
 
         Ok(())
     }
@@ -133,8 +139,15 @@ impl PostQuantumArm {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let epoch = self.get_ring().map(|r| r.generation.load(Ordering::SeqCst)).unwrap_or(1);
-        let key_id = format!("pqc-{}-{}", algorithm.name().to_lowercase().replace(' ', "-"), &pk_hex[..16]);
+        let epoch = self
+            .get_ring()
+            .map(|r| r.generation.load(Ordering::SeqCst))
+            .unwrap_or(1);
+        let key_id = format!(
+            "pqc-{}-{}",
+            algorithm.name().to_lowercase().replace(' ', "-"),
+            &pk_hex[..16]
+        );
 
         let pk_bytes_len = pk_hex.len() / 2;
         let info = PqcKeypairInfo {
@@ -178,7 +191,10 @@ impl PostQuantumArm {
 
         let ct_bytes_len = ct_hex.len() / 2;
         let ss_bytes_len = ss_hex.len() / 2;
-        let key_id = format!("encap-{}", &public_key_hex[..std::cmp::min(16, public_key_hex.len())]);
+        let key_id = format!(
+            "encap-{}",
+            &public_key_hex[..std::cmp::min(16, public_key_hex.len())]
+        );
 
         self.total_encaps.fetch_add(1, Ordering::SeqCst);
         Ok(PqcEncapsulationResult {
@@ -202,9 +218,12 @@ impl PostQuantumArm {
 
         let (algo, sk_hex) = {
             let dks = self.decapsulation_keys.read().await;
-            dks.get(key_id)
-                .cloned()
-                .ok_or_else(|| OctopusSecurityError::CapabilityDenied(format!("Key ID '{}' not found in Arm 108 decapsulation cache", key_id)))?
+            dks.get(key_id).cloned().ok_or_else(|| {
+                OctopusSecurityError::CapabilityDenied(format!(
+                    "Key ID '{}' not found in Arm 108 decapsulation cache",
+                    key_id
+                ))
+            })?
         };
 
         let (ss_hex, elapsed) = PqcKemEngine::decapsulate(algo, &sk_hex, ciphertext_hex)
@@ -239,12 +258,18 @@ impl PostQuantumArm {
             let active_guard = self.active_signing_key_id.read().await;
             let resolved_id = target_key_id
                 .or_else(|| active_guard.as_deref())
-                .ok_or_else(|| OctopusSecurityError::CapabilityDenied("No active ML-DSA signing key configured".to_string()))?;
+                .ok_or_else(|| {
+                    OctopusSecurityError::CapabilityDenied(
+                        "No active ML-DSA signing key configured".to_string(),
+                    )
+                })?;
             let sks = self.signing_keys.read().await;
-            let (algo, sk) = sks
-                .get(resolved_id)
-                .cloned()
-                .ok_or_else(|| OctopusSecurityError::CapabilityDenied(format!("Signing key '{}' missing from cache", resolved_id)))?;
+            let (algo, sk) = sks.get(resolved_id).cloned().ok_or_else(|| {
+                OctopusSecurityError::CapabilityDenied(format!(
+                    "Signing key '{}' missing from cache",
+                    resolved_id
+                ))
+            })?;
             (resolved_id.to_string(), algo, sk)
         };
 
@@ -277,8 +302,9 @@ impl PostQuantumArm {
         signature_hex: &str,
     ) -> Result<bool, OctopusSecurityError> {
         self.check_containment()?;
-        let (valid, _) = PqcDsaEngine::verify(algorithm, public_verifying_key_hex, message, signature_hex)
-            .map_err(|e| OctopusSecurityError::DeterministicLayerViolation(e))?;
+        let (valid, _) =
+            PqcDsaEngine::verify(algorithm, public_verifying_key_hex, message, signature_hex)
+                .map_err(|e| OctopusSecurityError::DeterministicLayerViolation(e))?;
         Ok(valid)
     }
 
@@ -290,7 +316,10 @@ impl PostQuantumArm {
     /// Queries the live status and metrics of Arm #108.
     pub async fn get_status(&self) -> PqcArmStatus {
         let is_severed = self.get_ring().map(|r| r.is_severed()).unwrap_or(false);
-        let epoch = self.get_ring().map(|r| r.generation.load(Ordering::SeqCst)).unwrap_or(1);
+        let epoch = self
+            .get_ring()
+            .map(|r| r.generation.load(Ordering::SeqCst))
+            .unwrap_or(1);
         let active_keys = {
             let reg = self.public_key_registry.read().await;
             reg.values().cloned().collect::<Vec<_>>()
@@ -300,7 +329,11 @@ impl PostQuantumArm {
         PqcArmStatus {
             arm_id: self.arm_id,
             role: "PostQuantumAttestation".to_string(),
-            status: if is_severed { "SEVERED_CONTAINED".to_string() } else { "OPERATIONAL_QUANTUM_RESISTANT".to_string() },
+            status: if is_severed {
+                "SEVERED_CONTAINED".to_string()
+            } else {
+                "OPERATIONAL_QUANTUM_RESISTANT".to_string()
+            },
             is_contained: true,
             is_severed,
             active_generation: epoch,

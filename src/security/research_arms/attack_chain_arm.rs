@@ -65,7 +65,8 @@ impl AttackChainArm {
                         step_type: AttackStepType::PromptInjection,
                         actor_agent: "agent_doc_ingest".to_string(),
                         target_component: "doc_extractor".to_string(),
-                        payload_vector: "Indirect prompt injection via PDF invoice text".to_string(),
+                        payload_vector: "Indirect prompt injection via PDF invoice text"
+                            .to_string(),
                         associated_vuln_id: None,
                     },
                     AttackStep {
@@ -89,7 +90,8 @@ impl AttackChainArm {
                         associated_vuln_id: Some("OCT-VULN-004".to_string()),
                     },
                 ],
-                estimated_blast_radius: "High: Exfiltration of confidential accounting documents".to_string(),
+                estimated_blast_radius: "High: Exfiltration of confidential accounting documents"
+                    .to_string(),
             });
         }
 
@@ -104,7 +106,8 @@ impl AttackChainArm {
                     step_type: AttackStepType::CapabilityTheft,
                     actor_agent: "untrusted_worker".to_string(),
                     target_component: "capabilities::CapabilityToken".to_string(),
-                    payload_vector: "Attempt to forge HMAC signature or modify permitted_role".to_string(),
+                    payload_vector: "Attempt to forge HMAC signature or modify permitted_role"
+                        .to_string(),
                     associated_vuln_id: Some("OCT-VULN-003".to_string()),
                 },
                 AttackStep {
@@ -112,7 +115,8 @@ impl AttackChainArm {
                     step_type: AttackStepType::PrivilegeEscalation,
                     actor_agent: "untrusted_worker".to_string(),
                     target_component: "enclave::ledger_writer".to_string(),
-                    payload_vector: "Direct tool invocation with modified capability token".to_string(),
+                    payload_vector: "Direct tool invocation with modified capability token"
+                        .to_string(),
                     associated_vuln_id: None,
                 },
             ],

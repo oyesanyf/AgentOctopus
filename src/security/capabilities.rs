@@ -45,7 +45,9 @@ impl ExternalAuthorizationEngine {
             master_key,
             capability_ttl_secs,
             policy_fingerprint: policy_fingerprint.to_string(),
-            revoked_tokens: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
+            revoked_tokens: std::sync::Arc::new(std::sync::RwLock::new(
+                std::collections::HashSet::new(),
+            )),
         }
     }
 
@@ -64,7 +66,9 @@ impl ExternalAuthorizationEngine {
         }
     }
 
-    pub fn revoked_tokens_arc(&self) -> std::sync::Arc<std::sync::RwLock<std::collections::HashSet<String>>> {
+    pub fn revoked_tokens_arc(
+        &self,
+    ) -> std::sync::Arc<std::sync::RwLock<std::collections::HashSet<String>>> {
         self.revoked_tokens.clone()
     }
 
@@ -87,7 +91,9 @@ impl ExternalAuthorizationEngine {
         permitted_tool: &str,
         resource_uri_prefix: &str,
     ) -> CapabilityToken {
-        let now_duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+        let now_duration = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
         let now_secs = now_duration.as_secs();
         let now_nanos = now_duration.as_nanos();
         let counter = TOKEN_ENTROPY_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -216,7 +222,8 @@ impl ExternalAuthorizationEngine {
             )));
         }
 
-        if !resource_uri.starts_with(&token.resource_uri_prefix) && token.resource_uri_prefix != "*" {
+        if !resource_uri.starts_with(&token.resource_uri_prefix) && token.resource_uri_prefix != "*"
+        {
             return Err(OctopusSecurityError::CapabilityDenied(format!(
                 "Resource scope violation: Target resource '{}' is outside token authorized prefix '{}'",
                 resource_uri, token.resource_uri_prefix

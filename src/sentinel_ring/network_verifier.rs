@@ -65,7 +65,8 @@ impl NetworkVerifier {
         let clean_dest = destination.trim().to_ascii_lowercase();
 
         // 1. SSRF metadata detection
-        if clean_dest.contains("169.254.169.254") || clean_dest.contains("metadata.google.internal") {
+        if clean_dest.contains("169.254.169.254") || clean_dest.contains("metadata.google.internal")
+        {
             return Ok(NetworkVerificationVerdict::BlockedSsrfMetadata);
         }
 
@@ -90,7 +91,11 @@ impl NetworkVerifier {
                     let o = v6.octets();
                     let is_unique_local = (o[0] & 0xfe) == 0xfc;
                     let is_link_local_v6 = (o[0] == 0xfe) && ((o[1] & 0xc0) == 0x80);
-                    if v6.is_loopback() || v6.is_unspecified() || is_unique_local || is_link_local_v6 {
+                    if v6.is_loopback()
+                        || v6.is_unspecified()
+                        || is_unique_local
+                        || is_link_local_v6
+                    {
                         return Ok(NetworkVerificationVerdict::BlockedPrivateSubnet(clean_dest));
                     }
                     format!("[{}]", v6)
@@ -102,7 +107,10 @@ impl NetworkVerifier {
             clean_dest.clone()
         };
 
-        if let Ok(ip) = host.trim_matches(|c| c == '[' || c == ']').parse::<std::net::IpAddr>() {
+        if let Ok(ip) = host
+            .trim_matches(|c| c == '[' || c == ']')
+            .parse::<std::net::IpAddr>()
+        {
             match ip {
                 std::net::IpAddr::V4(v4) => {
                     let o = v4.octets();
@@ -121,7 +129,11 @@ impl NetworkVerifier {
                     let o = v6.octets();
                     let is_unique_local = (o[0] & 0xfe) == 0xfc;
                     let is_link_local_v6 = (o[0] == 0xfe) && ((o[1] & 0xc0) == 0x80);
-                    if v6.is_loopback() || v6.is_unspecified() || is_unique_local || is_link_local_v6 {
+                    if v6.is_loopback()
+                        || v6.is_unspecified()
+                        || is_unique_local
+                        || is_link_local_v6
+                    {
                         return Ok(NetworkVerificationVerdict::BlockedPrivateSubnet(clean_dest));
                     }
                 }

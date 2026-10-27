@@ -24,11 +24,21 @@ fn test_vulnerability_arm_system_audit() {
     );
 
     assert_eq!(vulns.len(), 5);
-    assert!(vulns.iter().any(|v| v.vuln_id == "OCT-VULN-001" && v.severity == VulnerabilitySeverity::Critical));
-    assert!(vulns.iter().any(|v| v.vuln_id == "OCT-VULN-002" && v.severity == VulnerabilitySeverity::High));
-    assert!(vulns.iter().any(|v| v.vuln_id == "OCT-VULN-003" && v.severity == VulnerabilitySeverity::Medium));
-    assert!(vulns.iter().any(|v| v.vuln_id == "OCT-VULN-004" && v.severity == VulnerabilitySeverity::Critical));
-    assert!(vulns.iter().any(|v| v.vuln_id == "OCT-VULN-005" && v.severity == VulnerabilitySeverity::High));
+    assert!(vulns
+        .iter()
+        .any(|v| v.vuln_id == "OCT-VULN-001" && v.severity == VulnerabilitySeverity::Critical));
+    assert!(vulns
+        .iter()
+        .any(|v| v.vuln_id == "OCT-VULN-002" && v.severity == VulnerabilitySeverity::High));
+    assert!(vulns
+        .iter()
+        .any(|v| v.vuln_id == "OCT-VULN-003" && v.severity == VulnerabilitySeverity::Medium));
+    assert!(vulns
+        .iter()
+        .any(|v| v.vuln_id == "OCT-VULN-004" && v.severity == VulnerabilitySeverity::Critical));
+    assert!(vulns
+        .iter()
+        .any(|v| v.vuln_id == "OCT-VULN-005" && v.severity == VulnerabilitySeverity::High));
 }
 
 #[test]
@@ -89,11 +99,19 @@ fn test_trusted_test_controller_enforces_sandbox() {
     let mut controller = TrustedTestController::new();
     assert!(controller.is_active());
 
-    assert!(controller.authorize_test_action("test://invoice/sample.pdf").is_ok());
-    assert!(controller.authorize_test_action("s3://invoices/test_batch/").is_ok());
+    assert!(controller
+        .authorize_test_action("test://invoice/sample.pdf")
+        .is_ok());
+    assert!(controller
+        .authorize_test_action("s3://invoices/test_batch/")
+        .is_ok());
 
-    assert!(controller.authorize_test_action("prod://database/live_keys").is_err());
-    assert!(controller.authorize_test_action(".octopus_security_audit.log").is_err());
+    assert!(controller
+        .authorize_test_action("prod://database/live_keys")
+        .is_err());
+    assert!(controller
+        .authorize_test_action(".octopus_security_audit.log")
+        .is_err());
 }
 
 #[test]
@@ -101,14 +119,17 @@ fn test_atlas_sync_manager_and_parser() {
     let sync_mgr = AtlasSyncManager::default();
 
     // 1. Ingest valid payload from trusted source with explicit expected checksum
-    let sample_payload = b"version: 2026.02\ntactics: 16\ntechniques: 208\nmitigations: 40\ncase_studies: 73\n";
+    let sample_payload =
+        b"version: 2026.02\ntactics: 16\ntechniques: 208\nmitigations: 40\ncase_studies: 73\n";
     let sample_sha256 = "0e2d4053ba142d1f2ad1c833b5a54aa36a7e827cf7d6f1fdc87a4696c307be1e";
-    let meta = sync_mgr.verify_and_ingest(
-        "https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/atlas.yaml",
-        "2026.02",
-        sample_payload,
-        Some(sample_sha256),
-    ).unwrap();
+    let meta = sync_mgr
+        .verify_and_ingest(
+            "https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/atlas.yaml",
+            "2026.02",
+            sample_payload,
+            Some(sample_sha256),
+        )
+        .unwrap();
 
     assert_eq!(meta.dataset_version, "2026.02");
     assert_eq!(meta.total_tactics, 16);
@@ -123,16 +144,24 @@ fn test_atlas_sync_manager_and_parser() {
         sample_payload,
         None,
     );
-    assert!(unpinned_res.is_err(), "Must fail closed if payload does not match pinned golden digest when expected is None");
+    assert!(
+        unpinned_res.is_err(),
+        "Must fail closed if payload does not match pinned golden digest when expected is None"
+    );
 
     // 3. Ingest with None MUST succeed on the genuine golden STIX payload
-    let golden_meta = sync_mgr.verify_and_ingest(
-        "https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/atlas.yaml",
-        "2026.09",
-        agent_octopus::security::atlas_arm::EMBEDDED_GOLDEN_STIX.as_bytes(),
-        None,
-    ).expect("Golden STIX payload must succeed with default pinned digest");
-    assert_eq!(golden_meta.sha256_checksum, agent_octopus::security::atlas_arm::PINNED_ATLAS_GOLDEN_SHA256);
+    let golden_meta = sync_mgr
+        .verify_and_ingest(
+            "https://raw.githubusercontent.com/mitre-atlas/atlas-data/main/dist/atlas.yaml",
+            "2026.09",
+            agent_octopus::security::atlas_arm::EMBEDDED_GOLDEN_STIX.as_bytes(),
+            None,
+        )
+        .expect("Golden STIX payload must succeed with default pinned digest");
+    assert_eq!(
+        golden_meta.sha256_checksum,
+        agent_octopus::security::atlas_arm::PINNED_ATLAS_GOLDEN_SHA256
+    );
 
     // 4. Reject empty content SHA-256
     let empty_hash_res = sync_mgr.verify_and_ingest(
@@ -141,7 +170,10 @@ fn test_atlas_sync_manager_and_parser() {
         b"",
         Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
     );
-    assert!(empty_hash_res.is_err(), "Empty content SHA-256 must be explicitly rejected");
+    assert!(
+        empty_hash_res.is_err(),
+        "Empty content SHA-256 must be explicitly rejected"
+    );
 
     // 5. Untrusted publication source rejected
     let untrusted_res = sync_mgr.verify_and_ingest(
@@ -165,23 +197,27 @@ fn test_technique_mapper_and_threat_correlator() {
     let mapper = TechniqueMapper::new();
 
     // Map configuration finding to ATLAS technique
-    let mapped = mapper.map_finding(
-        "OCT-VULN-002",
-        "delegation::DelegationScopeGuard",
-        ThreatFeasibility::Demonstrated,
-        "Excessive delegation depth permits lateral capability expansion",
-    ).unwrap();
+    let mapped = mapper
+        .map_finding(
+            "OCT-VULN-002",
+            "delegation::DelegationScopeGuard",
+            ThreatFeasibility::Demonstrated,
+            "Excessive delegation depth permits lateral capability expansion",
+        )
+        .unwrap();
 
     assert_eq!(mapped.atlas_technique_id, "AML.T0016"); // Obtain Capabilities
     assert_eq!(mapped.feasibility, ThreatFeasibility::Demonstrated);
 
     // Dynamic prompt injection mapping
-    let mapped_injection = mapper.map_finding(
-        "PROMPT_INJECTION_PDF",
-        "doc_extractor",
-        ThreatFeasibility::Realized,
-        "Adversary attempted instruction override",
-    ).unwrap();
+    let mapped_injection = mapper
+        .map_finding(
+            "PROMPT_INJECTION_PDF",
+            "doc_extractor",
+            ThreatFeasibility::Realized,
+            "Adversary attempted instruction override",
+        )
+        .unwrap();
     assert_eq!(mapped_injection.atlas_technique_id, "AML.T0051");
 
     // Correlate multi-step attack chain using ATLAS relationships
@@ -203,7 +239,9 @@ fn test_coverage_matrix_prevention_vs_detection() {
     // Invariant: Escape to Host (AML.T0000) must be PreventedAtBoundary by Windows Job Object / AppContainer
     let escape_cov = coverage.get_coverage("AML.T0000").unwrap();
     assert_eq!(escape_cov.status, MitigationStatus::PreventedAtBoundary);
-    assert!(escape_cov.primary_enforcement_boundary.contains("Windows Job Object"));
+    assert!(escape_cov
+        .primary_enforcement_boundary
+        .contains("Windows Job Object"));
     assert!(!escape_cov.empirical_evidence_reference.is_empty());
 
     // Prompt injection (AML.T0051) must be PreventedAtBoundary by Schema Lexer
@@ -236,21 +274,32 @@ fn test_evidence_validator_with_cryptographic_artifacts() {
         [3u8; 32],
         &signing_key,
     );
-    let verdict_receipt = EvidenceValidator::validate_execution_receipt("AML.T0001", &receipt).unwrap();
+    let verdict_receipt =
+        EvidenceValidator::validate_execution_receipt("AML.T0001", &receipt).unwrap();
     assert!(verdict_receipt.is_empirically_verified);
-    assert_eq!(verdict_receipt.evidence_type, "Ed25519 Signed Execution Receipt");
+    assert_eq!(
+        verdict_receipt.evidence_type,
+        "Ed25519 Signed Execution Receipt"
+    );
 
     // 2. Validate Merkle inclusion proof
     let leaf1 = MerkleLeaf::new(0, "doc_extractor", "arg1", "out1");
     let leaf2 = MerkleLeaf::new(1, "ledger_writer", "arg2", "out2");
     let tree = MerkleTree::from_leaves(vec![leaf1, leaf2]);
     let proof = tree.generate_proof(0).unwrap();
-    let verdict_merkle = EvidenceValidator::validate_merkle_inclusion_proof("AML.T0043", &proof, &tree.root()).unwrap();
+    let verdict_merkle =
+        EvidenceValidator::validate_merkle_inclusion_proof("AML.T0043", &proof, &tree.root())
+            .unwrap();
     assert!(verdict_merkle.is_empirically_verified);
 
     // 3. Validate audit log hash chain
     let audit_log = SecurityAuditLog::new();
-    audit_log.record_event("ISOLATION", "supervisor", "AppContainer profile active", "ENFORCE");
+    audit_log.record_event(
+        "ISOLATION",
+        "supervisor",
+        "AppContainer profile active",
+        "ENFORCE",
+    );
     audit_log.record_event("TASK", "arm_doc", "Extracted invoice", "ALLOW");
     let verdict_audit = EvidenceValidator::validate_audit_chain("AML.T0000", &audit_log).unwrap();
     assert!(verdict_audit.is_empirically_verified);
@@ -264,7 +313,9 @@ fn test_atlas_test_generator_with_test_controller() {
     assert_eq!(suite.len(), 6);
     for tc in suite {
         // Authorize test in sandbox envelope
-        assert!(controller.authorize_test_action(&format!("test://atlas/{}", tc.technique_id)).is_ok());
+        assert!(controller
+            .authorize_test_action(&format!("test://atlas/{}", tc.technique_id))
+            .is_ok());
         assert!(tc.expected_blocked);
         assert!(!tc.target_component.is_empty());
     }
@@ -274,7 +325,9 @@ fn test_atlas_test_generator_with_test_controller() {
 fn test_dynamic_atlas_stix_ingestion_and_test_synthesis() {
     let sync_mgr = AtlasSyncManager::default();
     let cache_path = "data/atlas_stix/stix-atlas.json";
-    let (meta, kb) = sync_mgr.sync_or_load_stix(cache_path).expect("Failed to sync or load STIX bundle");
+    let (meta, kb) = sync_mgr
+        .sync_or_load_stix(cache_path)
+        .expect("Failed to sync or load STIX bundle");
 
     assert_eq!(meta.total_tactics, 16);
     assert_eq!(meta.total_techniques, 208);
@@ -286,12 +339,23 @@ fn test_dynamic_atlas_stix_ingestion_and_test_synthesis() {
     assert_eq!(dynamic_suite.len(), 208);
 
     // Verify key techniques are mapped correctly
-    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0000" && t.target_component == "cedar_arm::CedarAuthorizationGateway"));
-    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0051" && t.target_component == "doc_extractor"));
-    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0054" && t.target_component == "doc_extractor"));
-    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0016" && t.target_component == "guard_arms::capability_guard"));
-    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0025" && t.target_component == "guard_arms::network_guard"));
-    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0031" && t.target_component == "governor::OutOfBandCircuitBreaker"));
+    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0000"
+        && t.target_component == "cedar_arm::CedarAuthorizationGateway"));
+    assert!(dynamic_suite
+        .iter()
+        .any(|t| t.technique_id == "AML.T0051" && t.target_component == "doc_extractor"));
+    assert!(dynamic_suite
+        .iter()
+        .any(|t| t.technique_id == "AML.T0054" && t.target_component == "doc_extractor"));
+    assert!(dynamic_suite
+        .iter()
+        .any(|t| t.technique_id == "AML.T0016"
+            && t.target_component == "guard_arms::capability_guard"));
+    assert!(dynamic_suite.iter().any(
+        |t| t.technique_id == "AML.T0025" && t.target_component == "guard_arms::network_guard"
+    ));
+    assert!(dynamic_suite.iter().any(|t| t.technique_id == "AML.T0031"
+        && t.target_component == "governor::OutOfBandCircuitBreaker"));
 }
 
 #[test]
@@ -310,7 +374,10 @@ fn test_continuous_oss_fuzz_arm() {
     let sarif = arm.generate_cifuzz_sarif_report();
     let parsed: serde_json::Value = serde_json::from_str(&sarif).expect("SARIF must be valid JSON");
     assert_eq!(parsed["version"], "2.1.0");
-    assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "Google OSS-Fuzz Continuous Runtime Arm (Agent Octopus)");
+    assert_eq!(
+        parsed["runs"][0]["tool"]["driver"]["name"],
+        "Google OSS-Fuzz Continuous Runtime Arm (Agent Octopus)"
+    );
 }
 
 #[test]
@@ -327,9 +394,13 @@ fn test_continuous_osv_scanner_arm() {
 
     // Verify OSV SARIF export
     let sarif = arm.generate_osv_sarif_report();
-    let parsed: serde_json::Value = serde_json::from_str(&sarif).expect("OSV SARIF must be valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&sarif).expect("OSV SARIF must be valid JSON");
     assert_eq!(parsed["version"], "2.1.0");
-    assert_eq!(parsed["runs"][0]["tool"]["driver"]["name"], "Google OSV-Scanner Continuous Arm (Agent Octopus)");
+    assert_eq!(
+        parsed["runs"][0]["tool"]["driver"]["name"],
+        "Google OSV-Scanner Continuous Arm (Agent Octopus)"
+    );
 }
 
 #[test]
@@ -365,5 +436,3 @@ fn test_update_armor_anti_hijacking_and_air_gap() {
     let res_legit = AtlasSyncManager::sanitize_and_validate_payload(legit_sample);
     assert!(res_legit.is_ok());
 }
-
-

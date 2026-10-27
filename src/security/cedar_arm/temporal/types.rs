@@ -63,8 +63,8 @@ impl From<&str> for EventKind {
 pub struct TemporalEvent {
     pub id: u64,
     pub timestamp_secs: u64,
-    pub action: String,       // e.g. "Octopus::Action::\"LedgerWrite\"" or "Drupe::Action::\"Read\""
-    pub kind: EventKind,      // request, response, attempt
+    pub action: String, // e.g. "Octopus::Action::\"LedgerWrite\"" or "Drupe::Action::\"Read\""
+    pub kind: EventKind, // request, response, attempt
     pub caller_principal: String,
     pub caller_resource: String,
     pub fields: HashMap<String, serde_json::Value>, // nested keys like "input.user", "output.result", "amount"

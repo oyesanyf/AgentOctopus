@@ -52,7 +52,16 @@ impl ReasoningAuditorArm {
 
         // 2. Goal Drift Check:
         // Payload contains completely unrelated target keywords (e.g. "bitcoin", "powershell", "credentials", "etc/passwd")
-        for forbidden in &["powershell", "cmd.exe", "bash", "credentials", "password", "token", "shadow", "sam"] {
+        for forbidden in &[
+            "powershell",
+            "cmd.exe",
+            "bash",
+            "credentials",
+            "password",
+            "token",
+            "shadow",
+            "sam",
+        ] {
             if lower_payload.contains(forbidden) {
                 goal_drift = true;
                 findings.push(format!(

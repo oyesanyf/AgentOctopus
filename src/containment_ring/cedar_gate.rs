@@ -15,7 +15,10 @@ pub struct NegativeControlToken {
 
 impl NegativeControlToken {
     pub(crate) fn new(token: Arc<String>) -> Self {
-        Self { token, _private: () }
+        Self {
+            token,
+            _private: (),
+        }
     }
 
     pub fn as_str(&self) -> &str {
@@ -51,7 +54,13 @@ fn extract_domain(resource: &str) -> String {
         }
     } else {
         // Fallback for non-standard path segments: strip queries, paths, and ports
-        let no_path = trimmed.split('/').next().unwrap_or("").split('?').next().unwrap_or("");
+        let no_path = trimmed
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .split('?')
+            .next()
+            .unwrap_or("");
         if let Some(stripped_ipv6) = no_path.strip_prefix('[') {
             if let Some(end_bracket) = stripped_ipv6.find(']') {
                 return format!("[{}]", &stripped_ipv6[..end_bracket]);
@@ -121,7 +130,10 @@ impl CedarGate {
         Self::with_secret_and_token(secret, control_token)
     }
 
-    pub(crate) fn with_secret_and_token(secret: &[u8], control_token: Arc<String>) -> (Self, NegativeControlToken) {
+    pub(crate) fn with_secret_and_token(
+        secret: &[u8],
+        control_token: Arc<String>,
+    ) -> (Self, NegativeControlToken) {
         let gate = Self {
             gateway: Arc::new(RwLock::new(CedarAuthorizationGateway::new(
                 secret,
@@ -142,8 +154,15 @@ impl CedarGate {
     /// Enables or deliberately disables Cedar authorization for negative-control sensitivity tests.
     /// FAIL-CLOSED: Requires presenting the cryptographically unforgeable `NegativeControlToken`.
     /// Untrusted agents or arbitrary external callers without this token are denied immediately.
-    pub fn set_enabled(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
-        if !crate::security::constant_time_eq(token.as_str().as_bytes(), self.audit_control_token.as_bytes()) {
+    pub fn set_enabled(
+        &self,
+        enabled: bool,
+        token: &NegativeControlToken,
+    ) -> Result<(), OctopusSecurityError> {
+        if !crate::security::constant_time_eq(
+            token.as_str().as_bytes(),
+            self.audit_control_token.as_bytes(),
+        ) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Modification of Cedar gate authorization state requires authoritative NegativeControlToken".to_string(),
             ));
@@ -164,7 +183,10 @@ impl CedarGate {
         policy_fingerprint: &str,
         token: &NegativeControlToken,
     ) -> Result<String, OctopusSecurityError> {
-        if !crate::security::constant_time_eq(token.as_str().as_bytes(), self.audit_control_token.as_bytes()) {
+        if !crate::security::constant_time_eq(
+            token.as_str().as_bytes(),
+            self.audit_control_token.as_bytes(),
+        ) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Secret rotation requires authoritative NegativeControlToken".to_string(),
             ));
@@ -180,7 +202,10 @@ impl CedarGate {
         &self,
         token: &NegativeControlToken,
     ) -> Result<String, OctopusSecurityError> {
-        if !crate::security::constant_time_eq(token.as_str().as_bytes(), self.audit_control_token.as_bytes()) {
+        if !crate::security::constant_time_eq(
+            token.as_str().as_bytes(),
+            self.audit_control_token.as_bytes(),
+        ) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Secret rollback requires authoritative NegativeControlToken".to_string(),
             ));
@@ -191,11 +216,17 @@ impl CedarGate {
     }
 
     /// Dynamically updates the authorized network egress domains in Cedar Policy #3.
-    pub async fn update_egress_domains(&self, domains: &[String]) -> Result<(), OctopusSecurityError> {
+    pub async fn update_egress_domains(
+        &self,
+        domains: &[String],
+    ) -> Result<(), OctopusSecurityError> {
         let gw = self.gateway.write().await;
-        gw.engine()
-            .update_egress_domains(domains)
-            .map_err(|e| OctopusSecurityError::DeterministicLayerViolation(format!("Cedar policy update error: {:?}", e)))
+        gw.engine().update_egress_domains(domains).map_err(|e| {
+            OctopusSecurityError::DeterministicLayerViolation(format!(
+                "Cedar policy update error: {:?}",
+                e
+            ))
+        })
     }
 
     /// Evaluates whether an agent has authorization to perform an action on a specific resource.
@@ -226,8 +257,12 @@ impl CedarGate {
         // Role-based privilege mapping & zero-trust sink isolation
         match role {
             ArmRole::UntrustedDocIngest => {
-                if action == "ledger_writer" || action == "http_egress" || action == "shell_exec"
-                    || action == "write" || action == "egress" {
+                if action == "ledger_writer"
+                    || action == "http_egress"
+                    || action == "shell_exec"
+                    || action == "write"
+                    || action == "egress"
+                {
                     return Err(OctopusSecurityError::CapabilityDenied(format!(
                         "Cedar Zero-Trust Policy Veto: UntrustedDocIngest arm '{}' is forbidden from invoking sink tool '{}'",
                         agent_id, action
@@ -235,7 +270,11 @@ impl CedarGate {
                 }
             }
             ArmRole::AccountingLedgerWrite => {
-                if action == "http_egress" || action == "shell_exec" || action == "egress" || action == "extract" {
+                if action == "http_egress"
+                    || action == "shell_exec"
+                    || action == "egress"
+                    || action == "extract"
+                {
                     return Err(OctopusSecurityError::CapabilityDenied(format!(
                         "Cedar Zero-Trust Policy Veto: AccountingLedgerWrite arm '{}' is forbidden from invoking network, doc, or shell sink '{}'",
                         agent_id, action
@@ -243,7 +282,11 @@ impl CedarGate {
                 }
             }
             ArmRole::NetworkEgress => {
-                if action == "ledger_writer" || action == "shell_exec" || action == "write" || action == "extract" {
+                if action == "ledger_writer"
+                    || action == "shell_exec"
+                    || action == "write"
+                    || action == "extract"
+                {
                     return Err(OctopusSecurityError::CapabilityDenied(format!(
                         "Cedar Zero-Trust Policy Veto: NetworkEgress arm '{}' is forbidden from invoking ledger, doc, or shell sink '{}'",
                         agent_id, action
@@ -350,8 +393,16 @@ impl CedarGate {
         let gw = self.gateway.read().await;
         let verdict = gw
             .engine()
-            .evaluate(principal_str, action_name, resource, resource_type, context.clone())
-            .map_err(|e| OctopusSecurityError::CapabilityDenied(format!("Cedar evaluation error: {:?}", e)))?;
+            .evaluate(
+                principal_str,
+                action_name,
+                resource,
+                resource_type,
+                context.clone(),
+            )
+            .map_err(|e| {
+                OctopusSecurityError::CapabilityDenied(format!("Cedar evaluation error: {:?}", e))
+            })?;
 
         if !verdict.is_allowed {
             return Err(OctopusSecurityError::CapabilityDenied(format!(
@@ -361,11 +412,13 @@ impl CedarGate {
         }
 
         // Joint Dogwood Temporal Enforcement (Fail-Closed)
-        let temporal_rules = gw
-            .temporal_policies()
-            .read()
-            .map_err(|_| OctopusSecurityError::CapabilityDenied("Temporal policy lock poisoned".to_string()))?;
-        if let Some(temporal_policy) = temporal_rules.get(action_name).or_else(|| temporal_rules.get(action)) {
+        let temporal_rules = gw.temporal_policies().read().map_err(|_| {
+            OctopusSecurityError::CapabilityDenied("Temporal policy lock poisoned".to_string())
+        })?;
+        if let Some(temporal_policy) = temporal_rules
+            .get(action_name)
+            .or_else(|| temporal_rules.get(action))
+        {
             let now_sec = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -385,7 +438,10 @@ impl CedarGate {
                 context_fields: ctx_map,
             };
 
-            match gw.temporal_engine().evaluate_policy(temporal_policy, &decision_ctx) {
+            match gw
+                .temporal_engine()
+                .evaluate_policy(temporal_policy, &decision_ctx)
+            {
                 Ok(true) => {
                     // Temporal prerequisite satisfied
                 }
@@ -423,7 +479,6 @@ impl CedarGate {
         Ok(true)
     }
 }
-
 
 // ============================================================================
 // Law 2: Algebraic Intermediate Representation (AIR) Vanishing Polynomial Verifier

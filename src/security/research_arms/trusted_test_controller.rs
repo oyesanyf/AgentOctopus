@@ -30,10 +30,14 @@ impl TrustedTestController {
     }
 
     /// Verifies that an adversarial test target is within the synthetic test envelope.
-    pub fn authorize_test_action(&mut self, resource_uri: &str) -> Result<(), OctopusSecurityError> {
+    pub fn authorize_test_action(
+        &mut self,
+        resource_uri: &str,
+    ) -> Result<(), OctopusSecurityError> {
         if !self.is_active() {
             return Err(OctopusSecurityError::EnclaveViolation(
-                "Test Controller is inactive; live execution prohibited in test controller".to_string(),
+                "Test Controller is inactive; live execution prohibited in test controller"
+                    .to_string(),
             ));
         }
 

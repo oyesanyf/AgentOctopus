@@ -179,7 +179,10 @@ async fn test_continuous_governor_async_channel_and_trip() {
     }
 
     tokio::time::sleep(Duration::from_millis(30)).await;
-    assert!(!governor.is_halted(), "Governor should not trip on benign samples");
+    assert!(
+        !governor.is_halted(),
+        "Governor should not trip on benign samples"
+    );
 
     // 2. Submit high-severity attack: interactive shell + unauthorized egress
     // Each carries risk ~0.98, so P_secure drops below 0.35 quickly!
@@ -241,7 +244,11 @@ fn test_governor_breakout_perimeters_risk() {
         is_ring0_driver: false,
     };
     let risk_tech = state.compute_step_risk(&tech_ev);
-    assert!(risk_tech > 0.98, "Technical breakout risk must exceed 0.98, got {}", risk_tech);
+    assert!(
+        risk_tech > 0.98,
+        "Technical breakout risk must exceed 0.98, got {}",
+        risk_tech
+    );
 
     // 2. Operational Breakout: STS token exfiltration (weight = 3.9)
     let op_ev = KernelEventKind::OperationalBreakout {
@@ -251,7 +258,11 @@ fn test_governor_breakout_perimeters_risk() {
         is_env_scrape: false,
     };
     let risk_op = state.compute_step_risk(&op_ev);
-    assert!(risk_op > 0.97, "Operational breakout risk must exceed 0.97, got {}", risk_op);
+    assert!(
+        risk_op > 0.97,
+        "Operational breakout risk must exceed 0.97, got {}",
+        risk_op
+    );
 
     // 3. Behavioral Breakout: Evaluation harness tampering (weight = 4.1)
     let beh_ev = KernelEventKind::BehavioralBreakout {
@@ -261,7 +272,11 @@ fn test_governor_breakout_perimeters_risk() {
         is_self_grading_bypass: false,
     };
     let risk_beh = state.compute_step_risk(&beh_ev);
-    assert!(risk_beh > 0.98, "Behavioral breakout risk must exceed 0.98, got {}", risk_beh);
+    assert!(
+        risk_beh > 0.98,
+        "Behavioral breakout risk must exceed 0.98, got {}",
+        risk_beh
+    );
 
     // 4. Data Breakout: Cross-agent scratchpad leak (weight = 3.6)
     let data_ev = KernelEventKind::DataBreakout {
@@ -270,7 +285,11 @@ fn test_governor_breakout_perimeters_risk() {
         is_memory_dump: false,
     };
     let risk_data = state.compute_step_risk(&data_ev);
-    assert!(risk_data > 0.96, "Data breakout risk must exceed 0.96, got {}", risk_data);
+    assert!(
+        risk_data > 0.96,
+        "Data breakout risk must exceed 0.96, got {}",
+        risk_data
+    );
 }
 
 #[test]
@@ -314,7 +333,8 @@ fn test_governor_rl_closed_loop_mitigation_attenuation() {
     };
 
     // Evaluate with closed-loop RL mitigation
-    let (eff_eps, surv_prob, action_opt) = state.evaluate_sample_with_rl(sample, Some(&rl)).unwrap();
+    let (eff_eps, surv_prob, action_opt) =
+        state.evaluate_sample_with_rl(sample, Some(&rl)).unwrap();
 
     assert!(action_opt.is_some(), "RL action should be selected");
     // Raw risk for interactive shell is ~0.9776. With RL containment mitigation (factor >= 0.65),
@@ -360,4 +380,3 @@ fn test_governor_sisyphean_algebraic_decay_preserves_floor() {
         risk_step_500
     );
 }
-

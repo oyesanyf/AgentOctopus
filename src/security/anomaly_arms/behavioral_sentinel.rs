@@ -43,7 +43,10 @@ impl BehavioralSentinelArm {
         }
     }
 
-    pub fn with_containment_ring(mut self, ring: std::sync::Arc<crate::containment_ring::ArmContainmentRing>) -> Self {
+    pub fn with_containment_ring(
+        mut self,
+        ring: std::sync::Arc<crate::containment_ring::ArmContainmentRing>,
+    ) -> Self {
         self.arm_ring = ring;
         self
     }
@@ -89,23 +92,35 @@ impl BehavioralSentinelArm {
 
         // 1. Invocation burst velocity check: > 10 calls in last 1 second
         if history.invocation_timestamps.len() >= 10 {
-            let elapsed = now.duration_since(history.invocation_timestamps[0]).as_secs_f64();
+            let elapsed = now
+                .duration_since(history.invocation_timestamps[0])
+                .as_secs_f64();
             if elapsed < 1.0 {
                 anomaly_score += 4.0;
-                reasons.push(format!("Burst call frequency: {} calls in {:.2}s", history.invocation_timestamps.len(), elapsed));
+                reasons.push(format!(
+                    "Burst call frequency: {} calls in {:.2}s",
+                    history.invocation_timestamps.len(),
+                    elapsed
+                ));
             }
         }
 
         // 2. Token spike check: > 5,000 tokens in single call
         if tokens_consumed > 5000 {
             anomaly_score += 3.5;
-            reasons.push(format!("Excessive token spike: {} tokens consumed", tokens_consumed));
+            reasons.push(format!(
+                "Excessive token spike: {} tokens consumed",
+                tokens_consumed
+            ));
         }
 
         // 3. High Shannon entropy: > 7.5 bits/byte (indicative of encrypted/obfuscated payload)
         if payload_entropy > 7.5 {
             anomaly_score += 3.0;
-            reasons.push(format!("Abnormal payload entropy: {:.2} bits/byte", payload_entropy));
+            reasons.push(format!(
+                "Abnormal payload entropy: {:.2} bits/byte",
+                payload_entropy
+            ));
         }
 
         let is_anomalous = anomaly_score >= self.anomaly_threshold;

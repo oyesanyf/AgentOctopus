@@ -16,7 +16,10 @@ fn test_breakout_adversarial_google_network_bypass_attempts() {
     // 1. Domain Suffix Attack (the classic substring bypass)
     let domain_suffix_attack = "https://google.com.attacker.example/collect";
     let gate_res = gate.validate_target(domain_suffix_attack);
-    assert!(gate_res.is_err(), "Domain suffix attack must be blocked by HttpEgressGate");
+    assert!(
+        gate_res.is_err(),
+        "Domain suffix attack must be blocked by HttpEgressGate"
+    );
     match gate_res.unwrap_err() {
         OctopusSecurityError::EnclaveViolation(msg) => {
             assert!(msg.contains("destination host 'google.com.attacker.example' is unauthorized"));
@@ -25,25 +28,40 @@ fn test_breakout_adversarial_google_network_bypass_attempts() {
     }
 
     let ac_res = app_container.verify_access(domain_suffix_attack, true);
-    assert!(ac_res.is_err(), "Domain suffix attack must be blocked by AppContainer policy");
+    assert!(
+        ac_res.is_err(),
+        "Domain suffix attack must be blocked by AppContainer policy"
+    );
 
     // 2. Path Trick (attacker domain with google.com in the URL path)
     let path_trick_attack = "https://attacker.example/google.com/exfiltrate";
     assert!(gate.validate_target(path_trick_attack).is_err());
-    assert!(app_container.verify_access(path_trick_attack, true).is_err());
+    assert!(app_container
+        .verify_access(path_trick_attack, true)
+        .is_err());
 
     // 3. Custom Port Egress (attempting C2 over unauthorized port)
     let port_attack = "https://google.com:8443/c2_stream";
-    assert!(gate.validate_target(port_attack).is_err(), "Non-standard port must be blocked");
+    assert!(
+        gate.validate_target(port_attack).is_err(),
+        "Non-standard port must be blocked"
+    );
 
     // 4. Embedded Credentials Attack
     let creds_attack = "https://attacker:secret@google.com/leak";
-    assert!(gate.validate_target(creds_attack).is_err(), "Embedded credentials must be blocked");
+    assert!(
+        gate.validate_target(creds_attack).is_err(),
+        "Embedded credentials must be blocked"
+    );
 
     // 5. Authorized Google Endpoint (must succeed)
-    assert!(gate.validate_target("https://www.google.com/search?q=rust").is_ok());
+    assert!(gate
+        .validate_target("https://www.google.com/search?q=rust")
+        .is_ok());
     assert!(gate.validate_target("https://google.com/finance").is_ok());
-    assert!(app_container.verify_access("https://www.google.com/search?q=rust", true).is_ok());
+    assert!(app_container
+        .verify_access("https://www.google.com/search?q=rust", true)
+        .is_ok());
 }
 
 /// BREAKOUT TEST 2: Operating System Process & Subprocess Confinement.
@@ -131,8 +149,12 @@ async fn test_breakout_wall_clock_timeout_and_supervisor_termination() {
     };
 
     // Supervisor terminates sandbox
-    sandbox.terminate_sandbox(1).expect("Independent supervisor termination");
-    assert!(sandbox.supervisor_terminated.load(std::sync::atomic::Ordering::SeqCst));
+    sandbox
+        .terminate_sandbox(1)
+        .expect("Independent supervisor termination");
+    assert!(sandbox
+        .supervisor_terminated
+        .load(std::sync::atomic::Ordering::SeqCst));
 
     // Execution after supervisor termination is rejected
     let res = sandbox.execute_sandboxed(&directive, &auth_engine, &capability, "doc_extractor");
@@ -149,8 +171,10 @@ async fn test_breakout_wall_clock_timeout_and_supervisor_termination() {
 /// Verifies that replayed or stale messages with non-increasing nonces are rejected.
 #[test]
 fn test_breakout_replay_attack_prevention() {
-    let agent_sender = AgentIdentity::new("arm-ingest-01", ArmRole::UntrustedDocIngest, b"seed_sender");
-    let agent_verifier = AgentIdentity::new("arm-ingest-01", ArmRole::UntrustedDocIngest, b"seed_sender");
+    let agent_sender =
+        AgentIdentity::new("arm-ingest-01", ArmRole::UntrustedDocIngest, b"seed_sender");
+    let agent_verifier =
+        AgentIdentity::new("arm-ingest-01", ArmRole::UntrustedDocIngest, b"seed_sender");
 
     // First valid message with nonce 1
     let msg1 = agent_sender.sign_message("arm-ledger-01", 1, "Process transaction $50");
@@ -158,7 +182,10 @@ fn test_breakout_replay_attack_prevention() {
 
     // Adversary attempts to replay the exact same message with nonce 1
     let replay_res = agent_verifier.verify_incoming_message(&msg1);
-    assert!(replay_res.is_err(), "Replayed message with duplicate nonce must be rejected");
+    assert!(
+        replay_res.is_err(),
+        "Replayed message with duplicate nonce must be rejected"
+    );
     match replay_res.unwrap_err() {
         OctopusSecurityError::IdentitySpoofingDetected(msg) => {
             assert!(msg.contains("Replay attack detected"));
@@ -169,7 +196,10 @@ fn test_breakout_replay_attack_prevention() {
     // Message with decrementing nonce (stale)
     let stale_msg = agent_sender.sign_message("arm-ledger-01", 0, "Stale message");
     let stale_res = agent_verifier.verify_incoming_message(&stale_msg);
-    assert!(stale_res.is_err(), "Message with stale nonce must be rejected");
+    assert!(
+        stale_res.is_err(),
+        "Message with stale nonce must be rejected"
+    );
 }
 
 /// BREAKOUT TEST 6: Sender Role Tampering in Inter-Agent Messaging.
@@ -214,7 +244,11 @@ async fn test_breakout_defense_coordinator_auto_quarantine_in_containment_ring()
         generation: Some(1),
     };
     let (dec1, reason1) = ring.evaluate_operation(&tech_req).await;
-    assert_eq!(dec1, RingDecision::Quarantine, "Technical breakout must trigger Quarantine");
+    assert_eq!(
+        dec1,
+        RingDecision::Quarantine,
+        "Technical breakout must trigger Quarantine"
+    );
     assert!(reason1.contains("TECHNICAL_BREAKOUT"));
 
     // 2. Operational Breakout: Live API credential exfiltration
@@ -230,7 +264,11 @@ async fn test_breakout_defense_coordinator_auto_quarantine_in_containment_ring()
         generation: Some(1),
     };
     let (dec2, reason2) = ring.evaluate_operation(&oper_req).await;
-    assert_eq!(dec2, RingDecision::Quarantine, "Operational credential leak must trigger Quarantine");
+    assert_eq!(
+        dec2,
+        RingDecision::Quarantine,
+        "Operational credential leak must trigger Quarantine"
+    );
     assert!(reason2.contains("OPERATIONAL_FAILURE"));
 
     // 3. Data Breakout: Low-privilege agent attempting to pollute privileged ledger scratchpad
@@ -246,7 +284,11 @@ async fn test_breakout_defense_coordinator_auto_quarantine_in_containment_ring()
         generation: Some(1),
     };
     let (dec3, reason3) = ring.evaluate_operation(&data_req).await;
-    assert_eq!(dec3, RingDecision::Quarantine, "Data breakout must trigger Quarantine");
+    assert_eq!(
+        dec3,
+        RingDecision::Quarantine,
+        "Data breakout must trigger Quarantine"
+    );
     assert!(reason3.contains("DATA_BREAKOUT"));
 }
 
@@ -259,35 +301,47 @@ async fn test_breakout_isolation_manager_path_join_and_ads_escape_blocked() {
 
     // 1. Arbitrary host drive letter (previously bypassed c:\windows check)
     assert!(
-        mgr.validate_filesystem_access(r"D:\harfile\AgentOctopus\.env").await.is_err(),
+        mgr.validate_filesystem_access(r"D:\harfile\AgentOctopus\.env")
+            .await
+            .is_err(),
         "Host drive path D:\\ must be blocked"
     );
     assert!(
-        mgr.validate_filesystem_access(r"C:\ProgramData\secrets.json").await.is_err(),
+        mgr.validate_filesystem_access(r"C:\ProgramData\secrets.json")
+            .await
+            .is_err(),
         "C:\\ProgramData must be blocked"
     );
 
     // 2. Root-relative backslash path
     assert!(
-        mgr.validate_filesystem_access(r"\Users\Administrator\.ssh\id_rsa").await.is_err(),
+        mgr.validate_filesystem_access(r"\Users\Administrator\.ssh\id_rsa")
+            .await
+            .is_err(),
         "Leading backslash root path must be blocked"
     );
 
     // 3. UNC network share / named pipe path
     assert!(
-        mgr.validate_filesystem_access(r"\\127.0.0.1\c$\Windows\win.ini").await.is_err(),
+        mgr.validate_filesystem_access(r"\\127.0.0.1\c$\Windows\win.ini")
+            .await
+            .is_err(),
         "UNC path must be blocked"
     );
 
     // 4. NTFS Alternate Data Stream (ADS)
     assert!(
-        mgr.validate_filesystem_access("invoice.pdf:$DATA").await.is_err(),
+        mgr.validate_filesystem_access("invoice.pdf:$DATA")
+            .await
+            .is_err(),
         "NTFS Alternate Data Stream must be blocked"
     );
 
     // 5. Percent-encoded traversal
     assert!(
-        mgr.validate_filesystem_access("subdir/%2e%2e/secrets.txt").await.is_err(),
+        mgr.validate_filesystem_access("subdir/%2e%2e/secrets.txt")
+            .await
+            .is_err(),
         "Percent-encoded traversal must be blocked"
     );
 
@@ -358,4 +412,3 @@ async fn test_breakout_central_brain_regeneration_advances_epoch() {
     brain.regenerate_limb(ArmRole::UntrustedDocIngest);
     assert_eq!(brain.arm_generation(&ArmRole::UntrustedDocIngest), 3);
 }
-

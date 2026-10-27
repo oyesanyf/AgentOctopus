@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmRiskScore {
-    pub exploitability_score: f64, // 0.0 to 10.0
-    pub impact_score: f64,         // 0.0 to 10.0
-    pub composite_score: f64,      // 0.0 to 10.0
-    pub risk_tier: String,         // Critical, High, Medium, Low
+    pub exploitability_score: f64,    // 0.0 to 10.0
+    pub impact_score: f64,            // 0.0 to 10.0
+    pub composite_score: f64,         // 0.0 to 10.0
+    pub risk_tier: String,            // Critical, High, Medium, Low
     pub defense_mitigation_rate: f64, // 0.0 to 1.0 (100% neutralized)
 }
 

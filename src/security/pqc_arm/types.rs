@@ -42,7 +42,10 @@ impl PqcAlgorithm {
     }
 
     pub fn is_kem(&self) -> bool {
-        matches!(self, Self::MlKem512 | Self::MlKem768 | Self::MlKem1024 | Self::HybridX25519MlKem768)
+        matches!(
+            self,
+            Self::MlKem512 | Self::MlKem768 | Self::MlKem1024 | Self::HybridX25519MlKem768
+        )
     }
 
     pub fn is_dsa(&self) -> bool {

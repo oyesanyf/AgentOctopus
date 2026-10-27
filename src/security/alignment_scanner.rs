@@ -83,7 +83,11 @@ impl RuntimeAlignmentScanner {
             .as_secs();
         let payload = format!(
             "intent-v1|{}|{}|{:?}|{:?}|{}",
-            session_id, user_objective, allowed_tool_families, allowed_path_prefixes, pinned_at_secs
+            session_id,
+            user_objective,
+            allowed_tool_families,
+            allowed_path_prefixes,
+            pinned_at_secs
         );
         let contract_hmac_hex = hex::encode(hmac_sha256(&self.signing_key, payload.as_bytes()));
         let contract = SessionIntentContract {
@@ -141,7 +145,8 @@ impl RuntimeAlignmentScanner {
             contract.allowed_path_prefixes,
             contract.pinned_at_secs
         );
-        let expected_hmac = hex::encode(hmac_sha256(&self.signing_key, expected_payload.as_bytes()));
+        let expected_hmac =
+            hex::encode(hmac_sha256(&self.signing_key, expected_payload.as_bytes()));
         if !crate::security::constant_time_eq_hex(&contract.contract_hmac_hex, &expected_hmac) {
             return AlignmentScanVerdict {
                 aligned: false,
@@ -152,7 +157,8 @@ impl RuntimeAlignmentScanner {
                 tier2_enclave_evaluated: false,
                 detected_anomalies: vec!["INTENT_CONTRACT_TAMPERED".to_string()],
                 recommended_action: "Terminate".to_string(),
-                reason: "ALIGNMENT_VETO: Session intent contract HMAC signature mismatch".to_string(),
+                reason: "ALIGNMENT_VETO: Session intent contract HMAC signature mismatch"
+                    .to_string(),
             };
         }
 
@@ -211,10 +217,16 @@ impl RuntimeAlignmentScanner {
         if tier2_enclave_evaluated {
             let obj_digest = Sha256::digest(contract.user_objective.as_bytes());
             let step_digest = Sha256::digest(
-                format!("{}:{}:{}", step.tool_name, step.target_resource, step.arguments_preview)
-                    .as_bytes(),
+                format!(
+                    "{}:{}:{}",
+                    step.tool_name, step.target_resource, step.arguments_preview
+                )
+                .as_bytes(),
             );
-            let _enclave_attestation = hmac_sha256(&self.signing_key, &[&obj_digest[..], &step_digest[..]].concat());
+            let _enclave_attestation = hmac_sha256(
+                &self.signing_key,
+                &[&obj_digest[..], &step_digest[..]].concat(),
+            );
         }
 
         let clamped_score = score.clamp(0.0, 1.0);

@@ -50,9 +50,8 @@ impl AdaptiveRewardEngine {
                     AdaptiveDefenseAction::MicroContainment if threat_severity >= 0.4 => {
                         self.reward_true_containment
                     }
-                    AdaptiveDefenseAction::MemoryIntrospection | AdaptiveDefenseAction::TraceElevation => {
-                        self.reward_early_elevation
-                    }
+                    AdaptiveDefenseAction::MemoryIntrospection
+                    | AdaptiveDefenseAction::TraceElevation => self.reward_early_elevation,
                     AdaptiveDefenseAction::PassiveObserve => {
                         // Threat present but system stayed completely passive without containment!
                         -self.penalty_breach_leakage * 0.5

@@ -8,9 +8,9 @@ pub use event_trace::TemporalEventTrace;
 pub use parser::{DogwoodParser, ParsedTemporalClause};
 pub use types::*;
 
+use crate::security::audit::SecurityAuditLog;
 use std::path::Path;
 use std::sync::Arc;
-use crate::security::audit::SecurityAuditLog;
 
 /// Integrated Dogwood Temporal Policy Engine for Agent Octopus.
 /// Supports joint evaluation of AWS Cedar static policies and Dogwood temporal logic (MFOTL).
@@ -30,7 +30,10 @@ impl DogwoodTemporalEngine {
     }
 
     /// Creates a production temporal engine anchored to SecurityAuditLog and durable storage.
-    pub fn new_production<P: AsRef<Path>>(audit_log: Arc<SecurityAuditLog>, durable_path: P) -> Self {
+    pub fn new_production<P: AsRef<Path>>(
+        audit_log: Arc<SecurityAuditLog>,
+        durable_path: P,
+    ) -> Self {
         Self {
             trace: Arc::new(TemporalEventTrace::new_production(audit_log, durable_path)),
         }
@@ -74,13 +77,8 @@ impl DogwoodTemporalEngine {
         caller_resource: &str,
         fields: std::collections::HashMap<String, serde_json::Value>,
     ) -> u64 {
-        self.trace.record_event(
-            action,
-            kind,
-            caller_principal,
-            caller_resource,
-            fields,
-        )
+        self.trace
+            .record_event(action, kind, caller_principal, caller_resource, fields)
     }
 
     /// Records a simulated event with a specified timestamp (only allowed in simulation engine).

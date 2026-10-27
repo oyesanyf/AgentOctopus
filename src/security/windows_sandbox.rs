@@ -7,8 +7,8 @@ use std::sync::Arc;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 #[cfg(windows)]
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, SetInformationJobObject, TerminateJobObject,
-    JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
     JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOB_OBJECT_LIMIT_PROCESS_MEMORY,
@@ -178,10 +178,8 @@ impl WindowsJobObject {
         #[cfg(windows)]
         {
             let wide_name: Vec<u16> = name_str.encode_utf16().chain(std::iter::once(0)).collect();
-            
-            let handle = unsafe {
-                CreateJobObjectW(std::ptr::null(), wide_name.as_ptr())
-            };
+
+            let handle = unsafe { CreateJobObjectW(std::ptr::null(), wide_name.as_ptr()) };
 
             if handle.is_null() || handle == INVALID_HANDLE_VALUE {
                 return Err(OctopusSecurityError::IsolationViolation(format!(
@@ -273,13 +271,12 @@ impl WindowsJobObject {
     pub fn assign_process(&self, process_handle: HANDLE) -> Result<(), OctopusSecurityError> {
         if self.handle.is_null() || self.handle == INVALID_HANDLE_VALUE {
             return Err(OctopusSecurityError::IsolationViolation(
-                "FAIL-CLOSED: Cannot assign process to null or invalid Job Object handle".to_string(),
+                "FAIL-CLOSED: Cannot assign process to null or invalid Job Object handle"
+                    .to_string(),
             ));
         }
 
-        let success = unsafe {
-            AssignProcessToJobObject(self.handle, process_handle)
-        };
+        let success = unsafe { AssignProcessToJobObject(self.handle, process_handle) };
 
         if success == 0 {
             // Note: If running inside another job that disallows breakaway without nested jobs,
@@ -303,9 +300,7 @@ impl WindowsJobObject {
             self.assign_process(current_proc)?;
 
             let mut in_job: i32 = 0;
-            let check_success = unsafe {
-                IsProcessInJob(current_proc, self.handle, &mut in_job)
-            };
+            let check_success = unsafe { IsProcessInJob(current_proc, self.handle, &mut in_job) };
             if check_success == 0 || in_job == 0 {
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "FAIL-CLOSED: Current process verified NOT in Windows Job Object '{}'",
@@ -318,7 +313,10 @@ impl WindowsJobObject {
 
     /// Checks kernel containment: verifies whether a specific process is strictly bound inside this Job Object.
     #[cfg(windows)]
-    pub fn verify_process_in_job(&self, process_handle: HANDLE) -> Result<bool, OctopusSecurityError> {
+    pub fn verify_process_in_job(
+        &self,
+        process_handle: HANDLE,
+    ) -> Result<bool, OctopusSecurityError> {
         if self.handle.is_null() || self.handle == INVALID_HANDLE_VALUE {
             return Err(OctopusSecurityError::IsolationViolation(
                 "Cannot check process in null or invalid Job Object".to_string(),
@@ -448,8 +446,14 @@ pub fn create_or_open_appcontainer_profile(
     description: &str,
 ) -> Result<(String, win32::PSID), OctopusSecurityError> {
     let wide_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-    let wide_display: Vec<u16> = display_name.encode_utf16().chain(std::iter::once(0)).collect();
-    let wide_desc: Vec<u16> = description.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_display: Vec<u16> = display_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let wide_desc: Vec<u16> = description
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     let mut psid: win32::PSID = std::ptr::null_mut();
     let hr = unsafe {
@@ -508,7 +512,11 @@ fn rollback_appcontainer_profile(name: &str) {
 /// (`CommandLineToArgvW` / MSVCRT) parsing rules, preventing quote-escape and trailing-backslash
 /// argument injection.
 pub fn quote_windows_argv_arg(arg: &str) -> String {
-    if !arg.is_empty() && !arg.chars().any(|c| c == ' ' || c == '\t' || c == '\n' || c == '\x0b' || c == '"') {
+    if !arg.is_empty()
+        && !arg
+            .chars()
+            .any(|c| c == ' ' || c == '\t' || c == '\n' || c == '\x0b' || c == '"')
+    {
         return arg.to_string();
     }
     let mut quoted = String::with_capacity(arg.len() + 4);
@@ -560,7 +568,9 @@ impl WindowsAppContainerProfile {
                 &format!("Agent Octopus {}", agent_id),
                 "AppContainer profile for Agent Octopus agent",
             ) {
-                unsafe { win32::FreeSid(psid); }
+                unsafe {
+                    win32::FreeSid(psid);
+                }
                 let mut allowed_capabilities = Vec::new();
                 if allow_google_only {
                     allowed_capabilities.push("internetClient".to_string());
@@ -600,7 +610,11 @@ impl WindowsAppContainerProfile {
 
     /// Creates a mandatory AppContainer profile in production with genuine Windows kernel isolation.
     /// FAIL-CLOSED: Fails with OctopusSecurityError if userenv profile creation cannot be completed.
-    pub fn create_mandatory(agent_id: &str, is_lpac: bool, allow_google_only: bool) -> Result<Self, OctopusSecurityError> {
+    pub fn create_mandatory(
+        agent_id: &str,
+        is_lpac: bool,
+        allow_google_only: bool,
+    ) -> Result<Self, OctopusSecurityError> {
         let container_name = format!("AgentOctopus.AppContainer.{}", agent_id);
 
         #[cfg(windows)]
@@ -610,7 +624,9 @@ impl WindowsAppContainerProfile {
                 &format!("Agent Octopus {}", agent_id),
                 "AppContainer profile for Agent Octopus agent",
             )?;
-            unsafe { win32::FreeSid(psid); }
+            unsafe {
+                win32::FreeSid(psid);
+            }
 
             let mut allowed_capabilities = Vec::new();
             if allow_google_only {
@@ -637,7 +653,11 @@ impl WindowsAppContainerProfile {
     /// Validates whether a given system operation is permitted under this AppContainer profile.
     /// Strictly parses and validates destination hostnames to prevent bypasses like
     /// `https://google.com.attacker.example/collect`.
-    pub fn verify_access(&self, target_resource: &str, is_network: bool) -> Result<(), OctopusSecurityError> {
+    pub fn verify_access(
+        &self,
+        target_resource: &str,
+        is_network: bool,
+    ) -> Result<(), OctopusSecurityError> {
         if is_network {
             if !self.allow_internet_client {
                 return Err(OctopusSecurityError::IsolationViolation(format!(
@@ -751,7 +771,9 @@ impl Default for WindowsRestrictedTokenPolicy {
 impl WindowsRestrictedTokenPolicy {
     /// Creates a genuine Windows Restricted Token stripping dangerous privileges and administrative SIDs.
     #[cfg(windows)]
-    pub fn create_restricted_token(&self) -> Result<windows_sys::Win32::Foundation::HANDLE, OctopusSecurityError> {
+    pub fn create_restricted_token(
+        &self,
+    ) -> Result<windows_sys::Win32::Foundation::HANDLE, OctopusSecurityError> {
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
@@ -797,14 +819,20 @@ impl WindowsRestrictedTokenPolicy {
         // elevated supervisor hands full admin group membership to the "restricted" child.
         let mut admins_sid: win32::PSID = std::ptr::null_mut();
         let admins_w: Vec<u16> = "S-1-5-32-544\0".encode_utf16().collect();
-        let admins_ok = unsafe { win32::ConvertStringSidToSidW(admins_w.as_ptr(), &mut admins_sid) };
+        let admins_ok =
+            unsafe { win32::ConvertStringSidToSidW(admins_w.as_ptr(), &mut admins_sid) };
         if admins_ok == 0 || admins_sid.is_null() {
-            unsafe { CloseHandle(current_token); }
+            unsafe {
+                CloseHandle(current_token);
+            }
             if !restricted_sid.is_null() {
-                unsafe { win32::LocalFree(restricted_sid); }
+                unsafe {
+                    win32::LocalFree(restricted_sid);
+                }
             }
             return Err(OctopusSecurityError::IsolationViolation(
-                "FAIL-CLOSED: Unable to resolve BUILTIN\\Administrators SID for deny-only".to_string(),
+                "FAIL-CLOSED: Unable to resolve BUILTIN\\Administrators SID for deny-only"
+                    .to_string(),
             ));
         }
         let disable_admins = win32::SID_AND_ATTRIBUTES {
@@ -827,10 +855,16 @@ impl WindowsRestrictedTokenPolicy {
                 &mut restricted_token,
             )
         };
-        unsafe { CloseHandle(current_token); }
-        unsafe { win32::LocalFree(admins_sid); }
+        unsafe {
+            CloseHandle(current_token);
+        }
+        unsafe {
+            win32::LocalFree(admins_sid);
+        }
         if !restricted_sid.is_null() {
-            unsafe { win32::LocalFree(restricted_sid); }
+            unsafe {
+                win32::LocalFree(restricted_sid);
+            }
         }
 
         if rest_res == 0 || restricted_token.is_null() {
@@ -843,7 +877,9 @@ impl WindowsRestrictedTokenPolicy {
 
         let is_restricted = unsafe { win32::IsTokenRestricted(restricted_token) };
         if is_restricted == 0 {
-            unsafe { CloseHandle(restricted_token); }
+            unsafe {
+                CloseHandle(restricted_token);
+            }
             return Err(OctopusSecurityError::IsolationViolation(
                 "FAIL-CLOSED: Created token failed IsTokenRestricted verification".to_string(),
             ));
@@ -903,7 +939,9 @@ impl QuarantinedProcessInstance {
         let _ = self.job.terminate(exit_code);
         #[cfg(windows)]
         {
-            if !self.process_handle.is_null() && self.process_handle != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            if !self.process_handle.is_null()
+                && self.process_handle != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE
+            {
                 unsafe {
                     win32::TerminateProcess(self.process_handle, exit_code);
                 }
@@ -918,12 +956,18 @@ impl Drop for QuarantinedProcessInstance {
         let _ = self.terminate(1);
         #[cfg(windows)]
         {
-            if !self.process_handle.is_null() && self.process_handle != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            if !self.process_handle.is_null()
+                && self.process_handle != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE
+            {
                 unsafe {
                     windows_sys::Win32::Foundation::CloseHandle(self.process_handle);
                 }
             }
-            let wide_name: Vec<u16> = self.container_name.encode_utf16().chain(std::iter::once(0)).collect();
+            let wide_name: Vec<u16> = self
+                .container_name
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
             unsafe {
                 win32::DeleteAppContainerProfile(wide_name.as_ptr());
             }
@@ -982,20 +1026,21 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
         unsafe { win32::FreeSid(psid) };
         rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(
-            "FAIL-CLOSED: InitializeProcThreadAttributeList failed to calculate attribute size".to_string(),
+            "FAIL-CLOSED: InitializeProcThreadAttributeList failed to calculate attribute size"
+                .to_string(),
         ));
     }
 
     let mut attr_buf: Vec<u8> = vec![0u8; attr_size];
     let attr_list = attr_buf.as_mut_ptr() as *mut std::ffi::c_void;
-    let init_ok = unsafe {
-        win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size)
-    };
+    let init_ok =
+        unsafe { win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) };
     if init_ok == 0 {
         unsafe { win32::FreeSid(psid) };
         rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(
-            "FAIL-CLOSED: InitializeProcThreadAttributeList failed to initialize attribute buffer".to_string(),
+            "FAIL-CLOSED: InitializeProcThreadAttributeList failed to initialize attribute buffer"
+                .to_string(),
         ));
     }
 
@@ -1028,7 +1073,8 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
     si_ex.StartupInfo.cb = std::mem::size_of::<win32::STARTUPINFOEXW>() as u32;
     si_ex.lpAttributeList = attr_list;
 
-    let mut pi: windows_sys::Win32::System::Threading::PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    let mut pi: windows_sys::Win32::System::Threading::PROCESS_INFORMATION =
+        unsafe { std::mem::zeroed() };
 
     let cmdline = format!("\"{}\" {} {}", worker_exe.display(), arm_id, operation);
     let mut wide_cmdline: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
@@ -1143,7 +1189,6 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
     ))
 }
 
-
 // ============================================================================
 // OshoosiClaw Adapted Windows Confinement Policy & Pre-Resume Confinement Gate
 // ============================================================================
@@ -1185,7 +1230,8 @@ pub fn verify_windows_confinement_invariants(
     }
     if !policy.kill_on_job_close {
         return Err(OctopusSecurityError::IsolationViolation(
-            "WIN_CONFINEMENT_INVARIANT: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE must be enabled".to_string(),
+            "WIN_CONFINEMENT_INVARIANT: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE must be enabled"
+                .to_string(),
         ));
     }
     if policy.active_process_limit == 0 {
@@ -1222,7 +1268,8 @@ pub fn evaluate_pre_resume_confinement_gate(
 
     if !created_suspended {
         return Err(OctopusSecurityError::IsolationViolation(
-            "FAIL_CLOSED_PRE_RESUME: Process was not created with CREATE_SUSPENDED (0x00000004)".to_string(),
+            "FAIL_CLOSED_PRE_RESUME: Process was not created with CREATE_SUSPENDED (0x00000004)"
+                .to_string(),
         ));
     }
     if policy.require_appcontainer && !appcontainer_bound {
@@ -1277,7 +1324,8 @@ pub fn verify_process_appcontainer_token(
     let in_job = job.verify_process_in_job(process_handle)?;
     if !in_job {
         return Err(OctopusSecurityError::IsolationViolation(
-            "FAIL-CLOSED [AO-FIND-02]: Suspended child verified NOT in Windows Job Object".to_string(),
+            "FAIL-CLOSED [AO-FIND-02]: Suspended child verified NOT in Windows Job Object"
+                .to_string(),
         ));
     }
 
@@ -1462,16 +1510,23 @@ pub fn spawn_tier2_appcontainer_command(
     // LOCALAPPDATA / SystemRoot, CreateProcessW in AppContainer fails with ERROR_ENVVAR_NOT_FOUND (203).
     let sys_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
     let sys_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
-    let user_profile = std::env::var("USERPROFILE").unwrap_or_else(|_| scratchpad_root.to_string_lossy().to_string());
-    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| scratchpad_root.to_string_lossy().to_string());
-    let app_data = std::env::var("APPDATA").unwrap_or_else(|_| scratchpad_root.to_string_lossy().to_string());
-    let program_data = std::env::var("ProgramData").unwrap_or_else(|_| format!("{}\\ProgramData", sys_drive));
+    let user_profile = std::env::var("USERPROFILE")
+        .unwrap_or_else(|_| scratchpad_root.to_string_lossy().to_string());
+    let local_app_data = std::env::var("LOCALAPPDATA")
+        .unwrap_or_else(|_| scratchpad_root.to_string_lossy().to_string());
+    let app_data =
+        std::env::var("APPDATA").unwrap_or_else(|_| scratchpad_root.to_string_lossy().to_string());
+    let program_data =
+        std::env::var("ProgramData").unwrap_or_else(|_| format!("{}\\ProgramData", sys_drive));
     let scratch_str = scratchpad_root.to_string_lossy();
     let mut env_pairs: Vec<(String, String)> = vec![
         ("AGENT_OCTOPUS_TIER2_CONFINED".to_string(), "1".to_string()),
         ("ALLUSERSPROFILE".to_string(), program_data.clone()),
         ("APPDATA".to_string(), app_data),
-        ("ComSpec".to_string(), format!("{}\\System32\\cmd.exe", sys_root)),
+        (
+            "ComSpec".to_string(),
+            format!("{}\\System32\\cmd.exe", sys_root),
+        ),
         ("LOCALAPPDATA".to_string(), local_app_data),
         ("PATH".to_string(), format!("{}\\System32", sys_root)),
         ("PATHEXT".to_string(), ".COM;.EXE".to_string()),
@@ -1546,7 +1601,8 @@ pub fn spawn_tier2_appcontainer_command(
     }
 
     // 2. Verify actual child token AppContainer identity & Job Object membership BEFORE ResumeThread (AO-FIND-02)
-    let ac_verification = match verify_process_appcontainer_token(pi.hProcess, psid, &sid_str, job) {
+    let ac_verification = match verify_process_appcontainer_token(pi.hProcess, psid, &sid_str, job)
+    {
         Ok(v) => v,
         Err(e) => {
             unsafe {
@@ -1562,7 +1618,8 @@ pub fn spawn_tier2_appcontainer_command(
     unsafe { win32::FreeSid(psid) };
 
     // 3. Query child TokenPosture while still suspended
-    let token_posture = match crate::security::token_posture::TokenPosture::of_process(pi.hProcess) {
+    let token_posture = match crate::security::token_posture::TokenPosture::of_process(pi.hProcess)
+    {
         Ok(p) => p,
         Err(e) => {
             unsafe {

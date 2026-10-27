@@ -48,7 +48,11 @@ impl IdentityGate {
     }
 
     /// Checks if an agent is authorized for a specific role without impersonation.
-    pub async fn assert_role(&self, agent_id: &str, expected_role: &ArmRole) -> Result<(), OctopusSecurityError> {
+    pub async fn assert_role(
+        &self,
+        agent_id: &str,
+        expected_role: &ArmRole,
+    ) -> Result<(), OctopusSecurityError> {
         let map = self.enrolled_identities.read().await;
         let identity = map.get(agent_id).ok_or_else(|| {
             OctopusSecurityError::IdentitySpoofingDetected(format!(

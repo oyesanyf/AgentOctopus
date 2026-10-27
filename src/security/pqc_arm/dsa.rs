@@ -1,6 +1,8 @@
 use crate::security::pqc_arm::types::PqcAlgorithm;
 use ml_dsa::signature::{SignatureEncoding, Signer, Verifier};
-use ml_dsa::{Generate, KeyExport, Keypair, MlDsa44, MlDsa65, MlDsa87, Signature, SigningKey, VerifyingKey};
+use ml_dsa::{
+    Generate, KeyExport, Keypair, MlDsa44, MlDsa65, MlDsa87, Signature, SigningKey, VerifyingKey,
+};
 use std::time::Instant;
 
 pub struct PqcDsaEngine;
@@ -13,19 +15,31 @@ impl PqcDsaEngine {
             PqcAlgorithm::MlDsa44 => {
                 let sk = SigningKey::<MlDsa44>::generate();
                 let vk = sk.verifying_key();
-                Ok((hex::encode(sk.to_seed().as_slice()), hex::encode(vk.to_bytes().as_slice())))
+                Ok((
+                    hex::encode(sk.to_seed().as_slice()),
+                    hex::encode(vk.to_bytes().as_slice()),
+                ))
             }
             PqcAlgorithm::MlDsa65 => {
                 let sk = SigningKey::<MlDsa65>::generate();
                 let vk = sk.verifying_key();
-                Ok((hex::encode(sk.to_seed().as_slice()), hex::encode(vk.to_bytes().as_slice())))
+                Ok((
+                    hex::encode(sk.to_seed().as_slice()),
+                    hex::encode(vk.to_bytes().as_slice()),
+                ))
             }
             PqcAlgorithm::MlDsa87 => {
                 let sk = SigningKey::<MlDsa87>::generate();
                 let vk = sk.verifying_key();
-                Ok((hex::encode(sk.to_seed().as_slice()), hex::encode(vk.to_bytes().as_slice())))
+                Ok((
+                    hex::encode(sk.to_seed().as_slice()),
+                    hex::encode(vk.to_bytes().as_slice()),
+                ))
             }
-            _ => Err(format!("Algorithm {:?} is not a Digital Signature Algorithm", algorithm)),
+            _ => Err(format!(
+                "Algorithm {:?} is not a Digital Signature Algorithm",
+                algorithm
+            )),
         }
     }
 
@@ -86,51 +100,49 @@ impl PqcDsaEngine {
         let sig_bytes = hex::decode(signature_hex.trim())
             .map_err(|e| format!("Invalid signature hex: {}", e))?;
 
-        let is_valid = match algorithm {
-            PqcAlgorithm::MlDsa44 => {
-                let vk = VerifyingKey::<MlDsa44>::decode(
-                    (&vk_bytes[..])
-                        .try_into()
-                        .map_err(|_| "Invalid ML-DSA-44 public key length")?,
-                );
-                let sig = Signature::<MlDsa44>::decode(
-                    (&sig_bytes[..])
-                        .try_into()
-                        .map_err(|_| "Invalid ML-DSA-44 signature length")?,
-                )
-                .ok_or_else(|| "Failed to decode ML-DSA-44 signature".to_string())?;
-                vk.verify(message, &sig).is_ok()
-            }
-            PqcAlgorithm::MlDsa65 => {
-                let vk = VerifyingKey::<MlDsa65>::decode(
-                    (&vk_bytes[..])
-                        .try_into()
-                        .map_err(|_| "Invalid ML-DSA-65 public key length (expected 1952 bytes)")?,
-                );
-                let sig = Signature::<MlDsa65>::decode(
-                    (&sig_bytes[..])
-                        .try_into()
-                        .map_err(|_| "Invalid ML-DSA-65 signature length (expected 3309 bytes)")?,
-                )
-                .ok_or_else(|| "Failed to decode ML-DSA-65 signature".to_string())?;
-                vk.verify(message, &sig).is_ok()
-            }
-            PqcAlgorithm::MlDsa87 => {
-                let vk = VerifyingKey::<MlDsa87>::decode(
-                    (&vk_bytes[..])
-                        .try_into()
-                        .map_err(|_| "Invalid ML-DSA-87 public key length")?,
-                );
-                let sig = Signature::<MlDsa87>::decode(
-                    (&sig_bytes[..])
-                        .try_into()
-                        .map_err(|_| "Invalid ML-DSA-87 signature length")?,
-                )
-                .ok_or_else(|| "Failed to decode ML-DSA-87 signature".to_string())?;
-                vk.verify(message, &sig).is_ok()
-            }
-            _ => return Err(format!("Algorithm {:?} is not a DSA", algorithm)),
-        };
+        let is_valid =
+            match algorithm {
+                PqcAlgorithm::MlDsa44 => {
+                    let vk = VerifyingKey::<MlDsa44>::decode(
+                        (&vk_bytes[..])
+                            .try_into()
+                            .map_err(|_| "Invalid ML-DSA-44 public key length")?,
+                    );
+                    let sig = Signature::<MlDsa44>::decode(
+                        (&sig_bytes[..])
+                            .try_into()
+                            .map_err(|_| "Invalid ML-DSA-44 signature length")?,
+                    )
+                    .ok_or_else(|| "Failed to decode ML-DSA-44 signature".to_string())?;
+                    vk.verify(message, &sig).is_ok()
+                }
+                PqcAlgorithm::MlDsa65 => {
+                    let vk = VerifyingKey::<MlDsa65>::decode((&vk_bytes[..]).try_into().map_err(
+                        |_| "Invalid ML-DSA-65 public key length (expected 1952 bytes)",
+                    )?);
+                    let sig =
+                        Signature::<MlDsa65>::decode((&sig_bytes[..]).try_into().map_err(
+                            |_| "Invalid ML-DSA-65 signature length (expected 3309 bytes)",
+                        )?)
+                        .ok_or_else(|| "Failed to decode ML-DSA-65 signature".to_string())?;
+                    vk.verify(message, &sig).is_ok()
+                }
+                PqcAlgorithm::MlDsa87 => {
+                    let vk = VerifyingKey::<MlDsa87>::decode(
+                        (&vk_bytes[..])
+                            .try_into()
+                            .map_err(|_| "Invalid ML-DSA-87 public key length")?,
+                    );
+                    let sig = Signature::<MlDsa87>::decode(
+                        (&sig_bytes[..])
+                            .try_into()
+                            .map_err(|_| "Invalid ML-DSA-87 signature length")?,
+                    )
+                    .ok_or_else(|| "Failed to decode ML-DSA-87 signature".to_string())?;
+                    vk.verify(message, &sig).is_ok()
+                }
+                _ => return Err(format!("Algorithm {:?} is not a DSA", algorithm)),
+            };
 
         let elapsed = start.elapsed().as_micros();
         Ok((is_valid, elapsed))

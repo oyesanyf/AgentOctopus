@@ -51,7 +51,9 @@ impl StrictRfc7230Parser {
         let header_pos = match raw.windows(4).position(|w| w == b"\r\n\r\n") {
             Some(p) => p,
             None => {
-                interp.detected_anomalies.push("MISSING_CRLF_CRLF_BOUNDARY".to_string());
+                interp
+                    .detected_anomalies
+                    .push("MISSING_CRLF_CRLF_BOUNDARY".to_string());
                 return interp;
             }
         };
@@ -60,18 +62,24 @@ impl StrictRfc7230Parser {
 
         // Reject NUL or bare LF without CR
         if header_bytes.contains(&0) {
-            interp.detected_anomalies.push("NUL_BYTE_IN_HEADERS".to_string());
+            interp
+                .detected_anomalies
+                .push("NUL_BYTE_IN_HEADERS".to_string());
         }
         for (i, &b) in header_bytes.iter().enumerate() {
             if b == b'\n' && (i == 0 || header_bytes[i - 1] != b'\r') {
-                interp.detected_anomalies.push("BARE_LF_DETECTED".to_string());
+                interp
+                    .detected_anomalies
+                    .push("BARE_LF_DETECTED".to_string());
                 break;
             }
         }
 
         let lines: Vec<&[u8]> = header_bytes.split(|&b| b == b'\n').collect();
         if lines.is_empty() {
-            interp.detected_anomalies.push("EMPTY_REQUEST_HEADER".to_string());
+            interp
+                .detected_anomalies
+                .push("EMPTY_REQUEST_HEADER".to_string());
             return interp;
         }
 
@@ -82,13 +90,17 @@ impl StrictRfc7230Parser {
             interp.method = String::from_utf8(parts[0].to_vec()).ok();
             let uri_str = String::from_utf8_lossy(parts[1]).to_string();
             if uri_str.starts_with('*') {
-                interp.detected_anomalies.push("NOVEL_DESYNC_TRIGGER_ASTERISK_URI".to_string());
+                interp
+                    .detected_anomalies
+                    .push("NOVEL_DESYNC_TRIGGER_ASTERISK_URI".to_string());
             }
             interp.normalized_path = normalize_path_strict(&uri_str);
             interp.target_uri = Some(uri_str);
             interp.version = String::from_utf8(parts[2].to_vec()).ok();
         } else {
-            interp.detected_anomalies.push("MALFORMED_REQUEST_LINE".to_string());
+            interp
+                .detected_anomalies
+                .push("MALFORMED_REQUEST_LINE".to_string());
         }
 
         // Headers
@@ -104,32 +116,42 @@ impl StrictRfc7230Parser {
 
             // Strict: no leading whitespace (obs-fold forbidden)
             if line[0] == b' ' || line[0] == b'\t' {
-                interp.detected_anomalies.push("OBS_FOLD_DETECTED".to_string());
+                interp
+                    .detected_anomalies
+                    .push("OBS_FOLD_DETECTED".to_string());
                 continue;
             }
 
             let colon_idx = match line.iter().position(|&b| b == b':') {
                 Some(idx) => idx,
                 None => {
-                    interp.detected_anomalies.push("HEADER_MISSING_COLON".to_string());
+                    interp
+                        .detected_anomalies
+                        .push("HEADER_MISSING_COLON".to_string());
                     continue;
                 }
             };
 
             // Strict: whitespace before colon is illegal
             if colon_idx > 0 && (line[colon_idx - 1] == b' ' || line[colon_idx - 1] == b'\t') {
-                interp.detected_anomalies.push("WHITESPACE_BEFORE_COLON".to_string());
+                interp
+                    .detected_anomalies
+                    .push("WHITESPACE_BEFORE_COLON".to_string());
             }
 
             let key = String::from_utf8_lossy(&line[..colon_idx]).to_ascii_lowercase();
-            let val = String::from_utf8_lossy(&line[colon_idx + 1..]).trim().to_string();
+            let val = String::from_utf8_lossy(&line[colon_idx + 1..])
+                .trim()
+                .to_string();
 
             if key == "content-length" {
                 cl_count += 1;
                 if let Ok(cl) = val.parse::<usize>() {
                     interp.content_length = Some(cl);
                 } else {
-                    interp.detected_anomalies.push("NON_DIGIT_CONTENT_LENGTH".to_string());
+                    interp
+                        .detected_anomalies
+                        .push("NON_DIGIT_CONTENT_LENGTH".to_string());
                 }
             }
 
@@ -142,25 +164,37 @@ impl StrictRfc7230Parser {
 
             if key == "content-type" && val.to_ascii_lowercase().contains("multipart/byteranges") {
                 interp.has_ambiguous_framing = true;
-                interp.detected_anomalies.push("SHARED_PARSER_CONFUSION_MULTIPART_BYTERANGES".to_string());
+                interp
+                    .detected_anomalies
+                    .push("SHARED_PARSER_CONFUSION_MULTIPART_BYTERANGES".to_string());
             }
             if key == "content-range" {
-                interp.detected_anomalies.push("SHARED_PARSER_CONFUSION_CONTENT_RANGE".to_string());
+                interp
+                    .detected_anomalies
+                    .push("SHARED_PARSER_CONFUSION_CONTENT_RANGE".to_string());
             }
             if key == "location" {
-                interp.detected_anomalies.push("SHARED_PARSER_CONFUSION_LOCATION".to_string());
+                interp
+                    .detected_anomalies
+                    .push("SHARED_PARSER_CONFUSION_LOCATION".to_string());
             }
             if key == "set-cookie" {
-                interp.detected_anomalies.push("SHARED_PARSER_CONFUSION_SET_COOKIE".to_string());
+                interp
+                    .detected_anomalies
+                    .push("SHARED_PARSER_CONFUSION_SET_COOKIE".to_string());
             }
             if key == "early-data" {
-                interp.detected_anomalies.push("NOVEL_DESYNC_TRIGGER_EARLY_DATA".to_string());
+                interp
+                    .detected_anomalies
+                    .push("NOVEL_DESYNC_TRIGGER_EARLY_DATA".to_string());
             }
             if key == "max-forwards" {
                 if let Some(ref m) = interp.method {
                     let method_upper = m.to_ascii_uppercase();
                     if method_upper != "OPTIONS" && method_upper != "TRACE" && val.trim() == "0" {
-                        interp.detected_anomalies.push("NOVEL_DESYNC_TRIGGER_MAX_FORWARDS_ZERO".to_string());
+                        interp
+                            .detected_anomalies
+                            .push("NOVEL_DESYNC_TRIGGER_MAX_FORWARDS_ZERO".to_string());
                     }
                 }
             }
@@ -170,11 +204,15 @@ impl StrictRfc7230Parser {
 
         if cl_count > 1 {
             interp.has_ambiguous_framing = true;
-            interp.detected_anomalies.push("DUPLICATE_CONTENT_LENGTH".to_string());
+            interp
+                .detected_anomalies
+                .push("DUPLICATE_CONTENT_LENGTH".to_string());
         }
         if te_present && cl_count > 0 {
             interp.has_ambiguous_framing = true;
-            interp.detected_anomalies.push("CL_TE_SMUGGLING_CONFLICT".to_string());
+            interp
+                .detected_anomalies
+                .push("CL_TE_SMUGGLING_CONFLICT".to_string());
         }
 
         interp
@@ -189,14 +227,17 @@ impl PermissiveLegacyParser {
         let mut interp = ParsedProfileInterpretation::empty("Permissive-Legacy");
 
         // Accepts either \r\n\r\n or \n\n
-        let (header_bytes, header_len) = if let Some(p) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-            (&raw[..p], p + 4)
-        } else if let Some(p) = raw.windows(2).position(|w| w == b"\n\n") {
-            (&raw[..p], p + 2)
-        } else {
-            interp.detected_anomalies.push("NO_HEADER_TERMINATOR".to_string());
-            return interp;
-        };
+        let (header_bytes, header_len) =
+            if let Some(p) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                (&raw[..p], p + 4)
+            } else if let Some(p) = raw.windows(2).position(|w| w == b"\n\n") {
+                (&raw[..p], p + 2)
+            } else {
+                interp
+                    .detected_anomalies
+                    .push("NO_HEADER_TERMINATOR".to_string());
+                return interp;
+            };
         interp.header_end_offset = header_len;
 
         let lines: Vec<&[u8]> = header_bytes.split(|&b| b == b'\n').collect();
@@ -206,7 +247,9 @@ impl PermissiveLegacyParser {
 
         // Request line tolerant splitting
         let req_line = lines[0].strip_suffix(b"\r").unwrap_or(lines[0]);
-        let mut parts = req_line.split(|&b| b == b' ' || b == b'\t').filter(|s| !s.is_empty());
+        let mut parts = req_line
+            .split(|&b| b == b' ' || b == b'\t')
+            .filter(|s| !s.is_empty());
         if let Some(m) = parts.next() {
             interp.method = String::from_utf8(m.to_vec()).ok();
         }
@@ -236,7 +279,9 @@ impl PermissiveLegacyParser {
                 // Strips trailing whitespace from key (tolerating "Content-Length : 10")
                 let key_raw = &line[..colon_idx];
                 let key = String::from_utf8_lossy(key_raw).trim().to_ascii_lowercase();
-                let val = String::from_utf8_lossy(&line[colon_idx + 1..]).trim().to_string();
+                let val = String::from_utf8_lossy(&line[colon_idx + 1..])
+                    .trim()
+                    .to_string();
 
                 if key == "content-length" && cl_first.is_none() {
                     if let Ok(num) = val.parse::<usize>() {
@@ -254,7 +299,9 @@ impl PermissiveLegacyParser {
                 }
 
                 // Permissive/Legacy flaw: multipart/byteranges in request causes server to ignore Content-Length (CL.0 desync)
-                if key == "content-type" && val.to_ascii_lowercase().contains("multipart/byteranges") {
+                if key == "content-type"
+                    && val.to_ascii_lowercase().contains("multipart/byteranges")
+                {
                     cl_first = Some(0);
                 }
 
@@ -314,8 +361,12 @@ impl CdnProxyParser {
         for line_raw in &lines[1..] {
             let line = line_raw.strip_suffix(b"\r").unwrap_or(line_raw);
             if let Some(colon_idx) = line.iter().position(|&b| b == b':') {
-                let key = String::from_utf8_lossy(&line[..colon_idx]).trim().to_ascii_lowercase();
-                let val = String::from_utf8_lossy(&line[colon_idx + 1..]).trim().to_string();
+                let key = String::from_utf8_lossy(&line[..colon_idx])
+                    .trim()
+                    .to_ascii_lowercase();
+                let val = String::from_utf8_lossy(&line[colon_idx + 1..])
+                    .trim()
+                    .to_string();
 
                 if key == "content-length" {
                     if let Ok(c) = val.parse::<usize>() {
@@ -370,7 +421,9 @@ impl AsyncMicroserviceParser {
             let line = line_raw.strip_suffix(b"\r").unwrap_or(line_raw);
             if let Some(colon_idx) = line.iter().position(|&b| b == b':') {
                 let key = String::from_utf8_lossy(&line[..colon_idx]).to_ascii_lowercase();
-                let val = String::from_utf8_lossy(&line[colon_idx + 1..]).trim().to_string();
+                let val = String::from_utf8_lossy(&line[colon_idx + 1..])
+                    .trim()
+                    .to_string();
 
                 if key == "content-length" {
                     if let Ok(c) = val.parse::<usize>() {
@@ -382,7 +435,9 @@ impl AsyncMicroserviceParser {
                 }
 
                 // Microservices often aggregate multiple headers into comma-delimited strings
-                interp.headers.entry(key)
+                interp
+                    .headers
+                    .entry(key)
                     .and_modify(|existing| {
                         existing.push_str(", ");
                         existing.push_str(&val);

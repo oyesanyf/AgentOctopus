@@ -393,19 +393,21 @@ impl WasmTier1Executor {
         store.set_epoch_deadline(2);
         let mut uncached_linker: Linker<WasmHostState> = Linker::new(&self.engine);
         Self::bind_octopus_wasi_imports(&mut uncached_linker)?;
-        let instance = uncached_linker.instantiate(&mut store, &module).map_err(|e| {
-            if store.data().memory_limit_exceeded {
-                OctopusSecurityError::ResourceQuotaExceeded(format!(
+        let instance = uncached_linker
+            .instantiate(&mut store, &module)
+            .map_err(|e| {
+                if store.data().memory_limit_exceeded {
+                    OctopusSecurityError::ResourceQuotaExceeded(format!(
                     "TIER1_WASM_MEMORY_LIMIT_EXCEEDED [{}]: initial memory exceeds {} bytes ({})",
                     tool_name, max_linear_memory_bytes, e
                 ))
-            } else {
-                OctopusSecurityError::IsolationViolation(format!(
-                    "TIER1_WASM_INSTANTIATE_FAILED [{}]: {}",
-                    tool_name, e
-                ))
-            }
-        })?;
+                } else {
+                    OctopusSecurityError::IsolationViolation(format!(
+                        "TIER1_WASM_INSTANTIATE_FAILED [{}]: {}",
+                        tool_name, e
+                    ))
+                }
+            })?;
         let cold_start_us = cold_start_begin.elapsed().as_micros() as u64;
         let exec_begin = Instant::now();
         let run_fn = instance
@@ -736,7 +738,11 @@ impl WasmTier1Executor {
                         .min(caller.data().limits.max_linear_memory_bytes)
                         .min(16 * 1024 * 1024);
                     let mut buf = Vec::with_capacity(max_read.min(65_536));
-                    if (&mut file).take(max_read as u64).read_to_end(&mut buf).is_err() {
+                    if (&mut file)
+                        .take(max_read as u64)
+                        .read_to_end(&mut buf)
+                        .is_err()
+                    {
                         return WASI_ERR_IO;
                     }
                     let copy_len = buf.len().min(dst_cap as usize);

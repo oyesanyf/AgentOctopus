@@ -8,6 +8,4 @@ pub use attack_graph::{AgentNode, AttackEdge, AttackGraph, ChannelType};
 pub use circuit_simulator::{QuantumCircuit, QuantumGate};
 pub use experiment_metrics::{run_comparative_experiment, ExperimentComparisonReport};
 pub use quantum_walk::{Complex, QuantumWalkSimulator, WalkComparison};
-pub use qubo_optimizer::{
-    QuboModel, QuboResult, QuantumAnnealerConfig, SimulatedQuantumAnnealer,
-};
+pub use qubo_optimizer::{QuantumAnnealerConfig, QuboModel, QuboResult, SimulatedQuantumAnnealer};

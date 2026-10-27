@@ -94,7 +94,12 @@ impl AgentIdentity {
     }
 
     /// Signs an outgoing message with sender_id, sender_role, recipient_id, nonce, and payload.
-    pub fn sign_message(&self, recipient_id: &str, nonce: u64, payload: &str) -> SignedAgentMessage {
+    pub fn sign_message(
+        &self,
+        recipient_id: &str,
+        nonce: u64,
+        payload: &str,
+    ) -> SignedAgentMessage {
         let signature_payload = format!(
             "{}:{:?}:{}:{}:{}",
             self.agent_id, self.role, recipient_id, nonce, payload
@@ -113,7 +118,10 @@ impl AgentIdentity {
     }
 
     /// Verifies that an incoming message was genuinely signed by this agent identity and protects against replay attacks.
-    pub fn verify_incoming_message(&self, msg: &SignedAgentMessage) -> Result<(), OctopusSecurityError> {
+    pub fn verify_incoming_message(
+        &self,
+        msg: &SignedAgentMessage,
+    ) -> Result<(), OctopusSecurityError> {
         if msg.sender_id != self.agent_id {
             return Err(OctopusSecurityError::IdentitySpoofingDetected(format!(
                 "Message sender '{}' does not match identity '{}'",

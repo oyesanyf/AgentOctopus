@@ -32,7 +32,10 @@ impl DeterministicLayer {
     }
 
     /// Gate 1: Directive Ingestion & Pre-Execution Policy Check
-    pub fn accept_directive(&mut self, directive: &StrategicDirective) -> Result<(), OctopusSecurityError> {
+    pub fn accept_directive(
+        &mut self,
+        directive: &StrategicDirective,
+    ) -> Result<(), OctopusSecurityError> {
         self.policy.enforce_directive(directive)?;
         self.fsm.transition_to(ArmState::DirectiveAccepted)?;
         Ok(())
@@ -56,7 +59,10 @@ impl DeterministicLayer {
     }
 
     /// Gate 4: Final Schema Assertion & Spending Cap Verification
-    pub fn finalize_artifact(&mut self, artifact: &VerifiedInvoiceArtifact) -> Result<(), OctopusSecurityError> {
+    pub fn finalize_artifact(
+        &mut self,
+        artifact: &VerifiedInvoiceArtifact,
+    ) -> Result<(), OctopusSecurityError> {
         // Enforce schema typing
         self.schema.validate_fields(
             &artifact.invoice_id,

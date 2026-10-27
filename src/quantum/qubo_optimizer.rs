@@ -30,7 +30,11 @@ impl QuboModel {
     /// Evaluates the objective energy of a binary assignment:
     /// E(x) = sum_i a_i * x_i + sum_{i < j} b_{ij} * x_i * x_j
     pub fn energy(&self, x: &[bool]) -> f64 {
-        assert_eq!(x.len(), self.num_variables, "State size must match num_variables");
+        assert_eq!(
+            x.len(),
+            self.num_variables,
+            "State size must match num_variables"
+        );
         let mut total = 0.0;
 
         for (i, &xi) in x.iter().enumerate() {
@@ -302,8 +306,10 @@ impl SimulatedQuantumAnnealer {
             let progress = step as f64 / self.config.num_steps as f64;
 
             // Annealing schedules: Gamma(t) drops to 0, Temp drops to final_temp
-            let gamma = self.config.initial_gamma * (1.0 - progress) + self.config.final_gamma * progress;
-            let temp = self.config.initial_temp * (1.0 - progress) + self.config.final_temp * progress;
+            let gamma =
+                self.config.initial_gamma * (1.0 - progress) + self.config.final_gamma * progress;
+            let temp =
+                self.config.initial_temp * (1.0 - progress) + self.config.final_temp * progress;
 
             // Inter-slice quantum coupling: J_perp = -0.5 * T * ln(tanh(Gamma / (M * T)))
             let arg = (gamma / (m as f64 * temp.max(1e-4))).clamp(1e-6, 15.0);
@@ -373,7 +379,12 @@ impl SimulatedQuantumAnnealer {
     }
 
     /// Solves the QUBO model using classical Simulated Annealing (single replica, zero tunneling).
-    pub fn solve_classical_baseline(&self, model: &QuboModel, start: usize, target: usize) -> QuboResult {
+    pub fn solve_classical_baseline(
+        &self,
+        model: &QuboModel,
+        start: usize,
+        target: usize,
+    ) -> QuboResult {
         let n = model.num_variables;
         let mut rng = StdRng::seed_from_u64(self.config.seed);
 
@@ -383,7 +394,8 @@ impl SimulatedQuantumAnnealer {
 
         for step in 0..self.config.num_steps {
             let progress = step as f64 / self.config.num_steps as f64;
-            let temp = self.config.initial_temp * (1.0 - progress) + self.config.final_temp * progress;
+            let temp =
+                self.config.initial_temp * (1.0 - progress) + self.config.final_temp * progress;
 
             for bit in 0..n {
                 let mut candidate = current_state.clone();

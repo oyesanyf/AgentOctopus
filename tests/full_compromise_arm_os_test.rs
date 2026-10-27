@@ -21,7 +21,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-
 /// TEST 1: OS-Level Filesystem Boundary Enforcement under a verified de-elevated agent token.
 ///
 /// Under full RCE in an arm, the attacker executes raw `std::fs::File::open`, `reg save HKLM\SAM`,
@@ -82,7 +81,10 @@ fn test_os_filesystem_access_denied_under_full_compromise() {
         // Pre-resume verification as seen by the supervisor
         assert!(!child.posture.elevated, "child token must not be elevated");
         assert!(child.posture.integrity_rid <= agent_octopus::security::INTEGRITY_MEDIUM);
-        assert!(!child.posture.admins_enabled, "Administrators must not be enabled in child");
+        assert!(
+            !child.posture.admins_enabled,
+            "Administrators must not be enabled in child"
+        );
         assert!(
             child.posture.dangerous_privileges_present().is_empty(),
             "child must hold no dangerous privileges, found {:?}",
@@ -90,7 +92,11 @@ fn test_os_filesystem_access_denied_under_full_compromise() {
         );
 
         let exit = child.wait().expect("child exit code");
-        assert_eq!(exit, 0, "posture probe child process failed (exit code {})", exit);
+        assert_eq!(
+            exit, 0,
+            "posture probe child process failed (exit code {})",
+            exit
+        );
 
         let raw = std::fs::read_to_string(&out_path).expect("child must write probe report");
         let _ = std::fs::remove_file(&out_path);
@@ -101,19 +107,46 @@ fn test_os_filesystem_access_denied_under_full_compromise() {
         assert_eq!(report["posture"]["elevated"], false);
         assert!(report["posture"]["integrity_rid"].as_u64().unwrap() <= 0x2000);
         assert_eq!(report["posture"]["admins_enabled"], false);
-        let present: Vec<String> = serde_json::from_value(report["posture"]["present_privileges"].clone()).unwrap();
-        for p in ["SeBackupPrivilege", "SeRestorePrivilege", "SeDebugPrivilege"] {
-            assert!(!present.iter().any(|x| x == p), "{} must be absent in agent token", p);
+        let present: Vec<String> =
+            serde_json::from_value(report["posture"]["present_privileges"].clone()).unwrap();
+        for p in [
+            "SeBackupPrivilege",
+            "SeRestorePrivilege",
+            "SeDebugPrivilege",
+        ] {
+            assert!(
+                !present.iter().any(|x| x == p),
+                "{} must be absent in agent token",
+                p
+            );
         }
 
         // SAM / SYSTEM: access check must deny (error 5) — NOT a sharing-lock (32).
-        assert_eq!(report["sam_open_os_error"].as_i64(), Some(5), "SAM open must fail with ERROR_ACCESS_DENIED");
-        assert_eq!(report["system_open_os_error"].as_i64(), Some(5), "SYSTEM open must fail with ERROR_ACCESS_DENIED");
+        assert_eq!(
+            report["sam_open_os_error"].as_i64(),
+            Some(5),
+            "SAM open must fail with ERROR_ACCESS_DENIED"
+        );
+        assert_eq!(
+            report["system_open_os_error"].as_i64(),
+            Some(5),
+            "SYSTEM open must fail with ERROR_ACCESS_DENIED"
+        );
         // `reg save HKLM\SAM` (needs SeBackupPrivilege) must fail.
-        assert_eq!(report["reg_save_sam_succeeded"], false, "reg save HKLM\\SAM must fail in agent token");
-        assert_eq!(report["reg_save_file_exists"], false, "reg save must not produce a hive file");
+        assert_eq!(
+            report["reg_save_sam_succeeded"], false,
+            "reg save HKLM\\SAM must fail in agent token"
+        );
+        assert_eq!(
+            report["reg_save_file_exists"], false,
+            "reg save must not produce a hive file"
+        );
         // Raw disk read must be denied.
-        assert_eq!(report["physical_drive_open_os_error"].as_i64(), Some(5), "raw \\\\.\\PhysicalDrive0 must be access-denied");
+        assert_eq!(
+            report["physical_drive_open_os_error"].as_i64(),
+            Some(5),
+            "raw \\\\.\\PhysicalDrive0 must be access-denied"
+        );
     }
 }
 
@@ -148,7 +181,8 @@ fn posture_child_probe() {
         let posture = agent_octopus::security::current_token_posture().expect("posture");
         let os_err = |p: &str| File::open(p).err().and_then(|e| e.raw_os_error());
 
-        let hive_out = std::env::temp_dir().join(format!("octopus_sam_save_{}.hiv", std::process::id()));
+        let hive_out =
+            std::env::temp_dir().join(format!("octopus_sam_save_{}.hiv", std::process::id()));
         let _ = std::fs::remove_file(&hive_out);
         use std::os::windows::process::CommandExt;
         let reg_status = std::process::Command::new("reg.exe")
@@ -221,11 +255,14 @@ fn test_os_direct_network_socket_rejection() {
 fn test_windows_job_object_kernel_configuration() {
     let job = WindowsJobObject::create(
         "AgentOctopus.Test.KernelClamp",
-        1, // Max 1 active process (zero child processes allowed)
+        1,                // Max 1 active process (zero child processes allowed)
         64 * 1024 * 1024, // 64 MB memory ceiling enforced by NT kernel
     );
 
-    assert!(job.is_ok(), "Windows Job Object creation must succeed with kernel limits");
+    assert!(
+        job.is_ok(),
+        "Windows Job Object creation must succeed with kernel limits"
+    );
     let job = job.unwrap();
     assert_eq!(job.max_processes, 1);
     assert_eq!(job.max_memory_bytes, 64 * 1024 * 1024);
@@ -234,7 +271,10 @@ fn test_windows_job_object_kernel_configuration() {
     #[cfg(windows)]
     {
         let assign_fail = job.assign_process(std::ptr::null_mut());
-        assert!(assign_fail.is_err(), "FAIL-CLOSED: Assigning null process handle must be rejected");
+        assert!(
+            assign_fail.is_err(),
+            "FAIL-CLOSED: Assigning null process handle must be rejected"
+        );
     }
 }
 
@@ -245,12 +285,9 @@ fn test_windows_job_object_kernel_configuration() {
 /// `TerminateJobObject(hJob, exit_code)`.
 #[test]
 fn test_kernel_non_cooperative_termination() {
-    let job = WindowsJobObject::create(
-        "AgentOctopus.Test.AutotomyTermination",
-        1,
-        64 * 1024 * 1024,
-    )
-    .unwrap();
+    let job =
+        WindowsJobObject::create("AgentOctopus.Test.AutotomyTermination", 1, 64 * 1024 * 1024)
+            .unwrap();
 
     assert!(!job.is_terminated.load(Ordering::SeqCst));
 
@@ -275,16 +312,25 @@ fn test_appcontainer_sid_and_capability_isolation() {
 
     // Invariant: Ingestion arm attempting any network access is denied by AppContainer profile
     let net_access = ingest_profile.verify_access("https://www.google.com", true);
-    assert!(matches!(net_access, Err(OctopusSecurityError::IsolationViolation(_))));
+    assert!(matches!(
+        net_access,
+        Err(OctopusSecurityError::IsolationViolation(_))
+    ));
 
     // Network arm profile: Internet client permitted
     let net_profile = WindowsAppContainerProfile::new("arm-net-99", true, true);
     assert!(net_profile.allow_internet_client);
-    assert!(net_profile.verify_access("https://www.google.com", true).is_ok());
+    assert!(net_profile
+        .verify_access("https://www.google.com", true)
+        .is_ok());
 
     // Hostname bypass attack: google.com.attacker.example must be rejected
-    let bypass_attempt = net_profile.verify_access("https://google.com.attacker.example/exfil", true);
-    assert!(matches!(bypass_attempt, Err(OctopusSecurityError::IsolationViolation(_))));
+    let bypass_attempt =
+        net_profile.verify_access("https://google.com.attacker.example/exfil", true);
+    assert!(matches!(
+        bypass_attempt,
+        Err(OctopusSecurityError::IsolationViolation(_))
+    ));
 }
 
 /// TEST 6: Memory Address Separation (Worker Has No Access to Supervisor Privileged Handles)
@@ -298,25 +344,26 @@ async fn test_supervisor_handle_isolation_and_request_immutability() {
     let cedar_gate = Arc::new(CedarGate::new());
     let egress_proxy = Arc::new(EgressProxy::default());
 
-    let authorizer = Arc::new(agent_octopus::containment_ring::CedarAuthorizer::new(cedar_gate.clone()));
+    let authorizer = Arc::new(agent_octopus::containment_ring::CedarAuthorizer::new(
+        cedar_gate.clone(),
+    ));
     let executor = Arc::new(EnclaveToolExecutor::new(egress_proxy.clone()));
     let (audit_tx, mut audit_rx) = mpsc::channel(100);
 
     // Supervisor initializes RingController
-    let supervisor = RingController::new(
-        RingConfig::default(),
-        authorizer,
-        executor,
-        audit_tx,
-    )
-    .unwrap();
+    let supervisor =
+        RingController::new(RingConfig::default(), authorizer, executor, audit_tx).unwrap();
 
     let mut allowed_ops = std::collections::HashSet::new();
     allowed_ops.insert(Operation::DocumentRead);
 
     // Supervisor enrolls Arm 17 (UntrustedDocIngest)
     let trusted_handle = supervisor
-        .enroll("arm-ingest-17".to_string(), "UntrustedDocIngest".to_string(), allowed_ops)
+        .enroll(
+            "arm-ingest-17".to_string(),
+            "UntrustedDocIngest".to_string(),
+            allowed_ops,
+        )
         .await
         .unwrap();
 

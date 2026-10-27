@@ -188,8 +188,8 @@ fn test_quantum_circuit_state_vector_simulation_and_gates() {
     let probs = circuit.basis_probabilities();
     let inv2 = 0.5;
     assert!((probs[0] - inv2).abs() < 1e-6); // |00> prob ~ 0.5
-    assert!(probs[1].abs() < 1e-6);          // |01> prob ~ 0
-    assert!(probs[2].abs() < 1e-6);          // |10> prob ~ 0
+    assert!(probs[1].abs() < 1e-6); // |01> prob ~ 0
+    assert!(probs[2].abs() < 1e-6); // |10> prob ~ 0
     assert!((probs[3] - inv2).abs() < 1e-6); // |11> prob ~ 0.5
 
     // Pauli-Z expectation values
@@ -236,7 +236,8 @@ fn test_quantum_feature_encoding_and_anomaly_detection() {
     let anomalous_trace = vec![0.95, 0.90, 0.88, 0.98];
     circuit.encode_features(&anomalous_trace);
     let anomalous_state = circuit.state.clone();
-    let fidelity_anomaly = QuantumCircuit::compute_kernel_fidelity(&baseline_state, &anomalous_state);
+    let fidelity_anomaly =
+        QuantumCircuit::compute_kernel_fidelity(&baseline_state, &anomalous_state);
     assert!(
         fidelity_anomaly < 0.35,
         "Anomalous trace must yield low quantum fidelity < 0.35, got {}",
@@ -270,5 +271,7 @@ fn test_comparative_experiment_metrics_quantum_vs_classical() {
         assert!(graph.is_path_unauthorized(path));
     }
 
-    assert!(report.summary.contains("Quantum-Inspired Adversarial Defense"));
+    assert!(report
+        .summary
+        .contains("Quantum-Inspired Adversarial Defense"));
 }

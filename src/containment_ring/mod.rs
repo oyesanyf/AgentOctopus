@@ -32,14 +32,6 @@ pub use arm_ring::{
     ArmContainmentRing, ArmRingConfig, ArmRingMeshMessage, ArmRingRegistry, ArmRingStatusDto,
     ProvenanceHop,
 };
-pub use primitives::{
-    now_micros, DiracDeltaCapabilityTicket, IndependentTrustBoundaryVerifier, MeshWatchOutSignal,
-    MultiLayerGateVerdict, PinnedToolObjectBinding, ZeroCopyImmutableToolBuffer,
-};
-pub use sentinel::{
-    evaluate as evaluate_sentinel, create_supervisor_heartbeat, OctopusSentinelRing,
-    SentinelAction, SentinelAuditEntry, SentinelConfig, SentinelObservation, SupervisorHeartbeat,
-};
 pub use attestation::{PolicyAttestationRecord, RingAttestation};
 pub use audit::{RingAuditEntry, RingAuditLedger};
 pub use auditor::{ContainmentAuditor, DefenseAuditReport};
@@ -50,8 +42,8 @@ pub use cedar_gate::{
 };
 pub use egress_proxy::{
     is_restricted_rebinding_ip, pinned_curl_command, resolve_and_pin, validate_agent_egress_url,
-    validate_resolved_socket_addr, EgressProxy, EgressRequest, EgressResponse,
-    EgressSecurityLevel, PinnedEgress,
+    validate_resolved_socket_addr, EgressProxy, EgressRequest, EgressResponse, EgressSecurityLevel,
+    PinnedEgress,
 };
 pub use identity_gate::IdentityGate;
 pub use isolation_manager::{IsolationManager, SandboxConstraints};
@@ -59,14 +51,22 @@ pub use mesh_guard::{
     role_trust_tier, HomologicalAuditReport, HomologicalBoundaryAuditor, MeshGuard, TrustTier,
     VerifiedMeshMessage, MAX_RELAY_HOPS,
 };
+pub use primitives::{
+    now_micros, DiracDeltaCapabilityTicket, IndependentTrustBoundaryVerifier, MeshWatchOutSignal,
+    MultiLayerGateVerdict, PinnedToolObjectBinding, ZeroCopyImmutableToolBuffer,
+};
 pub use resource_guard::{BudgetQuota, ResourceGuard};
 pub use ring_controller::{ContainmentAuditHarness, ContainmentRing, RingOperationRequest};
+pub use sentinel::{
+    create_supervisor_heartbeat, evaluate as evaluate_sentinel, OctopusSentinelRing,
+    SentinelAction, SentinelAuditEntry, SentinelConfig, SentinelObservation, SupervisorHeartbeat,
+};
 pub use tiered_executor::{
     ExecutionTier, TieredExecutionDispatcher, TieredExecutionReceipt, TieredToolRequest,
 };
 pub use trusted_controller::{
-    AuditEvent, Authorizer, BoxFuture, CedarAuthorizer, EnclaveToolExecutor, Operation,
-    RingConfig, RingController, RingError, RingRequest, ToolExecutor, TrustedArmHandle,
+    AuditEvent, Authorizer, BoxFuture, CedarAuthorizer, EnclaveToolExecutor, Operation, RingConfig,
+    RingController, RingError, RingRequest, ToolExecutor, TrustedArmHandle,
 };
 
 use serde::{Deserialize, Serialize};

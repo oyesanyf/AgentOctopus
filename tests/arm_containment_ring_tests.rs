@@ -40,12 +40,7 @@ async fn test_fleet_initialization_of_50_distinct_arm_rings() {
 
 #[tokio::test]
 async fn test_level_1_arm_ring_tool_and_resource_bounds() {
-    let ring = ArmContainmentRing::new(
-        17,
-        ArmRole::UntrustedDocIngest,
-        1,
-        TEST_MASTER_SEED,
-    );
+    let ring = ArmContainmentRing::new(17, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED);
 
     // Allowed tool & resource
     assert!(ring
@@ -57,48 +52,96 @@ async fn test_level_1_arm_ring_tool_and_resource_bounds() {
     let bad_tool = ring
         .validate_tool_invocation("ledger_writer", "s3://invoices/inv_1.pdf", 1)
         .await;
-    assert!(matches!(bad_tool, Err(OctopusSecurityError::CapabilityDenied(_))));
+    assert!(matches!(
+        bad_tool,
+        Err(OctopusSecurityError::CapabilityDenied(_))
+    ));
 
     // Prohibited resource for Document Ingest: Sensitive ledger URI must be rejected
     let bad_resource = ring
         .validate_tool_invocation("doc_extractor", "s3://accounting/ledger.json", 1)
         .await;
-    assert!(matches!(bad_resource, Err(OctopusSecurityError::EnclaveViolation(_))));
+    assert!(matches!(
+        bad_resource,
+        Err(OctopusSecurityError::EnclaveViolation(_))
+    ));
 }
 
 #[tokio::test]
 async fn test_arm_ring_resource_boundary_canonicalization_and_adversarial_rejections() {
-    let ring = ArmContainmentRing::new(
-        17,
-        ArmRole::UntrustedDocIngest,
-        1,
-        TEST_MASTER_SEED,
-    );
+    let ring = ArmContainmentRing::new(17, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED);
 
     // 1. Path traversal attacks
-    let traversal_1 = ring.validate_tool_invocation("doc_extractor", "s3://invoices/../accounting/ledger.json", 1).await;
-    assert!(matches!(traversal_1, Err(OctopusSecurityError::EnclaveViolation(_))));
+    let traversal_1 = ring
+        .validate_tool_invocation(
+            "doc_extractor",
+            "s3://invoices/../accounting/ledger.json",
+            1,
+        )
+        .await;
+    assert!(matches!(
+        traversal_1,
+        Err(OctopusSecurityError::EnclaveViolation(_))
+    ));
 
-    let traversal_2 = ring.validate_tool_invocation("doc_extractor", "s3://invoices/../../secret.key", 1).await;
-    assert!(matches!(traversal_2, Err(OctopusSecurityError::EnclaveViolation(_))));
+    let traversal_2 = ring
+        .validate_tool_invocation("doc_extractor", "s3://invoices/../../secret.key", 1)
+        .await;
+    assert!(matches!(
+        traversal_2,
+        Err(OctopusSecurityError::EnclaveViolation(_))
+    ));
 
     // 2. Encoded separators (%2e%2e, %2f, %5c, null byte)
-    let encoded_dots = ring.validate_tool_invocation("doc_extractor", "s3://invoices/%2e%2e/accounting/ledger.json", 1).await;
-    assert!(matches!(encoded_dots, Err(OctopusSecurityError::EnclaveViolation(_))));
+    let encoded_dots = ring
+        .validate_tool_invocation(
+            "doc_extractor",
+            "s3://invoices/%2e%2e/accounting/ledger.json",
+            1,
+        )
+        .await;
+    assert!(matches!(
+        encoded_dots,
+        Err(OctopusSecurityError::EnclaveViolation(_))
+    ));
 
-    let encoded_slash = ring.validate_tool_invocation("doc_extractor", "s3://invoices%2faccounting", 1).await;
-    assert!(matches!(encoded_slash, Err(OctopusSecurityError::EnclaveViolation(_))));
+    let encoded_slash = ring
+        .validate_tool_invocation("doc_extractor", "s3://invoices%2faccounting", 1)
+        .await;
+    assert!(matches!(
+        encoded_slash,
+        Err(OctopusSecurityError::EnclaveViolation(_))
+    ));
 
-    let null_byte = ring.validate_tool_invocation("doc_extractor", "s3://invoices/\0admin", 1).await;
-    assert!(matches!(null_byte, Err(OctopusSecurityError::EnclaveViolation(_))));
+    let null_byte = ring
+        .validate_tool_invocation("doc_extractor", "s3://invoices/\0admin", 1)
+        .await;
+    assert!(matches!(
+        null_byte,
+        Err(OctopusSecurityError::EnclaveViolation(_))
+    ));
 
     // 3. Ambiguous backslash in URI
-    let backslash = ring.validate_tool_invocation("doc_extractor", "s3://invoices\\subfolder\\doc.pdf", 1).await;
-    assert!(matches!(backslash, Err(OctopusSecurityError::EnclaveViolation(_))));
+    let backslash = ring
+        .validate_tool_invocation("doc_extractor", "s3://invoices\\subfolder\\doc.pdf", 1)
+        .await;
+    assert!(matches!(
+        backslash,
+        Err(OctopusSecurityError::EnclaveViolation(_))
+    ));
 
     // 4. Substring containment bypass attempt (permitted prefix in query parameter or middle)
-    let substring_attack = ring.validate_tool_invocation("doc_extractor", "https://attacker.com/?ref=s3://invoices/", 1).await;
-    assert!(matches!(substring_attack, Err(OctopusSecurityError::EnclaveViolation(_))));
+    let substring_attack = ring
+        .validate_tool_invocation(
+            "doc_extractor",
+            "https://attacker.com/?ref=s3://invoices/",
+            1,
+        )
+        .await;
+    assert!(matches!(
+        substring_attack,
+        Err(OctopusSecurityError::EnclaveViolation(_))
+    ));
 
     // 5. AutonomousProtocolResearch arm: prefix collision tests
     let ring_107 = ArmContainmentRing::new(
@@ -109,38 +152,55 @@ async fn test_arm_ring_resource_boundary_canonicalization_and_adversarial_reject
     );
 
     // Prefix collision: http://localhost.attacker.com must NOT match http://localhost
-    let collision_1 = ring_107.validate_tool_invocation("rfc_intelligence", "http://localhost.attacker.com/evil", 1).await;
-    assert!(matches!(collision_1, Err(OctopusSecurityError::EnclaveViolation(_))));
+    let collision_1 = ring_107
+        .validate_tool_invocation("rfc_intelligence", "http://localhost.attacker.com/evil", 1)
+        .await;
+    assert!(matches!(
+        collision_1,
+        Err(OctopusSecurityError::EnclaveViolation(_))
+    ));
 
     // Prefix collision: http://127.0.0.1.nip.io must NOT match http://127.0.0.1
-    let collision_2 = ring_107.validate_tool_invocation("rfc_intelligence", "http://127.0.0.1.nip.io/evil", 1).await;
-    assert!(matches!(collision_2, Err(OctopusSecurityError::EnclaveViolation(_))));
+    let collision_2 = ring_107
+        .validate_tool_invocation("rfc_intelligence", "http://127.0.0.1.nip.io/evil", 1)
+        .await;
+    assert!(matches!(
+        collision_2,
+        Err(OctopusSecurityError::EnclaveViolation(_))
+    ));
 
     // Valid port-bound destination must succeed
-    let valid_port = ring_107.validate_tool_invocation("isolated_evaluator", "http://127.0.0.1:5005/test", 1).await;
-    assert!(valid_port.is_ok(), "Valid port-bound local loopback must be accepted: {:?}", valid_port.err());
+    let valid_port = ring_107
+        .validate_tool_invocation("isolated_evaluator", "http://127.0.0.1:5005/test", 1)
+        .await;
+    assert!(
+        valid_port.is_ok(),
+        "Valid port-bound local loopback must be accepted: {:?}",
+        valid_port.err()
+    );
 }
 
 #[tokio::test]
 async fn test_level_1_arm_ring_memory_clamp_and_step_budget() {
-    let ring = ArmContainmentRing::new(
-        22,
-        ArmRole::NetworkEgress,
-        1,
-        TEST_MASTER_SEED,
-    );
+    let ring = ArmContainmentRing::new(22, ArmRole::NetworkEgress, 1, TEST_MASTER_SEED);
 
     // Step budget check
     assert!(ring.check_step_budget(5).is_ok());
     assert!(ring.check_step_budget(10).is_ok());
     let step_overflow = ring.check_step_budget(11);
-    assert!(matches!(step_overflow, Err(OctopusSecurityError::ResourceQuotaExceeded(_))));
+    assert!(matches!(
+        step_overflow,
+        Err(OctopusSecurityError::ResourceQuotaExceeded(_))
+    ));
 
     // Memory clamp check (64 MB = 67,108,864 bytes)
     assert!(ring.check_memory_budget(32 * 1024 * 1024).is_ok());
     assert!(ring.check_memory_budget(64 * 1024 * 1024).is_ok());
     let oom_attempt = ring.check_memory_budget(65 * 1024 * 1024);
-    assert!(matches!(oom_attempt, Err(OctopusSecurityError::ResourceQuotaExceeded(_))));
+    assert!(matches!(
+        oom_attempt,
+        Err(OctopusSecurityError::ResourceQuotaExceeded(_))
+    ));
 }
 
 #[tokio::test]
@@ -172,11 +232,17 @@ async fn test_security_generation_epoch_advancement_on_autotomy() {
     // CRITICAL SECURITY INVARIANT:
     // Stale Gen 8 token MUST now be strictly rejected by the regenerated Gen 9 arm!
     let stale_verify = ring.verify_epoch_capability(&gen8_token).await;
-    assert!(matches!(stale_verify, Err(OctopusSecurityError::CapabilityDenied(_))));
+    assert!(matches!(
+        stale_verify,
+        Err(OctopusSecurityError::CapabilityDenied(_))
+    ));
 
     // Validate epoch check also rejects Gen 8
     let stale_epoch_check = ring.validate_epoch(8).await;
-    assert!(matches!(stale_epoch_check, Err(OctopusSecurityError::CapabilityDenied(_))));
+    assert!(matches!(
+        stale_epoch_check,
+        Err(OctopusSecurityError::CapabilityDenied(_))
+    ));
 
     // Fresh token issued under Gen 9 is accepted
     let gen9_token = ring
@@ -188,12 +254,7 @@ async fn test_security_generation_epoch_advancement_on_autotomy() {
 
 #[tokio::test]
 async fn test_stale_mesh_message_from_revoked_generation_is_rejected() {
-    let sender_ring = ArmContainmentRing::new(
-        10,
-        ArmRole::UntrustedDocIngest,
-        1,
-        TEST_MASTER_SEED,
-    );
+    let sender_ring = ArmContainmentRing::new(10, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED);
     let target_ring = ArmContainmentRing::new(
         15,
         ArmRole::NetworkEgress,
@@ -217,7 +278,10 @@ async fn test_stale_mesh_message_from_revoked_generation_is_rejected() {
     // CRITICAL INVARIANT: Replaying or delivering the Gen 8 message to the regenerated Gen 9 arm
     // MUST BE REJECTED!
     let replay_res = target_ring.verify_incoming_message(&msg_gen8).await;
-    assert!(matches!(replay_res, Err(OctopusSecurityError::CapabilityDenied(_))));
+    assert!(matches!(
+        replay_res,
+        Err(OctopusSecurityError::CapabilityDenied(_))
+    ));
 }
 
 #[tokio::test]
@@ -232,7 +296,10 @@ async fn test_per_arm_isolation_without_collateral_damage() {
     assert!(!ring_22.is_severed());
 
     // Non-cooperatively sever Arm 17
-    registry.sever_arm(17, "Hostile memory injection detected").await.unwrap();
+    registry
+        .sever_arm(17, "Hostile memory injection detected")
+        .await
+        .unwrap();
 
     // Invariant: Arm 17 is severed, but Arm 22 remains completely unaffected!
     assert!(ring_17.is_severed());
@@ -250,26 +317,32 @@ async fn test_per_arm_isolation_without_collateral_damage() {
 #[tokio::test]
 async fn test_inter_arm_lateral_movement_block_between_untrusted_and_ledger() {
     let ingest_ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED);
-    let ledger_ring = ArmContainmentRing::new(1, ArmRole::AccountingLedgerWrite, 1, TEST_MASTER_SEED);
+    let ledger_ring =
+        ArmContainmentRing::new(1, ArmRole::AccountingLedgerWrite, 1, TEST_MASTER_SEED);
 
     // Untrusted Ingest attempts to send a message directly to Sensitive Ledger arm
     let hostile_msg = ingest_ring
-        .sign_mesh_message(1, 1, MessageKind::Finding, "pivot-1", "override ledger balance")
+        .sign_mesh_message(
+            1,
+            1,
+            MessageKind::Finding,
+            "pivot-1",
+            "override ledger balance",
+        )
         .await
         .unwrap();
 
     let delivery_res = ledger_ring.verify_incoming_message(&hostile_msg).await;
-    assert!(matches!(delivery_res, Err(OctopusSecurityError::DelegationScopeViolation(_))));
+    assert!(matches!(
+        delivery_res,
+        Err(OctopusSecurityError::DelegationScopeViolation(_))
+    ));
 }
 
 #[tokio::test]
 async fn test_negative_control_level_1_epoch_enforcement() {
-    let (ring, token) = ArmContainmentRing::new_for_audit(
-        33,
-        ArmRole::AccountingLedgerWrite,
-        8,
-        TEST_MASTER_SEED,
-    );
+    let (ring, token) =
+        ArmContainmentRing::new_for_audit(33, ArmRole::AccountingLedgerWrite, 8, TEST_MASTER_SEED);
 
     // Sever Gen 8 and advance to Gen 9
     ring.sever_and_regenerate().await;
@@ -281,23 +354,36 @@ async fn test_negative_control_level_1_epoch_enforcement() {
     // -------------------------------------------------------------------------
     let _ = ring.set_epoch_enforcement(true, &token);
     let pos_res = ring.validate_epoch(8).await;
-    assert!(pos_res.is_err(), "Positive control: stale epoch 8 must be rejected");
+    assert!(
+        pos_res.is_err(),
+        "Positive control: stale epoch 8 must be rejected"
+    );
 
     // -------------------------------------------------------------------------
     // Phase 2: NEGATIVE CONTROL (Epoch Enforcement DELIBERATELY DISABLED)
     // -------------------------------------------------------------------------
     let _ = ring.set_epoch_enforcement(false, &token);
     let neg_res = ring.validate_epoch(8).await;
-    assert!(neg_res.is_ok(), "Negative control: when epoch defense is disabled, stale epoch succeeds");
-    println!("[NEGATIVE CONTROL: ARM RING EPOCH DISABLED] -> BREACH DETECTED: Stale Gen 8 accepted!");
+    assert!(
+        neg_res.is_ok(),
+        "Negative control: when epoch defense is disabled, stale epoch succeeds"
+    );
+    println!(
+        "[NEGATIVE CONTROL: ARM RING EPOCH DISABLED] -> BREACH DETECTED: Stale Gen 8 accepted!"
+    );
 
     // -------------------------------------------------------------------------
     // Phase 3: RESTORATION (Epoch Enforcement RE-ENABLED)
     // -------------------------------------------------------------------------
     let _ = ring.set_epoch_enforcement(true, &token);
     let restored_res = ring.validate_epoch(8).await;
-    assert!(restored_res.is_err(), "Restoration: stale epoch must be blocked again");
-    println!("[ARM RING LEVEL 1 RESTORED] Epoch enforcement re-enabled -> 100% Containment active.");
+    assert!(
+        restored_res.is_err(),
+        "Restoration: stale epoch must be blocked again"
+    );
+    println!(
+        "[ARM RING LEVEL 1 RESTORED] Epoch enforcement re-enabled -> 100% Containment active."
+    );
 }
 
 #[tokio::test]
@@ -319,9 +405,14 @@ async fn test_swarm_manager_integrates_50_individual_arm_rings() {
         max_step_budget: 3,
     }];
 
-    let (results, summary) = swarm.dispatch_swarm_batch(tasks, Duration::from_secs(5)).await;
+    let (results, summary) = swarm
+        .dispatch_swarm_batch(tasks, Duration::from_secs(5))
+        .await;
     assert_eq!(results.len(), 1);
-    assert!(results[0].is_ok(), "Swarm arm should complete under its individual ring");
+    assert!(
+        results[0].is_ok(),
+        "Swarm arm should complete under its individual ring"
+    );
     assert_eq!(summary.successful_completions, 1);
 }
 
@@ -331,11 +422,19 @@ async fn test_swarm_manager_sever_and_regenerate_arm() {
     let swarm = SwarmManager::new(10, tx);
 
     // Check Arm 5 ring
-    let arm5_ring = swarm.containment_ring().arm_registry.get_ring(5).await.unwrap();
+    let arm5_ring = swarm
+        .containment_ring()
+        .arm_registry
+        .get_ring(5)
+        .await
+        .unwrap();
     assert_eq!(arm5_ring.current_generation(), 1);
 
     // Sever Arm 5
-    swarm.sever_arm(5, "Compromise detected in Arm 5").await.unwrap();
+    swarm
+        .sever_arm(5, "Compromise detected in Arm 5")
+        .await
+        .unwrap();
     assert!(arm5_ring.is_severed());
 
     // Regenerate Arm 5
@@ -359,12 +458,16 @@ async fn test_arm_ring_mesh_message_signature_tampering_and_role_spoofing_reject
     msg.payload = "tampered_payload".to_string();
     let res_tampered = target_ring.verify_incoming_message(&msg).await;
     assert!(
-        matches!(res_tampered, Err(OctopusSecurityError::IdentitySpoofingDetected(_))),
+        matches!(
+            res_tampered,
+            Err(OctopusSecurityError::IdentitySpoofingDetected(_))
+        ),
         "Tampered mesh payload must be rejected by cryptographic HMAC verification"
     );
 
     // 2. Spoof sender_role to bypass lateral sink isolation on Ledger arm
-    let ledger_ring = ArmContainmentRing::new(1, ArmRole::AccountingLedgerWrite, 1, TEST_MASTER_SEED);
+    let ledger_ring =
+        ArmContainmentRing::new(1, ArmRole::AccountingLedgerWrite, 1, TEST_MASTER_SEED);
     let mut spoofed_msg = sender_ring
         .sign_mesh_message(1, 1, MessageKind::Finding, "corr-sig-2", "write $500")
         .await
@@ -372,7 +475,10 @@ async fn test_arm_ring_mesh_message_signature_tampering_and_role_spoofing_reject
     spoofed_msg.sender_role = ArmRole::KernelLevelSentinel;
     let res_spoofed = ledger_ring.verify_incoming_message(&spoofed_msg).await;
     assert!(
-        matches!(res_spoofed, Err(OctopusSecurityError::IdentitySpoofingDetected(_))),
+        matches!(
+            res_spoofed,
+            Err(OctopusSecurityError::IdentitySpoofingDetected(_))
+        ),
         "Spoofed sender_role must fail sender epoch key HMAC check"
     );
 }
@@ -386,9 +492,18 @@ async fn test_mesh_guard_pascal_case_and_security_arms_107_to_110_enforcement() 
 
     let guard = MeshGuard::new();
     // Verify role-based trust tier ignores self-chosen names and uses authenticated ArmRole
-    assert_eq!(role_trust_tier(&ArmRole::UntrustedDocIngest), TrustTier::Untrusted);
-    assert_eq!(role_trust_tier(&ArmRole::AnomalyDetection), TrustTier::Worker);
-    assert_eq!(role_trust_tier(&ArmRole::AccountingLedgerWrite), TrustTier::PrivilegedSink);
+    assert_eq!(
+        role_trust_tier(&ArmRole::UntrustedDocIngest),
+        TrustTier::Untrusted
+    );
+    assert_eq!(
+        role_trust_tier(&ArmRole::AnomalyDetection),
+        TrustTier::Worker
+    );
+    assert_eq!(
+        role_trust_tier(&ArmRole::AccountingLedgerWrite),
+        TrustTier::PrivilegedSink
+    );
 
     let chain_report = HomologicalBoundaryAuditor::audit_role_chain(&[
         ArmRole::UntrustedDocIngest,
@@ -402,25 +517,60 @@ async fn test_mesh_guard_pascal_case_and_security_arms_107_to_110_enforcement() 
     // Even with a route registered, MeshGuard blocks UntrustedDocIngest -> AccountingLedgerWrite
     guard.allow_route(0, 1, Some(MessageKind::Finding)).await;
     let sender_ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED);
-    let ledger_ring = ArmContainmentRing::new(1, ArmRole::AccountingLedgerWrite, 1, TEST_MASTER_SEED);
+    let ledger_ring =
+        ArmContainmentRing::new(1, ArmRole::AccountingLedgerWrite, 1, TEST_MASTER_SEED);
     let msg = sender_ring
-        .sign_mesh_message(1, 1, MessageKind::Finding, "corr-lat-1", "direct ledger write attempt")
+        .sign_mesh_message(
+            1,
+            1,
+            MessageKind::Finding,
+            "corr-lat-1",
+            "direct ledger write attempt",
+        )
         .await
         .unwrap();
     let lateral_res = ledger_ring.verify_incoming_message(&msg).await;
     assert!(
-        matches!(lateral_res, Err(OctopusSecurityError::DelegationScopeViolation(_))),
+        matches!(
+            lateral_res,
+            Err(OctopusSecurityError::DelegationScopeViolation(_))
+        ),
         "UntrustedDocIngest -> AccountingLedgerWrite must be blocked by verify_incoming_message"
     );
 
     // Verify Arms 107-111 require generation epoch in ContainmentRing::evaluate_operation
     let ring = ContainmentRing::default();
     for (arm_id, role, tool, target) in [
-        (107, ArmRole::AutonomousProtocolResearch, "protocol_research", "protocol://scan"),
-        (108, ArmRole::PostQuantumAttestation, "pqc_attestation", "pqc://attest"),
-        (109, ArmRole::EvolutionaryOptimizer, "evolutionary_optimizer", "evolution://run"),
-        (110, ArmRole::DreamRsiOptimizer, "dream_rsi_optimizer", "dream_rsi://rollout"),
-        (111, ArmRole::RecursiveHarnessOptimizer, "harness2_optimizer", "harness2://run"),
+        (
+            107,
+            ArmRole::AutonomousProtocolResearch,
+            "protocol_research",
+            "protocol://scan",
+        ),
+        (
+            108,
+            ArmRole::PostQuantumAttestation,
+            "pqc_attestation",
+            "pqc://attest",
+        ),
+        (
+            109,
+            ArmRole::EvolutionaryOptimizer,
+            "evolutionary_optimizer",
+            "evolution://run",
+        ),
+        (
+            110,
+            ArmRole::DreamRsiOptimizer,
+            "dream_rsi_optimizer",
+            "dream_rsi://rollout",
+        ),
+        (
+            111,
+            ArmRole::RecursiveHarnessOptimizer,
+            "harness2_optimizer",
+            "harness2://run",
+        ),
     ] {
         let req_missing_epoch = RingOperationRequest {
             agent_id: format!("arm-{:?}-{}", role, arm_id),
@@ -434,8 +584,12 @@ async fn test_mesh_guard_pascal_case_and_security_arms_107_to_110_enforcement() 
             generation: None,
         };
         let (dec, reason) = ring.evaluate_operation(&req_missing_epoch).await;
-        assert_eq!(dec, RingDecision::Deny, "Arm {} without epoch must be denied", arm_id);
+        assert_eq!(
+            dec,
+            RingDecision::Deny,
+            "Arm {} without epoch must be denied",
+            arm_id
+        );
         assert!(reason.contains("Missing required generation epoch"));
     }
 }
-

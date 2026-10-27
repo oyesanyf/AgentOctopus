@@ -12,11 +12,11 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 #[cfg(windows)]
-use windows_sys::Win32::System::IO::DeviceIoControl;
-#[cfg(windows)]
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, TerminateProcess, PROCESS_TERMINATE,
 };
+#[cfg(windows)]
+use windows_sys::Win32::System::IO::DeviceIoControl;
 
 // IOCTL Calculation
 const FILE_DEVICE_UNKNOWN: u32 = 0x00000022;
@@ -28,18 +28,42 @@ const fn ctl_code(device_type: u32, function: u32, method: u32, access: u32) -> 
     (device_type << 16) | (access << 14) | (function << 2) | method
 }
 
-pub const IOCTL_OSOOSI_GET_STATUS: u32 =
-    ctl_code(FILE_DEVICE_UNKNOWN, OSOOSI_IOCTL_BASE + 0, METHOD_BUFFERED, FILE_ANY_ACCESS);
-pub const IOCTL_OSOOSI_SET_MODE: u32 =
-    ctl_code(FILE_DEVICE_UNKNOWN, OSOOSI_IOCTL_BASE + 1, METHOD_BUFFERED, FILE_ANY_ACCESS);
-pub const IOCTL_OSOOSI_ADD_BLOCK_PATH: u32 =
-    ctl_code(FILE_DEVICE_UNKNOWN, OSOOSI_IOCTL_BASE + 2, METHOD_BUFFERED, FILE_ANY_ACCESS);
-pub const IOCTL_OSOOSI_ADD_BLOCK_HASH: u32 =
-    ctl_code(FILE_DEVICE_UNKNOWN, OSOOSI_IOCTL_BASE + 3, METHOD_BUFFERED, FILE_ANY_ACCESS);
-pub const IOCTL_OSOOSI_CLEAR_RULES: u32 =
-    ctl_code(FILE_DEVICE_UNKNOWN, OSOOSI_IOCTL_BASE + 4, METHOD_BUFFERED, FILE_ANY_ACCESS);
-pub const IOCTL_OSOOSI_POLL_INTERCEPTIONS: u32 =
-    ctl_code(FILE_DEVICE_UNKNOWN, OSOOSI_IOCTL_BASE + 5, METHOD_BUFFERED, FILE_ANY_ACCESS);
+pub const IOCTL_OSOOSI_GET_STATUS: u32 = ctl_code(
+    FILE_DEVICE_UNKNOWN,
+    OSOOSI_IOCTL_BASE + 0,
+    METHOD_BUFFERED,
+    FILE_ANY_ACCESS,
+);
+pub const IOCTL_OSOOSI_SET_MODE: u32 = ctl_code(
+    FILE_DEVICE_UNKNOWN,
+    OSOOSI_IOCTL_BASE + 1,
+    METHOD_BUFFERED,
+    FILE_ANY_ACCESS,
+);
+pub const IOCTL_OSOOSI_ADD_BLOCK_PATH: u32 = ctl_code(
+    FILE_DEVICE_UNKNOWN,
+    OSOOSI_IOCTL_BASE + 2,
+    METHOD_BUFFERED,
+    FILE_ANY_ACCESS,
+);
+pub const IOCTL_OSOOSI_ADD_BLOCK_HASH: u32 = ctl_code(
+    FILE_DEVICE_UNKNOWN,
+    OSOOSI_IOCTL_BASE + 3,
+    METHOD_BUFFERED,
+    FILE_ANY_ACCESS,
+);
+pub const IOCTL_OSOOSI_CLEAR_RULES: u32 = ctl_code(
+    FILE_DEVICE_UNKNOWN,
+    OSOOSI_IOCTL_BASE + 4,
+    METHOD_BUFFERED,
+    FILE_ANY_ACCESS,
+);
+pub const IOCTL_OSOOSI_POLL_INTERCEPTIONS: u32 = ctl_code(
+    FILE_DEVICE_UNKNOWN,
+    OSOOSI_IOCTL_BASE + 5,
+    METHOD_BUFFERED,
+    FILE_ANY_ACCESS,
+);
 
 pub const OSOOSI_USER_DEVICE_NAME: &str = r"\\.\OsoosiDriver";
 
@@ -243,9 +267,12 @@ impl KernelSentinelArm {
 
                 if ok != 0 {
                     self.tier2_connected.store(true, Ordering::SeqCst);
-                    self.driver_version.store(status.version as usize, Ordering::SeqCst);
-                    self.driver_blocked_count.store(status.blocked_count as usize, Ordering::SeqCst);
-                    self.driver_rule_count.store(status.rule_count as usize, Ordering::SeqCst);
+                    self.driver_version
+                        .store(status.version as usize, Ordering::SeqCst);
+                    self.driver_blocked_count
+                        .store(status.blocked_count as usize, Ordering::SeqCst);
+                    self.driver_rule_count
+                        .store(status.rule_count as usize, Ordering::SeqCst);
 
                     let mode_str = match status.mode {
                         0 => "Audit",
@@ -285,7 +312,11 @@ impl KernelSentinelArm {
     }
 
     /// Intercepts and vetoes a rogue process execution attempt.
-    pub fn veto_process_creation(&self, pid: u32, _reason: &str) -> Result<(), OctopusSecurityError> {
+    pub fn veto_process_creation(
+        &self,
+        pid: u32,
+        _reason: &str,
+    ) -> Result<(), OctopusSecurityError> {
         self.process_creation_vetos.fetch_add(1, Ordering::SeqCst);
 
         #[cfg(windows)]
@@ -420,13 +451,22 @@ impl KernelSentinelArm {
     pub fn stats(&self) -> KernelSentinelStats {
         let is_t2 = self.tier2_connected.load(Ordering::SeqCst);
         let status_label = if is_t2 {
-            "Active Ring-0 Driver Attached (Hardware ObRegisterCallbacks Pre-Op Enforcing)".to_string()
+            "Active Ring-0 Driver Attached (Hardware ObRegisterCallbacks Pre-Op Enforcing)"
+                .to_string()
         } else {
             "Standby Native Job Substrate (Tier 1 Windows NT Job Object Enforcing)".to_string()
         };
 
-        let mode = self.driver_mode.read().map(|m| m.clone()).unwrap_or_else(|_| "Active".to_string());
-        let pids = self.monitored_pids.read().map(|p| p.clone()).unwrap_or_default();
+        let mode = self
+            .driver_mode
+            .read()
+            .map(|m| m.clone())
+            .unwrap_or_else(|_| "Active".to_string());
+        let pids = self
+            .monitored_pids
+            .read()
+            .map(|p| p.clone())
+            .unwrap_or_default();
 
         KernelSentinelStats {
             tier1_active: true,

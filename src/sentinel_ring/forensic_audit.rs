@@ -179,7 +179,9 @@ impl ForensicAuditLog {
     }
 
     /// Anchors an immutable signed audit checkpoint to an independent destination.
-    pub async fn create_and_anchor_checkpoint(&self) -> Result<AuditCheckpoint, OctopusSecurityError> {
+    pub async fn create_and_anchor_checkpoint(
+        &self,
+    ) -> Result<AuditCheckpoint, OctopusSecurityError> {
         let records = self.in_memory_records.read().await;
         let mut checkpoint_seq_guard = self.checkpoint_counter.write().await;
         *checkpoint_seq_guard += 1;
@@ -200,7 +202,14 @@ impl ForensicAuditLog {
         let mut prev_cp_guard = self.last_checkpoint_hash.write().await;
         let prev_cp = prev_cp_guard.clone();
 
-        let signing_content = format!("{}:{}:{}:{}:{}", cp_seq, now, records.len(), merkle_root, prev_cp);
+        let signing_content = format!(
+            "{}:{}:{}:{}:{}",
+            cp_seq,
+            now,
+            records.len(),
+            merkle_root,
+            prev_cp
+        );
         let sig = hex::encode(compute_hmac(&self.secret_key, signing_content.as_bytes()));
 
         let checkpoint = AuditCheckpoint {
@@ -252,7 +261,10 @@ impl ForensicAuditLog {
 
             // Verify signature
             let expected_hmac = compute_hmac(&self.secret_key, computed_hash.as_bytes());
-            if !crate::security::constant_time_eq_hex(&record.hmac_signature, &hex::encode(expected_hmac)) {
+            if !crate::security::constant_time_eq_hex(
+                &record.hmac_signature,
+                &hex::encode(expected_hmac),
+            ) {
                 return false;
             }
 

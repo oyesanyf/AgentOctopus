@@ -36,7 +36,12 @@ impl SentinelGuard {
     }
 
     /// Registers a monitored arm with initial step budget and memory bounds.
-    pub fn register_arm(&mut self, arm_id: &str, max_step_budget: usize, memory_limit_bytes: usize) {
+    pub fn register_arm(
+        &mut self,
+        arm_id: &str,
+        max_step_budget: usize,
+        memory_limit_bytes: usize,
+    ) {
         self.arm_registry.insert(
             arm_id.to_string(),
             ArmHealthState {

@@ -250,11 +250,12 @@ impl ZeroCopyImmutableToolBuffer {
             )));
         }
 
-        let alloc_size = ((payload.len().max(1) + Self::PAGE_SIZE - 1) / Self::PAGE_SIZE)
-            * Self::PAGE_SIZE;
-        let layout = std::alloc::Layout::from_size_align(alloc_size, Self::PAGE_SIZE).map_err(
-            |e| OctopusSecurityError::EnclaveViolation(format!("Invalid page layout: {}", e)),
-        )?;
+        let alloc_size =
+            ((payload.len().max(1) + Self::PAGE_SIZE - 1) / Self::PAGE_SIZE) * Self::PAGE_SIZE;
+        let layout =
+            std::alloc::Layout::from_size_align(alloc_size, Self::PAGE_SIZE).map_err(|e| {
+                OctopusSecurityError::EnclaveViolation(format!("Invalid page layout: {}", e))
+            })?;
 
         let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
         if ptr.is_null() {
@@ -300,13 +301,8 @@ impl ZeroCopyImmutableToolBuffer {
 
         #[cfg(unix)]
         let locked = {
-            let res = unsafe {
-                libc::mprotect(
-                    ptr as *mut libc::c_void,
-                    alloc_size,
-                    libc::PROT_READ,
-                )
-            };
+            let res =
+                unsafe { libc::mprotect(ptr as *mut libc::c_void, alloc_size, libc::PROT_READ) };
             if res != 0 {
                 unsafe { std::alloc::dealloc(ptr, layout) };
                 return Err(OctopusSecurityError::IsolationViolation(

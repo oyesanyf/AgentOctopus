@@ -113,7 +113,10 @@ impl DogwoodParser {
                         let bind_spec = &s[open_p + 1..close_p];
                         let parts: Vec<&str> = bind_spec.split(':').collect();
                         let var_name = parts[0].trim().to_string();
-                        let var_type = parts.get(1).map(|t| t.trim().to_string()).unwrap_or_else(|| "Any".to_string());
+                        let var_type = parts
+                            .get(1)
+                            .map(|t| t.trim().to_string())
+                            .unwrap_or_else(|| "Any".to_string());
                         let body_str = s[close_p + dot_p + 1..].trim();
                         let body = Self::parse_expression(body_str)?;
                         return Ok(TemporalExpr::Exists {
@@ -162,16 +165,24 @@ impl DogwoodParser {
     pub fn parse_window(s: &str) -> Result<TemporalWindow, String> {
         let clean = s.trim().trim_end_matches(';');
         if clean.ends_with('s') {
-            let n = clean[..clean.len() - 1].parse().map_err(|e| format!("Invalid seconds window: {}", e))?;
+            let n = clean[..clean.len() - 1]
+                .parse()
+                .map_err(|e| format!("Invalid seconds window: {}", e))?;
             Ok(TemporalWindow::new(n, TimeUnit::Seconds))
         } else if clean.ends_with('m') {
-            let n = clean[..clean.len() - 1].parse().map_err(|e| format!("Invalid minutes window: {}", e))?;
+            let n = clean[..clean.len() - 1]
+                .parse()
+                .map_err(|e| format!("Invalid minutes window: {}", e))?;
             Ok(TemporalWindow::new(n, TimeUnit::Minutes))
         } else if clean.ends_with('h') {
-            let n = clean[..clean.len() - 1].parse().map_err(|e| format!("Invalid hours window: {}", e))?;
+            let n = clean[..clean.len() - 1]
+                .parse()
+                .map_err(|e| format!("Invalid hours window: {}", e))?;
             Ok(TemporalWindow::new(n, TimeUnit::Hours))
         } else if clean.ends_with('d') {
-            let n = clean[..clean.len() - 1].parse().map_err(|e| format!("Invalid days window: {}", e))?;
+            let n = clean[..clean.len() - 1]
+                .parse()
+                .map_err(|e| format!("Invalid days window: {}", e))?;
             Ok(TemporalWindow::new(n, TimeUnit::Days))
         } else {
             Err(format!("Unknown time unit in interval: {}", s))
@@ -179,8 +190,12 @@ impl DogwoodParser {
     }
 
     fn parse_predicate(s: &str) -> Result<TemporalExpr, String> {
-        let open_brace = s.find('{').ok_or_else(|| format!("Expected '{{' in predicate: {}", s))?;
-        let close_brace = s.rfind('}').ok_or_else(|| format!("Expected '}}' in predicate: {}", s))?;
+        let open_brace = s
+            .find('{')
+            .ok_or_else(|| format!("Expected '{{' in predicate: {}", s))?;
+        let close_brace = s
+            .rfind('}')
+            .ok_or_else(|| format!("Expected '}}' in predicate: {}", s))?;
         let header = s[..open_brace].trim();
         let body = &s[open_brace + 1..close_brace].trim();
 
@@ -235,12 +250,14 @@ impl DogwoodParser {
             "*" | "_" => Ok(TermPattern::Wildcard),
             "principal" => Ok(TermPattern::ScopePrincipal),
             "resource" => Ok(TermPattern::ScopeResource),
-            other if other.starts_with("context.") => Ok(TermPattern::PinnedContext(other.to_string())),
+            other if other.starts_with("context.") => {
+                Ok(TermPattern::PinnedContext(other.to_string()))
+            }
             "true" => Ok(TermPattern::Literal(serde_json::Value::Bool(true))),
             "false" => Ok(TermPattern::Literal(serde_json::Value::Bool(false))),
-            other if other.starts_with('"') && other.ends_with('"') => {
-                Ok(TermPattern::Literal(serde_json::Value::String(other[1..other.len() - 1].to_string())))
-            }
+            other if other.starts_with('"') && other.ends_with('"') => Ok(TermPattern::Literal(
+                serde_json::Value::String(other[1..other.len() - 1].to_string()),
+            )),
             other => {
                 if let Ok(n) = other.parse::<i64>() {
                     Ok(TermPattern::Literal(serde_json::json!(n)))
@@ -283,14 +300,18 @@ impl DogwoodParser {
             return Ok(TermExpr::Literal(serde_json::Value::Bool(false)));
         }
         if clean.starts_with('"') && clean.ends_with('"') {
-            return Ok(TermExpr::Literal(serde_json::Value::String(clean[1..clean.len() - 1].to_string())));
+            return Ok(TermExpr::Literal(serde_json::Value::String(
+                clean[1..clean.len() - 1].to_string(),
+            )));
         }
         Ok(TermExpr::Variable(clean.to_string()))
     }
 
     fn parse_count_agg(s: &str) -> Result<AggregateExpr, String> {
         // Form: count for (t: Timepoint). where phi
-        let where_pos = s.find("where").ok_or("Expected 'where' in count aggregate")?;
+        let where_pos = s
+            .find("where")
+            .ok_or("Expected 'where' in count aggregate")?;
         let body_str = s[where_pos + 5..].trim();
         let where_body = Box::new(Self::parse_expression(body_str)?);
         Ok(AggregateExpr::Count {
@@ -325,7 +346,10 @@ impl DogwoodParser {
                 b'(' | b'{' | b'[' => depth += 1,
                 b')' | b'}' | b']' => depth -= 1,
                 _ => {
-                    if depth == 0 && i + op_bytes.len() <= bytes.len() && &bytes[i..i + op_bytes.len()] == op_bytes {
+                    if depth == 0
+                        && i + op_bytes.len() <= bytes.len()
+                        && &bytes[i..i + op_bytes.len()] == op_bytes
+                    {
                         return Some((&s[..i], &s[i + op_bytes.len()..]));
                     }
                 }
@@ -345,7 +369,8 @@ impl DogwoodParser {
                 _ => {
                     if depth == 0 && i + kw_len <= bytes.len() && &s[i..i + kw_len] == keyword {
                         let prev_ok = i == 0 || bytes[i - 1].is_ascii_whitespace();
-                        let next_ok = i + kw_len >= bytes.len() || bytes[i + kw_len].is_ascii_whitespace();
+                        let next_ok =
+                            i + kw_len >= bytes.len() || bytes[i + kw_len].is_ascii_whitespace();
                         if prev_ok && next_ok {
                             return Some(i);
                         }
@@ -365,7 +390,10 @@ impl DogwoodParser {
                 b'(' | b'{' | b'[' => depth += 1,
                 b')' | b'}' | b']' => depth -= 1,
                 _ => {
-                    if depth == 0 && i + op_bytes.len() <= bytes.len() && &bytes[i..i + op_bytes.len()] == op_bytes {
+                    if depth == 0
+                        && i + op_bytes.len() <= bytes.len()
+                        && &bytes[i..i + op_bytes.len()] == op_bytes
+                    {
                         return Some(i);
                     }
                 }
@@ -398,7 +426,11 @@ mod tests {
         let code = r#"when temporal { !Drupe::Action::"Revoke"::request{ input.user: context.input.user } since within 24h Drupe::Action::"Grant"::request{ input.user: context.input.user } };"#;
         let clause = DogwoodParser::parse(code).expect("Should parse since");
         match clause.expr {
-            TemporalExpr::Since { left: _, window, right: _ } => {
+            TemporalExpr::Since {
+                left: _,
+                window,
+                right: _,
+            } => {
                 assert_eq!(window.amount, 24);
                 assert_eq!(window.unit, TimeUnit::Hours);
             }

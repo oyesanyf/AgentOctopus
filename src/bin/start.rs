@@ -34,7 +34,9 @@ mod win_console {
                     let mut mode = 0u32;
                     if GetConsoleMode(handle, &mut mode) != 0 {
                         // Strip QuickEdit mode so selecting text cannot freeze the daemon
-                        let hardened = (mode & !(ENABLE_QUICK_EDIT_MODE | ENABLE_INSERT_MODE | ENABLE_MOUSE_INPUT)) | ENABLE_EXTENDED_FLAGS;
+                        let hardened = (mode
+                            & !(ENABLE_QUICK_EDIT_MODE | ENABLE_INSERT_MODE | ENABLE_MOUSE_INPUT))
+                            | ENABLE_EXTENDED_FLAGS;
                         let _ = SetConsoleMode(handle, hardened);
                         let _ = FlushConsoleInputBuffer(handle);
                     }
@@ -51,19 +53,22 @@ mod win_console {
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args: Vec<String> = std::env::args().collect();
     let console_requested = args.iter().any(|a| a == "--console" || a == "-c")
-        || std::env::var("OCTOPUS_CONSOLE").map(|v| v == "1" || v == "true").unwrap_or(false);
+        || std::env::var("OCTOPUS_CONSOLE")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
 
     // Finding 7 (FAIL-CLOSED): never run arms under an elevated / Administrator token.
     // Elevated launch -> relaunch under a verified de-elevated token and exit; still elevated -> refuse.
-    let token_posture = match agent_octopus::security::relaunch_deelevated_or_fail(!console_requested) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{}", e);
-            let _ = std::fs::create_dir_all("logs");
-            let _ = std::fs::write("logs/startup_refused.txt", e.to_string());
-            std::process::exit(5);
-        }
-    };
+    let token_posture =
+        match agent_octopus::security::relaunch_deelevated_or_fail(!console_requested) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("{}", e);
+                let _ = std::fs::create_dir_all("logs");
+                let _ = std::fs::write("logs/startup_refused.txt", e.to_string());
+                std::process::exit(5);
+            }
+        };
 
     #[cfg(target_os = "windows")]
     {
@@ -71,9 +76,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     if console_requested {
-        println!("================================================================================");
+        println!(
+            "================================================================================"
+        );
         println!("    🐙 AGENT OCTOPUS: AUTONOMOUS SWARM BREAKOUT DEFENSE & POLICY ENGINE");
-        println!("================================================================================");
+        println!(
+            "================================================================================"
+        );
         println!("  [+] Mode: Production Security Defense & Interactive Test Runner");
         println!(
             "  [+] Token Posture: elevated={} integrity={} admins_enabled={} dangerous_privs={:?}",
@@ -84,10 +93,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
         println!("  [+] Architecture: 8 Isolated Specialized Arms + Central Brain");
         println!("  [+] Cedar Policy Arm: AWS Cedar v4.13 Deterministic Engine Online");
-        println!("  [+] Egress Boundary: Strict Google Egress Filter (Only google.com / www.google.com)");
+        println!(
+            "  [+] Egress Boundary: Strict Google Egress Filter (Only google.com / www.google.com)"
+        );
         println!("  [+] Windows Confinement: Job Objects + AppContainer Monikers + Wasmtime Fuel");
         println!("  [+] Audit Trail: Append-Only SHA-256 Hash Chain Initialized");
-        println!("--------------------------------------------------------------------------------");
+        println!(
+            "--------------------------------------------------------------------------------"
+        );
     }
 
     // Proactively check for updated PyRIT AI Red-Teaming, external scanners, and test suites in background
@@ -134,7 +147,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("  [+] Web Dashboard URL: {}", dashboard_url);
         println!("  [+] Launching your web browser...");
         println!("  [+] Press Ctrl+C in this terminal to shut down the server.");
-        println!("================================================================================\n");
+        println!(
+            "================================================================================\n"
+        );
     }
 
     // Spawn browser launch in background after short delay without spawning any cmd.exe shell window
@@ -150,14 +165,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .ok()
                 .and_then(|s| s.trim().parse::<u16>().ok())
                 .unwrap_or(fallback_port);
-            let url_for_browser = format!("http://127.0.0.1:{}/?bootstrap={}", active_port, bootstrap_nonce);
+            let url_for_browser = format!(
+                "http://127.0.0.1:{}/?bootstrap={}",
+                active_port, bootstrap_nonce
+            );
             #[cfg(target_os = "windows")]
             {
                 // Never execute "cmd /c start" as that opens an unwanted console window.
                 // Invoke explorer directly with CREATE_NO_WINDOW flag (recorded in hidden-process ledger).
                 let mut explorer = std::process::Command::new("explorer");
                 explorer.arg(&url_for_browser);
-                let _ = agent_octopus::security::spawn_hidden(&mut explorer, "startup: open dashboard in default browser");
+                let _ = agent_octopus::security::spawn_hidden(
+                    &mut explorer,
+                    "startup: open dashboard in default browser",
+                );
             }
             #[cfg(not(target_os = "windows"))]
             {
@@ -185,10 +206,16 @@ fn check_startup_dependencies_and_toolchains(verbose: bool) {
 
     // 1. PyRIT Version & Upstream PyPI Update Check
     let mut pyrit_cmd = std::process::Command::new("python");
-    pyrit_cmd.args(["-c", "import pyrit; print(getattr(pyrit, '__version__', '1.1.0'))"]);
+    pyrit_cmd.args([
+        "-c",
+        "import pyrit; print(getattr(pyrit, '__version__', '1.1.0'))",
+    ]);
     #[cfg(target_os = "windows")]
     pyrit_cmd.creation_flags(win_console::CREATE_NO_WINDOW);
-    let pyrit_check = agent_octopus::security::output_hidden(&mut pyrit_cmd, "startup: PyRIT installed version probe");
+    let pyrit_check = agent_octopus::security::output_hidden(
+        &mut pyrit_cmd,
+        "startup: PyRIT installed version probe",
+    );
 
     match pyrit_check {
         Ok(out) if out.status.success() => {
@@ -198,7 +225,10 @@ fn check_startup_dependencies_and_toolchains(verbose: bool) {
             pypi_cmd.args(["-c", "import urllib.request, json; print(json.loads(urllib.request.urlopen(urllib.request.Request('https://pypi.org/pypi/pyrit/json', headers={'User-Agent': 'AgentOctopus'}), timeout=1.5).read())['info']['version'])"]);
             #[cfg(target_os = "windows")]
             pypi_cmd.creation_flags(win_console::CREATE_NO_WINDOW);
-            let pypi_check = agent_octopus::security::output_hidden(&mut pypi_cmd, "startup: PyRIT upstream PyPI version probe");
+            let pypi_check = agent_octopus::security::output_hidden(
+                &mut pypi_cmd,
+                "startup: PyRIT upstream PyPI version probe",
+            );
 
             match pypi_check {
                 Ok(p_out) if p_out.status.success() => {
@@ -237,27 +267,44 @@ fn check_startup_dependencies_and_toolchains(verbose: bool) {
         let p = std::path::Path::new(path_str);
         if p.exists() {
             if verbose {
-                let sz_mb = std::fs::metadata(p).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
-                println!("  [+] {}: {} ({:.1} MB, operational)", name, path_str, sz_mb);
+                let sz_mb = std::fs::metadata(p)
+                    .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+                    .unwrap_or(0.0);
+                println!(
+                    "  [+] {}: {} ({:.1} MB, operational)",
+                    name, path_str, sz_mb
+                );
             }
         } else if verbose {
-            println!("  [!] {}: {} (Standby / native emulation mode)", name, path_str);
+            println!(
+                "  [!] {}: {} (Standby / native emulation mode)",
+                name, path_str
+            );
         }
     }
 
     // 3. Test Suites & Perimeters Synchronization
     let suite_paths = [
-        ("Unified Adversarial Matrix", "tests/strix_llm_adversarial_tester.py"),
+        (
+            "Unified Adversarial Matrix",
+            "tests/strix_llm_adversarial_tester.py",
+        ),
         ("Cedar Policy Defense Tests", "tests/cedar_policy_tests.rs"),
         ("RT-ASP Shielding Tests", "tests/rasp_tests.rs"),
         ("Breakout Defense Tests", "tests/breakout_defense_tests.rs"),
-        ("RL Continuous Defense Tests", "tests/continuous_security_rl_tests.rs"),
+        (
+            "RL Continuous Defense Tests",
+            "tests/continuous_security_rl_tests.rs",
+        ),
     ];
 
     if verbose {
         for (label, s_path) in suite_paths {
             if std::path::Path::new(s_path).exists() {
-                println!("  [+] Test Suite: {} ({}) verified & synchronized", label, s_path);
+                println!(
+                    "  [+] Test Suite: {} ({}) verified & synchronized",
+                    label, s_path
+                );
             }
         }
         println!("  [+] ✓ All 19 Red-Teaming Frameworks & 13 Perimeters bound to unified policy engine.\n");

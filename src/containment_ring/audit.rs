@@ -32,7 +32,8 @@ impl Default for RingAuditLedger {
 
 impl RingAuditLedger {
     pub fn new() -> Self {
-        let genesis_hash = hex::encode(Sha256::digest(b"OCTOPUS_CONTAINMENT_RING_AUDIT_GENESIS_V1"));
+        let genesis_hash =
+            hex::encode(Sha256::digest(b"OCTOPUS_CONTAINMENT_RING_AUDIT_GENESIS_V1"));
         Self {
             entries: Arc::new(Mutex::new(Vec::new())),
             latest_root: Arc::new(Mutex::new(genesis_hash)),
@@ -83,7 +84,8 @@ impl RingAuditLedger {
 
     pub async fn verify_integrity(&self) -> bool {
         let entries = self.entries.lock().await;
-        let mut current_hash = hex::encode(Sha256::digest(b"OCTOPUS_CONTAINMENT_RING_AUDIT_GENESIS_V1"));
+        let mut current_hash =
+            hex::encode(Sha256::digest(b"OCTOPUS_CONTAINMENT_RING_AUDIT_GENESIS_V1"));
 
         for entry in entries.iter() {
             if entry.parent_hash != current_hash {

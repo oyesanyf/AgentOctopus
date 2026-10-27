@@ -69,7 +69,10 @@ impl WatchdogSupervisor {
                 }
 
                 // 2. Check for anomalous high entropy indicating encrypted payload exfiltration or packed shellcode
-                if self.detector.is_entropy_anomalous(packet.raw_target.as_bytes()) {
+                if self
+                    .detector
+                    .is_entropy_anomalous(packet.raw_target.as_bytes())
+                {
                     eprintln!(
                         "[CRITICAL SUPERVISORY ALERT] High-entropy payload anomaly ({:.2} bits/byte) detected from arm {:?} (id: {:?})! Tripping autotomy circuit breaker.",
                         packet.entropy_bits, packet.arm_role, packet.arm_id

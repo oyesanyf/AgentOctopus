@@ -65,37 +65,50 @@ fn test_kernel_sentinel_cedar_policy_evaluation() {
     let engine = CedarPolicyEngine::new().expect("Failed to initialize CedarPolicyEngine");
 
     // 1. Authorized action: kernel_sentinel_arm performing kernel_enforce on KernelSubstrate
-    let verdict = engine.evaluate(
-        "kernel_sentinel_arm",
-        "kernel_enforce",
-        "hardware_clamps",
-        "KernelSubstrate",
-        json!({
-            "enforcement_tier": "Ring0",
-            "target_pid": 1234
-        }),
-    ).expect("Cedar evaluation failed");
+    let verdict = engine
+        .evaluate(
+            "kernel_sentinel_arm",
+            "kernel_enforce",
+            "hardware_clamps",
+            "KernelSubstrate",
+            json!({
+                "enforcement_tier": "Ring0",
+                "target_pid": 1234
+            }),
+        )
+        .expect("Cedar evaluation failed");
 
-    assert!(verdict.is_allowed, "kernel_sentinel_arm must be permitted to kernel_enforce");
     assert!(
-        verdict.determining_policies.iter().any(|p| p.contains("policy5") || p.contains("6")),
+        verdict.is_allowed,
+        "kernel_sentinel_arm must be permitted to kernel_enforce"
+    );
+    assert!(
+        verdict
+            .determining_policies
+            .iter()
+            .any(|p| p.contains("policy5") || p.contains("6")),
         "Determining policies should include kernel sentinel policy: {:?}",
         verdict.determining_policies
     );
 
     // 2. Hostile/Unauthorized agent attempting kernel_enforce must be DENIED (default-deny)
-    let hostile_verdict = engine.evaluate(
-        "untrusted_doc_arm",
-        "kernel_enforce",
-        "hardware_clamps",
-        "KernelSubstrate",
-        json!({
-            "enforcement_tier": "Ring0",
-            "target_pid": 1234
-        }),
-    ).expect("Cedar evaluation failed");
+    let hostile_verdict = engine
+        .evaluate(
+            "untrusted_doc_arm",
+            "kernel_enforce",
+            "hardware_clamps",
+            "KernelSubstrate",
+            json!({
+                "enforcement_tier": "Ring0",
+                "target_pid": 1234
+            }),
+        )
+        .expect("Cedar evaluation failed");
 
-    assert!(!hostile_verdict.is_allowed, "Hostile untrusted agent must be DENIED kernel_enforce");
+    assert!(
+        !hostile_verdict.is_allowed,
+        "Hostile untrusted agent must be DENIED kernel_enforce"
+    );
 }
 
 #[test]
@@ -109,9 +122,15 @@ fn test_kernel_sentinel_driver_bridge_resilience() {
 
     if connected {
         assert!(stats.tier2_connected);
-        assert_eq!(stats.driver_status_label, "Active Ring-0 Driver Attached (Hardware ObRegisterCallbacks Pre-Op Enforcing)");
+        assert_eq!(
+            stats.driver_status_label,
+            "Active Ring-0 Driver Attached (Hardware ObRegisterCallbacks Pre-Op Enforcing)"
+        );
     } else {
         assert!(!stats.tier2_connected);
-        assert_eq!(stats.driver_status_label, "Standby Native Job Substrate (Tier 1 Windows NT Job Object Enforcing)");
+        assert_eq!(
+            stats.driver_status_label,
+            "Standby Native Job Substrate (Tier 1 Windows NT Job Object Enforcing)"
+        );
     }
 }

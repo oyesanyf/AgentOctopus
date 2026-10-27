@@ -1,6 +1,6 @@
 use agent_octopus::ledger::{
-    LedgerError, PolicyAttestation, PolicyProposal, PqcAlgorithm, PqcKeypair,
-    QuorumPolicyGuard, SignedExecutionReceipt, TransparencyLog,
+    LedgerError, PolicyAttestation, PolicyProposal, PqcAlgorithm, PqcKeypair, QuorumPolicyGuard,
+    SignedExecutionReceipt, TransparencyLog,
 };
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
@@ -142,7 +142,9 @@ fn test_merkle_transparency_inclusion_proof_and_verification() {
 
         // Wrong root must fail verification
         let bad_root = [99u8; 32];
-        assert!(!TransparencyLog::verify_inclusion(leaf_hash, &proof, bad_root));
+        assert!(!TransparencyLog::verify_inclusion(
+            leaf_hash, &proof, bad_root
+        ));
     }
 }
 
@@ -206,8 +208,10 @@ fn test_quorum_policy_guard_multi_party_approval_success() {
     };
 
     // Authorities Alpha and Beta sign the proposal (2-of-3 quorum met)
-    let attestation_alpha = PolicyAttestation::create_and_sign(&proposal, "authority-alpha", &key_auth1);
-    let attestation_beta = PolicyAttestation::create_and_sign(&proposal, "authority-beta", &key_auth2);
+    let attestation_alpha =
+        PolicyAttestation::create_and_sign(&proposal, "authority-alpha", &key_auth1);
+    let attestation_beta =
+        PolicyAttestation::create_and_sign(&proposal, "authority-beta", &key_auth2);
 
     let res = guard.submit_and_commit_proposal(&proposal, &[attestation_alpha, attestation_beta]);
     assert!(res.is_ok(), "2-of-3 quorum approval must succeed");
@@ -215,7 +219,9 @@ fn test_quorum_policy_guard_multi_party_approval_success() {
     // Guard state is committed
     assert_eq!(guard.active_policy_hash, new_policy);
     assert_eq!(guard.active_egress_domains.len(), 2);
-    assert!(guard.active_egress_domains.contains(&"https://google.com".to_string()));
+    assert!(guard
+        .active_egress_domains
+        .contains(&"https://google.com".to_string()));
 }
 
 #[test]
@@ -239,8 +245,10 @@ fn test_quorum_policy_guard_insufficient_signatures_and_sybil_prevention() {
     };
 
     // 1. Only 1 signature provided when threshold = 2 -> rejected
-    let attestation_alpha = PolicyAttestation::create_and_sign(&proposal, "authority-alpha", &key_auth1);
-    let res_insufficient = guard.submit_and_commit_proposal(&proposal, &[attestation_alpha.clone()]);
+    let attestation_alpha =
+        PolicyAttestation::create_and_sign(&proposal, "authority-alpha", &key_auth1);
+    let res_insufficient =
+        guard.submit_and_commit_proposal(&proposal, &[attestation_alpha.clone()]);
     assert!(res_insufficient.is_err());
     match res_insufficient.unwrap_err() {
         LedgerError::QuorumNotMet { required, valid } => {
@@ -264,11 +272,10 @@ fn test_quorum_policy_guard_insufficient_signatures_and_sybil_prevention() {
     }
 
     // 3. Rogue unregistered authority signature -> rejected
-    let attestation_rogue = PolicyAttestation::create_and_sign(&proposal, "authority-rogue", &key_rogue);
-    let res_rogue = guard.submit_and_commit_proposal(
-        &proposal,
-        &[attestation_alpha.clone(), attestation_rogue],
-    );
+    let attestation_rogue =
+        PolicyAttestation::create_and_sign(&proposal, "authority-rogue", &key_rogue);
+    let res_rogue = guard
+        .submit_and_commit_proposal(&proposal, &[attestation_alpha.clone(), attestation_rogue]);
     assert!(res_rogue.is_err());
     match res_rogue.unwrap_err() {
         LedgerError::UnauthorizedAuthority(id) => {

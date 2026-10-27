@@ -206,9 +206,16 @@ impl TieredExecutionDispatcher {
         let tool_lower = req.tool_name.trim().to_ascii_lowercase();
         if matches!(
             tool_lower.as_str(),
-            "doc_extractor" | "wasm_doc_extractor" | "extract" | "ledger_writer" | "wasm_ledger_validator" | "write"
-        ) || matches!(req.role, ArmRole::UntrustedDocIngest | ArmRole::AccountingLedgerWrite)
-        {
+            "doc_extractor"
+                | "wasm_doc_extractor"
+                | "extract"
+                | "ledger_writer"
+                | "wasm_ledger_validator"
+                | "write"
+        ) || matches!(
+            req.role,
+            ArmRole::UntrustedDocIngest | ArmRole::AccountingLedgerWrite
+        ) {
             return Err(OctopusSecurityError::IsolationViolation(format!(
                 "TIER2_ROLE_OR_TOOL_MISMATCH [{} / {:?}]: Untrusted document or ledger tools are restricted to Tier 1 Wasmtime and may not spawn native Tier 2 processes",
                 req.tool_name, req.role
@@ -217,7 +224,9 @@ impl TieredExecutionDispatcher {
 
         if program.trim().is_empty()
             || program.chars().any(|c| c < ' ' || c == '\x7f')
-            || args.iter().any(|a| a.chars().any(|c| c < ' ' || c == '\x7f'))
+            || args
+                .iter()
+                .any(|a| a.chars().any(|c| c < ' ' || c == '\x7f'))
         {
             return Err(OctopusSecurityError::IsolationViolation(
                 "Tier 2 command rejected: program or arguments contain NUL or control characters"
@@ -278,8 +287,11 @@ impl TieredExecutionDispatcher {
 
         // 6. Sample real kernel Job Object I/O and memory counters (AO-FIND-07: process was assigned to `job`!)
         let elapsed_s = start.elapsed().as_secs_f64().max(0.001);
-        let job_sample =
-            MeasuredActuationSample::sample_from_job(&job, HostActuationPore::SubprocessSpawn, elapsed_s)?;
+        let job_sample = MeasuredActuationSample::sample_from_job(
+            &job,
+            HostActuationPore::SubprocessSpawn,
+            elapsed_s,
+        )?;
         let mercury_eval = self
             .mercury
             .evaluate_measured_sample(&req.agent_id, &job_sample);

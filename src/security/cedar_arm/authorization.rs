@@ -86,7 +86,7 @@ impl CedarAuthorizationGateway {
         ));
 
         let temporal_engine = std::sync::Arc::new(
-            crate::security::cedar_arm::temporal::DogwoodTemporalEngine::new_simulation()
+            crate::security::cedar_arm::temporal::DogwoodTemporalEngine::new_simulation(),
         );
 
         let mut default_temporal_policies = std::collections::HashMap::new();
@@ -129,7 +129,10 @@ impl CedarAuthorizationGateway {
         }
     }
 
-    pub fn with_containment_ring(mut self, ring: std::sync::Arc<crate::containment_ring::ArmContainmentRing>) -> Self {
+    pub fn with_containment_ring(
+        mut self,
+        ring: std::sync::Arc<crate::containment_ring::ArmContainmentRing>,
+    ) -> Self {
         self.arm_ring = ring;
         self
     }
@@ -143,25 +146,38 @@ impl CedarAuthorizationGateway {
         self
     }
 
-    pub fn with_temporal_engine(mut self, engine: std::sync::Arc<crate::security::cedar_arm::temporal::DogwoodTemporalEngine>) -> Self {
+    pub fn with_temporal_engine(
+        mut self,
+        engine: std::sync::Arc<crate::security::cedar_arm::temporal::DogwoodTemporalEngine>,
+    ) -> Self {
         self.temporal_engine = engine;
         self
     }
 
-    pub fn temporal_engine(&self) -> &std::sync::Arc<crate::security::cedar_arm::temporal::DogwoodTemporalEngine> {
+    pub fn temporal_engine(
+        &self,
+    ) -> &std::sync::Arc<crate::security::cedar_arm::temporal::DogwoodTemporalEngine> {
         &self.temporal_engine
     }
 
-    pub fn temporal_policies(&self) -> &std::sync::RwLock<std::collections::HashMap<String, String>> {
+    pub fn temporal_policies(
+        &self,
+    ) -> &std::sync::RwLock<std::collections::HashMap<String, String>> {
         &self.temporal_policies
     }
 
     pub fn register_temporal_policy(&self, action_or_tool: &str, policy_clause: &str) {
-        self.temporal_policies.write().unwrap().insert(action_or_tool.to_string(), policy_clause.to_string());
+        self.temporal_policies
+            .write()
+            .unwrap()
+            .insert(action_or_tool.to_string(), policy_clause.to_string());
     }
 
     pub fn remove_temporal_policy(&self, action_or_tool: &str) {
-        self.temporal_policies.write().unwrap().remove(action_or_tool);
+        self.temporal_policies
+            .write()
+            .unwrap()
+            .remove(action_or_tool);
     }
 
     pub fn engine(&self) -> &CedarPolicyEngine {
@@ -210,7 +226,8 @@ impl CedarAuthorizationGateway {
         }
         if new_secret == self.secret_seed.as_slice() {
             return Err(OctopusSecurityError::CapabilityDenied(
-                "New secret matches active secret: rotation requires a distinct cryptographic key".to_string(),
+                "New secret matches active secret: rotation requires a distinct cryptographic key"
+                    .to_string(),
             ));
         }
 
@@ -248,7 +265,11 @@ impl CedarAuthorizationGateway {
             log.record_event(
                 "SECRET_ROTATION",
                 "system::security_admin",
-                &format!("Rotated Cedar authorization secret from sha256:{} to sha256:{}", &old_fingerprint[..8], &new_fingerprint[..8]),
+                &format!(
+                    "Rotated Cedar authorization secret from sha256:{} to sha256:{}",
+                    &old_fingerprint[..8],
+                    &new_fingerprint[..8]
+                ),
                 "COMPLETED",
             );
         }
@@ -293,7 +314,11 @@ impl CedarAuthorizationGateway {
             log.record_event(
                 "SECRET_ROLLBACK",
                 "system::security_admin",
-                &format!("Rolled back Cedar authorization secret from sha256:{} to sha256:{}", &old_fingerprint[..8], &restored_fingerprint[..8]),
+                &format!(
+                    "Rolled back Cedar authorization secret from sha256:{} to sha256:{}",
+                    &old_fingerprint[..8],
+                    &restored_fingerprint[..8]
+                ),
                 "COMPLETED",
             );
         }
@@ -362,7 +387,9 @@ impl CedarAuthorizationGateway {
         }
 
         // 2. Segregation of duties: self-approval check
-        if receipt.supervisor_id == receipt.requesting_agent || receipt.supervisor_id == requesting_agent {
+        if receipt.supervisor_id == receipt.requesting_agent
+            || receipt.supervisor_id == requesting_agent
+        {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "Segregation of duties violation: self-approval is forbidden".to_string(),
             ));
@@ -377,7 +404,9 @@ impl CedarAuthorizationGateway {
         }
 
         // 4. Target resource binding
-        if receipt.target_resource != target_resource && !target_resource.starts_with(&receipt.target_resource) {
+        if receipt.target_resource != target_resource
+            && !target_resource.starts_with(&receipt.target_resource)
+        {
             return Err(OctopusSecurityError::CapabilityDenied(format!(
                 "Approval receipt target '{}' does not match requested resource '{}'",
                 receipt.target_resource, target_resource
@@ -402,12 +431,18 @@ impl CedarAuthorizationGateway {
             receipt.expires_at_secs
         );
         let expected_sig = hmac_sha256(&self.secret_seed, content.as_bytes());
-        if !crate::security::constant_time_eq_hex(&hex::encode(expected_sig), &receipt.signature_hex) {
+        if !crate::security::constant_time_eq_hex(
+            &hex::encode(expected_sig),
+            &receipt.signature_hex,
+        ) {
             let in_grace_period = if let Some(prev) = &self.previous_epoch {
                 let elapsed = now.saturating_sub(self.active_epoch.activated_at_secs);
                 if elapsed <= self.grace_period_secs {
                     let prev_sig = hmac_sha256(&prev.secret, content.as_bytes());
-                    crate::security::constant_time_eq_hex(&hex::encode(prev_sig), &receipt.signature_hex)
+                    crate::security::constant_time_eq_hex(
+                        &hex::encode(prev_sig),
+                        &receipt.signature_hex,
+                    )
                 } else {
                     false
                 }
@@ -430,7 +465,10 @@ impl CedarAuthorizationGateway {
         authorized_resource_digest: &str,
         execution_resource_digest: &str,
     ) -> Result<(), OctopusSecurityError> {
-        if !crate::security::constant_time_eq_hex(authorized_resource_digest, execution_resource_digest) {
+        if !crate::security::constant_time_eq_hex(
+            authorized_resource_digest,
+            execution_resource_digest,
+        ) {
             return Err(OctopusSecurityError::MerkleTamperDetected(format!(
                 "TOCTOU violation: resource digest changed from '{}' at authorization to '{}' at execution",
                 authorized_resource_digest, execution_resource_digest
@@ -456,8 +494,9 @@ impl CedarAuthorizationGateway {
         }
 
         // 1. Verify capability token (with dual verification during 300s grace window)
-        let token_result = self.auth_engine
-            .verify_capability(token, requesting_agent, tool_name, target_resource);
+        let token_result =
+            self.auth_engine
+                .verify_capability(token, requesting_agent, tool_name, target_resource);
         if let Err(e) = token_result {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -466,7 +505,9 @@ impl CedarAuthorizationGateway {
             let in_grace = if let Some(prev_engine) = &self.previous_auth_engine {
                 let elapsed = now.saturating_sub(self.active_epoch.activated_at_secs);
                 if elapsed <= self.grace_period_secs {
-                    prev_engine.verify_capability(token, requesting_agent, tool_name, target_resource).is_ok()
+                    prev_engine
+                        .verify_capability(token, requesting_agent, tool_name, target_resource)
+                        .is_ok()
                 } else {
                     false
                 }
@@ -584,13 +625,17 @@ impl CedarAuthorizationGateway {
                     .get("enforcement_tier")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Ring0");
-                let pid = untrusted_context
-                    .get("target_pid")
-                    .and_then(|v| v.as_i64());
+                let pid = untrusted_context.get("target_pid").and_then(|v| v.as_i64());
                 let mut ctx_map = serde_json::Map::new();
-                ctx_map.insert("enforcement_tier".to_string(), serde_json::Value::String(tier.to_string()));
+                ctx_map.insert(
+                    "enforcement_tier".to_string(),
+                    serde_json::Value::String(tier.to_string()),
+                );
                 if let Some(p) = pid {
-                    ctx_map.insert("target_pid".to_string(), serde_json::Value::Number(p.into()));
+                    ctx_map.insert(
+                        "target_pid".to_string(),
+                        serde_json::Value::Number(p.into()),
+                    );
                 }
                 serde_json::Value::Object(ctx_map)
             }
@@ -607,7 +652,9 @@ impl CedarAuthorizationGateway {
                 resource_type,
                 verified_context.clone(),
             )
-            .map_err(|e| OctopusSecurityError::CapabilityDenied(format!("Cedar evaluation error: {}", e)))?;
+            .map_err(|e| {
+                OctopusSecurityError::CapabilityDenied(format!("Cedar evaluation error: {}", e))
+            })?;
 
         if !verdict.is_allowed {
             let decision_str = "DENY";
@@ -630,11 +677,13 @@ impl CedarAuthorizationGateway {
         }
 
         // 5. JOINT DOGWOOD TEMPORAL ENFORCEMENT (FAIL-CLOSED)
-        let temporal_rules = self
-            .temporal_policies
-            .read()
-            .map_err(|_| OctopusSecurityError::CapabilityDenied("Temporal policy lock poisoned".to_string()))?;
-        if let Some(temporal_policy) = temporal_rules.get(tool_name).or_else(|| temporal_rules.get(action_name)) {
+        let temporal_rules = self.temporal_policies.read().map_err(|_| {
+            OctopusSecurityError::CapabilityDenied("Temporal policy lock poisoned".to_string())
+        })?;
+        if let Some(temporal_policy) = temporal_rules
+            .get(tool_name)
+            .or_else(|| temporal_rules.get(action_name))
+        {
             let now_sec = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -654,7 +703,9 @@ impl CedarAuthorizationGateway {
                 context_fields: ctx_fields,
             };
 
-            let temporal_verdict = self.temporal_engine.evaluate_policy(temporal_policy, &decision_ctx);
+            let temporal_verdict = self
+                .temporal_engine
+                .evaluate_policy(temporal_policy, &decision_ctx);
             match temporal_verdict {
                 Ok(true) => {
                     // Both Cedar and Dogwood temporal preconditions satisfied
@@ -664,7 +715,10 @@ impl CedarAuthorizationGateway {
                         audit.record_event(
                             "DOGWOOD_TEMPORAL_AUTHORIZATION",
                             requesting_agent,
-                            &format!("Tool: {}, Resource: {}, Temporal policy '{}' unsatisfied", tool_name, target_resource, temporal_policy),
+                            &format!(
+                                "Tool: {}, Resource: {}, Temporal policy '{}' unsatisfied",
+                                tool_name, target_resource, temporal_policy
+                            ),
                             "FORBID",
                         );
                     }
@@ -679,7 +733,10 @@ impl CedarAuthorizationGateway {
                         audit.record_event(
                             "DOGWOOD_TEMPORAL_ERROR",
                             requesting_agent,
-                            &format!("Tool: {}, Resource: {}, Error: {}", tool_name, target_resource, err),
+                            &format!(
+                                "Tool: {}, Resource: {}, Error: {}",
+                                tool_name, target_resource, err
+                            ),
                             "FORBID",
                         );
                     }
@@ -778,4 +835,3 @@ impl CedarAuthorizationGateway {
         )
     }
 }
-

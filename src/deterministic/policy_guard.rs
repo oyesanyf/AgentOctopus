@@ -40,7 +40,10 @@ impl PolicyGuard {
     }
 
     /// Enforces pre-execution policy on incoming high-level directives.
-    pub fn enforce_directive(&self, directive: &StrategicDirective) -> Result<(), OctopusSecurityError> {
+    pub fn enforce_directive(
+        &self,
+        directive: &StrategicDirective,
+    ) -> Result<(), OctopusSecurityError> {
         // 1. Step budget policy check
         if directive.max_step_budget > self.max_steps_permitted {
             return Err(OctopusSecurityError::DeterministicLayerViolation(format!(
@@ -66,7 +69,10 @@ impl PolicyGuard {
     }
 
     /// Enforces post-extraction invariants on verified financial artifacts before commit.
-    pub fn enforce_artifact(&self, artifact: &VerifiedInvoiceArtifact) -> Result<(), OctopusSecurityError> {
+    pub fn enforce_artifact(
+        &self,
+        artifact: &VerifiedInvoiceArtifact,
+    ) -> Result<(), OctopusSecurityError> {
         // 1. Financial amount cap
         if artifact.amount_cents > self.max_amount_cents {
             return Err(OctopusSecurityError::DeterministicLayerViolation(format!(

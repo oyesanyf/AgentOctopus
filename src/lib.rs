@@ -4,16 +4,16 @@ pub mod brain;
 pub mod containment_ring;
 pub mod core;
 pub mod deterministic;
-pub mod enclave;
 pub mod edr_bench;
+pub mod enclave;
 pub mod fprime_flight;
 pub mod ledger;
 pub mod neural_mesh;
 pub mod quantum;
 pub mod security;
+pub mod sentinel_ring;
 pub mod swarm;
 pub mod telemetry;
-pub mod sentinel_ring;
 pub mod web;
 
 pub use adversary::{
@@ -39,6 +39,11 @@ pub use core::types::*;
 pub use deterministic::{
     ArmState, DeterministicLayer, FsmTransitionGuard, PolicyGuard, SchemaGuard,
 };
+pub use edr_bench::{
+    resolve_fixture_path, BenchmarkReport, BenignBaselineAssertion, EdrBenchHarness, EdrBenchTask,
+    ExpectedVerdict, HarnessBounds, ParsedYaraRule, StringPattern, TargetArch, TelemetryContext,
+    ThreatAssertion,
+};
 pub use enclave::{HttpEgressGate, SafeDocumentExtractor, SafeLedgerWriter, SafeTool};
 pub use fprime_flight::{
     create_port_pair, ArenaBinKind, ArenaSlotHandle, BftMeshConsensusComponent,
@@ -51,17 +56,12 @@ pub use fprime_flight::{
     StaticArenaPool, SvcCmdSequencer, SvcHealthMonitor, TelemetryFrame, WatchdogStrokeReceipt,
     WfpNetworkIsolatorComponent,
 };
-pub use edr_bench::{
-    resolve_fixture_path, BenchmarkReport, BenignBaselineAssertion, EdrBenchHarness, EdrBenchTask,
-    ExpectedVerdict, HarnessBounds, ParsedYaraRule, StringPattern, TargetArch, TelemetryContext,
-    ThreatAssertion,
-};
 pub use ledger::{
     InclusionProof, LedgerError, LogCheckpoint, PolicyAttestation, PolicyProposal,
     PostQuantumAttestation, PqcAlgorithm, PqcKeypair, ProofDirection, ProofSibling,
     QuorumPolicyGuard, SignedExecutionReceipt, TransparencyLog,
 };
-pub use neural_mesh::{ArmEndpoint, MessageKind, MeshError, NeuralMesh, NeuralMessage};
+pub use neural_mesh::{ArmEndpoint, MeshError, MessageKind, NeuralMesh, NeuralMessage};
 pub use quantum::{
     AgentNode, AttackEdge, AttackGraph, ChannelType, Complex, ExperimentComparisonReport,
     QuantumAnnealerConfig, QuantumCircuit, QuantumGate, QuantumWalkSimulator, QuboModel,
@@ -71,13 +71,12 @@ pub use security::{
     hmac_sha256, AdaptiveMitigationTier, AgentIdentity, AgentRaspEngine, AgentSecuritySubject,
     AuditRecord, CapabilityToken, CedarAuthorizationGateway, CedarPolicyEngine, CedarSchema,
     DelegationScopeGuard, ExternalAuthorizationEngine, OpenShellConfig, OpenShellMode,
-    RaspDecision, RaspThreatCategory, SandboxConfinementPolicy, SecurityAuditLog, SignedAgentMessage,
-    WasmArmSandbox,
+    RaspDecision, RaspThreatCategory, SandboxConfinementPolicy, SecurityAuditLog,
+    SignedAgentMessage, WasmArmSandbox,
 };
 pub use swarm::{SwarmBatchSummary, SwarmManager};
 pub use telemetry::{AnomalyDetector, WatchdogSupervisor};
 pub use web::{start_web_server, static_files::INDEX_HTML};
-
 
 pub use containment_ring::{
     is_restricted_rebinding_ip, now_micros, validate_agent_egress_url, AlgebraicTraceProof,

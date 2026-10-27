@@ -114,7 +114,10 @@ impl IsolationManager {
     /// Validates that a requested file path strictly adheres to the sandbox filesystem boundary.
     /// Prevents `Path::join` replacement via absolute paths, Windows drive letters, UNC paths,
     /// percent-encoded traversals, and NTFS Alternate Data Streams (ADS).
-    pub async fn validate_filesystem_access(&self, requested_path: &str) -> Result<PathBuf, OctopusSecurityError> {
+    pub async fn validate_filesystem_access(
+        &self,
+        requested_path: &str,
+    ) -> Result<PathBuf, OctopusSecurityError> {
         let trimmed = requested_path.trim();
         if trimmed.is_empty() {
             return Err(OctopusSecurityError::IsolationViolation(
@@ -123,7 +126,10 @@ impl IsolationManager {
         }
 
         // 0. Reject control characters and null bytes
-        if trimmed.chars().any(|c| (c as u32) < 0x20 || (c as u32) == 0x7f) {
+        if trimmed
+            .chars()
+            .any(|c| (c as u32) < 0x20 || (c as u32) == 0x7f)
+        {
             return Err(OctopusSecurityError::IsolationViolation(
                 "Illegal control characters or null byte in filesystem path".to_string(),
             ));
@@ -209,7 +215,11 @@ impl IsolationManager {
     /// Does NOT require the arm's consent or cooperation.
     /// Instantly trips the hardware kill switch, terminates the OS process via Job Object,
     /// revokes all capability tokens, and revokes ring handles.
-    pub async fn terminate_arm(&self, agent_id: &str, reason: &str) -> Result<(), OctopusSecurityError> {
+    pub async fn terminate_arm(
+        &self,
+        agent_id: &str,
+        reason: &str,
+    ) -> Result<(), OctopusSecurityError> {
         // 1. Trip the software/atomic kill switch
         let switches = self.arm_kill_switches.read().await;
         if let Some(ks) = switches.get(agent_id) {

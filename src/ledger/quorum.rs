@@ -79,7 +79,11 @@ impl QuorumPolicyGuard {
     }
 
     /// Registers a trusted authority public key.
-    pub fn register_authority(&mut self, authority_id: impl Into<String>, verifying_key: VerifyingKey) {
+    pub fn register_authority(
+        &mut self,
+        authority_id: impl Into<String>,
+        verifying_key: VerifyingKey,
+    ) {
         self.authorities.insert(authority_id.into(), verifying_key);
     }
 
@@ -111,9 +115,12 @@ impl QuorumPolicyGuard {
             }
 
             // Check authority registration
-            let trusted_key = self.authorities.get(&attestation.authority_id).ok_or_else(|| {
-                LedgerError::UnauthorizedAuthority(attestation.authority_id.clone())
-            })?;
+            let trusted_key = self
+                .authorities
+                .get(&attestation.authority_id)
+                .ok_or_else(|| {
+                    LedgerError::UnauthorizedAuthority(attestation.authority_id.clone())
+                })?;
 
             // Check public key bytes match registered key
             if trusted_key.to_bytes() != attestation.authority_pubkey {
@@ -125,20 +132,26 @@ impl QuorumPolicyGuard {
 
             // Anti-sybil: Check for duplicate authority voting
             if !verified_authorities.insert(attestation.authority_id.clone()) {
-                return Err(LedgerError::DuplicateAuthority(attestation.authority_id.clone()));
+                return Err(LedgerError::DuplicateAuthority(
+                    attestation.authority_id.clone(),
+                ));
             }
 
             // Cryptographic Ed25519 signature verification
-            let sig_bytes: [u8; 64] = attestation.signature.as_slice().try_into()
-                .map_err(|_| LedgerError::InvalidSignature("Signature length must be 64 bytes".to_string()))?;
+            let sig_bytes: [u8; 64] =
+                attestation.signature.as_slice().try_into().map_err(|_| {
+                    LedgerError::InvalidSignature("Signature length must be 64 bytes".to_string())
+                })?;
 
             let signature = Signature::from_bytes(&sig_bytes);
             trusted_key
                 .verify(&proposal_digest, &signature)
-                .map_err(|e| LedgerError::InvalidSignature(format!(
-                    "Authority '{}' signature invalid: {}",
-                    attestation.authority_id, e
-                )))?;
+                .map_err(|e| {
+                    LedgerError::InvalidSignature(format!(
+                        "Authority '{}' signature invalid: {}",
+                        attestation.authority_id, e
+                    ))
+                })?;
         }
 
         if verified_authorities.len() < self.quorum_threshold {

@@ -1,8 +1,8 @@
 use super::rfc_knowledge_base::RfcKnowledgeBase;
 use super::rfc_sync::{RfcIndexSynchronizer, RfcSyncReport};
 use super::types::{
-    Arm106ValidationHandoff, EvaluationRequest, ProtocolResearchStatus,
-    ResearchFinding, ResearchFindingStatus, TransportOutcome,
+    Arm106ValidationHandoff, EvaluationRequest, ProtocolResearchStatus, ResearchFinding,
+    ResearchFindingStatus, TransportOutcome,
 };
 use crate::containment_ring::arm_ring::ArmRingRegistry;
 use crate::core::types::OctopusSecurityError;
@@ -39,7 +39,10 @@ async fn transmit_request(
             match tokio::time::timeout(timeout_duration, stream.read(&mut buf)).await {
                 Ok(Ok(n)) if n > 0 => {
                     let wire_str = String::from_utf8_lossy(&buf[..n]).to_string();
-                    (TransportOutcome::ResponseReceived { bytes_count: n }, wire_str)
+                    (
+                        TransportOutcome::ResponseReceived { bytes_count: n },
+                        wire_str,
+                    )
                 }
                 Ok(Ok(_)) => (TransportOutcome::Connected, String::new()),
                 Ok(Err(e)) => (
@@ -139,7 +142,8 @@ impl ProtocolResearchSupervisor {
             probe_count: probes,
             evaluations_recorded: evals,
             memory_clamp_mb: 64,
-            cedar_policy_bound: "Policy 8 (Target Allowlist: 127.0.0.1, localhost, ::1)".to_string(),
+            cedar_policy_bound: "Policy 8 (Target Allowlist: 127.0.0.1, localhost, ::1)"
+                .to_string(),
             dogwood_velocity_bound: "Velocity Limiter: max 30 evals per 300s window".to_string(),
             active_worker_sandboxed: true,
         }
@@ -167,7 +171,10 @@ impl ProtocolResearchSupervisor {
         }
 
         // Reject control chars and null bytes in host
-        if trimmed_host.chars().any(|c| (c as u32) < 0x20 || (c as u32) == 0x7f) {
+        if trimmed_host
+            .chars()
+            .any(|c| (c as u32) < 0x20 || (c as u32) == 0x7f)
+        {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "FAIL-CLOSED: Target host contains illegal control characters.".to_string(),
             ));
@@ -194,15 +201,16 @@ impl ProtocolResearchSupervisor {
             trimmed_host
         };
 
-        let resolved_addrs: Vec<std::net::SocketAddr> = match (host_for_lookup, port).to_socket_addrs() {
-            Ok(iter) => iter.collect(),
-            Err(e) => {
-                return Err(OctopusSecurityError::CapabilityDenied(format!(
-                    "FAIL-CLOSED: DNS resolution failed for '{}:{}': {}",
-                    host, port, e
-                )));
-            }
-        };
+        let resolved_addrs: Vec<std::net::SocketAddr> =
+            match (host_for_lookup, port).to_socket_addrs() {
+                Ok(iter) => iter.collect(),
+                Err(e) => {
+                    return Err(OctopusSecurityError::CapabilityDenied(format!(
+                        "FAIL-CLOSED: DNS resolution failed for '{}:{}': {}",
+                        host, port, e
+                    )));
+                }
+            };
 
         if resolved_addrs.is_empty() {
             return Err(OctopusSecurityError::CapabilityDenied(format!(
@@ -270,7 +278,8 @@ impl ProtocolResearchSupervisor {
         self.authorize_target(&request.target_host, request.target_port)?;
 
         // Step 2: Validate and resolve network destination (loopback boundary + DNS rebinding immunity)
-        let target_addr = self.validate_and_resolve_destination(&request.target_host, request.target_port)?;
+        let target_addr =
+            self.validate_and_resolve_destination(&request.target_host, request.target_port)?;
 
         // Step 3: Mandatory Dogwood Temporal Velocity Gate (Fail closed on any evaluation error)
         self.enforce_temporal_velocity().await?;
@@ -278,14 +287,16 @@ impl ProtocolResearchSupervisor {
         // Step 4: Execute Real Network Transmission over TCP Socket (Zero Mocks)
         let timeout_duration = std::time::Duration::from_millis(2500);
 
-        let (baseline_outcome, baseline_response) = if let Some(ref base_req) = request.baseline_request {
-            let (out, resp) = transmit_request(target_addr, base_req, timeout_duration).await;
-            (Some(out), Some(resp))
-        } else {
-            (None, None)
-        };
+        let (baseline_outcome, baseline_response) =
+            if let Some(ref base_req) = request.baseline_request {
+                let (out, resp) = transmit_request(target_addr, base_req, timeout_duration).await;
+                (Some(out), Some(resp))
+            } else {
+                (None, None)
+            };
 
-        let (probe_outcome, probe_response) = transmit_request(target_addr, &request.raw_request, timeout_duration).await;
+        let (probe_outcome, probe_response) =
+            transmit_request(target_addr, &request.raw_request, timeout_duration).await;
 
         // Step 5: Baseline Subtraction & Response-Level Anomaly Detection
         let count = self.evaluation_counter.fetch_add(1, Ordering::SeqCst);
@@ -306,8 +317,10 @@ impl ProtocolResearchSupervisor {
         // Wilson score confidence interval, and independent Arm 106 cross-validation.
         let requested_repetitions = request.repetition_count.unwrap_or(2).clamp(1, 10);
 
-        let mut probe_responses: Vec<(TransportOutcome, String)> = Vec::with_capacity(requested_repetitions);
-        let mut baseline_responses: Vec<(Option<TransportOutcome>, Option<String>)> = Vec::with_capacity(requested_repetitions);
+        let mut probe_responses: Vec<(TransportOutcome, String)> =
+            Vec::with_capacity(requested_repetitions);
+        let mut baseline_responses: Vec<(Option<TransportOutcome>, Option<String>)> =
+            Vec::with_capacity(requested_repetitions);
         let mut trial_anomalies: Vec<bool> = Vec::with_capacity(requested_repetitions);
 
         // Trial 1 (Initial observation)
@@ -318,14 +331,17 @@ impl ProtocolResearchSupervisor {
         // Repetition trials (if anomalous and multi-trial requested)
         if is_anomalous && requested_repetitions >= 2 {
             for _ in 1..requested_repetitions {
-                let (rep_base_out, rep_base_resp) = if let Some(ref base_req) = request.baseline_request {
-                    let (b_out, b_resp) = transmit_request(target_addr, base_req, timeout_duration).await;
-                    (Some(b_out), Some(b_resp))
-                } else {
-                    (None, None)
-                };
+                let (rep_base_out, rep_base_resp) =
+                    if let Some(ref base_req) = request.baseline_request {
+                        let (b_out, b_resp) =
+                            transmit_request(target_addr, base_req, timeout_duration).await;
+                        (Some(b_out), Some(b_resp))
+                    } else {
+                        (None, None)
+                    };
 
-                let (rep_out, rep_resp) = transmit_request(target_addr, &request.raw_request, timeout_duration).await;
+                let (rep_out, rep_resp) =
+                    transmit_request(target_addr, &request.raw_request, timeout_duration).await;
 
                 let rep_anomalous = self.detect_anomaly_differential(
                     &request.raw_request,
@@ -343,10 +359,13 @@ impl ProtocolResearchSupervisor {
         }
 
         // Assess baseline response stability across trials
-        let baseline_stable = if request.baseline_request.is_some() && baseline_responses.len() >= 2 {
+        let baseline_stable = if request.baseline_request.is_some() && baseline_responses.len() >= 2
+        {
             let first_base_resp = &baseline_responses[0].1;
             let first_base_out = &baseline_responses[0].0;
-            baseline_responses.iter().all(|(out, resp)| out == first_base_out && resp == first_base_resp)
+            baseline_responses
+                .iter()
+                .all(|(out, resp)| out == first_base_out && resp == first_base_resp)
         } else {
             true
         };
@@ -371,39 +390,41 @@ impl ProtocolResearchSupervisor {
 
         // Verification condition: requires multi-trial reproducibility and stable baseline
         let is_reproducible = is_anomalous
-            && ((total_trials <= 1) || (confirmation_count >= 2 && reproducibility_rate >= 0.60 && baseline_stable));
+            && ((total_trials <= 1)
+                || (confirmation_count >= 2 && reproducibility_rate >= 0.60 && baseline_stable));
 
         // Independent Arm 106 validation:
         // Before classifying as a confirmed vulnerability, require independent Arm 106 differential validation!
-        let (arm106_validated, confirmed_vulnerability) = if is_reproducible && requested_repetitions >= 3 {
-            let arm106_report = self
-                .differential_engine
-                .evaluate_raw_stream(request.raw_request.as_bytes())
-                .await;
+        let (arm106_validated, confirmed_vulnerability) =
+            if is_reproducible && requested_repetitions >= 3 {
+                let arm106_report = self
+                    .differential_engine
+                    .evaluate_raw_stream(request.raw_request.as_bytes())
+                    .await;
 
-            let validated = arm106_report.action != DifferentialAction::Allow
-                || arm106_report.divergence_vector.framing_conflict
-                || arm106_report.divergence_vector.novel_trigger_detected
-                || arm106_report.divergence_vector.novelty_score > 0.0;
+                let validated = arm106_report.action != DifferentialAction::Allow
+                    || arm106_report.divergence_vector.framing_conflict
+                    || arm106_report.divergence_vector.novel_trigger_detected
+                    || arm106_report.divergence_vector.novelty_score > 0.0;
 
-            // Record Arm 106 validation in Octopus research store
-            let hex_prefix = Sha256::digest(finding_id.as_bytes())[..8]
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>();
-            let validation_id = format!("val-{}", hex_prefix);
-            self.knowledge_base.record_arm106_validation(
-                &validation_id,
-                &finding_id,
-                &arm106_report.primary_verdict,
-                &format!("{:?}", arm106_report.action),
-                validated,
-            );
+                // Record Arm 106 validation in Octopus research store
+                let hex_prefix = Sha256::digest(finding_id.as_bytes())[..8]
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>();
+                let validation_id = format!("val-{}", hex_prefix);
+                self.knowledge_base.record_arm106_validation(
+                    &validation_id,
+                    &finding_id,
+                    &arm106_report.primary_verdict,
+                    &format!("{:?}", arm106_report.action),
+                    validated,
+                );
 
-            (validated, validated)
-        } else {
-            (false, false)
-        };
+                (validated, validated)
+            } else {
+                (false, false)
+            };
 
         let finding_status = if confirmed_vulnerability {
             ResearchFindingStatus::ConfirmedVulnerability.to_string()
@@ -453,20 +474,35 @@ impl ProtocolResearchSupervisor {
         let traj_ev = crate::security::dream_rsi::TrajectoryEvent {
             event_id: format!("traj-{}", finding_id),
             rfc_number: request.rfc_number.unwrap_or(9112),
-            section: request.section.clone().unwrap_or_else(|| "normative_syntax".to_string()),
-            mutation_type: request.mutation_type.clone().unwrap_or_else(|| "abnf_delimiter".to_string()),
+            section: request
+                .section
+                .clone()
+                .unwrap_or_else(|| "normative_syntax".to_string()),
+            mutation_type: request
+                .mutation_type
+                .clone()
+                .unwrap_or_else(|| "abnf_delimiter".to_string()),
             is_anomalous: is_reproducible,
             divergence_score: if is_reproducible { 0.85 } else { 0.05 },
             reproducibility_rate,
             latency_ms: 12.0,
             finding_status: finding_status.clone(),
-            timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
         };
-        let history_file = std::path::Path::new("data").join("protocol_research").join("evaluation_history.jsonl");
+        let history_file = std::path::Path::new("data")
+            .join("protocol_research")
+            .join("evaluation_history.jsonl");
         if let Some(p) = history_file.parent() {
             let _ = std::fs::create_dir_all(p);
         }
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&history_file) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&history_file)
+        {
             use std::io::Write;
             if let Ok(line) = serde_json::to_string(&traj_ev) {
                 let _ = writeln!(f, "{}", line);
@@ -497,7 +533,10 @@ impl ProtocolResearchSupervisor {
     pub async fn handoff_to_arm106(
         &self,
         handoff: Arm106ValidationHandoff,
-    ) -> Result<crate::security::differential_protocol::DifferentialAnalysisReport, OctopusSecurityError> {
+    ) -> Result<
+        crate::security::differential_protocol::DifferentialAnalysisReport,
+        OctopusSecurityError,
+    > {
         // Enforce Ring 107 permissions: Arm 107 can only communicate candidate findings to Arm 106
         let report = self
             .differential_engine
@@ -586,7 +625,10 @@ impl ProtocolResearchSupervisor {
         };
 
         let rate_policy = r#"when temporal { (count for (t: Timepoint). where (formerly within 5m (Octopus::Action::"EvaluateProbe"::request{ callerPrincipal: principal } && tp(t)))) < 30 };"#;
-        match self.dogwood_engine.evaluate_policy(rate_policy, &decision_ctx) {
+        match self
+            .dogwood_engine
+            .evaluate_policy(rate_policy, &decision_ctx)
+        {
             Ok(true) => {
                 let mut fields = HashMap::new();
                 fields.insert("target".to_string(), serde_json::json!("local_target"));
@@ -628,28 +670,45 @@ impl ProtocolResearchSupervisor {
     ) -> bool {
         // 1. Syntactic framing anomalies in request
         let has_chunk_mutation = raw_request.contains("Transfer-Encoding: chunked")
-            && (raw_request.contains("Content-Length:") || raw_request.contains("Transfer-Encoding: \tchunked"));
-        let has_ambiguous_delimiters = raw_request.contains("\r\n\r ") || raw_request.contains("\n\r\n");
+            && (raw_request.contains("Content-Length:")
+                || raw_request.contains("Transfer-Encoding: \tchunked"));
+        let has_ambiguous_delimiters =
+            raw_request.contains("\r\n\r ") || raw_request.contains("\n\r\n");
         let has_probe_framing_anomaly = has_chunk_mutation || has_ambiguous_delimiters;
 
         // 2. Behavioral response divergence against baseline
         if let (Some(base_resp), Some(base_out)) = (baseline_response, baseline_outcome) {
             // Transport outcome divergence
             let transport_diverged = match (base_out, probe_outcome) {
-                (TransportOutcome::ResponseReceived { .. }, TransportOutcome::Timeout { .. }) => true,
-                (TransportOutcome::ResponseReceived { .. }, TransportOutcome::ConnectionRefused { .. }) => true,
+                (TransportOutcome::ResponseReceived { .. }, TransportOutcome::Timeout { .. }) => {
+                    true
+                }
+                (
+                    TransportOutcome::ResponseReceived { .. },
+                    TransportOutcome::ConnectionRefused { .. },
+                ) => true,
                 _ => false,
             };
 
             // Status code divergence
-            let base_status = base_resp.lines().next().and_then(|l| l.split_whitespace().nth(1));
-            let probe_status = probe_response.lines().next().and_then(|l| l.split_whitespace().nth(1));
-            let status_diverged = base_status.is_some() && probe_status.is_some() && base_status != probe_status;
+            let base_status = base_resp
+                .lines()
+                .next()
+                .and_then(|l| l.split_whitespace().nth(1));
+            let probe_status = probe_response
+                .lines()
+                .next()
+                .and_then(|l| l.split_whitespace().nth(1));
+            let status_diverged =
+                base_status.is_some() && probe_status.is_some() && base_status != probe_status;
 
             // Wire response divergence
-            let response_diverged = !base_resp.is_empty() && !probe_response.is_empty() && base_resp != probe_response;
+            let response_diverged =
+                !base_resp.is_empty() && !probe_response.is_empty() && base_resp != probe_response;
 
-            return transport_diverged || status_diverged || (has_probe_framing_anomaly && response_diverged);
+            return transport_diverged
+                || status_diverged
+                || (has_probe_framing_anomaly && response_diverged);
         }
 
         has_probe_framing_anomaly

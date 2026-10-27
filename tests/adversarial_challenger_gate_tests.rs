@@ -10,13 +10,10 @@
 //! ==============================================================================
 
 use agent_octopus::containment_ring::{
-    ArmContainmentRing, CapabilityGate, CedarGate,
-    EgressProxy, EgressRequest, EgressSecurityLevel,
+    ArmContainmentRing, CapabilityGate, CedarGate, EgressProxy, EgressRequest, EgressSecurityLevel,
 };
 use agent_octopus::core::types::{ArmRole, OctopusSecurityError};
-use agent_octopus::security::atlas_arm::atlas_sync::{
-    validate_atlas_version, AtlasSyncManager,
-};
+use agent_octopus::security::atlas_arm::atlas_sync::{validate_atlas_version, AtlasSyncManager};
 use agent_octopus::security::atlas_arm::EMBEDDED_GOLDEN_STIX;
 use agent_octopus::security::cedar_arm::authorization::load_or_generate_cedar_secret;
 use agent_octopus::security::cedar_arm::CedarAuthorizationGateway;
@@ -30,7 +27,10 @@ use serde_json::json;
 async fn test_adversarial_r1_cedargate_token_gating_and_bypass_resistance() {
     // 1. Production instance cannot be disabled with arbitrary or foreign tokens
     let prod_gate = CedarGate::new();
-    assert!(prod_gate.is_enabled(), "Production CedarGate must be enabled by default");
+    assert!(
+        prod_gate.is_enabled(),
+        "Production CedarGate must be enabled by default"
+    );
 
     // Create an unrelated audit token from another instance to simulate forged/stolen token
     let (_audit_gate, foreign_token) = CedarGate::new_for_audit();
@@ -42,16 +42,21 @@ async fn test_adversarial_r1_cedargate_token_gating_and_bypass_resistance() {
         "CedarGate must reject disable attempt with foreign NegativeControlToken: {:?}",
         unauth_disable
     );
-    assert!(prod_gate.is_enabled(), "CedarGate must remain enabled after failed attack");
+    assert!(
+        prod_gate.is_enabled(),
+        "CedarGate must remain enabled after failed attack"
+    );
 
     // Verify Cedar evaluation remains fully active and enforces policy
-    let unauthorized_eval = prod_gate.evaluate_authorization(
-        "arm-untrusted-doc",
-        &ArmRole::UntrustedDocIngest,
-        "write",
-        "s3://accounting/ledger.json",
-        Some(50_000),
-    ).await;
+    let unauthorized_eval = prod_gate
+        .evaluate_authorization(
+            "arm-untrusted-doc",
+            &ArmRole::UntrustedDocIngest,
+            "write",
+            "s3://accounting/ledger.json",
+            Some(50_000),
+        )
+        .await;
     assert!(
         matches!(unauthorized_eval, Err(OctopusSecurityError::CapabilityDenied(ref msg)) if msg.contains("Cedar Zero-Trust Policy Veto")),
         "Cedar policy must deny unauthorized write from doc ingest arm with CapabilityDenied: {:?}",
@@ -59,13 +64,15 @@ async fn test_adversarial_r1_cedargate_token_gating_and_bypass_resistance() {
     );
 
     // Hard spending cap check ($100,000 ceiling = 10,000,000 cents)
-    let ceiling_violation = prod_gate.evaluate_authorization(
-        "arm-accounting-ledger",
-        &ArmRole::AccountingLedgerWrite,
-        "write",
-        "s3://accounting/ledger.json",
-        Some(15_000_000), // $150,000
-    ).await;
+    let ceiling_violation = prod_gate
+        .evaluate_authorization(
+            "arm-accounting-ledger",
+            &ArmRole::AccountingLedgerWrite,
+            "write",
+            "s3://accounting/ledger.json",
+            Some(15_000_000), // $150,000
+        )
+        .await;
     assert!(
         matches!(ceiling_violation, Err(OctopusSecurityError::DeterministicLayerViolation(ref msg)) if msg.contains("strict hard spending ceiling")),
         "Spending ceiling over $100k must trigger DeterministicLayerViolation: {:?}",
@@ -74,25 +81,37 @@ async fn test_adversarial_r1_cedargate_token_gating_and_bypass_resistance() {
 
     // 2. CapabilityGate cannot be disabled with unauthorized token
     let cap_gate = CapabilityGate::new(b"SEED_TEST_CAP_GATE_32_BYTES_OK!", 300);
-    assert!(cap_gate.is_enforced(), "CapabilityGate must be enforced by default");
+    assert!(
+        cap_gate.is_enforced(),
+        "CapabilityGate must be enforced by default"
+    );
     let unauth_cap_disable = cap_gate.set_enforcement_enabled(false, &foreign_token);
     assert!(
         matches!(unauth_cap_disable, Err(OctopusSecurityError::CapabilityDenied(ref msg)) if msg.contains("UNAUTHORIZED_CALL_PATH")),
         "CapabilityGate must reject foreign NegativeControlToken: {:?}",
         unauth_cap_disable
     );
-    assert!(cap_gate.is_enforced(), "CapabilityGate must remain enforced");
+    assert!(
+        cap_gate.is_enforced(),
+        "CapabilityGate must remain enforced"
+    );
 
     // 3. EgressProxy cannot be disabled with unauthorized token
     let egress_proxy = EgressProxy::new(EgressSecurityLevel::StrictGoogleOnly);
-    assert!(egress_proxy.is_allowlist_enabled(), "EgressProxy allowlist must be enabled by default");
+    assert!(
+        egress_proxy.is_allowlist_enabled(),
+        "EgressProxy allowlist must be enabled by default"
+    );
     let unauth_egress_disable = egress_proxy.set_allowlist_enabled(false, &foreign_token);
     assert!(
         matches!(unauth_egress_disable, Err(OctopusSecurityError::CapabilityDenied(ref msg)) if msg.contains("UNAUTHORIZED_CALL_PATH")),
         "EgressProxy must reject foreign NegativeControlToken: {:?}",
         unauth_egress_disable
     );
-    assert!(egress_proxy.is_allowlist_enabled(), "EgressProxy must remain enabled");
+    assert!(
+        egress_proxy.is_allowlist_enabled(),
+        "EgressProxy must remain enabled"
+    );
 
     // 4. ArmContainmentRing sensitivity toggles cannot be modified with unauthorized token
     let arm_ring = ArmContainmentRing::new(
@@ -101,41 +120,64 @@ async fn test_adversarial_r1_cedargate_token_gating_and_bypass_resistance() {
         1,
         b"SEED_TEST_ARM_RING_32_BYTES_OK!!",
     );
-    assert!(arm_ring.set_epoch_enforcement(false, &foreign_token).is_err());
-    assert!(arm_ring.set_tool_enforcement(false, &foreign_token).is_err());
-    assert!(arm_ring.set_budget_enforcement(false, &foreign_token).is_err());
+    assert!(arm_ring
+        .set_epoch_enforcement(false, &foreign_token)
+        .is_err());
+    assert!(arm_ring
+        .set_tool_enforcement(false, &foreign_token)
+        .is_err());
+    assert!(arm_ring
+        .set_budget_enforcement(false, &foreign_token)
+        .is_err());
 
     // 5. Positive Control: Authorized sensitivity modification using authentic token
     let (audit_gate_genuine, authentic_token) = CedarGate::new_for_audit();
     assert!(audit_gate_genuine.is_enabled());
 
     let auth_disable = audit_gate_genuine.set_enabled(false, &authentic_token);
-    assert!(auth_disable.is_ok(), "Authorized disable with authentic token must succeed");
-    assert!(!audit_gate_genuine.is_enabled(), "Audit gate must be disabled");
+    assert!(
+        auth_disable.is_ok(),
+        "Authorized disable with authentic token must succeed"
+    );
+    assert!(
+        !audit_gate_genuine.is_enabled(),
+        "Audit gate must be disabled"
+    );
 
     // While disabled, evaluate_authorization returns Ok(true) for negative-control probing
-    let probe_eval = audit_gate_genuine.evaluate_authorization(
-        "arm-untrusted-doc",
-        &ArmRole::UntrustedDocIngest,
-        "write",
-        "s3://accounting/ledger.json",
-        Some(50_000),
-    ).await;
-    assert_eq!(probe_eval.unwrap(), true, "Disabled gate permits negative control probe");
+    let probe_eval = audit_gate_genuine
+        .evaluate_authorization(
+            "arm-untrusted-doc",
+            &ArmRole::UntrustedDocIngest,
+            "write",
+            "s3://accounting/ledger.json",
+            Some(50_000),
+        )
+        .await;
+    assert_eq!(
+        probe_eval.unwrap(),
+        true,
+        "Disabled gate permits negative control probe"
+    );
 
     // Re-enable using authentic token
     let auth_enable = audit_gate_genuine.set_enabled(true, &authentic_token);
-    assert!(auth_enable.is_ok(), "Re-enabling with authentic token must succeed");
+    assert!(
+        auth_enable.is_ok(),
+        "Re-enabling with authentic token must succeed"
+    );
     assert!(audit_gate_genuine.is_enabled());
 
     // Policy enforcement is restored
-    let restored_eval = audit_gate_genuine.evaluate_authorization(
-        "arm-untrusted-doc",
-        &ArmRole::UntrustedDocIngest,
-        "write",
-        "s3://accounting/ledger.json",
-        Some(50_000),
-    ).await;
+    let restored_eval = audit_gate_genuine
+        .evaluate_authorization(
+            "arm-untrusted-doc",
+            &ArmRole::UntrustedDocIngest,
+            "write",
+            "s3://accounting/ledger.json",
+            Some(50_000),
+        )
+        .await;
     assert!(
         matches!(restored_eval, Err(OctopusSecurityError::CapabilityDenied(ref msg)) if msg.contains("Cedar Zero-Trust Policy Veto")),
         "Policy enforcement restored after re-enable: {:?}",
@@ -197,13 +239,15 @@ async fn test_adversarial_r2_secret_rotation_entropy_rollback_and_grace_period()
         "ledger_writer",
         "corporate_ledger",
     );
-    let receipt_a = gateway.issue_supervisor_approval(
-        "supervisor_1",
-        "ledger_arm",
-        "corporate_ledger",
-        100_000,
-        300,
-    ).expect("Issued supervisor receipt");
+    let receipt_a = gateway
+        .issue_supervisor_approval(
+            "supervisor_1",
+            "ledger_arm",
+            "corporate_ledger",
+            100_000,
+            300,
+        )
+        .expect("Issued supervisor receipt");
 
     // Record prerequisite read event in Dogwood temporal engine
     gateway.temporal_engine().record_event(
@@ -227,7 +271,9 @@ async fn test_adversarial_r2_secret_rotation_entropy_rollback_and_grace_period()
 
     // 4. Rotate to valid Secret B (32+ bytes)
     let secret_b = b"ROTATED_SECRET_BETA__32_BYTES_OK!";
-    let fp_b = gateway.rotate_secret(secret_b, "cedar_ring_v4.13").expect("Rotation succeeded");
+    let fp_b = gateway
+        .rotate_secret(secret_b, "cedar_ring_v4.13")
+        .expect("Rotation succeeded");
     assert_eq!(gateway.active_epoch().fingerprint, fp_b);
     assert!(gateway.previous_epoch().is_some());
 
@@ -254,13 +300,15 @@ async fn test_adversarial_r2_secret_rotation_entropy_rollback_and_grace_period()
         "ledger_writer",
         "corporate_ledger",
     );
-    let receipt_b = gateway.issue_supervisor_approval(
-        "supervisor_1",
-        "ledger_arm",
-        "corporate_ledger",
-        100_000,
-        300,
-    ).expect("Issued receipt under B");
+    let receipt_b = gateway
+        .issue_supervisor_approval(
+            "supervisor_1",
+            "ledger_arm",
+            "corporate_ledger",
+            100_000,
+            300,
+        )
+        .expect("Issued receipt under B");
 
     let eval_b = gateway.authorize_tool_invocation_with_approval(
         &token_b,
@@ -276,7 +324,10 @@ async fn test_adversarial_r2_secret_rotation_entropy_rollback_and_grace_period()
     let fp_restored = gateway.rollback_secret().expect("Rollback succeeded");
     assert_eq!(gateway.secret_seed(), secret_a);
     assert_eq!(gateway.active_epoch().fingerprint, fp_restored);
-    assert!(gateway.previous_epoch().is_none(), "Previous epoch must be cleared after rollback");
+    assert!(
+        gateway.previous_epoch().is_none(),
+        "Previous epoch must be cleared after rollback"
+    );
 
     // Under rolled back secret A: Token A works as primary active secret!
     let eval_restored_a = gateway.authorize_tool_invocation_with_approval(
@@ -287,7 +338,10 @@ async fn test_adversarial_r2_secret_rotation_entropy_rollback_and_grace_period()
         json!({ "amount_cents": 50000, "approved": true }),
         Some(&receipt_a),
     );
-    assert!(eval_restored_a.is_ok(), "Token A must verify under restored Secret A");
+    assert!(
+        eval_restored_a.is_ok(),
+        "Token A must verify under restored Secret A"
+    );
 
     // Token B (signed with Secret B, now rolled back) MUST be rejected!
     let eval_rolled_b = gateway.authorize_tool_invocation_with_approval(
@@ -298,7 +352,10 @@ async fn test_adversarial_r2_secret_rotation_entropy_rollback_and_grace_period()
         json!({ "amount_cents": 50000, "approved": true }),
         Some(&receipt_b),
     );
-    assert!(eval_rolled_b.is_err(), "Token B must fail after rollback to Secret A");
+    assert!(
+        eval_rolled_b.is_err(),
+        "Token B must fail after rollback to Secret A"
+    );
 
     // Second consecutive rollback attempt must fail closed
     let double_rollback = gateway.rollback_secret();
@@ -321,7 +378,9 @@ async fn test_adversarial_r2_secret_rotation_entropy_rollback_and_grace_period()
 
     // Rotate secret to Secret C
     let secret_c = b"ROTATED_SECRET_GAMMA_32_BYTES_OK!";
-    gateway.rotate_secret(secret_c, "cedar_ring_v4.13").expect("Rotation to C succeeded");
+    gateway
+        .rotate_secret(secret_c, "cedar_ring_v4.13")
+        .expect("Rotation to C succeeded");
 
     // Revoked token must remain revoked after rotation!
     let revoked_verdict = gateway.authorize_tool_invocation(
@@ -340,13 +399,24 @@ async fn test_adversarial_r2_secret_rotation_entropy_rollback_and_grace_period()
     // 8. Secret loader resilience (OCTOPUS_CEDAR_SECRET & CSPRNG)
     // Dynamic CSPRNG generation
     let dynamic_secret = load_or_generate_cedar_secret();
-    assert_eq!(dynamic_secret.len(), 32, "CSPRNG secret must be exactly 32 bytes");
-    assert_ne!(dynamic_secret, [0u8; 32], "CSPRNG secret cannot be all zeros");
+    assert_eq!(
+        dynamic_secret.len(),
+        32,
+        "CSPRNG secret must be exactly 32 bytes"
+    );
+    assert_ne!(
+        dynamic_secret, [0u8; 32],
+        "CSPRNG secret cannot be all zeros"
+    );
 
     // Process-scoped environment loading: short key stretching
     std::env::set_var("OCTOPUS_CEDAR_SECRET", "short_secret_to_stretch");
     let stretched_secret = load_or_generate_cedar_secret();
-    assert_eq!(stretched_secret.len(), 32, "Stretched secret must be 32 bytes");
+    assert_eq!(
+        stretched_secret.len(),
+        32,
+        "Stretched secret must be 32 bytes"
+    );
     std::env::remove_var("OCTOPUS_CEDAR_SECRET");
 
     // Process-scoped environment loading: 32+ byte key
@@ -395,7 +465,10 @@ async fn test_adversarial_r3_rfc3986_threat_provenance_and_url_validation() {
         golden_payload,
         None,
     );
-    assert!(valid_assets.is_ok(), "Anchored release asset URL must succeed");
+    assert!(
+        valid_assets.is_ok(),
+        "Anchored release asset URL must succeed"
+    );
 
     let valid_raw = sync_mgr.verify_and_ingest(
         "https://raw.githubusercontent.com/mitre-atlas/atlas-data/stix-atlas.json",
@@ -403,7 +476,10 @@ async fn test_adversarial_r3_rfc3986_threat_provenance_and_url_validation() {
         golden_payload,
         None,
     );
-    assert!(valid_raw.is_ok(), "Anchored raw.githubusercontent.com URL must succeed");
+    assert!(
+        valid_raw.is_ok(),
+        "Anchored raw.githubusercontent.com URL must succeed"
+    );
 
     // 2. Non-standard ports rejection
     let bad_ports = [
@@ -414,7 +490,11 @@ async fn test_adversarial_r3_rfc3986_threat_provenance_and_url_validation() {
     ];
     for bad_port_url in &bad_ports {
         let res = sync_mgr.verify_and_ingest(bad_port_url, "2026.09", golden_payload, None);
-        assert!(res.is_err(), "Non-443 port URL '{}' must be rejected", bad_port_url);
+        assert!(
+            res.is_err(),
+            "Non-443 port URL '{}' must be rejected",
+            bad_port_url
+        );
     }
 
     // 3. Embedded userinfo credentials rejection
@@ -425,7 +505,11 @@ async fn test_adversarial_r3_rfc3986_threat_provenance_and_url_validation() {
     ];
     for cred_url in &credential_urls {
         let res = sync_mgr.verify_and_ingest(cred_url, "2026.09", golden_payload, None);
-        assert!(res.is_err(), "Embedded userinfo URL '{}' must be rejected", cred_url);
+        assert!(
+            res.is_err(),
+            "Embedded userinfo URL '{}' must be rejected",
+            cred_url
+        );
     }
 
     // 4. Strict ISO Calendar Version Formatting (`validate_atlas_version`)
@@ -438,19 +522,19 @@ async fn test_adversarial_r3_rfc3986_threat_provenance_and_url_validation() {
 
     // Invalid formats
     let invalid_versions = [
-        "2026.1",        // single digit month
-        "26.09",         // 2-digit year
-        "+2026.09",      // leading sign
-        "-2026.09",      // leading minus
-        "2023.12",       // year < 2024
-        "2031.01",       // year > 2030
-        "2025.00",       // month 00
-        "2025.13",       // month 13
-        "2025.01.01",    // extra sub-parts
-        "2025-09",       // dash instead of dot in date
-        "2025.09-",      // empty variant tag
+        "2026.1",           // single digit month
+        "26.09",            // 2-digit year
+        "+2026.09",         // leading sign
+        "-2026.09",         // leading minus
+        "2023.12",          // year < 2024
+        "2031.01",          // year > 2030
+        "2025.00",          // month 00
+        "2025.13",          // month 13
+        "2025.01.01",       // extra sub-parts
+        "2025-09",          // dash instead of dot in date
+        "2025.09-",         // empty variant tag
         "2025.09-bad tag!", // invalid character in tag
-        "",              // empty string
+        "",                 // empty string
     ];
     for bad_ver in &invalid_versions {
         assert!(
@@ -504,7 +588,10 @@ async fn test_adversarial_r3_rfc3986_threat_provenance_and_url_validation() {
         payload: None,
     };
     let allowed_res = proxy.dispatch_egress(&allowed_req).await;
-    assert!(allowed_res.is_ok(), "Legitimate allowlisted HTTPS request must succeed");
+    assert!(
+        allowed_res.is_ok(),
+        "Legitimate allowlisted HTTPS request must succeed"
+    );
 }
 
 // ==============================================================================
@@ -518,7 +605,9 @@ async fn test_adversarial_r4_cedargate_direct_rotation_rollback_and_server_ipv6(
 
     // 1. CedarGate::rotate_secret rejected with foreign token
     let secret_1 = b"CEDAR_GATE_DYNAMIC_ROTATION_KEY_1_32B!";
-    let unauth_rot = gate.rotate_secret(secret_1, "cedar_ring_v4.13", &foreign_token).await;
+    let unauth_rot = gate
+        .rotate_secret(secret_1, "cedar_ring_v4.13", &foreign_token)
+        .await;
     assert!(
         matches!(unauth_rot, Err(OctopusSecurityError::CapabilityDenied(ref msg)) if msg.contains("UNAUTHORIZED_CALL_PATH")),
         "CedarGate direct rotation must reject foreign token: {:?}",
@@ -526,8 +615,13 @@ async fn test_adversarial_r4_cedargate_direct_rotation_rollback_and_server_ipv6(
     );
 
     // 2. CedarGate::rotate_secret succeeds with authentic token
-    let auth_rot = gate.rotate_secret(secret_1, "cedar_ring_v4.13", &token).await;
-    assert!(auth_rot.is_ok(), "CedarGate direct rotation with authentic token must succeed");
+    let auth_rot = gate
+        .rotate_secret(secret_1, "cedar_ring_v4.13", &token)
+        .await;
+    assert!(
+        auth_rot.is_ok(),
+        "CedarGate direct rotation with authentic token must succeed"
+    );
 
     // 3. CedarGate::rollback_secret rejected with foreign token
     let unauth_rollback = gate.rollback_secret(&foreign_token).await;
@@ -539,7 +633,10 @@ async fn test_adversarial_r4_cedargate_direct_rotation_rollback_and_server_ipv6(
 
     // 4. CedarGate::rollback_secret succeeds with authentic token
     let auth_rollback = gate.rollback_secret(&token).await;
-    assert!(auth_rollback.is_ok(), "CedarGate direct rollback with authentic token must succeed");
+    assert!(
+        auth_rollback.is_ok(),
+        "CedarGate direct rollback with authentic token must succeed"
+    );
 
     // Second consecutive rollback must fail closed
     let double_rollback = gate.rollback_secret(&token).await;
@@ -557,12 +654,32 @@ async fn test_adversarial_r4_cedargate_direct_rotation_rollback_and_server_ipv6(
         }
     }
 
-    assert_eq!(parse_port("[::1]:5005"), "5005", "IPv6 loopback literal port extraction");
-    assert_eq!(parse_port("[::]:5005"), "5005", "IPv6 wildcard port extraction");
-    assert_eq!(parse_port("127.0.0.1:5005"), "5005", "IPv4 loopback port extraction");
-    assert_eq!(parse_port("[::1]:8080"), "8080", "Non-default port extraction");
+    assert_eq!(
+        parse_port("[::1]:5005"),
+        "5005",
+        "IPv6 loopback literal port extraction"
+    );
+    assert_eq!(
+        parse_port("[::]:5005"),
+        "5005",
+        "IPv6 wildcard port extraction"
+    );
+    assert_eq!(
+        parse_port("127.0.0.1:5005"),
+        "5005",
+        "IPv4 loopback port extraction"
+    );
+    assert_eq!(
+        parse_port("[::1]:8080"),
+        "8080",
+        "Non-default port extraction"
+    );
     assert_eq!(parse_port("[::1]"), "5005", "Missing port defaults to 5005");
-    assert_eq!(parse_port("invalid_address"), "5005", "Malformed address defaults to 5005");
+    assert_eq!(
+        parse_port("invalid_address"),
+        "5005",
+        "Malformed address defaults to 5005"
+    );
 
     // 6. Supervisor Approval Receipt Segregation of Duties
     let gw = CedarAuthorizationGateway::new(b"SEED_SUPERVISOR_TEST_32_BYTES_OK!", "fp_test");
@@ -582,13 +699,15 @@ async fn test_adversarial_r4_cedargate_direct_rotation_rollback_and_server_ipv6(
     );
 
     // Valid supervisor approval
-    let valid_receipt = gw.issue_supervisor_approval(
-        "supervisor_lead",
-        "worker_arm_1",
-        "corporate_ledger",
-        50000,
-        300,
-    ).expect("Issued valid receipt");
+    let valid_receipt = gw
+        .issue_supervisor_approval(
+            "supervisor_lead",
+            "worker_arm_1",
+            "corporate_ledger",
+            50000,
+            300,
+        )
+        .expect("Issued valid receipt");
 
     // Presented by a different agent -> rejected
     let wrong_agent_verify = gw.verify_supervisor_approval(
@@ -614,4 +733,3 @@ async fn test_adversarial_r4_cedargate_direct_rotation_rollback_and_server_ipv6(
         "Requested amount exceeding approved receipt limit must be rejected"
     );
 }
-

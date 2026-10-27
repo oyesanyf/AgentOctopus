@@ -157,4 +157,3 @@ pub struct TelemetryPacket {
     pub entropy_bits: f64,
     pub incremental_merkle_root: Option<String>,
 }
-

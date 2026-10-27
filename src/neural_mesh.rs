@@ -358,9 +358,7 @@ mod tests {
         let (_, _) = mesh.enroll("b", 2).await.unwrap();
 
         let long_corr_id = "X".repeat(129);
-        let res = a
-            .send("b", MessageKind::Alert, &long_corr_id, "test")
-            .await;
+        let res = a.send("b", MessageKind::Alert, &long_corr_id, "test").await;
         assert_eq!(res, Err(MeshError::Oversize));
     }
 
@@ -370,12 +368,17 @@ mod tests {
         let (a, _) = mesh.enroll("a", 2).await.unwrap();
         let (_, mut b_rx) = mesh.enroll("b", 2).await.unwrap();
 
-        a.send("b", MessageKind::Finding, "c-1", "authentic").await.unwrap();
+        a.send("b", MessageKind::Finding, "c-1", "authentic")
+            .await
+            .unwrap();
         let mut msg = b_rx.recv().await.unwrap();
         assert!(mesh.verify_message(&msg).await.is_ok());
 
         msg.content = "forged content".to_string();
-        assert_eq!(mesh.verify_message(&msg).await, Err(MeshError::AuthenticationFailed));
+        assert_eq!(
+            mesh.verify_message(&msg).await,
+            Err(MeshError::AuthenticationFailed)
+        );
     }
 
     #[tokio::test]

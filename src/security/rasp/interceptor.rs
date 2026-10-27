@@ -41,7 +41,8 @@ impl PromptInvocationInterceptor {
             Regex::new(r"(?i)exfiltrate\s+confidential\s+keys").unwrap(),
         ];
 
-        let zero_width_regex = Regex::new(r"[\u{200B}\u{200C}\u{200D}\u{FEFF}\u{202A}-\u{202E}]").unwrap();
+        let zero_width_regex =
+            Regex::new(r"[\u{200B}\u{200C}\u{200D}\u{FEFF}\u{202A}-\u{202E}]").unwrap();
 
         Self {
             policy_engine,
@@ -87,7 +88,10 @@ impl PromptInvocationInterceptor {
                 let cat = RaspThreatCategory::PromptInjection;
                 let dec = self.policy_engine.evaluate_mitigation_action(
                     cat,
-                    &format!("Direct prompt injection pattern matched: {}", pattern.as_str()),
+                    &format!(
+                        "Direct prompt injection pattern matched: {}",
+                        pattern.as_str()
+                    ),
                     subject,
                     "RASP-PROMPT-002",
                 );
@@ -102,7 +106,12 @@ impl PromptInvocationInterceptor {
             !c.is_empty() && c != "en" && c != "english"
         });
 
-        if is_foreign_lang && self.policy_engine.config().enable_multilingual_semantic_pass {
+        if is_foreign_lang
+            && self
+                .policy_engine
+                .config()
+                .enable_multilingual_semantic_pass
+        {
             // Multilingual instructions pass cleanly if no adversarial signatures exist
             return (
                 RaspDecision::Allow {
@@ -152,7 +161,8 @@ impl Default for ToolActuatorInterceptor {
 impl ToolActuatorInterceptor {
     pub fn new(policy_engine: Arc<RaspPolicyEngine>) -> Self {
         let cmd_regex = Regex::new(r#"(?i)(;|&&|\|\||`|\$\(|\bpowershell(\.exe)?\b|\bcmd(\.exe)?\b|\bbash\b|\bwscript(\.exe)?\b)"#).unwrap();
-        let path_regex = Regex::new(r#"(?i)(\.\./|\.\.\\|/etc/passwd|c:\\windows\\system32|%2e%2e)"#).unwrap();
+        let path_regex =
+            Regex::new(r#"(?i)(\.\./|\.\.\\|/etc/passwd|c:\\windows\\system32|%2e%2e)"#).unwrap();
 
         Self {
             policy_engine,
@@ -198,10 +208,18 @@ impl ToolActuatorInterceptor {
         // 3. Dynamic 64-bit numerical boundary validation
         if let Some(obj) = params.as_object() {
             for (key, val) in obj {
-                if key.contains("amount") || key.contains("budget") || key.contains("count") || key.contains("limit") {
+                if key.contains("amount")
+                    || key.contains("budget")
+                    || key.contains("count")
+                    || key.contains("limit")
+                {
                     if let Some(n) = val.as_i64() {
                         // Negative values on financial or disbursement actions are invalid
-                        if n < 0 && (tool_name.contains("disburse") || tool_name.contains("transfer") || tool_name.contains("spend")) {
+                        if n < 0
+                            && (tool_name.contains("disburse")
+                                || tool_name.contains("transfer")
+                                || tool_name.contains("spend"))
+                        {
                             let cat = RaspThreatCategory::NumericalBoundaryViolation;
                             let dec = self.policy_engine.evaluate_mitigation_action(
                                 cat,
@@ -213,8 +231,14 @@ impl ToolActuatorInterceptor {
                         }
 
                         // High-value disbursement without supervisor signature
-                        let max_unattested = self.policy_engine.config().max_ledger_disbursement_unattested;
-                        if n > max_unattested && subject.supervisor_signature.is_none() && subject.trust_tier != AgentTrustTier::SupervisorAttested {
+                        let max_unattested = self
+                            .policy_engine
+                            .config()
+                            .max_ledger_disbursement_unattested;
+                        if n > max_unattested
+                            && subject.supervisor_signature.is_none()
+                            && subject.trust_tier != AgentTrustTier::SupervisorAttested
+                        {
                             let cat = RaspThreatCategory::PrivilegeEscalation;
                             let dec = self.policy_engine.evaluate_mitigation_action(
                                 cat,
@@ -319,7 +343,10 @@ impl MemoryScratchpadInterceptor {
             let cat = RaspThreatCategory::CanaryTokenTripped;
             let dec = self.policy_engine.evaluate_mitigation_action(
                 cat,
-                &format!("Unauthorized access to canary memory address: {} ({})", canary, label),
+                &format!(
+                    "Unauthorized access to canary memory address: {} ({})",
+                    canary, label
+                ),
                 subject,
                 "RASP-MEM-001",
             );
@@ -331,11 +358,16 @@ impl MemoryScratchpadInterceptor {
             let parts: Vec<&str> = key.split(':').collect();
             if parts.len() >= 2 {
                 let owner = parts[1];
-                if owner != subject.agent_id && subject.trust_tier == AgentTrustTier::WorkerSandboxed {
+                if owner != subject.agent_id
+                    && subject.trust_tier == AgentTrustTier::WorkerSandboxed
+                {
                     let cat = RaspThreatCategory::ScratchpadBleed;
                     let dec = self.policy_engine.evaluate_mitigation_action(
                         cat,
-                        &format!("Cross-agent scratchpad access denied for agent '{}' accessing '{}'", subject.agent_id, owner),
+                        &format!(
+                            "Cross-agent scratchpad access denied for agent '{}' accessing '{}'",
+                            subject.agent_id, owner
+                        ),
                         subject,
                         "RASP-MEM-002",
                     );
@@ -364,7 +396,10 @@ impl MemoryScratchpadInterceptor {
             let cat = RaspThreatCategory::CanaryTokenTripped;
             let dec = self.policy_engine.evaluate_mitigation_action(
                 cat,
-                &format!("Unauthorized write to canary memory address: {} ({})", canary, label),
+                &format!(
+                    "Unauthorized write to canary memory address: {} ({})",
+                    canary, label
+                ),
                 subject,
                 "RASP-MEM-003",
             );
@@ -373,7 +408,10 @@ impl MemoryScratchpadInterceptor {
 
         // 2. Detect and auto-redact credentials
         if self.credential_regex.is_match(content) {
-            let sanitized = self.credential_regex.replace_all(content, "[REDACTED_BY_RT_ASP]").to_string();
+            let sanitized = self
+                .credential_regex
+                .replace_all(content, "[REDACTED_BY_RT_ASP]")
+                .to_string();
             let cat = RaspThreatCategory::CredentialLeakage;
             let dec = self.policy_engine.evaluate_mitigation_action(
                 cat,
@@ -434,9 +472,16 @@ impl LateralA2AInterceptor {
         if let Some(action) = message.get("action").and_then(|a| a.as_str()) {
             if action == "disburse_ledger" || action == "transfer_funds" {
                 let amount = message.get("amount").and_then(|a| a.as_i64()).unwrap_or(0);
-                if amount > self.policy_engine.config().max_ledger_disbursement_unattested {
+                if amount
+                    > self
+                        .policy_engine
+                        .config()
+                        .max_ledger_disbursement_unattested
+                {
                     // Must have supervisor attestation
-                    if sender_subject.supervisor_signature.is_none() && sender_subject.trust_tier != AgentTrustTier::SupervisorAttested {
+                    if sender_subject.supervisor_signature.is_none()
+                        && sender_subject.trust_tier != AgentTrustTier::SupervisorAttested
+                    {
                         let cat = RaspThreatCategory::LateralCollusion;
                         let dec = self.policy_engine.evaluate_mitigation_action(
                             cat,
@@ -508,7 +553,15 @@ impl SubstrateClampInterceptor {
         }
 
         // Veto unauthorized interactive shells
-        let blocked_shells = ["powershell.exe", "cmd.exe", "bash", "sh", "wscript.exe", "cscript.exe", "pwsh.exe"];
+        let blocked_shells = [
+            "powershell.exe",
+            "cmd.exe",
+            "bash",
+            "sh",
+            "wscript.exe",
+            "cscript.exe",
+            "pwsh.exe",
+        ];
         for blocked in &blocked_shells {
             if exe_lower.ends_with(blocked) {
                 let cat = RaspThreatCategory::SubstrateClampBreach;
@@ -544,7 +597,10 @@ impl SubstrateClampInterceptor {
             let cat = RaspThreatCategory::SubstrateClampBreach;
             let dec = self.policy_engine.evaluate_mitigation_action(
                 cat,
-                &format!("Memory request {} bytes exceeds 64MB clamp (current: {}, max: {})", requested_bytes, current_usage_bytes, max_clamp),
+                &format!(
+                    "Memory request {} bytes exceeds 64MB clamp (current: {}, max: {})",
+                    requested_bytes, current_usage_bytes, max_clamp
+                ),
                 subject,
                 "RASP-SUBSTRATE-002",
             );

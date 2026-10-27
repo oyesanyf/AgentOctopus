@@ -195,8 +195,8 @@ impl CedarSchema {
 
     /// Loads a custom Cedar schema from a JSON string.
     pub fn from_json_str(json_str: &str) -> Result<Self, SchemaError> {
-        let schema = Schema::from_json_str(json_str)
-            .map_err(|e| SchemaError::ParseError(e.to_string()))?;
+        let schema =
+            Schema::from_json_str(json_str).map_err(|e| SchemaError::ParseError(e.to_string()))?;
         Ok(Self { schema })
     }
 

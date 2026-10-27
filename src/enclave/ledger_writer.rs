@@ -19,7 +19,11 @@ impl SafeLedgerWriter {
         }
     }
 
-    pub fn write_entry(&self, target_account: &str, amount_cents: u64) -> Result<String, OctopusSecurityError> {
+    pub fn write_entry(
+        &self,
+        target_account: &str,
+        amount_cents: u64,
+    ) -> Result<String, OctopusSecurityError> {
         let trimmed = target_account.trim();
         if !self.account_regex.is_match(trimmed) {
             return Err(OctopusSecurityError::EnclaveViolation(format!(

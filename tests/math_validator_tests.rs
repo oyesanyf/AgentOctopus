@@ -1,6 +1,4 @@
-use agent_octopus::security::math_validator::{
-    ResilienceBreachEvent, VassilevMathValidator,
-};
+use agent_octopus::security::math_validator::{ResilienceBreachEvent, VassilevMathValidator};
 use agent_octopus::security::rl_defense::{
     AdaptiveDefenseAction, AdaptiveRlDefenseEngine, AdaptiveStateVector,
 };
@@ -90,10 +88,18 @@ fn test_equations_11_and_12_mttd_and_mttr() {
     let mttr = VassilevMathValidator::compute_mttr(&events);
 
     // MTTD = (2.5 + 1.5) / 2 = 2.0 ms
-    assert!((mttd - 2.0).abs() < 1e-6, "Expected MTTD = 2.0, got {}", mttd);
+    assert!(
+        (mttd - 2.0).abs() < 1e-6,
+        "Expected MTTD = 2.0, got {}",
+        mttd
+    );
 
     // MTTR = (3.5 + 2.5) / 2 = 3.0 ms
-    assert!((mttr - 3.0).abs() < 1e-6, "Expected MTTR = 3.0, got {}", mttr);
+    assert!(
+        (mttr - 3.0).abs() < 1e-6,
+        "Expected MTTR = 3.0, got {}",
+        mttr
+    );
 }
 
 #[test]
@@ -144,7 +150,10 @@ fn test_enhanced_dueling_q_and_epistemic_uncertainty() {
     s.credential_access_pressure = 0.85;
     let bucket = s.discretize_bucket();
     let initial_unc = rl.composite_uncertainty_for_state(bucket);
-    assert_eq!(initial_unc, 1.0, "Expected max uncertainty for unseen state");
+    assert_eq!(
+        initial_unc, 1.0,
+        "Expected max uncertainty for unseen state"
+    );
 
     // 2. Perform steps to train the state
     for i in 0..15 {
@@ -174,8 +183,12 @@ fn test_enhanced_dueling_q_and_epistemic_uncertainty() {
     );
 
     // 4. Verify Dueling Q evaluation
-    let dueling_q = rl.evaluate_dueling_q(bucket, AdaptiveDefenseAction::MicroContainment.to_index());
-    assert!(dueling_q > 0.0, "Expected positive dueling Q-value after containment rewards");
+    let dueling_q =
+        rl.evaluate_dueling_q(bucket, AdaptiveDefenseAction::MicroContainment.to_index());
+    assert!(
+        dueling_q > 0.0,
+        "Expected positive dueling Q-value after containment rewards"
+    );
 
     let stats = rl.stats();
     assert!(stats.dueling_state_values_count > 0);

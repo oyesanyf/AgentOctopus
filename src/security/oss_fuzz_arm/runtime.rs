@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use serde::{Deserialize, Serialize};
 
 use super::mutator::OssFuzzMutator;
 use super::targets::{
@@ -94,7 +94,10 @@ impl ContinuousOssFuzzArm {
         }
     }
 
-    pub fn with_containment_ring(mut self, ring: Arc<crate::containment_ring::ArmContainmentRing>) -> Self {
+    pub fn with_containment_ring(
+        mut self,
+        ring: Arc<crate::containment_ring::ArmContainmentRing>,
+    ) -> Self {
         self.arm_ring = ring;
         self
     }
@@ -179,7 +182,8 @@ impl ContinuousOssFuzzArm {
                 }
             }
 
-            self.total_executions.fetch_add(target_execs, Ordering::Relaxed);
+            self.total_executions
+                .fetch_add(target_execs, Ordering::Relaxed);
             total_executed_in_cycle += target_execs as usize;
 
             let avg_micros = if target_execs > 0 {

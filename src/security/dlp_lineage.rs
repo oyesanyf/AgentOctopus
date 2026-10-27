@@ -363,7 +363,9 @@ impl DlpLineageEngine {
                     baggage.source_sha256
                 ),
             )
-        } else if baggage.classification.is_sensitive() && baggage.policy == PolicyLattice::Quarantine {
+        } else if baggage.classification.is_sensitive()
+            && baggage.policy == PolicyLattice::Quarantine
+        {
             (
                 false,
                 Some(baggage.policy),
@@ -402,7 +404,10 @@ mod tests {
         assert_eq!(joined.source_sha256, "aabbcc");
 
         let joined_crown = joined.join(&crown);
-        assert_eq!(joined_crown.classification, ClassificationLattice::CrownJewel);
+        assert_eq!(
+            joined_crown.classification,
+            ClassificationLattice::CrownJewel
+        );
         assert_eq!(joined_crown.policy, PolicyLattice::Quarantine);
         assert_eq!(joined_crown.source_sha256, "112233");
     }

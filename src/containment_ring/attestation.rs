@@ -24,7 +24,11 @@ impl RingAttestation {
         hasher.update(seed);
         let secret: [u8; 32] = hasher.finalize().into();
 
-        let initial_record = Self::compute_record(&secret, "default_cedar_policy_v4.13", "hardened_job_object_v1");
+        let initial_record = Self::compute_record(
+            &secret,
+            "default_cedar_policy_v4.13",
+            "hardened_job_object_v1",
+        );
 
         Self {
             secret_key: Arc::new(secret),
@@ -32,7 +36,11 @@ impl RingAttestation {
         }
     }
 
-    fn compute_record(secret: &[u8; 32], policy_spec: &str, sandbox_spec: &str) -> PolicyAttestationRecord {
+    fn compute_record(
+        secret: &[u8; 32],
+        policy_spec: &str,
+        sandbox_spec: &str,
+    ) -> PolicyAttestationRecord {
         let policy_hash = hex::encode(Sha256::digest(policy_spec.as_bytes()));
         let sandbox_hash = hex::encode(Sha256::digest(sandbox_spec.as_bytes()));
         let now = std::time::SystemTime::now()
@@ -54,7 +62,10 @@ impl RingAttestation {
 
     pub async fn verify_attestation(&self) -> bool {
         let record = self.active_attestation.read().await;
-        let payload = format!("{}:{}:{}", record.timestamp_ms, record.policy_root_hash, record.sandbox_profile_hash);
+        let payload = format!(
+            "{}:{}:{}",
+            record.timestamp_ms, record.policy_root_hash, record.sandbox_profile_hash
+        );
         let expected = crate::security::hmac_sha256(&self.secret_key[..], payload.as_bytes());
         crate::security::constant_time_eq_hex(&hex::encode(expected), &record.signature_hex)
     }
@@ -76,7 +87,11 @@ impl RingAttestation {
 
     /// Restores a valid cryptographic attestation signature.
     pub async fn restore_authentic_attestation(&self) {
-        let rec = Self::compute_record(&self.secret_key, "default_cedar_policy_v4.13", "hardened_job_object_v1");
+        let rec = Self::compute_record(
+            &self.secret_key,
+            "default_cedar_policy_v4.13",
+            "hardened_job_object_v1",
+        );
         *self.active_attestation.write().await = rec;
     }
 }

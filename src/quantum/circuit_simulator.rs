@@ -24,7 +24,10 @@ pub struct QuantumCircuit {
 impl QuantumCircuit {
     /// Creates a new circuit initialized to state |00...0>.
     pub fn new(num_qubits: usize) -> Self {
-        assert!(num_qubits >= 1 && num_qubits <= 14, "num_qubits must be between 1 and 14");
+        assert!(
+            num_qubits >= 1 && num_qubits <= 14,
+            "num_qubits must be between 1 and 14"
+        );
         let dim = 1 << num_qubits;
         let mut state = vec![Complex::zero(); dim];
         state[0] = Complex::new(1.0, 0.0);

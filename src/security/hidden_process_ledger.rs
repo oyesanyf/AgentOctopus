@@ -45,7 +45,10 @@ fn ledger() -> &'static Mutex<Ledger> {
 
 fn describe(cmd: &std::process::Command) -> (String, Vec<String>) {
     let program = cmd.get_program().to_string_lossy().into_owned();
-    let args = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+    let args = cmd
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
     (program, args)
 }
 
@@ -108,7 +111,10 @@ pub fn list_hidden_spawns() -> Vec<HiddenSpawnRecord> {
 }
 
 /// Spawns `cmd` with `CREATE_NO_WINDOW` and records it in the ledger.
-pub fn spawn_hidden(cmd: &mut std::process::Command, purpose: &str) -> std::io::Result<std::process::Child> {
+pub fn spawn_hidden(
+    cmd: &mut std::process::Command,
+    purpose: &str,
+) -> std::io::Result<std::process::Child> {
     use crate::security::console_defense::CommandConsoleExt;
     cmd.enforce_no_window();
     match cmd.spawn() {
@@ -125,7 +131,10 @@ pub fn spawn_hidden(cmd: &mut std::process::Command, purpose: &str) -> std::io::
 
 /// Runs `cmd` hidden to completion (`spawn` + `wait_with_output`), recording its PID.
 /// Mirrors `Command::output()` semantics: stdin null, stdout/stderr captured.
-pub fn output_hidden(cmd: &mut std::process::Command, purpose: &str) -> std::io::Result<std::process::Output> {
+pub fn output_hidden(
+    cmd: &mut std::process::Command,
+    purpose: &str,
+) -> std::io::Result<std::process::Output> {
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -153,7 +162,10 @@ impl LedgeredCommandExt for std::process::Command {
 }
 
 /// Runs `cmd` hidden to completion and returns its exit status, recording its PID.
-pub fn status_hidden(cmd: &mut std::process::Command, purpose: &str) -> std::io::Result<std::process::ExitStatus> {
+pub fn status_hidden(
+    cmd: &mut std::process::Command,
+    purpose: &str,
+) -> std::io::Result<std::process::ExitStatus> {
     let mut child = spawn_hidden(cmd, purpose)?;
     child.wait()
 }

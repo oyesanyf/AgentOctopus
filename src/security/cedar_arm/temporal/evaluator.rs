@@ -36,12 +36,7 @@ impl<'a> DogwoodEvaluator<'a> {
         !results.is_empty()
     }
 
-    fn eval_expr(
-        &self,
-        expr: &TemporalExpr,
-        curr_idx: usize,
-        env: &BindingEnv,
-    ) -> Vec<BindingEnv> {
+    fn eval_expr(&self, expr: &TemporalExpr, curr_idx: usize, env: &BindingEnv) -> Vec<BindingEnv> {
         match expr {
             TemporalExpr::Formerly { window, body } => {
                 let curr_time = self.get_timepoint_time(curr_idx);
@@ -72,7 +67,11 @@ impl<'a> DogwoodEvaluator<'a> {
                 }
             }
 
-            TemporalExpr::Since { left, window, right } => {
+            TemporalExpr::Since {
+                left,
+                window,
+                right,
+            } => {
                 let curr_time = self.get_timepoint_time(curr_idx);
                 let w_secs = window.as_seconds();
                 let mut valid_envs = Vec::new();
@@ -120,7 +119,11 @@ impl<'a> DogwoodEvaluator<'a> {
                 }
             }
 
-            TemporalExpr::Exists { var, var_type: _, body } => {
+            TemporalExpr::Exists {
+                var,
+                var_type: _,
+                body,
+            } => {
                 let matches = self.eval_expr(body, curr_idx, env);
                 if matches.is_empty() {
                     Vec::new()
@@ -157,7 +160,8 @@ impl<'a> DogwoodEvaluator<'a> {
                 // Match action name and kind
                 let action_norm = action.trim_matches('"');
                 let ev_action_norm = ev.action.trim_matches('"');
-                if !ev_action_norm.ends_with(action_norm) && !action_norm.ends_with(ev_action_norm) {
+                if !ev_action_norm.ends_with(action_norm) && !action_norm.ends_with(ev_action_norm)
+                {
                     return Vec::new();
                 }
                 if &ev.kind != kind {
@@ -168,8 +172,12 @@ impl<'a> DogwoodEvaluator<'a> {
                 let mut new_env = env.clone();
                 for (field, pattern) in patterns {
                     let actual_val = match field.as_str() {
-                        "callerPrincipal" => Some(serde_json::Value::String(ev.caller_principal.clone())),
-                        "callerResource" => Some(serde_json::Value::String(ev.caller_resource.clone())),
+                        "callerPrincipal" => {
+                            Some(serde_json::Value::String(ev.caller_principal.clone()))
+                        }
+                        "callerResource" => {
+                            Some(serde_json::Value::String(ev.caller_resource.clone()))
+                        }
                         other => ev.fields.get(other).cloned(),
                     };
 
@@ -240,19 +248,35 @@ impl<'a> DogwoodEvaluator<'a> {
         }
     }
 
-    fn resolve_term(&self, term: &TermExpr, curr_idx: usize, env: &BindingEnv) -> Option<serde_json::Value> {
+    fn resolve_term(
+        &self,
+        term: &TermExpr,
+        curr_idx: usize,
+        env: &BindingEnv,
+    ) -> Option<serde_json::Value> {
         match term {
             TermExpr::Literal(val) => Some(val.clone()),
             TermExpr::ContextField(f) => self.resolve_context_field(f),
-            TermExpr::ScopePrincipal => Some(serde_json::Value::String(self.decision_ctx.principal.clone())),
-            TermExpr::ScopeResource => Some(serde_json::Value::String(self.decision_ctx.resource.clone())),
+            TermExpr::ScopePrincipal => Some(serde_json::Value::String(
+                self.decision_ctx.principal.clone(),
+            )),
+            TermExpr::ScopeResource => Some(serde_json::Value::String(
+                self.decision_ctx.resource.clone(),
+            )),
             TermExpr::Variable(var) => env.get(var).cloned(),
             TermExpr::Aggregate(agg) => match agg.as_ref() {
-                AggregateExpr::Count { for_vars: _, where_body } => {
+                AggregateExpr::Count {
+                    for_vars: _,
+                    where_body,
+                } => {
                     let matches = self.eval_expr(where_body, curr_idx, env);
                     Some(serde_json::json!(matches.len() as i64))
                 }
-                AggregateExpr::Sum { sum_var, for_vars: _, where_body } => {
+                AggregateExpr::Sum {
+                    sum_var,
+                    for_vars: _,
+                    where_body,
+                } => {
                     let matches = self.eval_expr(where_body, curr_idx, env);
                     let mut sum: i64 = 0;
                     for m in matches {
@@ -279,21 +303,34 @@ impl<'a> DogwoodEvaluator<'a> {
         }
     }
 
-    fn compare_values(&self, left: &serde_json::Value, op: CmpOp, right: &serde_json::Value) -> bool {
+    fn compare_values(
+        &self,
+        left: &serde_json::Value,
+        op: CmpOp,
+        right: &serde_json::Value,
+    ) -> bool {
         match op {
             CmpOp::Eq => left == right,
             CmpOp::Neq => left != right,
             CmpOp::Lt => {
-                left.as_i64().is_some() && right.as_i64().is_some() && left.as_i64() < right.as_i64()
+                left.as_i64().is_some()
+                    && right.as_i64().is_some()
+                    && left.as_i64() < right.as_i64()
             }
             CmpOp::Lte => {
-                left.as_i64().is_some() && right.as_i64().is_some() && left.as_i64() <= right.as_i64()
+                left.as_i64().is_some()
+                    && right.as_i64().is_some()
+                    && left.as_i64() <= right.as_i64()
             }
             CmpOp::Gt => {
-                left.as_i64().is_some() && right.as_i64().is_some() && left.as_i64() > right.as_i64()
+                left.as_i64().is_some()
+                    && right.as_i64().is_some()
+                    && left.as_i64() > right.as_i64()
             }
             CmpOp::Gte => {
-                left.as_i64().is_some() && right.as_i64().is_some() && left.as_i64() >= right.as_i64()
+                left.as_i64().is_some()
+                    && right.as_i64().is_some()
+                    && left.as_i64() >= right.as_i64()
             }
         }
     }

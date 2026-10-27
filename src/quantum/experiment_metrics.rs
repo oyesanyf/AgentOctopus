@@ -1,5 +1,5 @@
 use crate::quantum::attack_graph::AttackGraph;
-use crate::quantum::qubo_optimizer::{QuboModel, QuantumAnnealerConfig, SimulatedQuantumAnnealer};
+use crate::quantum::qubo_optimizer::{QuantumAnnealerConfig, QuboModel, SimulatedQuantumAnnealer};
 use std::collections::HashSet;
 use std::time::Instant;
 

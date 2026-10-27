@@ -64,12 +64,30 @@ pub struct DataBreakoutGuard {
 impl Default for DataBreakoutGuard {
     fn default() -> Self {
         let mut tiers = HashMap::new();
-        tiers.insert("document_arm".to_string(), AgentTrustTier::LowUntrustedWorker);
-        tiers.insert("researcher_arm".to_string(), AgentTrustTier::LowUntrustedWorker);
-        tiers.insert("orchestrator".to_string(), AgentTrustTier::MediumCoordinator);
-        tiers.insert("ledger_arm".to_string(), AgentTrustTier::HighExecutionPrivileged);
-        tiers.insert("network_arm".to_string(), AgentTrustTier::HighExecutionPrivileged);
-        tiers.insert("kernel_sentinel_arm".to_string(), AgentTrustTier::HighExecutionPrivileged);
+        tiers.insert(
+            "document_arm".to_string(),
+            AgentTrustTier::LowUntrustedWorker,
+        );
+        tiers.insert(
+            "researcher_arm".to_string(),
+            AgentTrustTier::LowUntrustedWorker,
+        );
+        tiers.insert(
+            "orchestrator".to_string(),
+            AgentTrustTier::MediumCoordinator,
+        );
+        tiers.insert(
+            "ledger_arm".to_string(),
+            AgentTrustTier::HighExecutionPrivileged,
+        );
+        tiers.insert(
+            "network_arm".to_string(),
+            AgentTrustTier::HighExecutionPrivileged,
+        );
+        tiers.insert(
+            "kernel_sentinel_arm".to_string(),
+            AgentTrustTier::HighExecutionPrivileged,
+        );
 
         let mut privileged_paths = HashSet::new();
         privileged_paths.insert("/shared/state/ledger");
@@ -127,7 +145,10 @@ impl DataBreakoutGuard {
         let mode = self.operating_mode();
 
         let tiers = self.agent_tiers.read().unwrap();
-        let agent_tier = tiers.get(requesting_agent).copied().unwrap_or(AgentTrustTier::LowUntrustedWorker);
+        let agent_tier = tiers
+            .get(requesting_agent)
+            .copied()
+            .unwrap_or(AgentTrustTier::LowUntrustedWorker);
 
         // 1. Cross-Agent Memory Pollution / Shared Scratchpad Isolation Check
         for &priv_path in &self.privileged_scratchpad_paths {
@@ -144,7 +165,10 @@ impl DataBreakoutGuard {
         // 2. Credential extraction & memory dumping command checks
         for &cmd in &self.data_dump_commands {
             if lower_target.contains(cmd) || lower_payload.contains(cmd) {
-                detected_violations.push(format!("Credential extraction / memory scraping attempt detected: '{}'", cmd));
+                detected_violations.push(format!(
+                    "Credential extraction / memory scraping attempt detected: '{}'",
+                    cmd
+                ));
             }
         }
 
@@ -175,9 +199,10 @@ impl DataBreakoutGuard {
             let has_email = regex::Regex::new(r"(?i)\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b")
                 .map(|re| re.is_match(payload))
                 .unwrap_or(false);
-            let has_phone = regex::Regex::new(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b")
-                .map(|re| re.is_match(payload))
-                .unwrap_or(false);
+            let has_phone =
+                regex::Regex::new(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b")
+                    .map(|re| re.is_match(payload))
+                    .unwrap_or(false);
             if has_email || has_phone {
                 phi_pii_blocked = true;
                 detected_violations.push(
@@ -198,7 +223,10 @@ impl DataBreakoutGuard {
         } else if is_clean {
             "Data boundary verified: strict cross-agent isolation & zero memory leakage".to_string()
         } else {
-            format!("Data breakout intercepted: {} isolation breach(es) detected", detected_violations.len())
+            format!(
+                "Data breakout intercepted: {} isolation breach(es) detected",
+                detected_violations.len()
+            )
         };
 
         DataBreakoutVerdict {

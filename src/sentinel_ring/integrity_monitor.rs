@@ -84,8 +84,8 @@ impl IntegrityMonitor {
         }
 
         // 2. Verify supervisor identity
-        let supervisor_match = !is_tampered
-            && current_supervisor_identity == manifest.authorized_supervisor_identity;
+        let supervisor_match =
+            !is_tampered && current_supervisor_identity == manifest.authorized_supervisor_identity;
         if !supervisor_match {
             details.push(format!(
                 "CRITICAL: Supervisor identity untrusted or modified (found: '{}', expected: '{}')",
@@ -104,7 +104,10 @@ impl IntegrityMonitor {
 
         let binary_match = !is_tampered;
         if !binary_match {
-            details.push("CRITICAL: Binary text section hash mismatch / in-memory tampering detected".to_string());
+            details.push(
+                "CRITICAL: Binary text section hash mismatch / in-memory tampering detected"
+                    .to_string(),
+            );
         }
 
         let is_valid = policy_match && supervisor_match && sandbox_match && binary_match;
@@ -121,7 +124,10 @@ impl IntegrityMonitor {
             });
         }
 
-        details.push("All security binaries, policies, and sandbox clamps cryptographically attested.".to_string());
+        details.push(
+            "All security binaries, policies, and sandbox clamps cryptographically attested."
+                .to_string(),
+        );
         Ok(IntegrityReport {
             is_valid: true,
             binary_hash_matched: true,

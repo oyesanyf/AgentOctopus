@@ -30,7 +30,7 @@ impl RfcKnowledgeBase {
     pub fn new() -> Self {
         let base_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let db_path = base_dir.join("data").join("protocol_research.db");
-        
+
         let kb = Self { db_path };
         kb.ensure_initialized();
         kb
@@ -38,7 +38,9 @@ impl RfcKnowledgeBase {
 
     /// Initializes from an explicit file path (e.g. for testing isolated instances).
     pub fn from_path(path: impl Into<PathBuf>) -> Self {
-        let kb = Self { db_path: path.into() };
+        let kb = Self {
+            db_path: path.into(),
+        };
         kb.ensure_initialized();
         kb
     }
@@ -105,7 +107,8 @@ impl RfcKnowledgeBase {
             );
         ";
 
-        let _ = self.sqlite_cmd()
+        let _ = self
+            .sqlite_cmd()
             .arg(schema_sql)
             .output_logged("rfc knowledge base: sqlite3");
     }
@@ -119,7 +122,8 @@ impl RfcKnowledgeBase {
     /// Returns all counts including recorded evaluations.
     pub fn get_full_counts(&self) -> (usize, usize, usize, usize) {
         let query = "SELECT (SELECT COUNT(*) FROM rfcs), (SELECT COUNT(*) FROM fragments), (SELECT COUNT(*) FROM probes), (SELECT COUNT(*) FROM evaluations);";
-        let output = self.sqlite_cmd()
+        let output = self
+            .sqlite_cmd()
             .arg(query)
             .output_logged("rfc knowledge base: sqlite3");
 
@@ -159,7 +163,8 @@ impl RfcKnowledgeBase {
         );
 
         let mut results = Vec::new();
-        let output = self.sqlite_cmd()
+        let output = self
+            .sqlite_cmd()
             .arg("-separator")
             .arg("<|OCT_SEP|>")
             .arg(&query)
@@ -192,7 +197,8 @@ impl RfcKnowledgeBase {
         );
 
         let mut probes = Vec::new();
-        let output = self.sqlite_cmd()
+        let output = self
+            .sqlite_cmd()
             .arg("-separator")
             .arg("<|OCT_SEP|>")
             .arg(&query)
@@ -246,7 +252,8 @@ impl RfcKnowledgeBase {
             if baseline_subtracted { 1 } else { 0 }
         );
 
-        let _ = self.sqlite_cmd()
+        let _ = self
+            .sqlite_cmd()
             .arg(&query)
             .output_logged("rfc knowledge base: sqlite3");
     }
@@ -273,13 +280,20 @@ impl RfcKnowledgeBase {
             if requires_rule_promotion { 1 } else { 0 }
         );
 
-        let _ = self.sqlite_cmd()
+        let _ = self
+            .sqlite_cmd()
             .arg(&query)
             .output_logged("rfc knowledge base: sqlite3");
     }
 
     /// Inserts or updates an RFC metadata record in the database.
-    pub fn insert_or_update_rfc(&self, rfc_number: u32, title: &str, published_date: &str, status: &str) {
+    pub fn insert_or_update_rfc(
+        &self,
+        rfc_number: u32,
+        title: &str,
+        published_date: &str,
+        status: &str,
+    ) {
         let clean_title = Self::sanitize_sql_literal(title);
         let clean_date = Self::sanitize_sql_literal(published_date);
         let clean_status = Self::sanitize_sql_literal(status);
@@ -287,20 +301,29 @@ impl RfcKnowledgeBase {
             "INSERT OR REPLACE INTO rfcs (rfc_number, title, published_date, status) VALUES ({}, '{}', '{}', '{}');",
             rfc_number, clean_title, clean_date, clean_status
         );
-        let _ = self.sqlite_cmd()
+        let _ = self
+            .sqlite_cmd()
             .arg(&query)
             .output_logged("rfc knowledge base: sqlite3");
     }
 
     /// Inserts a chunk/normative fragment for an RFC with deduplication.
-    pub fn insert_fragment(&self, rfc_number: u32, title: &str, chunk_index: usize, content: &str, is_normative: bool) {
+    pub fn insert_fragment(
+        &self,
+        rfc_number: u32,
+        title: &str,
+        chunk_index: usize,
+        content: &str,
+        is_normative: bool,
+    ) {
         let clean_title = Self::sanitize_sql_literal(title);
         let clean_content = Self::sanitize_sql_literal(content);
         let query = format!(
             "INSERT OR REPLACE INTO fragments (rfc_number, title, chunk_index, content, is_normative) VALUES ({}, '{}', {}, '{}', {});",
             rfc_number, clean_title, chunk_index, clean_content, if is_normative { 1 } else { 0 }
         );
-        let _ = self.sqlite_cmd()
+        let _ = self
+            .sqlite_cmd()
             .arg(&query)
             .output_logged("rfc knowledge base: sqlite3");
     }
@@ -312,7 +335,8 @@ impl RfcKnowledgeBase {
             rfc_number
         );
         let mut results = Vec::new();
-        let output = self.sqlite_cmd()
+        let output = self
+            .sqlite_cmd()
             .arg("-separator")
             .arg("<|OCT_SEP|>")
             .arg(&query)
@@ -339,8 +363,15 @@ impl RfcKnowledgeBase {
 
     /// Returns the total chunk count for an RFC.
     pub fn get_chunk_count_for_rfc(&self, rfc_number: u32) -> usize {
-        let query = format!("SELECT COUNT(*) FROM fragments WHERE rfc_number = {};", rfc_number);
-        if let Ok(out) = self.sqlite_cmd().arg(&query).output_logged("rfc knowledge base: sqlite3") {
+        let query = format!(
+            "SELECT COUNT(*) FROM fragments WHERE rfc_number = {};",
+            rfc_number
+        );
+        if let Ok(out) = self
+            .sqlite_cmd()
+            .arg(&query)
+            .output_logged("rfc knowledge base: sqlite3")
+        {
             let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
             text.parse().unwrap_or(0)
         } else {
@@ -349,7 +380,12 @@ impl RfcKnowledgeBase {
     }
 
     /// Inserts a batch of structured chunks for an RFC.
-    pub fn insert_fragments_batch(&self, rfc_number: u32, title: &str, chunks: &[(usize, String, bool)]) {
+    pub fn insert_fragments_batch(
+        &self,
+        rfc_number: u32,
+        title: &str,
+        chunks: &[(usize, String, bool)],
+    ) {
         let mut cmds = Vec::with_capacity(chunks.len());
         let clean_title = Self::sanitize_sql_literal(title);
         for (idx, content, is_norm) in chunks {
@@ -365,8 +401,12 @@ impl RfcKnowledgeBase {
     /// Retrieves synchronization metadata by key (e.g. etag, last_sync).
     pub fn get_metadata(&self, key: &str) -> Option<String> {
         let clean_key = Self::sanitize_sql_literal(key);
-        let query = format!("SELECT value FROM sync_metadata WHERE key = '{}';", clean_key);
-        let output = self.sqlite_cmd()
+        let query = format!(
+            "SELECT value FROM sync_metadata WHERE key = '{}';",
+            clean_key
+        );
+        let output = self
+            .sqlite_cmd()
             .arg(&query)
             .output_logged("rfc knowledge base: sqlite3")
             .ok()?;
@@ -386,7 +426,8 @@ impl RfcKnowledgeBase {
             "INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES ('{}', '{}', datetime('now'));",
             clean_key, clean_val
         );
-        let _ = self.sqlite_cmd()
+        let _ = self
+            .sqlite_cmd()
             .arg(&query)
             .output_logged("rfc knowledge base: sqlite3");
     }
@@ -394,7 +435,8 @@ impl RfcKnowledgeBase {
     /// Deletes all fragments for a given RFC number for transactional updates.
     pub fn delete_rfc_fragments(&self, rfc_number: u32) {
         let query = format!("DELETE FROM fragments WHERE rfc_number = {};", rfc_number);
-        let _ = self.sqlite_cmd()
+        let _ = self
+            .sqlite_cmd()
             .arg(&query)
             .output_logged("rfc knowledge base: sqlite3");
     }
@@ -406,7 +448,8 @@ impl RfcKnowledgeBase {
         }
 
         use std::io::Write;
-        let mut child = match self.sqlite_cmd()
+        let mut child = match self
+            .sqlite_cmd()
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

@@ -124,7 +124,11 @@ impl ParsedYaraRule {
             .find(|l| l.trim().starts_with("rule "))
             .ok_or_else(|| "Missing rule declaration line".to_string())?;
 
-        let mut parts = rule_line.trim()["rule ".len()..].split('{').next().unwrap_or("").split(':');
+        let mut parts = rule_line.trim()["rule ".len()..]
+            .split('{')
+            .next()
+            .unwrap_or("")
+            .split(':');
         let name_part = parts.next().unwrap_or("").trim();
         if name_part.is_empty() || !name_part.chars().all(|c| c.is_alphanumeric() || c == '_') {
             return Err(format!("Invalid rule identifier: '{}'", name_part));
@@ -143,11 +147,19 @@ impl ParsedYaraRule {
         // Also check if tags are specified in meta section
         if let Some(meta_idx) = trimmed.find("meta:") {
             let rest = &trimmed[meta_idx + 5..];
-            let end_meta = rest.find("strings:").or_else(|| rest.find("condition:")).unwrap_or(rest.len());
+            let end_meta = rest
+                .find("strings:")
+                .or_else(|| rest.find("condition:"))
+                .unwrap_or(rest.len());
             let meta_sec = &rest[..end_meta];
             for line in meta_sec.lines() {
                 if line.contains("tags =") || line.contains("tag =") {
-                    for word in line.split('=').nth(1).unwrap_or("").split(&['"', ',', ' '][..]) {
+                    for word in line
+                        .split('=')
+                        .nth(1)
+                        .unwrap_or("")
+                        .split(&['"', ',', ' '][..])
+                    {
                         let clean = word.trim().to_ascii_lowercase();
                         if !clean.is_empty() && !tags.contains(&clean) {
                             tags.push(clean);
@@ -189,7 +201,10 @@ impl ParsedYaraRule {
                                     if let Ok(b) = u8::from_str_radix(token, 16) {
                                         bytes.push(b);
                                     } else {
-                                        return Err(format!("Invalid hex token '{}' in string {}", token, id));
+                                        return Err(format!(
+                                            "Invalid hex token '{}' in string {}",
+                                            token, id
+                                        ));
                                     }
                                 }
                                 string_patterns.push(StringPattern::Hex { id, bytes });
@@ -255,10 +270,14 @@ impl ParsedYaraRule {
         // Expression evaluation (handles "$a at 0 and $b", "$a and $b", "$a or $b", "$a")
         if cond.contains(" and ") {
             let parts: Vec<&str> = cond.split(" and ").collect();
-            parts.iter().all(|sub| self.eval_subcondition(sub.trim(), &matches_by_id, &match_offsets))
+            parts
+                .iter()
+                .all(|sub| self.eval_subcondition(sub.trim(), &matches_by_id, &match_offsets))
         } else if cond.contains(" or ") {
             let parts: Vec<&str> = cond.split(" or ").collect();
-            parts.iter().any(|sub| self.eval_subcondition(sub.trim(), &matches_by_id, &match_offsets))
+            parts
+                .iter()
+                .any(|sub| self.eval_subcondition(sub.trim(), &matches_by_id, &match_offsets))
         } else {
             self.eval_subcondition(cond, &matches_by_id, &match_offsets)
         }
@@ -531,7 +550,10 @@ impl EdrBenchHarness {
             }
 
             // Tag verification for YaraMatch verdicts
-            if let ExpectedVerdict::YaraMatch { ref required_rule_tag } = threat.expected_verdict {
+            if let ExpectedVerdict::YaraMatch {
+                ref required_rule_tag,
+            } = threat.expected_verdict
+            {
                 let required_clean = required_rule_tag.trim().to_ascii_lowercase();
                 if !required_clean.is_empty() {
                     let has_tag = parsed_rule.tags.iter().any(|t| t == &required_clean);
@@ -626,7 +648,11 @@ impl EdrBenchHarness {
         tpm_hasher.update(task.instance_id.as_bytes());
         tpm_hasher.update(b":");
         tpm_hasher.update(rule_hash_hex.as_bytes());
-        let tpm_pcr16_attestation = format!("TPM2_PCR16_SHA256:{}:{}", task.instance_id, hex::encode(tpm_hasher.finalize()));
+        let tpm_pcr16_attestation = format!(
+            "TPM2_PCR16_SHA256:{}:{}",
+            task.instance_id,
+            hex::encode(tpm_hasher.finalize())
+        );
 
         // Cryptographic Ed25519 BFT Promotion Transcript
         let transcript = format!(
@@ -670,7 +696,11 @@ impl EdrBenchHarness {
         }
 
         for attempt in 2..=max_attempts {
-            current_rule = Self::synthesize_refined_yara_from_feedback(task, &current_rule, &last_report.diagnostic_log);
+            current_rule = Self::synthesize_refined_yara_from_feedback(
+                task,
+                &current_rule,
+                &last_report.diagnostic_log,
+            );
             last_report = self.evaluate_candidate_yara(task, &current_rule);
             last_report.attempts_used = attempt;
 
@@ -699,12 +729,15 @@ impl EdrBenchHarness {
         let clean_id = task.instance_id.replace('-', "_");
 
         // Extract sample unique marker if sample exists
-        let mut marker_string = "OSHOOSI_EBPF_CAP_BPF_CONTAINER_ESCAPE_PAYLOAD_2026_0042".to_string();
+        let mut marker_string =
+            "OSHOOSI_EBPF_CAP_BPF_CONTAINER_ESCAPE_PAYLOAD_2026_0042".to_string();
         if let Some(first_threat) = task.fail_to_pass.first() {
             let sample_path = resolve_fixture_path(&first_threat.sample_path);
             if let Ok(bytes) = std::fs::read(&sample_path) {
                 if let Some(pos) = bytes.windows(16).find(|window| {
-                    window.iter().all(|&b| b.is_ascii_graphic() && b != b'"' && b != b'\\')
+                    window
+                        .iter()
+                        .all(|&b| b.is_ascii_graphic() && b != b'"' && b != b'\\')
                 }) {
                     if let Ok(s) = std::str::from_utf8(pos) {
                         marker_string = s.to_string();
@@ -725,7 +758,12 @@ impl EdrBenchHarness {
     condition:
         $magic at 0 and $threat_sig
 }}"#,
-            clean_id, tag, task.instance_id, task.instance_id, diagnostic.replace('\"', "'"), marker_string
+            clean_id,
+            tag,
+            task.instance_id,
+            task.instance_id,
+            diagnostic.replace('\"', "'"),
+            marker_string
         )
     }
 
@@ -782,7 +820,9 @@ impl EdrBenchHarness {
             _ => return false,
         };
 
-        pubkey_bytes.verify_strict(transcript.as_bytes(), &sig_bytes).is_ok()
+        pubkey_bytes
+            .verify_strict(transcript.as_bytes(), &sig_bytes)
+            .is_ok()
     }
 }
 
@@ -791,7 +831,8 @@ mod tests {
     use super::*;
 
     fn load_fixture_task() -> EdrBenchTask {
-        let task_path = resolve_fixture_path(Path::new("benchmarks/tasks/OSHOOSI-BENCH-2026-0042.json"));
+        let task_path =
+            resolve_fixture_path(Path::new("benchmarks/tasks/OSHOOSI-BENCH-2026-0042.json"));
         let content = std::fs::read_to_string(&task_path)
             .unwrap_or_else(|_| panic!("Failed to read benchmark task at {}", task_path.display()));
         serde_json::from_str(&content).expect("Valid task JSON")
@@ -856,7 +897,9 @@ mod tests {
         assert!(report.compiled_cleanly);
         assert!(!report.fail_to_pass_resolved);
         assert!(!report.promoted_to_bft_mesh);
-        assert!(report.diagnostic_log.contains("missing required_rule_tag 'container_escape'"));
+        assert!(report
+            .diagnostic_log
+            .contains("missing required_rule_tag 'container_escape'"));
     }
 
     #[test]
@@ -877,7 +920,9 @@ mod tests {
         assert!(!report.pass_to_pass_preserved);
         assert!(report.false_positive_count > 0);
         assert!(!report.promoted_to_bft_mesh);
-        assert!(report.diagnostic_log.contains("PASS_TO_PASS regression failed"));
+        assert!(report
+            .diagnostic_log
+            .contains("PASS_TO_PASS regression failed"));
     }
 
     #[test]

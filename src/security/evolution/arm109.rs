@@ -1,7 +1,6 @@
 use super::invariant_guard::SecurityInvariantGuard;
 use super::types::{
-    EvolutionArmStatus, EvolutionCandidate, EvolutionJobStatus, EvolutionMetrics,
-    PromotionState,
+    EvolutionArmStatus, EvolutionCandidate, EvolutionJobStatus, EvolutionMetrics, PromotionState,
 };
 use crate::containment_ring::arm_ring::{ArmContainmentRing, ArmRingRegistry};
 use crate::core::types::OctopusSecurityError;
@@ -50,7 +49,10 @@ impl EvolutionaryOptimizerArm {
     }
 
     fn load_persisted_candidates(root: &Path) -> Vec<EvolutionCandidate> {
-        let cand_file = root.join("data").join("evolution_staging").join("candidates.json");
+        let cand_file = root
+            .join("data")
+            .join("evolution_staging")
+            .join("candidates.json");
         if cand_file.exists() {
             if let Ok(content) = fs::read_to_string(&cand_file) {
                 if let Ok(cands) = serde_json::from_str::<Vec<EvolutionCandidate>>(&content) {
@@ -189,7 +191,13 @@ impl EvolutionaryOptimizerArm {
     ) -> Result<EvolutionCandidate, OctopusSecurityError> {
         let sanitized_id: String = failure_id
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c.to_ascii_lowercase() } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    c.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
             .collect();
         let fn_suffix = if sanitized_id.is_empty() {
             "general_failure".to_string()
@@ -200,7 +208,9 @@ impl EvolutionaryOptimizerArm {
         let upper_id = failure_id.to_ascii_uppercase();
         let upper_ctx = failure_context.to_ascii_uppercase();
 
-        let synthesized_code = if upper_id.contains("KERNEL-CEDAR") || upper_ctx.contains("KERNELSUBSTRATE") {
+        let synthesized_code = if upper_id.contains("KERNEL-CEDAR")
+            || upper_ctx.contains("KERNELSUBSTRATE")
+        {
             format!(
                 r##"# OpenEvolve Arm 109 Auto-Synthesized Remediation Patch for {fn_suffix}
 def remediate_{fn_suffix}(principal, action, resource, context):
@@ -214,7 +224,10 @@ def remediate_{fn_suffix}(principal, action, resource, context):
     return None
 "##
             )
-        } else if upper_id.contains("EGRESS") || upper_ctx.contains("LATENCY_FAIL") || upper_ctx.contains("FAIL_TIMEOUT") {
+        } else if upper_id.contains("EGRESS")
+            || upper_ctx.contains("LATENCY_FAIL")
+            || upper_ctx.contains("FAIL_TIMEOUT")
+        {
             format!(
                 r##"# OpenEvolve Arm 109 Auto-Synthesized Egress & Latency Guard for {fn_suffix}
 def remediate_{fn_suffix}(principal, action, resource, context):
@@ -515,7 +528,9 @@ mod tests {
 
         assert!(cand.security_audit.passed);
         assert_eq!(cand.promotion_state, PromotionState::ApprovedActive);
-        assert!(cand.source_code.contains("def remediate_kernel_cedar_auth_01"));
+        assert!(cand
+            .source_code
+            .contains("def remediate_kernel_cedar_auth_01"));
         assert!(cand.source_code.contains("kernel_sentinel_arm"));
     }
 }

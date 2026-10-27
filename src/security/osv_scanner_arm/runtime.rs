@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
 
 use super::advisor::{OsvAdvisory, OsvDatabaseMatcher, OsvSeverity};
 use super::parser::{DependencyManifestParser, DiscoveredDependency};
@@ -52,7 +52,10 @@ impl ContinuousOsvScannerArm {
         }
     }
 
-    pub fn with_containment_ring(mut self, ring: Arc<crate::containment_ring::ArmContainmentRing>) -> Self {
+    pub fn with_containment_ring(
+        mut self,
+        ring: Arc<crate::containment_ring::ArmContainmentRing>,
+    ) -> Self {
         self.arm_ring = ring;
         self
     }
@@ -115,12 +118,17 @@ impl ContinuousOsvScannerArm {
                         ],
                     )
                     .ok()
-                    .and_then(|(mut cmd, _pinned)| cmd.output_logged("osv_scanner_arm::querybatch").ok());
+                    .and_then(|(mut cmd, _pinned)| {
+                        cmd.output_logged("osv_scanner_arm::querybatch").ok()
+                    });
 
                     if let Some(out) = output {
                         if out.status.success() {
-                            if let Ok(resp_json) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                                let mut batch_adv = OsvDatabaseMatcher::parse_osv_batch_response(&resp_json, chunk);
+                            if let Ok(resp_json) =
+                                serde_json::from_slice::<serde_json::Value>(&out.stdout)
+                            {
+                                let mut batch_adv =
+                                    OsvDatabaseMatcher::parse_osv_batch_response(&resp_json, chunk);
                                 advisories.append(&mut batch_adv);
                             }
                         }

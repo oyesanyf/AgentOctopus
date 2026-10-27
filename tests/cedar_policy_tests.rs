@@ -7,9 +7,16 @@ use serde_json::json;
 #[test]
 fn test_cedar_engine_initialization() {
     let engine = CedarPolicyEngine::new();
-    assert!(engine.is_ok(), "Engine failed to initialize: {:?}", engine.err());
+    assert!(
+        engine.is_ok(),
+        "Engine failed to initialize: {:?}",
+        engine.err()
+    );
     let engine = engine.unwrap();
-    assert!(engine.policy_count() >= 4, "Expected at least 4 baseline policies");
+    assert!(
+        engine.policy_count() >= 4,
+        "Expected at least 4 baseline policies"
+    );
 }
 
 #[test]
@@ -17,27 +24,33 @@ fn test_document_extraction_and_ledger_permit() {
     let engine = CedarPolicyEngine::new().unwrap();
 
     // 1. Document Extraction by document_arm should be permitted
-    let doc_verdict = engine.evaluate(
-        "document_arm",
-        "extract",
-        "doc_001",
-        "Document",
-        json!({}),
-    ).unwrap();
-    assert!(doc_verdict.is_allowed, "Expected document extraction to be permitted: {:?}", doc_verdict);
+    let doc_verdict = engine
+        .evaluate("document_arm", "extract", "doc_001", "Document", json!({}))
+        .unwrap();
+    assert!(
+        doc_verdict.is_allowed,
+        "Expected document extraction to be permitted: {:?}",
+        doc_verdict
+    );
 
     // 2. Ledger Writing under limit ($500.00 = 50,000 cents) with approval
-    let ledger_verdict = engine.evaluate(
-        "ledger_arm",
-        "write",
-        "ledger_001",
-        "Ledger",
-        json!({
-            "amount_cents": 50000,
-            "approved": true
-        }),
-    ).unwrap();
-    assert!(ledger_verdict.is_allowed, "Expected ledger write to be permitted: {:?}", ledger_verdict);
+    let ledger_verdict = engine
+        .evaluate(
+            "ledger_arm",
+            "write",
+            "ledger_001",
+            "Ledger",
+            json!({
+                "amount_cents": 50000,
+                "approved": true
+            }),
+        )
+        .unwrap();
+    assert!(
+        ledger_verdict.is_allowed,
+        "Expected ledger write to be permitted: {:?}",
+        ledger_verdict
+    );
 }
 
 #[test]
@@ -45,43 +58,58 @@ fn test_financial_ceiling_enforcement() {
     let engine = CedarPolicyEngine::new().unwrap();
 
     // 1. Transaction exceeding $100,000.00 ceiling ($150,000.00 = 15,000,000 cents) must be DENIED
-    let over_limit_verdict = engine.evaluate(
-        "ledger_arm",
-        "write",
-        "ledger_001",
-        "Ledger",
-        json!({
-            "amount_cents": 15000000,
-            "approved": true
-        }),
-    ).unwrap();
-    assert!(!over_limit_verdict.is_allowed, "Transaction over $100,000 limit must be denied");
+    let over_limit_verdict = engine
+        .evaluate(
+            "ledger_arm",
+            "write",
+            "ledger_001",
+            "Ledger",
+            json!({
+                "amount_cents": 15000000,
+                "approved": true
+            }),
+        )
+        .unwrap();
+    assert!(
+        !over_limit_verdict.is_allowed,
+        "Transaction over $100,000 limit must be denied"
+    );
 
     // 2. Transaction under ceiling but lacking approval must be DENIED
-    let unapproved_verdict = engine.evaluate(
-        "ledger_arm",
-        "write",
-        "ledger_001",
-        "Ledger",
-        json!({
-            "amount_cents": 50000,
-            "approved": false
-        }),
-    ).unwrap();
-    assert!(!unapproved_verdict.is_allowed, "Unapproved ledger write must be denied");
+    let unapproved_verdict = engine
+        .evaluate(
+            "ledger_arm",
+            "write",
+            "ledger_001",
+            "Ledger",
+            json!({
+                "amount_cents": 50000,
+                "approved": false
+            }),
+        )
+        .unwrap();
+    assert!(
+        !unapproved_verdict.is_allowed,
+        "Unapproved ledger write must be denied"
+    );
 
     // 3. Unauthorized agent attempting to write to ledger must be DENIED
-    let rogue_verdict = engine.evaluate(
-        "untrusted_agent",
-        "write",
-        "ledger_001",
-        "Ledger",
-        json!({
-            "amount_cents": 1000,
-            "approved": true
-        }),
-    ).unwrap();
-    assert!(!rogue_verdict.is_allowed, "Untrusted agent ledger write must be denied");
+    let rogue_verdict = engine
+        .evaluate(
+            "untrusted_agent",
+            "write",
+            "ledger_001",
+            "Ledger",
+            json!({
+                "amount_cents": 1000,
+                "approved": true
+            }),
+        )
+        .unwrap();
+    assert!(
+        !rogue_verdict.is_allowed,
+        "Untrusted agent ledger write must be denied"
+    );
 }
 
 #[test]
@@ -89,41 +117,56 @@ fn test_explicit_forbid_overrides_permit() {
     let engine = CedarPolicyEngine::new().unwrap();
 
     // 1. Any attempt to modify security policy without quorum authorization is explicitly FORBIDDEN
-    let tamper_verdict = engine.evaluate(
-        "compromised_arm",
-        "change_security_policy",
-        "policy_001",
-        "SystemPolicy",
-        json!({}),
-    ).unwrap();
-    assert!(!tamper_verdict.is_allowed, "Tampering with policy must be denied");
+    let tamper_verdict = engine
+        .evaluate(
+            "compromised_arm",
+            "change_security_policy",
+            "policy_001",
+            "SystemPolicy",
+            json!({}),
+        )
+        .unwrap();
+    assert!(
+        !tamper_verdict.is_allowed,
+        "Tampering with policy must be denied"
+    );
 
     // 2. Attempt with quorum_authorized: false must still be FORBIDDEN
-    let false_quorum_verdict = engine.evaluate(
-        "compromised_arm",
-        "change_security_policy",
-        "policy_001",
-        "SystemPolicy",
-        json!({
-            "quorum_authorized": false
-        }),
-    ).unwrap();
-    assert!(!false_quorum_verdict.is_allowed, "Policy change without true quorum must be denied");
+    let false_quorum_verdict = engine
+        .evaluate(
+            "compromised_arm",
+            "change_security_policy",
+            "policy_001",
+            "SystemPolicy",
+            json!({
+                "quorum_authorized": false
+            }),
+        )
+        .unwrap();
+    assert!(
+        !false_quorum_verdict.is_allowed,
+        "Policy change without true quorum must be denied"
+    );
 
     // 3. When quorum_authorized: true, the explicit forbid condition is satisfied, permitting controlled update
     // Note: Default policy set requires an explicit permit for the update if one exists, or default-denies unless permitted
-    let quorum_verdict = engine.evaluate(
-        "security_supervisor",
-        "change_security_policy",
-        "policy_001",
-        "SystemPolicy",
-        json!({
-            "quorum_authorized": true
-        }),
-    ).unwrap();
+    let quorum_verdict = engine
+        .evaluate(
+            "security_supervisor",
+            "change_security_policy",
+            "policy_001",
+            "SystemPolicy",
+            json!({
+                "quorum_authorized": true
+            }),
+        )
+        .unwrap();
     // Default set has forbid unless quorum_authorized, but no blanket permit for change_security_policy unless added
     // So without a permit policy, it default-denies (or permits if policy added)
-    assert!(!quorum_verdict.is_allowed, "Without explicit permit, policy change remains default-denied");
+    assert!(
+        !quorum_verdict.is_allowed,
+        "Without explicit permit, policy change remains default-denied"
+    );
 }
 
 #[test]
@@ -139,7 +182,11 @@ fn test_strict_schema_validation() {
         );
     "#;
     let report = validator.validate_policy_text(valid_policy);
-    assert!(report.is_valid, "Valid policy should pass schema validation: {:?}", report.validation_errors);
+    assert!(
+        report.is_valid,
+        "Valid policy should pass schema validation: {:?}",
+        report.validation_errors
+    );
 
     // 2. Policy referencing non-existent action in schema must FAIL validation
     let invalid_action_policy = r#"
@@ -150,14 +197,20 @@ fn test_strict_schema_validation() {
         );
     "#;
     let invalid_report = validator.validate_policy_text(invalid_action_policy);
-    assert!(!invalid_report.is_valid, "Policy with non-existent action must fail validation");
+    assert!(
+        !invalid_report.is_valid,
+        "Policy with non-existent action must fail validation"
+    );
 
     // 3. Policy with syntax error must FAIL validation
     let syntax_error_policy = r#"
         permit this is completely broken syntax;
     "#;
     let syntax_report = validator.validate_policy_text(syntax_error_policy);
-    assert!(!syntax_report.is_valid, "Policy with syntax error must fail validation");
+    assert!(
+        !syntax_report.is_valid,
+        "Policy with syntax error must fail validation"
+    );
 }
 
 #[test]
@@ -165,52 +218,73 @@ fn test_network_egress_domain_restriction() {
     let engine = CedarPolicyEngine::new().unwrap();
 
     // 1. Egress to approved domain google.com is permitted
-    let google_verdict = engine.evaluate(
-        "network_arm",
-        "egress",
-        "target_google",
-        "NetworkTarget",
-        json!({
-            "destination_domain": "google.com"
-        }),
-    ).unwrap();
-    assert!(google_verdict.is_allowed, "Egress to google.com must be permitted: {:?}", google_verdict);
+    let google_verdict = engine
+        .evaluate(
+            "network_arm",
+            "egress",
+            "target_google",
+            "NetworkTarget",
+            json!({
+                "destination_domain": "google.com"
+            }),
+        )
+        .unwrap();
+    assert!(
+        google_verdict.is_allowed,
+        "Egress to google.com must be permitted: {:?}",
+        google_verdict
+    );
 
     // 2. Egress to approved domain www.google.com is permitted
-    let www_google_verdict = engine.evaluate(
-        "network_arm",
-        "egress",
-        "target_www_google",
-        "NetworkTarget",
-        json!({
-            "destination_domain": "www.google.com"
-        }),
-    ).unwrap();
-    assert!(www_google_verdict.is_allowed, "Egress to www.google.com must be permitted");
+    let www_google_verdict = engine
+        .evaluate(
+            "network_arm",
+            "egress",
+            "target_www_google",
+            "NetworkTarget",
+            json!({
+                "destination_domain": "www.google.com"
+            }),
+        )
+        .unwrap();
+    assert!(
+        www_google_verdict.is_allowed,
+        "Egress to www.google.com must be permitted"
+    );
 
     // 3. Egress to unauthorized domain must be DENIED
-    let malicious_verdict = engine.evaluate(
-        "network_arm",
-        "egress",
-        "target_c2",
-        "NetworkTarget",
-        json!({
-            "destination_domain": "malicious-c2.attacker.com"
-        }),
-    ).unwrap();
-    assert!(!malicious_verdict.is_allowed, "Egress to unauthorized domain must be denied");
+    let malicious_verdict = engine
+        .evaluate(
+            "network_arm",
+            "egress",
+            "target_c2",
+            "NetworkTarget",
+            json!({
+                "destination_domain": "malicious-c2.attacker.com"
+            }),
+        )
+        .unwrap();
+    assert!(
+        !malicious_verdict.is_allowed,
+        "Egress to unauthorized domain must be denied"
+    );
 
     // 4. Substring bypass attempt (e.g. google.com.attacker.org) must be DENIED
-    let bypass_verdict = engine.evaluate(
-        "network_arm",
-        "egress",
-        "target_bypass",
-        "NetworkTarget",
-        json!({
-            "destination_domain": "google.com.attacker.org"
-        }),
-    ).unwrap();
-    assert!(!bypass_verdict.is_allowed, "Egress domain substring bypass must be denied");
+    let bypass_verdict = engine
+        .evaluate(
+            "network_arm",
+            "egress",
+            "target_bypass",
+            "NetworkTarget",
+            json!({
+                "destination_domain": "google.com.attacker.org"
+            }),
+        )
+        .unwrap();
+    assert!(
+        !bypass_verdict.is_allowed,
+        "Egress domain substring bypass must be denied"
+    );
 }
 
 #[test]
@@ -226,7 +300,11 @@ fn test_delegation_chain_depth_guard() {
         "doc_extractor",
         "doc_contract_01",
     );
-    assert!(res1.is_ok(), "1-hop delegation should be permitted: {:?}", res1);
+    assert!(
+        res1.is_ok(),
+        "1-hop delegation should be permitted: {:?}",
+        res1
+    );
 
     // 2. 2-hop delegation (brain -> coord -> document_arm) is permitted
     let two_hops = vec!["brain".to_string(), "coordinator".to_string()];
@@ -237,7 +315,11 @@ fn test_delegation_chain_depth_guard() {
         "doc_extractor",
         "doc_contract_02",
     );
-    assert!(res2.is_ok(), "2-hop delegation should be permitted: {:?}", res2);
+    assert!(
+        res2.is_ok(),
+        "2-hop delegation should be permitted: {:?}",
+        res2
+    );
 
     // 3. 3-hop delegation exceeds max allowable depth of 2 -> must FAIL
     let three_hops = vec![
@@ -252,7 +334,10 @@ fn test_delegation_chain_depth_guard() {
         "doc_extractor",
         "doc_contract_03",
     );
-    assert!(matches!(res3, Err(OctopusSecurityError::DelegationScopeViolation(_))));
+    assert!(matches!(
+        res3,
+        Err(OctopusSecurityError::DelegationScopeViolation(_))
+    ));
 }
 
 #[test]
@@ -261,14 +346,13 @@ fn test_quorum_approved_policy_mutation() {
     let initial_count = engine.policy_count();
 
     // 1. Initially, notifier_arm cannot call notify
-    let initial_verdict = engine.evaluate(
-        "notifier_arm",
-        "notify",
-        "target_agent",
-        "Agent",
-        json!({}),
-    ).unwrap();
-    assert!(!initial_verdict.is_allowed, "Notifier should be denied by default");
+    let initial_verdict = engine
+        .evaluate("notifier_arm", "notify", "target_agent", "Agent", json!({}))
+        .unwrap();
+    assert!(
+        !initial_verdict.is_allowed,
+        "Notifier should be denied by default"
+    );
 
     // 2. Quorum-approved policy addition: Permit notifier_arm to notify
     let new_policy = r#"
@@ -279,18 +363,21 @@ fn test_quorum_approved_policy_mutation() {
         );
     "#;
     let add_res = engine.add_policy(Some("notify_permit_01"), new_policy);
-    assert!(add_res.is_ok(), "Policy addition should succeed: {:?}", add_res);
+    assert!(
+        add_res.is_ok(),
+        "Policy addition should succeed: {:?}",
+        add_res
+    );
     assert_eq!(engine.policy_count(), initial_count + 1);
 
     // 3. Now notifier_arm is permitted
-    let after_verdict = engine.evaluate(
-        "notifier_arm",
-        "notify",
-        "target_agent",
-        "Agent",
-        json!({}),
-    ).unwrap();
-    assert!(after_verdict.is_allowed, "Notifier should now be permitted by new policy");
+    let after_verdict = engine
+        .evaluate("notifier_arm", "notify", "target_agent", "Agent", json!({}))
+        .unwrap();
+    assert!(
+        after_verdict.is_allowed,
+        "Notifier should now be permitted by new policy"
+    );
 }
 
 #[test]
@@ -299,8 +386,8 @@ fn test_cryptographic_audit_bridge() {
     let policy_fingerprint = "cedar_v1_fingerprint";
     let audit_log = SecurityAuditLog::new();
 
-    let gateway = CedarAuthorizationGateway::new(secret_seed, policy_fingerprint)
-        .with_audit_log(audit_log);
+    let gateway =
+        CedarAuthorizationGateway::new(secret_seed, policy_fingerprint).with_audit_log(audit_log);
 
     // 1. Issue a valid capability token for document_arm -> doc_extractor
     let valid_token = gateway.auth_engine().issue_capability(
@@ -319,13 +406,23 @@ fn test_cryptographic_audit_bridge() {
         "invoice_2026_001",
         json!({}),
     );
-    assert!(auth_res.is_ok(), "Legitimate tool invocation should be authorized: {:?}", auth_res);
+    assert!(
+        auth_res.is_ok(),
+        "Legitimate tool invocation should be authorized: {:?}",
+        auth_res
+    );
 
     // 3. Verify audit log captured the authorization event and hash chain is intact
     let audit_ref = gateway.audit_log().expect("Audit log should be present");
     let entries = audit_ref.get_entries();
-    assert!(!entries.is_empty(), "Audit log should have recorded the event");
-    assert!(audit_ref.verify_integrity(), "Audit log cryptographic chain must be valid");
+    assert!(
+        !entries.is_empty(),
+        "Audit log should have recorded the event"
+    );
+    assert!(
+        audit_ref.verify_integrity(),
+        "Audit log cryptographic chain must be valid"
+    );
 
     let last_event = entries.last().unwrap();
     assert_eq!(last_event.event_type, "CEDAR_AUTHORIZATION");
@@ -334,7 +431,8 @@ fn test_cryptographic_audit_bridge() {
 
     // 4. Forged token attempt (tampered signature) must be rejected before Cedar
     let mut tampered_token = valid_token.clone();
-    tampered_token.signature_hex = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
+    tampered_token.signature_hex =
+        "0000000000000000000000000000000000000000000000000000000000000000".to_string();
 
     let forged_res = gateway.authorize_tool_invocation(
         &tampered_token,
@@ -343,7 +441,10 @@ fn test_cryptographic_audit_bridge() {
         "invoice_2026_001",
         json!({}),
     );
-    assert!(matches!(forged_res, Err(OctopusSecurityError::CapabilityDenied(_))));
+    assert!(matches!(
+        forged_res,
+        Err(OctopusSecurityError::CapabilityDenied(_))
+    ));
 }
 
 // ============================================================================
@@ -378,19 +479,24 @@ fn test_redteam_1_context_manipulation_untrusted_approval() {
         unverified_context,
     );
     assert!(
-        matches!(attack_result, Err(OctopusSecurityError::CapabilityDenied(_))),
+        matches!(
+            attack_result,
+            Err(OctopusSecurityError::CapabilityDenied(_))
+        ),
         "Authorization-context injection must be DENIED without verified supervisor receipt: {:?}",
         attack_result
     );
 
     // 2. DEFENSE: Provide genuine cryptographic SupervisorApprovalReceipt and satisfy Dogwood temporal read prerequisite
-    let receipt = gateway.issue_supervisor_approval(
-        "security_supervisor",
-        "ledger_arm",
-        "corporate_ledger",
-        100000,
-        300,
-    ).expect("Supervisor should be able to issue approval for another agent");
+    let receipt = gateway
+        .issue_supervisor_approval(
+            "security_supervisor",
+            "ledger_arm",
+            "corporate_ledger",
+            100000,
+            300,
+        )
+        .expect("Supervisor should be able to issue approval for another agent");
 
     gateway.temporal_engine().record_event(
         "LedgerRead",
@@ -460,13 +566,15 @@ fn test_redteam_3_confused_deputy_delegation_unauthorized_ledger_write() {
         "corporate_ledger",
     );
 
-    let receipt = gateway.issue_supervisor_approval(
-        "security_supervisor",
-        "ledger_arm",
-        "corporate_ledger",
-        50000,
-        300,
-    ).unwrap();
+    let receipt = gateway
+        .issue_supervisor_approval(
+            "security_supervisor",
+            "ledger_arm",
+            "corporate_ledger",
+            50000,
+            300,
+        )
+        .unwrap();
 
     // ATTACK: Document Arm (only authorized for extract on Document) delegates ledger_writer to Ledger Arm
     // Even though ledger_arm has write capability, document_arm (originator) does NOT!
@@ -524,7 +632,8 @@ fn test_redteam_5_toctou_resource_replaced_before_execution() {
     // Authorized digest computed at time-of-check
     let authorized_digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     // Maliciously swapped content digest at time-of-use
-    let swapped_execution_digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+    let swapped_execution_digest =
+        "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
     // ATTACK: Resource content changed between authorization and execution
     let toctou_check = CedarAuthorizationGateway::verify_toctou_digest(
@@ -539,11 +648,12 @@ fn test_redteam_5_toctou_resource_replaced_before_execution() {
     );
 
     // Legitimate unaltered execution
-    let legitimate_check = CedarAuthorizationGateway::verify_toctou_digest(
-        authorized_digest,
-        authorized_digest,
+    let legitimate_check =
+        CedarAuthorizationGateway::verify_toctou_digest(authorized_digest, authorized_digest);
+    assert!(
+        legitimate_check.is_ok(),
+        "Unaltered resource execution must be ALLOWED"
     );
-    assert!(legitimate_check.is_ok(), "Unaltered resource execution must be ALLOWED");
 }
 
 #[test]
@@ -575,7 +685,10 @@ fn test_redteam_6_tool_invocation_bypasses_cedar_gateway() {
     );
 
     assert!(
-        matches!(bypass_result, Err(OctopusSecurityError::CapabilityDenied(_))),
+        matches!(
+            bypass_result,
+            Err(OctopusSecurityError::CapabilityDenied(_))
+        ),
         "Unmediated tool execution bypassing authorization must be BLOCKED: {:?}",
         bypass_result
     );
@@ -685,7 +798,10 @@ fn test_redteam_10_signed_capability_replayed_after_revocation() {
         "invoice_doc_1",
         json!({}),
     );
-    assert!(initial_res.is_ok(), "Initial invocation with valid capability must succeed");
+    assert!(
+        initial_res.is_ok(),
+        "Initial invocation with valid capability must succeed"
+    );
 
     // 2. Security supervisor revokes the capability token
     gateway.auth_engine().revoke_token(&token.token_id);
@@ -712,27 +828,38 @@ fn test_tarpit_arm_authorization_and_quarantine() {
     let engine = CedarPolicyEngine::new().unwrap();
 
     // 1. Tarpit Arm is permitted to quarantine DecoyTrap
-    let verdict = engine.evaluate(
-        "tarpit_arm",
-        "quarantine",
-        "trap_001",
-        "DecoyTrap",
-        json!({
-            "adversary_ip": "192.168.1.100",
-            "attack_type": "prompt_injection"
-        }),
-    ).unwrap();
-    assert!(verdict.is_allowed, "Expected tarpit_arm quarantine action to be permitted: {:?}", verdict);
+    let verdict = engine
+        .evaluate(
+            "tarpit_arm",
+            "quarantine",
+            "trap_001",
+            "DecoyTrap",
+            json!({
+                "adversary_ip": "192.168.1.100",
+                "attack_type": "prompt_injection"
+            }),
+        )
+        .unwrap();
+    assert!(
+        verdict.is_allowed,
+        "Expected tarpit_arm quarantine action to be permitted: {:?}",
+        verdict
+    );
 
     // 2. Unauthorized untrusted agent attempting quarantine must be DENIED
-    let denied = engine.evaluate(
-        "untrusted_agent",
-        "quarantine",
-        "trap_001",
-        "DecoyTrap",
-        json!({}),
-    ).unwrap();
-    assert!(!denied.is_allowed, "Untrusted agent must not be permitted to quarantine decoy trap");
+    let denied = engine
+        .evaluate(
+            "untrusted_agent",
+            "quarantine",
+            "trap_001",
+            "DecoyTrap",
+            json!({}),
+        )
+        .unwrap();
+    assert!(
+        !denied.is_allowed,
+        "Untrusted agent must not be permitted to quarantine decoy trap"
+    );
 }
 
 #[test]
@@ -776,7 +903,11 @@ fn test_cedar_engine_panic_boundary_and_malformed_context() {
         "Ledger",
         adversarial_context,
     );
-    assert!(res2.is_ok(), "Valid schema structure must evaluate safely: {:?}", res2);
+    assert!(
+        res2.is_ok(),
+        "Valid schema structure must evaluate safely: {:?}",
+        res2
+    );
     let verdict = res2.unwrap();
     assert!(!verdict.is_allowed, "Adversarial amount must be denied");
 
@@ -799,9 +930,6 @@ fn test_cedar_engine_panic_boundary_and_malformed_context() {
         res3
     );
 }
-
-
-
 
 #[test]
 fn test_secret_rotation_entropy_and_rollback() {
@@ -850,13 +978,15 @@ fn test_secret_rotation_grace_period_dual_verification() {
     let mut gateway = CedarAuthorizationGateway::new(secret_a, "cedar_policy_v1");
 
     // Issue supervisor approval receipt with Secret A
-    let receipt = gateway.issue_supervisor_approval(
-        "security_supervisor",
-        "ledger_arm",
-        "corporate_ledger",
-        100000,
-        300,
-    ).unwrap();
+    let receipt = gateway
+        .issue_supervisor_approval(
+            "security_supervisor",
+            "ledger_arm",
+            "corporate_ledger",
+            100000,
+            300,
+        )
+        .unwrap();
 
     // Issue capability token with Secret A
     let token = gateway.auth_engine().issue_capability(
@@ -871,13 +1001,12 @@ fn test_secret_rotation_grace_period_dual_verification() {
     gateway.rotate_secret(secret_b, "cedar_policy_v1").unwrap();
 
     // Verify supervisor approval receipt still passes under grace period
-    let verify_receipt = gateway.verify_supervisor_approval(
-        &receipt,
-        "ledger_arm",
-        "corporate_ledger",
-        50000,
+    let verify_receipt =
+        gateway.verify_supervisor_approval(&receipt, "ledger_arm", "corporate_ledger", 50000);
+    assert!(
+        verify_receipt.is_ok(),
+        "Supervisor approval must pass during 300s grace window"
     );
-    assert!(verify_receipt.is_ok(), "Supervisor approval must pass during 300s grace window");
 
     // Record prerequisite read in Dogwood temporal trace
     gateway.temporal_engine().record_event(
@@ -900,7 +1029,11 @@ fn test_secret_rotation_grace_period_dual_verification() {
         }),
         Some(&receipt),
     );
-    assert!(verdict.is_ok(), "Capability token must pass during 300s grace window: {:?}", verdict.err());
+    assert!(
+        verdict.is_ok(),
+        "Capability token must pass during 300s grace window: {:?}",
+        verdict.err()
+    );
 
     // Revoke token; verify revocation persists across subsequent rotation
     gateway.auth_engine().revoke_token(&token.token_id);
@@ -918,24 +1051,55 @@ fn test_secret_rotation_grace_period_dual_verification() {
         }),
         Some(&receipt),
     );
-    assert!(revoked_verdict.is_err(), "Revoked token must remain revoked across rotations");
+    assert!(
+        revoked_verdict.is_err(),
+        "Revoked token must remain revoked across rotations"
+    );
 }
 
 #[tokio::test]
 async fn test_rfc3986_atlas_version_and_egress_hardening() {
-    use agent_octopus::security::atlas_arm::atlas_sync::{validate_atlas_version, AtlasSyncManager};
-    use agent_octopus::containment_ring::egress_proxy::{EgressProxy, EgressRequest, EgressSecurityLevel};
+    use agent_octopus::containment_ring::egress_proxy::{
+        EgressProxy, EgressRequest, EgressSecurityLevel,
+    };
+    use agent_octopus::security::atlas_arm::atlas_sync::{
+        validate_atlas_version, AtlasSyncManager,
+    };
 
     // 1. Strict ISO Calendar Version Formatting
     assert!(validate_atlas_version("2026.02"), "Valid YYYY.MM");
-    assert!(validate_atlas_version("2024.12-stix2.1"), "Valid YYYY.MM with tag");
-    assert!(!validate_atlas_version("2026.2"), "Single-digit month must be rejected");
-    assert!(!validate_atlas_version("26.02"), "2-digit year must be rejected");
-    assert!(!validate_atlas_version("+2026.02"), "Leading signs must be rejected");
-    assert!(!validate_atlas_version("2023.12"), "Year before 2024 must be rejected");
-    assert!(!validate_atlas_version("2031.01"), "Year after 2030 must be rejected");
-    assert!(!validate_atlas_version("2026.00"), "Month 00 must be rejected");
-    assert!(!validate_atlas_version("2026.13"), "Month 13 must be rejected");
+    assert!(
+        validate_atlas_version("2024.12-stix2.1"),
+        "Valid YYYY.MM with tag"
+    );
+    assert!(
+        !validate_atlas_version("2026.2"),
+        "Single-digit month must be rejected"
+    );
+    assert!(
+        !validate_atlas_version("26.02"),
+        "2-digit year must be rejected"
+    );
+    assert!(
+        !validate_atlas_version("+2026.02"),
+        "Leading signs must be rejected"
+    );
+    assert!(
+        !validate_atlas_version("2023.12"),
+        "Year before 2024 must be rejected"
+    );
+    assert!(
+        !validate_atlas_version("2031.01"),
+        "Year after 2030 must be rejected"
+    );
+    assert!(
+        !validate_atlas_version("2026.00"),
+        "Month 00 must be rejected"
+    );
+    assert!(
+        !validate_atlas_version("2026.13"),
+        "Month 13 must be rejected"
+    );
 
     // 2. MITRE ATLAS Provenance URL Anchoring and Port Validation
     let sync_mgr = AtlasSyncManager::default();
@@ -948,7 +1112,10 @@ async fn test_rfc3986_atlas_version_and_egress_hardening() {
         golden_payload,
         None,
     );
-    assert!(valid_asset.is_ok(), "Anchored release asset URL must succeed");
+    assert!(
+        valid_asset.is_ok(),
+        "Anchored release asset URL must succeed"
+    );
 
     // Release assets without anchored prefix (path traversal/subpath trick) fails
     let unanchored_asset = sync_mgr.verify_and_ingest(
@@ -957,7 +1124,10 @@ async fn test_rfc3986_atlas_version_and_egress_hardening() {
         golden_payload,
         None,
     );
-    assert!(unanchored_asset.is_err(), "Unanchored release asset URL must be rejected");
+    assert!(
+        unanchored_asset.is_err(),
+        "Unanchored release asset URL must be rejected"
+    );
 
     // Embedded userinfo credentials fails
     let creds_asset = sync_mgr.verify_and_ingest(
@@ -966,7 +1136,10 @@ async fn test_rfc3986_atlas_version_and_egress_hardening() {
         golden_payload,
         None,
     );
-    assert!(creds_asset.is_err(), "Embedded credentials must be rejected");
+    assert!(
+        creds_asset.is_err(),
+        "Embedded credentials must be rejected"
+    );
 
     // Non-443 port fails
     let port_asset = sync_mgr.verify_and_ingest(
@@ -987,7 +1160,10 @@ async fn test_rfc3986_atlas_version_and_egress_hardening() {
         method: "GET".to_string(),
         payload: None,
     };
-    assert!(proxy.dispatch_egress(&req_v6).await.is_err(), "IPv6 [::1] must be blocked");
+    assert!(
+        proxy.dispatch_egress(&req_v6).await.is_err(),
+        "IPv6 [::1] must be blocked"
+    );
 
     // IPv4-mapped IPv6 loopback
     let req_v4_mapped = EgressRequest {
@@ -996,7 +1172,10 @@ async fn test_rfc3986_atlas_version_and_egress_hardening() {
         method: "GET".to_string(),
         payload: None,
     };
-    assert!(proxy.dispatch_egress(&req_v4_mapped).await.is_err(), "IPv4-mapped [::ffff:127.0.0.1] must be blocked");
+    assert!(
+        proxy.dispatch_egress(&req_v4_mapped).await.is_err(),
+        "IPv4-mapped [::ffff:127.0.0.1] must be blocked"
+    );
 
     // Userinfo credentials in egress URL
     let req_creds = EgressRequest {
@@ -1005,5 +1184,8 @@ async fn test_rfc3986_atlas_version_and_egress_hardening() {
         method: "GET".to_string(),
         payload: None,
     };
-    assert!(proxy.dispatch_egress(&req_creds).await.is_err(), "Userinfo credentials in egress must be blocked");
+    assert!(
+        proxy.dispatch_egress(&req_creds).await.is_err(),
+        "Userinfo credentials in egress must be blocked"
+    );
 }

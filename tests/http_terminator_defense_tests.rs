@@ -18,14 +18,26 @@ async fn test_shared_parser_confusion_multipart_byteranges_quarantine() {
     let raw_payload = b"POST /api/payment HTTP/1.1\r\nHost: 127.0.0.1:5005\r\nContent-Type: multipart/byteranges; boundary=BOUND\r\nContent-Length: 123\r\n\r\n--BOUND\r\n";
 
     // 1. Strict parser must reject fail-closed
-    let strict_res = validate_header(&raw_payload[..raw_payload.windows(4).position(|w| w == b"\r\n\r\n").unwrap()]);
+    let strict_res = validate_header(
+        &raw_payload[..raw_payload
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .unwrap()],
+    );
     assert!(strict_res.is_err());
-    assert_eq!(strict_res.unwrap_err().signal, Signal::SharedParserConfusion);
+    assert_eq!(
+        strict_res.unwrap_err().signal,
+        Signal::SharedParserConfusion
+    );
 
     // 2. Differential engine must compute high novelty score and quarantine in Arm 106
     let report = engine.evaluate_raw_stream(raw_payload).await;
     assert!(report.divergence_vector.shared_parser_confusion);
-    assert!(report.divergence_vector.novelty_score >= 0.70, "Score was {}", report.divergence_vector.novelty_score);
+    assert!(
+        report.divergence_vector.novelty_score >= 0.70,
+        "Score was {}",
+        report.divergence_vector.novelty_score
+    );
     assert_eq!(report.action, DifferentialAction::QuarantineAndSever);
     assert_eq!(report.quarantined_in_arm, Some(106));
 }
@@ -38,10 +50,16 @@ async fn test_novel_desync_trigger_transfer_encoding_gzip() {
     let raw_payload = b"POST /api/login HTTP/1.1\r\nHost: 127.0.0.1:5005\r\nTransfer-Encoding: gzip\r\nContent-Length: 45\r\n\r\n";
 
     // 1. Strict parser must reject
-    let header_pos = raw_payload.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let header_pos = raw_payload
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap();
     let strict_res = validate_header(&raw_payload[..header_pos]);
     assert!(strict_res.is_err());
-    assert_eq!(strict_res.unwrap_err().signal, Signal::TransferEncodingPresent);
+    assert_eq!(
+        strict_res.unwrap_err().signal,
+        Signal::TransferEncodingPresent
+    );
 
     // 2. Differential engine must detect framing conflict
     let report = engine.evaluate_raw_stream(raw_payload).await;
@@ -55,11 +73,17 @@ async fn test_dual_matching_content_length_citrix_sso_exploit() {
     // PortSwigger Research discovery: Dual matching CL headers (Content-Length: 28 + Content-Length: 28)
     // caused Citrix NetScaler and SSO servers to treat body length as 0.
     let raw_payload = b"POST /api/sso HTTP/1.1\r\nHost: 127.0.0.1:5005\r\nContent-Length: 28\r\nContent-Length: 28\r\n\r\n";
-    let header_pos = raw_payload.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let header_pos = raw_payload
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap();
 
     let strict_res = validate_header(&raw_payload[..header_pos]);
     assert!(strict_res.is_err());
-    assert_eq!(strict_res.unwrap_err().signal, Signal::DuplicateContentLength);
+    assert_eq!(
+        strict_res.unwrap_err().signal,
+        Signal::DuplicateContentLength
+    );
 }
 
 #[tokio::test]
@@ -72,7 +96,10 @@ async fn test_the_dangling_byte_technique_defense() {
     // Fail-closed boundary check must instantly reject stalled/dangling byte bodies
     let boundary_res = validate_complete_body(buffered_body_bytes, expected_content_length);
     assert!(boundary_res.is_err());
-    assert_eq!(boundary_res.unwrap_err().signal, Signal::UnexpectedTrailingBytes);
+    assert_eq!(
+        boundary_res.unwrap_err().signal,
+        Signal::UnexpectedTrailingBytes
+    );
 
     // Exact match must pass
     assert!(validate_complete_body(3, 3).is_ok());
@@ -124,10 +151,14 @@ async fn test_pipelined_smuggling_residue_tracking() {
     let conn_id = correlator.next_connection_id();
 
     let extra_residue = b"GET /smuggled HTTP/1.1\r\nHost: evil.com\r\n\r\n";
-    let residue_event = correlator.record_residue(conn_id, extra_residue.len(), extra_residue).await;
+    let residue_event = correlator
+        .record_residue(conn_id, extra_residue.len(), extra_residue)
+        .await;
 
     assert_eq!(residue_event.anomaly_kind, "PIPELINED_SMUGGLING_RESIDUE");
-    assert!(residue_event.details.contains(&format!("{} bytes remaining", extra_residue.len())));
+    assert!(residue_event
+        .details
+        .contains(&format!("{} bytes remaining", extra_residue.len())));
     assert_eq!(correlator.total_desync_count(), 1);
 }
 
@@ -149,8 +180,13 @@ async fn test_arm_106_sandbox_containment_properties() {
     let registry = ArmRingRegistry::new(50, &seed);
 
     // Retrieve Arm ID 106 (DifferentialProtocolAnalyzer)
-    let arm_ring = registry.get_security_ring(ArmRole::DifferentialProtocolAnalyzer).await;
-    assert!(arm_ring.is_some(), "Arm ID 106 containment ring must be registered");
+    let arm_ring = registry
+        .get_security_ring(ArmRole::DifferentialProtocolAnalyzer)
+        .await;
+    assert!(
+        arm_ring.is_some(),
+        "Arm ID 106 containment ring must be registered"
+    );
 
     let ring = arm_ring.unwrap();
     assert_eq!(ring.arm_id, 106);
@@ -159,11 +195,9 @@ async fn test_arm_106_sandbox_containment_properties() {
     assert!(!ring.is_severed());
 
     // Authoritative execution of Level 1 Ring quarantine operation
-    let (hmac_proof, _job_name, _ac_sid, _mem, _pid) = ring.execute_quarantine_containment(
-        "diff-test-001",
-        "mock-sha256-hash",
-        512,
-        0.85,
-    ).await.expect("Quarantine containment must succeed on active Arm 106");
+    let (hmac_proof, _job_name, _ac_sid, _mem, _pid) = ring
+        .execute_quarantine_containment("diff-test-001", "mock-sha256-hash", 512, 0.85)
+        .await
+        .expect("Quarantine containment must succeed on active Arm 106");
     assert_eq!(hmac_proof.len(), 64, "Containment HMAC must be 64-char hex");
 }

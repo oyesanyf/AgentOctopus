@@ -122,7 +122,12 @@ impl DesyncCorrelator {
     }
 
     /// Records trailing bytes or pipelining residue on a connection.
-    pub async fn record_residue(&self, connection_id: u64, residue_bytes: usize, sample: &[u8]) -> DesyncEvent {
+    pub async fn record_residue(
+        &self,
+        connection_id: u64,
+        residue_bytes: usize,
+        sample: &[u8],
+    ) -> DesyncEvent {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -132,7 +137,10 @@ impl DesyncCorrelator {
         let sample_snippet = String::from_utf8_lossy(&sample[..sample.len().min(32)]).to_string();
 
         let event = DesyncEvent {
-            event_id: format!("residue-{}", self.total_desync_detected.load(Ordering::SeqCst)),
+            event_id: format!(
+                "residue-{}",
+                self.total_desync_detected.load(Ordering::SeqCst)
+            ),
             timestamp_epoch_secs: now,
             connection_id,
             anomaly_kind: "PIPELINED_SMUGGLING_RESIDUE".to_string(),

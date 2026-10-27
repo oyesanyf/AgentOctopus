@@ -39,7 +39,8 @@ impl SafeDocumentExtractor {
             ],
             invoice_id_regex: Regex::new(r"(?i)(?:INV|ID|INVOICE)[:\s#-]+([A-Z0-9-]+)").unwrap(),
             vendor_regex: Regex::new(r"(?i)vendor[:\s]+([A-Za-z0-9\s&.,-]+?)(?:\||\n|$)").unwrap(),
-            amount_regex: Regex::new(r"(?i)(?:total|amount)[:\s]*\$?([0-9]+(?:\.[0-9]{2})?)").unwrap(),
+            amount_regex: Regex::new(r"(?i)(?:total|amount)[:\s]*\$?([0-9]+(?:\.[0-9]{2})?)")
+                .unwrap(),
         }
     }
 
@@ -64,7 +65,9 @@ impl SafeDocumentExtractor {
         }
         if data.starts_with(b"PK\x03\x04") {
             let window = &data[..data.len().min(65536)];
-            if window.windows(19).any(|w| w == b"xl/sharedStrings.xm" || w == b"xl/workbook.xml")
+            if window
+                .windows(19)
+                .any(|w| w == b"xl/sharedStrings.xm" || w == b"xl/workbook.xml")
                 || window.windows(14).any(|w| w == b"xl/worksheets/")
             {
                 return "xlsx";
@@ -88,7 +91,12 @@ impl SafeDocumentExtractor {
             }
             return "ole2";
         }
-        let trimmed = data.iter().copied().skip_while(|b| b.is_ascii_whitespace()).take(16).collect::<Vec<u8>>();
+        let trimmed = data
+            .iter()
+            .copied()
+            .skip_while(|b| b.is_ascii_whitespace())
+            .take(16)
+            .collect::<Vec<u8>>();
         if trimmed.starts_with(b"<?xml") || trimmed.starts_with(b"<") {
             return "xml";
         }
@@ -142,7 +150,11 @@ impl SafeDocumentExtractor {
         // Count line items or bullet points in raw document
         let line_item_count = raw_input
             .lines()
-            .filter(|line| line.trim().starts_with('-') || line.trim().starts_with('*') || line.contains("ITEM"))
+            .filter(|line| {
+                line.trim().starts_with('-')
+                    || line.trim().starts_with('*')
+                    || line.contains("ITEM")
+            })
             .count()
             .max(1);
 

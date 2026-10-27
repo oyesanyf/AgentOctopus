@@ -27,7 +27,8 @@ impl IntegrityGuard {
     ) -> Result<usize, OctopusSecurityError> {
         if !audit_log.verify_integrity() {
             return Err(OctopusSecurityError::MerkleTamperDetected(
-                "Audit trail hash chain integrity verification failed (tampered records detected)".to_string(),
+                "Audit trail hash chain integrity verification failed (tampered records detected)"
+                    .to_string(),
             ));
         }
 

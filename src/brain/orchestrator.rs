@@ -60,10 +60,9 @@ impl CentralBrain {
         directive: StrategicDirective,
         timeout_budget: Duration,
     ) -> Result<ArmExecutionReport, OctopusSecurityError> {
-        let channel = self
-            .dispatch_table
-            .get(&role)
-            .ok_or_else(|| OctopusSecurityError::EnclaveViolation(format!("Target limb '{:?}' unmapped", role)))?;
+        let channel = self.dispatch_table.get(&role).ok_or_else(|| {
+            OctopusSecurityError::EnclaveViolation(format!("Target limb '{:?}' unmapped", role))
+        })?;
 
         let (resp_tx, resp_rx) = oneshot::channel();
         channel
@@ -77,12 +76,15 @@ impl CentralBrain {
                 if let Ok(ref report) = result {
                     if let Some(ref artifact) = report.verified_data {
                         // Check hex length (32 bytes = 64 hex characters)
-                        if artifact.merkle_root.len() != 64 || hex::decode(&artifact.merkle_root).is_err() {
+                        if artifact.merkle_root.len() != 64
+                            || hex::decode(&artifact.merkle_root).is_err()
+                        {
                             if let Some(kill_switch) = self.arm_kill_switches.get(&role) {
                                 kill_switch.trip();
                             }
                             return Err(OctopusSecurityError::MerkleTamperDetected(
-                                "Invalid or forged Merkle root format in verified artifact".to_string(),
+                                "Invalid or forged Merkle root format in verified artifact"
+                                    .to_string(),
                             ));
                         }
 

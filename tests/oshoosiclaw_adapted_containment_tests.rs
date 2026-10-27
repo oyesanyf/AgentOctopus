@@ -20,7 +20,7 @@ use agent_octopus::security::rl_defense::AdaptiveRlDefenseEngine;
 use agent_octopus::security::{
     compute_hardened_console_mode, evaluate_pre_resume_confinement_gate, harden_windows_console,
     is_console_mode_hardened, validate_agent_filesystem_access, validate_sandbox_relative_path,
-     verify_windows_confinement_invariants, BreakoutDefenseCoordinator, DynamicAgentClassifier,
+    verify_windows_confinement_invariants, BreakoutDefenseCoordinator, DynamicAgentClassifier,
     FileLineageTracker, HostActuationPore, MercuryContainmentEngine, OrbWebContainmentEngine,
     ProcessBehavioralTelemetry, RuntimeAlignmentScanner, SilkRegime, ToolCallTraceStep,
     WindowsConfinementPolicy, ZeroMutualInformationProjector, CREATE_NO_WINDOW,
@@ -153,17 +153,13 @@ fn test_law1_homological_boundary_exactness_and_2simplex_veto() {
 
 #[test]
 fn test_law2_vanishing_polynomial_trace_verifier_mersenne127() {
-    let valid_proof = VanishingPolynomialTraceVerifier::verify_execution_trace(
-        &[100, 142, 200],
-        &[42, 58],
-    );
+    let valid_proof =
+        VanishingPolynomialTraceVerifier::verify_execution_trace(&[100, 142, 200], &[42, 58]);
     assert!(valid_proof.verified);
     assert_eq!(valid_proof.quotient_remainder, 0);
 
-    let tampered_proof = VanishingPolynomialTraceVerifier::verify_execution_trace(
-        &[100, 999, 200],
-        &[42, 58],
-    );
+    let tampered_proof =
+        VanishingPolynomialTraceVerifier::verify_execution_trace(&[100, 999, 200], &[42, 58]);
     assert!(
         !tampered_proof.verified,
         "Tampered execution trace must fail vanishing polynomial verification"
@@ -193,7 +189,10 @@ fn test_law3_dirac_delta_capability_impulse_and_replay() {
     assert!(ticket.is_consumed());
 
     let replay = ticket.consume_once("read_invoice", "sha256:abc123", 1, &secret, None);
-    assert!(replay.is_err(), "Replay of DiracDeltaCapabilityTicket must fail closed");
+    assert!(
+        replay.is_err(),
+        "Replay of DiracDeltaCapabilityTicket must fail closed"
+    );
 }
 
 #[test]
@@ -216,7 +215,10 @@ fn test_dirac_delta_capability_canary_self_destruct() {
         &secret,
         Some("CANARY_HONEYFILE_HASH_01"),
     );
-    assert!(canary_touch.is_err(), "Canary touch must immediately self-destruct ticket");
+    assert!(
+        canary_touch.is_err(),
+        "Canary touch must immediately self-destruct ticket"
+    );
     assert_eq!(ticket.inspect_secret_bytes(), &[0u8; 32]);
 }
 
@@ -295,7 +297,10 @@ async fn test_sec_ring_01_pid_termination_guard_and_mesh_watchout_broadcast() {
     assert!(!watchouts.is_empty());
     assert_eq!(watchouts[0].severed_arm_id, 1);
 
-    let new_gen = registry.sever_and_regenerate(1).await.expect("Regenerate arm 1");
+    let new_gen = registry
+        .sever_and_regenerate(1)
+        .await
+        .expect("Regenerate arm 1");
     assert!(new_gen >= 2);
 }
 
@@ -330,7 +335,9 @@ fn test_cis_3_3_extended_ssrf_ip_and_encoding_guards() {
     assert!(is_restricted_rebinding_ip(&"10.255.255.1".parse().unwrap()));
     assert!(is_restricted_rebinding_ip(&"172.31.255.1".parse().unwrap()));
     assert!(is_restricted_rebinding_ip(&"192.168.0.1".parse().unwrap()));
-    assert!(is_restricted_rebinding_ip(&"169.254.169.254".parse().unwrap()));
+    assert!(is_restricted_rebinding_ip(
+        &"169.254.169.254".parse().unwrap()
+    ));
     assert!(is_restricted_rebinding_ip(&"100.64.0.1".parse().unwrap()));
     assert!(is_restricted_rebinding_ip(&"::1".parse().unwrap()));
     assert!(is_restricted_rebinding_ip(&"fe80::1".parse().unwrap()));
@@ -352,7 +359,8 @@ fn test_law8_zero_mutual_information_projector() {
 #[test]
 fn test_law8_deep_encoding_and_nato_redaction() {
     let nato_secret = "Status report: Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel";
-    let projected = ZeroMutualInformationProjector::project_output(nato_secret, 1_700_000_000_555, 100);
+    let projected =
+        ZeroMutualInformationProjector::project_output(nato_secret, 1_700_000_000_555, 100);
     assert!(
         projected.covert_secrets_redacted >= 1
             || projected.canonical_output.contains("<ZK_MI_REDACTED>")
@@ -375,7 +383,11 @@ fn test_fifo_eviction_at_capacity() {
             false,
         );
     }
-    assert_eq!(tracker.len(), 16, "FileLineageTracker must strictly enforce FIFO capacity");
+    assert_eq!(
+        tracker.len(),
+        16,
+        "FileLineageTracker must strictly enforce FIFO capacity"
+    );
 }
 
 #[test]
@@ -391,9 +403,20 @@ fn test_repository_file_immunity_before_poisoned_digests() {
     );
 
     // Hard repository/toolchain immunity must be checked BEFORE poisoned_digests
-    for immune_path in ["Cargo.toml", "Cargo.lock", "src/lib.rs", "tests/containment_tests.rs", "git.exe", "cargo.exe"] {
+    for immune_path in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "src/lib.rs",
+        "tests/containment_tests.rs",
+        "git.exe",
+        "cargo.exe",
+    ] {
         let verdict = tracker.evaluate_lineage(immune_path, Some(payload));
-        assert!(verdict.allowed, "Immune path '{}' must never be locked out", immune_path);
+        assert!(
+            verdict.allowed,
+            "Immune path '{}' must never be locked out",
+            immune_path
+        );
         assert!(verdict.is_immune_repository_or_toolchain);
     }
 }
@@ -689,7 +712,10 @@ fn test_finding1_real_command_line_tokenizer_and_encoded_command_decoder() {
         format!("powershell -e {}", b64),
         format!("powershell /enc {}", b64),
         format!("powershell \u{2013}EncodedCommand {}", b64), // Unicode en-dash
-        format!("cmd.exe /c \"p^o^w^e^r^s^h^e^l^l -NoP -W Hidden -ec {}\"", b64),
+        format!(
+            "cmd.exe /c \"p^o^w^e^r^s^h^e^l^l -NoP -W Hidden -ec {}\"",
+            b64
+        ),
     ] {
         let parsed = analyze_command_line(&cmd);
         assert!(
@@ -745,7 +771,10 @@ async fn test_finding2_authenticated_role_trust_and_multihop_provenance_taint() 
         role_trust_tier(&ArmRole::UntrustedDocIngest),
         TrustTier::Untrusted
     );
-    assert_eq!(role_trust_tier(&ArmRole::AnomalyDetection), TrustTier::Worker);
+    assert_eq!(
+        role_trust_tier(&ArmRole::AnomalyDetection),
+        TrustTier::Worker
+    );
     assert_eq!(
         role_trust_tier(&ArmRole::AccountingLedgerWrite),
         TrustTier::PrivilegedSink
@@ -799,7 +828,13 @@ async fn test_finding2_authenticated_role_trust_and_multihop_provenance_taint() 
     // Hop 3: Relay2 (3) -> LedgerSink (4) — sticky taint_state and multi-hop provenance chain
     // cause LedgerSink (PrivilegedSink) to reject the 4-hop tainted relay!
     let hop3_sticky = relay2
-        .sign_mesh_message(4, 1, MessageKind::Finding, "c-hop3", "settle invoice $99999")
+        .sign_mesh_message(
+            4,
+            1,
+            MessageKind::Finding,
+            "c-hop3",
+            "settle invoice $99999",
+        )
         .await
         .unwrap();
     assert_eq!(hop3_sticky.taint_floor, TrustTier::Untrusted);
@@ -1061,9 +1096,7 @@ fn test_finding8_dashboard_request_guard_blocks_rebinding_csrf_and_unauthenticat
 
 #[test]
 fn test_tier1_wasm_zero_ambient_authority_and_open_confined_bridge() {
-    use agent_octopus::security::{
-        WasmSandboxLimits, WasmTier1Executor, WASI_ERR_ACCESS_DENIED,
-    };
+    use agent_octopus::security::{WasmSandboxLimits, WasmTier1Executor, WASI_ERR_ACCESS_DENIED};
 
     let executor = WasmTier1Executor::try_new().expect("Initialize WasmTier1Executor");
     let scratch =
@@ -1248,8 +1281,7 @@ fn test_tier1_vs_tier2_hybrid_dispatcher_end_to_end() {
     let mercury = Arc::new(MercuryContainmentEngine::new());
     let dispatcher =
         TieredExecutionDispatcher::try_new(mercury).expect("Create TieredExecutionDispatcher");
-    let scratch =
-        std::env::temp_dir().join(format!("octopus_hybrid_disp_{}", std::process::id()));
+    let scratch = std::env::temp_dir().join(format!("octopus_hybrid_disp_{}", std::process::id()));
 
     // 1. Tier 1 (Default): Untrusted document extraction runs in-process inside Wasmtime
     let tier1_req = TieredToolRequest {
@@ -1280,7 +1312,11 @@ fn test_tier1_vs_tier2_hybrid_dispatcher_end_to_end() {
         custom_wat: None,
         native_command: Some((
             r"C:\Windows\System32\cmd.exe".to_string(),
-            vec!["/C".to_string(), "echo".to_string(), "tier2_confined_ok".to_string()],
+            vec![
+                "/C".to_string(),
+                "echo".to_string(),
+                "tier2_confined_ok".to_string(),
+            ],
         )),
         scratchpad_root: scratch.clone(),
         allow_scratch_write: false,

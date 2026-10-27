@@ -48,18 +48,20 @@ impl LogCheckpoint {
     }
 
     pub fn verify(&self) -> Result<(), LedgerError> {
-        let verifying_key = VerifyingKey::from_bytes(&self.supervisor_pubkey)
-            .map_err(|e| LedgerError::InvalidSignature(format!("Malformed checkpoint pubkey: {}", e)))?;
+        let verifying_key = VerifyingKey::from_bytes(&self.supervisor_pubkey).map_err(|e| {
+            LedgerError::InvalidSignature(format!("Malformed checkpoint pubkey: {}", e))
+        })?;
 
-        let sig_bytes: [u8; 64] = self.signature.as_slice().try_into()
-            .map_err(|_| LedgerError::InvalidSignature("Checkpoint signature length is not 64 bytes".to_string()))?;
+        let sig_bytes: [u8; 64] = self.signature.as_slice().try_into().map_err(|_| {
+            LedgerError::InvalidSignature("Checkpoint signature length is not 64 bytes".to_string())
+        })?;
 
         let signature = Signature::from_bytes(&sig_bytes);
         let digest = self.digest();
 
-        verifying_key
-            .verify(&digest, &signature)
-            .map_err(|e| LedgerError::InvalidSignature(format!("Checkpoint signature mismatch: {}", e)))
+        verifying_key.verify(&digest, &signature).map_err(|e| {
+            LedgerError::InvalidSignature(format!("Checkpoint signature mismatch: {}", e))
+        })
     }
 }
 

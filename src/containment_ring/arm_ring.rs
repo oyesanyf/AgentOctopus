@@ -100,7 +100,15 @@ fn mesh_signing_content(
         .join(",");
     format!(
         "{}:{}:{}:{}:{:?}:{}:{}|prov=[{}]|floor={:?}",
-        sender_arm_id, sender_generation, target_arm_id, target_generation, kind, correlation_id, payload, prov, taint_floor
+        sender_arm_id,
+        sender_generation,
+        target_arm_id,
+        target_generation,
+        kind,
+        correlation_id,
+        payload,
+        prov,
+        taint_floor
     )
 }
 
@@ -167,7 +175,10 @@ pub fn validate_resource_boundary(
     }
 
     // 1. Control character / null byte rejection
-    if trimmed.chars().any(|c| (c as u32) < 0x20 || (c as u32) == 0x7f) {
+    if trimmed
+        .chars()
+        .any(|c| (c as u32) < 0x20 || (c as u32) == 0x7f)
+    {
         return Err(OctopusSecurityError::EnclaveViolation(
             "Resource contains illegal ASCII control characters or null bytes".to_string(),
         ));
@@ -274,13 +285,25 @@ pub fn validate_resource_boundary(
             if trimmed.starts_with(p) {
                 // Must be followed by a path separator ('/'), port separator (':'), or query/fragment
                 let remainder = &trimmed[p.len()..];
-                if remainder.is_empty() || remainder.starts_with('/') || remainder.starts_with(':') || remainder.starts_with('?') || remainder.starts_with('#') {
+                if remainder.is_empty()
+                    || remainder.starts_with('/')
+                    || remainder.starts_with(':')
+                    || remainder.starts_with('?')
+                    || remainder.starts_with('#')
+                {
                     // Check if port separator, ensure port doesn't have suffix collision
                     if let Some(port_rest) = remainder.strip_prefix(':') {
-                        let port_digits: String = port_rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                        let port_digits: String = port_rest
+                            .chars()
+                            .take_while(|c| c.is_ascii_digit())
+                            .collect();
                         if !port_digits.is_empty() {
                             let after_port = &port_rest[port_digits.len()..];
-                            if after_port.is_empty() || after_port.starts_with('/') || after_port.starts_with('?') || after_port.starts_with('#') {
+                            if after_port.is_empty()
+                                || after_port.starts_with('/')
+                                || after_port.starts_with('?')
+                                || after_port.starts_with('#')
+                            {
                                 matched = true;
                                 break;
                             }
@@ -335,19 +358,16 @@ pub struct ArmContainmentRing {
     tool_enforcement_enabled: Arc<AtomicBool>,
     budget_enforcement_enabled: Arc<AtomicBool>,
     audit_control_token: Arc<String>,
-    pub(crate) quarantined_instances: Arc<RwLock<HashMap<String, Arc<crate::security::windows_sandbox::QuarantinedProcessInstance>>>>,
+    pub(crate) quarantined_instances: Arc<
+        RwLock<HashMap<String, Arc<crate::security::windows_sandbox::QuarantinedProcessInstance>>>,
+    >,
     /// Sticky information-flow taint for the current epoch: (lowest accepted trust tier, provenance).
     taint_state: Arc<RwLock<(TrustTier, Vec<ProvenanceHop>)>>,
 }
 
 impl ArmContainmentRing {
     /// Creates a new individual arm containment ring at a specified starting generation.
-    pub fn new(
-        arm_id: usize,
-        role: ArmRole,
-        initial_generation: u64,
-        master_seed: &[u8],
-    ) -> Self {
+    pub fn new(arm_id: usize, role: ArmRole, initial_generation: u64, master_seed: &[u8]) -> Self {
         let mut token_bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut token_bytes);
         let control_token = Arc::new(hex::encode(token_bytes));
@@ -546,7 +566,13 @@ impl ArmContainmentRing {
         let mut token_bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut token_bytes);
         let control_token = Arc::new(hex::encode(token_bytes));
-        let ring = Self::with_audit_token(arm_id, role, initial_generation, master_seed, control_token.clone());
+        let ring = Self::with_audit_token(
+            arm_id,
+            role,
+            initial_generation,
+            master_seed,
+            control_token.clone(),
+        );
         let token = NegativeControlToken::new(control_token);
         (ring, token)
     }
@@ -726,7 +752,8 @@ impl ArmContainmentRing {
         resource: &str,
     ) -> Result<CapabilityToken, OctopusSecurityError> {
         let current_gen = self.current_generation();
-        self.validate_tool_invocation(tool, resource, current_gen).await?;
+        self.validate_tool_invocation(tool, resource, current_gen)
+            .await?;
 
         let now_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -932,11 +959,8 @@ impl ArmContainmentRing {
 
         // Verify cryptographic HMAC-SHA256 signature bound to sender_arm_id, sender_generation,
         // sender_role (via key derivation), provenance and taint floor (via signed content).
-        let sender_epoch_key = self.derive_arm_epoch_key(
-            msg.sender_arm_id,
-            msg.sender_generation,
-            &msg.sender_role,
-        );
+        let sender_epoch_key =
+            self.derive_arm_epoch_key(msg.sender_arm_id, msg.sender_generation, &msg.sender_role);
         let expected_data = mesh_signing_content(
             msg.sender_arm_id,
             msg.sender_generation,
@@ -948,7 +972,10 @@ impl ArmContainmentRing {
             &msg.provenance,
             msg.taint_floor,
         );
-        let expected_sig = hex::encode(compute_ring_hmac(&sender_epoch_key, expected_data.as_bytes()));
+        let expected_sig = hex::encode(compute_ring_hmac(
+            &sender_epoch_key,
+            expected_data.as_bytes(),
+        ));
         if !crate::security::constant_time_eq_hex(&msg.signature_hex, &expected_sig) {
             return Err(OctopusSecurityError::IdentitySpoofingDetected(format!(
                 "Cryptographic mesh signature mismatch from sender arm {} ({:?}, gen {}): payload tampering or role spoofing detected",
@@ -977,7 +1004,10 @@ impl ArmContainmentRing {
 
         let mut audit = HomologicalBoundaryAuditor::audit_role_chain(&role_chain);
         let recipient_tier = role_trust_tier(&self.role);
-        if audit.allowed && effective_floor == TrustTier::Untrusted && recipient_tier == TrustTier::PrivilegedSink {
+        if audit.allowed
+            && effective_floor == TrustTier::Untrusted
+            && recipient_tier == TrustTier::PrivilegedSink
+        {
             // Sticky floor captured taint that the hop list alone may not show.
             audit.allowed = false;
             audit.proxy_laundering_detected = true;
@@ -1020,7 +1050,11 @@ impl ArmContainmentRing {
                     .cloned();
                 taint.1.drain(0..excess);
                 if let Some(untrusted_hop) = preserved_untrusted {
-                    if !taint.1.iter().any(|h| role_trust_tier(&h.role) == TrustTier::Untrusted) {
+                    if !taint
+                        .1
+                        .iter()
+                        .any(|h| role_trust_tier(&h.role) == TrustTier::Untrusted)
+                    {
                         if !taint.1.is_empty() {
                             taint.1[0] = untrusted_hop;
                         } else {
@@ -1053,12 +1087,22 @@ impl ArmContainmentRing {
     ) -> Result<(String, String, String, usize, u32), OctopusSecurityError> {
         let current_gen = self.current_generation();
         self.validate_epoch(current_gen).await?;
-        self.validate_tool_invocation("protocol_analyzer", "protocol://differential-quarantine", current_gen).await?;
+        self.validate_tool_invocation(
+            "protocol_analyzer",
+            "protocol://differential-quarantine",
+            current_gen,
+        )
+        .await?;
         self.check_step_budget(1)?;
         self.check_memory_budget(payload_len)?;
 
         // Apply OS Isolation: Create Windows Job Object with strict 64MB clamp & 1 active process limit
-        let job_name = format!("QuarantineJob_Arm{}_{}_{}", self.arm_id, report_id, rand::random::<u32>());
+        let job_name = format!(
+            "QuarantineJob_Arm{}_{}_{}",
+            self.arm_id,
+            report_id,
+            rand::random::<u32>()
+        );
         let job = Arc::new(crate::security::windows_sandbox::WindowsJobObject::create(
             &job_name,
             1,
@@ -1066,7 +1110,8 @@ impl ArmContainmentRing {
         )?);
 
         // Resolve quarantined worker binary: strictly fail-closed if missing (zero fallback)
-        let mut worker_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("octopus-worker.exe"));
+        let mut worker_path = std::env::current_exe()
+            .unwrap_or_else(|_| std::path::PathBuf::from("octopus-worker.exe"));
         if worker_path.is_absolute() {
             worker_path.pop();
             if worker_path.file_name().and_then(|n| n.to_str()) == Some("deps") {
@@ -1094,13 +1139,14 @@ impl ArmContainmentRing {
         }
 
         // Spawn suspended in genuine AppContainer and assign to Job Object before resuming
-        let quarantined_proc = crate::security::windows_sandbox::spawn_quarantined_worker_in_job_and_appcontainer(
-            &worker_path,
-            self.arm_id as u64,
-            report_id,
-            "doc_ingest",
-            &job,
-        )?;
+        let quarantined_proc =
+            crate::security::windows_sandbox::spawn_quarantined_worker_in_job_and_appcontainer(
+                &worker_path,
+                self.arm_id as u64,
+                report_id,
+                "doc_ingest",
+                &job,
+            )?;
 
         let pid = quarantined_proc.pid;
         let ac_sid = quarantined_proc.package_sid.clone();
@@ -1117,7 +1163,13 @@ impl ArmContainmentRing {
             report_id, payload_sha256, current_gen, novelty_score
         );
         let sig = compute_ring_hmac(&epoch_key, signing_content.as_bytes());
-        Ok((hex::encode(sig), job_name, ac_sid, self.config.max_memory_bytes, pid))
+        Ok((
+            hex::encode(sig),
+            job_name,
+            ac_sid,
+            self.config.max_memory_bytes,
+            pid,
+        ))
     }
 
     /// Returns the number of active quarantined processes held by this ring.
@@ -1127,7 +1179,10 @@ impl ArmContainmentRing {
     }
 
     /// Explicitly terminates a quarantined worker instance by its report ID.
-    pub async fn terminate_quarantined_instance(&self, report_id: &str) -> Result<(), OctopusSecurityError> {
+    pub async fn terminate_quarantined_instance(
+        &self,
+        report_id: &str,
+    ) -> Result<(), OctopusSecurityError> {
         let mut instances = self.quarantined_instances.write().await;
         if let Some(inst) = instances.remove(report_id) {
             inst.terminate(0)?;
@@ -1141,13 +1196,20 @@ impl ArmContainmentRing {
     }
 
     /// Retrieves an active quarantined process instance by its report ID.
-    pub async fn get_quarantined_instance(&self, report_id: &str) -> Option<Arc<crate::security::windows_sandbox::QuarantinedProcessInstance>> {
+    pub async fn get_quarantined_instance(
+        &self,
+        report_id: &str,
+    ) -> Option<Arc<crate::security::windows_sandbox::QuarantinedProcessInstance>> {
         let instances = self.quarantined_instances.read().await;
         instances.get(report_id).cloned()
     }
 
     // Negative-control test hook methods (constant-time token verification — AO-FIND-08)
-    pub fn set_epoch_enforcement(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
+    pub fn set_epoch_enforcement(
+        &self,
+        enabled: bool,
+        token: &NegativeControlToken,
+    ) -> Result<(), OctopusSecurityError> {
         if !crate::security::constant_time_eq(
             token.as_str().as_bytes(),
             self.audit_control_token.as_str().as_bytes(),
@@ -1156,11 +1218,16 @@ impl ArmContainmentRing {
                 "UNAUTHORIZED_CALL_PATH: Modification of arm epoch enforcement state requires authoritative NegativeControlToken".to_string(),
             ));
         }
-        self.epoch_enforcement_enabled.store(enabled, Ordering::SeqCst);
+        self.epoch_enforcement_enabled
+            .store(enabled, Ordering::SeqCst);
         Ok(())
     }
 
-    pub fn set_tool_enforcement(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
+    pub fn set_tool_enforcement(
+        &self,
+        enabled: bool,
+        token: &NegativeControlToken,
+    ) -> Result<(), OctopusSecurityError> {
         if !crate::security::constant_time_eq(
             token.as_str().as_bytes(),
             self.audit_control_token.as_str().as_bytes(),
@@ -1169,11 +1236,16 @@ impl ArmContainmentRing {
                 "UNAUTHORIZED_CALL_PATH: Modification of arm tool enforcement state requires authoritative NegativeControlToken".to_string(),
             ));
         }
-        self.tool_enforcement_enabled.store(enabled, Ordering::SeqCst);
+        self.tool_enforcement_enabled
+            .store(enabled, Ordering::SeqCst);
         Ok(())
     }
 
-    pub fn set_budget_enforcement(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
+    pub fn set_budget_enforcement(
+        &self,
+        enabled: bool,
+        token: &NegativeControlToken,
+    ) -> Result<(), OctopusSecurityError> {
         if !crate::security::constant_time_eq(
             token.as_str().as_bytes(),
             self.audit_control_token.as_str().as_bytes(),
@@ -1182,7 +1254,8 @@ impl ArmContainmentRing {
                 "UNAUTHORIZED_CALL_PATH: Modification of arm budget enforcement state requires authoritative NegativeControlToken".to_string(),
             ));
         }
-        self.budget_enforcement_enabled.store(enabled, Ordering::SeqCst);
+        self.budget_enforcement_enabled
+            .store(enabled, Ordering::SeqCst);
         Ok(())
     }
 
@@ -1192,26 +1265,34 @@ impl ArmContainmentRing {
         let prefixes: Vec<String> = self.allowed_resource_prefixes.read().await.clone();
 
         let instances = self.quarantined_instances.read().await;
-        let (os_isolation, job_object_clamped, appcontainer_sid) = if let Some(inst) = instances.values().next() {
-            let is_active = !inst.job.is_terminated.load(Ordering::SeqCst);
-            let desc = if instances.len() == 1 {
-                format!("Windows NT Job Object (64MB) + AppContainer [{}] PID: {}", inst.package_sid, inst.pid)
-            } else {
-                let pids: Vec<String> = instances.values().map(|i| i.pid.to_string()).collect();
-                format!("Windows NT Job Object (64MB) + AppContainer [{}] PIDs: {}", inst.package_sid, pids.join(","))
-            };
-            (desc, is_active, inst.package_sid.clone())
-        } else {
-            (
-                if self.is_severed() {
-                    "Severed (Unattached)".to_string()
+        let (os_isolation, job_object_clamped, appcontainer_sid) =
+            if let Some(inst) = instances.values().next() {
+                let is_active = !inst.job.is_terminated.load(Ordering::SeqCst);
+                let desc = if instances.len() == 1 {
+                    format!(
+                        "Windows NT Job Object (64MB) + AppContainer [{}] PID: {}",
+                        inst.package_sid, inst.pid
+                    )
                 } else {
-                    "Standby (Pre-allocated Ring Boundary)".to_string()
-                },
-                false,
-                "None (No Active OS Process)".to_string(),
-            )
-        };
+                    let pids: Vec<String> = instances.values().map(|i| i.pid.to_string()).collect();
+                    format!(
+                        "Windows NT Job Object (64MB) + AppContainer [{}] PIDs: {}",
+                        inst.package_sid,
+                        pids.join(",")
+                    )
+                };
+                (desc, is_active, inst.package_sid.clone())
+            } else {
+                (
+                    if self.is_severed() {
+                        "Severed (Unattached)".to_string()
+                    } else {
+                        "Standby (Pre-allocated Ring Boundary)".to_string()
+                    },
+                    false,
+                    "None (No Active OS Process)".to_string(),
+                )
+            };
 
         ArmRingStatusDto {
             arm_id: self.arm_id,
@@ -1311,7 +1392,8 @@ impl ArmContainmentRing {
             .await?;
 
         // Law 5: Hardware page-locked immutable buffer (\Delta t_TOCTOU = 0)
-        let immutable_buf = super::primitives::ZeroCopyImmutableToolBuffer::create_and_lock(payload)?;
+        let immutable_buf =
+            super::primitives::ZeroCopyImmutableToolBuffer::create_and_lock(payload)?;
         let verified_slice = immutable_buf.as_verified_slice()?;
 
         // 4-Category Breakout Coordinator check
@@ -1531,7 +1613,10 @@ impl ArmRingRegistry {
     }
 
     /// Retrieves an arm's containment ring, returning an explicit IsolationViolation error if missing.
-    pub async fn get_ring_or_fail(&self, arm_id: usize) -> Result<Arc<ArmContainmentRing>, OctopusSecurityError> {
+    pub async fn get_ring_or_fail(
+        &self,
+        arm_id: usize,
+    ) -> Result<Arc<ArmContainmentRing>, OctopusSecurityError> {
         let rings = self.rings.read().await;
         rings.get(&arm_id).cloned().ok_or_else(|| {
             OctopusSecurityError::IsolationViolation(format!(

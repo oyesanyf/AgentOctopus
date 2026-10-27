@@ -113,16 +113,12 @@ impl ProcessMonitor {
 
     /// Backwards compatible helper for tests or simple registration.
     pub async fn register_worker(&self, arm_id: u64, pid: u32, timeout_secs: u64) {
-        self.register_worker_identity(arm_id, 1, pid, timeout_secs).await;
+        self.register_worker_identity(arm_id, 1, pid, timeout_secs)
+            .await;
     }
 
     /// Updates worker memory consumption and severance status.
-    pub async fn update_worker_status(
-        &self,
-        arm_id: u64,
-        memory_bytes: usize,
-        is_severed: bool,
-    ) {
+    pub async fn update_worker_status(&self, arm_id: u64, memory_bytes: usize, is_severed: bool) {
         let mut map = self.workers.write().await;
         if let Some(w) = map.get_mut(&arm_id) {
             w.memory_bytes_used = memory_bytes;
@@ -237,14 +233,27 @@ impl ProcessMonitor {
                 if handle.is_null() {
                     return None;
                 }
-                let mut creation = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
-                let mut exit = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
-                let mut kernel = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
-                let mut user = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+                let mut creation = FILETIME {
+                    dwLowDateTime: 0,
+                    dwHighDateTime: 0,
+                };
+                let mut exit = FILETIME {
+                    dwLowDateTime: 0,
+                    dwHighDateTime: 0,
+                };
+                let mut kernel = FILETIME {
+                    dwLowDateTime: 0,
+                    dwHighDateTime: 0,
+                };
+                let mut user = FILETIME {
+                    dwLowDateTime: 0,
+                    dwHighDateTime: 0,
+                };
                 let res = GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user);
                 CloseHandle(handle);
                 if res != 0 {
-                    let ft = ((creation.dwHighDateTime as u64) << 32) | (creation.dwLowDateTime as u64);
+                    let ft =
+                        ((creation.dwHighDateTime as u64) << 32) | (creation.dwLowDateTime as u64);
                     Some(ft)
                 } else {
                     None

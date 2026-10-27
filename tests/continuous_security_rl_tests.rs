@@ -17,10 +17,14 @@ fn test_technical_breakout_guard_intercepts_unmasked_docker_socket() {
     let verdict = guard.evaluate_execution("/var/run/docker.sock", "POST /v1.41/containers/create");
     assert!(!verdict.is_clean);
     assert!(verdict.sandbox_quarantine_required);
-    assert!(verdict.detected_vectors.iter().any(|v| v.contains("docker.sock")));
+    assert!(verdict
+        .detected_vectors
+        .iter()
+        .any(|v| v.contains("docker.sock")));
 
     // 2. Windows named pipe container engine probe
-    let verdict2 = guard.evaluate_execution(r"\\.\pipe\docker_engine", "docker run -v /:/host alpine");
+    let verdict2 =
+        guard.evaluate_execution(r"\\.\pipe\docker_engine", "docker run -v /:/host alpine");
     assert!(!verdict2.is_clean);
 
     // 3. Clean execution
@@ -68,7 +72,11 @@ fn test_behavioral_breakout_guard_detects_harness_tampering_and_route_evasion() 
     assert!(!verdict2.is_clean);
 
     // 3. Local hosts file tampering
-    let verdict3 = guard.evaluate_action("write", r"c:\windows\system32\drivers\etc\hosts", "127.0.0.1 google.com");
+    let verdict3 = guard.evaluate_action(
+        "write",
+        r"c:\windows\system32\drivers\etc\hosts",
+        "127.0.0.1 google.com",
+    );
     assert!(!verdict3.is_clean);
 
     // 4. Clean action
@@ -90,11 +98,13 @@ fn test_data_breakout_guard_blocks_cross_agent_scratchpad_pollution() {
     assert!(verdict.memory_isolation_breached);
 
     // 2. Process memory dump attempt
-    let verdict2 = guard.evaluate_data_access("document_arm", "printenv", "dumping_host_memory_proc_self");
+    let verdict2 =
+        guard.evaluate_data_access("document_arm", "printenv", "dumping_host_memory_proc_self");
     assert!(!verdict2.is_clean);
 
     // 3. Authorized high privilege ledger_arm writes to ledger
-    let clean = guard.evaluate_data_access("ledger_arm", "/shared/state/ledger", "{\"verified\": true}");
+    let clean =
+        guard.evaluate_data_access("ledger_arm", "/shared/state/ledger", "{\"verified\": true}");
     assert!(clean.is_clean);
 }
 
@@ -109,7 +119,11 @@ fn test_rl_adaptive_defense_engine_q_learning_and_reward() {
 
     // Must escalate to containment for high threat severity
     let action = rl.select_action(&threat_state);
-    assert!(action.is_containment(), "Action should be containment, got {:?}", action);
+    assert!(
+        action.is_containment(),
+        "Action should be containment, got {:?}",
+        action
+    );
 
     // Reward for true containment
     let mut next_state = threat_state.clone();
@@ -123,7 +137,11 @@ fn test_rl_adaptive_defense_engine_q_learning_and_reward() {
         &next_state,
         true,
     );
-    assert!(reward > 50.0, "Expected positive containment reward, got {}", reward);
+    assert!(
+        reward > 50.0,
+        "Expected positive containment reward, got {}",
+        reward
+    );
 
     let stats = rl.stats();
     assert_eq!(stats.total_episodes, 1);
@@ -157,7 +175,10 @@ fn test_prioritized_experience_replay_weighted_sampling_and_training() {
 
     // Execute explicit PER batch training pass
     let metrics = rl.train_prioritized_replay(8);
-    assert!(metrics.is_some(), "PER training pass must execute successfully");
+    assert!(
+        metrics.is_some(),
+        "PER training pass must execute successfully"
+    );
     let m = metrics.unwrap();
     assert_eq!(m.sampled_batch_size, 8);
     assert!(m.max_importance_weight > 0.0);
@@ -189,10 +210,24 @@ fn test_rl_policy_empirical_baseline_comparison() {
     // Evaluate against 50 held-out evaluation episodes
     let benchmark = rl.evaluate_policy_against_baselines(50);
     assert_eq!(benchmark.episodes_evaluated, 50);
-    assert!(benchmark.learned_containment_rate >= 0.80, "Learned policy must contain at least 80% of threats, got {:.2}", benchmark.learned_containment_rate);
-    assert!(benchmark.learned_false_positive_rate <= 0.20, "Learned policy FP rate must be <= 20%, got {:.2}", benchmark.learned_false_positive_rate);
-    assert!(benchmark.learned_cumulative_reward > benchmark.random_cumulative_reward, "Learned RL must outperform random defender");
-    assert!(benchmark.learned_cumulative_reward > benchmark.disabled_cumulative_reward, "Learned RL must outperform disabled baseline");
+    assert!(
+        benchmark.learned_containment_rate >= 0.80,
+        "Learned policy must contain at least 80% of threats, got {:.2}",
+        benchmark.learned_containment_rate
+    );
+    assert!(
+        benchmark.learned_false_positive_rate <= 0.20,
+        "Learned policy FP rate must be <= 20%, got {:.2}",
+        benchmark.learned_false_positive_rate
+    );
+    assert!(
+        benchmark.learned_cumulative_reward > benchmark.random_cumulative_reward,
+        "Learned RL must outperform random defender"
+    );
+    assert!(
+        benchmark.learned_cumulative_reward > benchmark.disabled_cumulative_reward,
+        "Learned RL must outperform disabled baseline"
+    );
 }
 
 #[test]
@@ -231,18 +266,26 @@ fn test_opentelemetry_session_telemetry_and_resilience_metrics() {
 #[tokio::test]
 async fn test_continuous_evaluation_cycle_executes_all_perimeters() {
     let breakout_coord = Arc::new(BreakoutDefenseCoordinator::default());
-    let rl_engine = Arc::new(AdaptiveRlDefenseEngine::new("config/test_continuous_rl.json"));
-    let otel_telemetry = Arc::new(OtelSessionTelemetry::new("logs/test_continuous_otel.jsonl", 200));
+    let rl_engine = Arc::new(AdaptiveRlDefenseEngine::new(
+        "config/test_continuous_rl.json",
+    ));
+    let otel_telemetry = Arc::new(OtelSessionTelemetry::new(
+        "logs/test_continuous_otel.jsonl",
+        200,
+    ));
 
-    let engine = ContinuousEvaluationEngine::new(
-        breakout_coord,
-        rl_engine,
-        otel_telemetry,
-    );
+    let engine = ContinuousEvaluationEngine::new(breakout_coord, rl_engine, otel_telemetry);
 
     let report = engine.run_continuous_training_cycle().await;
-    assert!(report.total_probes >= 25, "Expected at least 25 probes across perimeters, got {}", report.total_probes);
-    assert_eq!(report.defensive_breaches, 0, "Zero defensive breaches invariant violated!");
+    assert!(
+        report.total_probes >= 25,
+        "Expected at least 25 probes across perimeters, got {}",
+        report.total_probes
+    );
+    assert_eq!(
+        report.defensive_breaches, 0,
+        "Zero defensive breaches invariant violated!"
+    );
     assert_eq!(report.passed_invariants, report.total_probes);
     assert!(report.average_reward > 0.0);
 }

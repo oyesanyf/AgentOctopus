@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn test_arm107_dedicated_database_isolation() {
-    let temp_dir = std::env::temp_dir().join(format!("octopus_research_test_{}", std::process::id()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("octopus_research_test_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&temp_dir);
     let db_path = temp_dir.join("isolated_research.db");
 
@@ -42,7 +43,10 @@ async fn test_arm107_dedicated_database_isolation() {
     );
 
     let (_, _, _, evals) = kb.get_full_counts();
-    assert_eq!(evals, 1, "Evaluation record must persist in isolated database");
+    assert_eq!(
+        evals, 1,
+        "Evaluation record must persist in isolated database"
+    );
 
     // Clean up test database
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -63,7 +67,9 @@ async fn test_arm107_cedar_target_allowlist_enforcement() {
     let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
 
     // Positive Control: Local loopback 127.0.0.1 must be permitted through Cedar Policy 8
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("Bind test listener");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Bind test listener");
     let test_port = listener.local_addr().expect("Get local addr").port();
     tokio::spawn(async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -72,10 +78,15 @@ async fn test_arm107_cedar_target_allowlist_enforcement() {
                 let mut buf = vec![0u8; 4096];
                 if let Ok(n) = stream.read(&mut buf).await {
                     let req = String::from_utf8_lossy(&buf[..n]);
-                    if req.contains("Transfer-Encoding: chunked") && req.contains("Content-Length:") {
-                        let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n").await;
+                    if req.contains("Transfer-Encoding: chunked") && req.contains("Content-Length:")
+                    {
+                        let _ = stream
+                            .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+                            .await;
                     } else {
-                        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK").await;
+                        let _ = stream
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+                            .await;
                     }
                 }
             }
@@ -92,9 +103,16 @@ async fn test_arm107_cedar_target_allowlist_enforcement() {
     };
 
     let result = supervisor.evaluate_probe(local_req).await;
-    assert!(result.is_ok(), "Local loopback evaluation must be authorized by Cedar Policy 8: {:?}", result.as_ref().err());
+    assert!(
+        result.is_ok(),
+        "Local loopback evaluation must be authorized by Cedar Policy 8: {:?}",
+        result.as_ref().err()
+    );
     let finding = result.unwrap();
-    assert!(finding.is_anomalous, "Chunked and Content-Length conflict must be detected as anomaly");
+    assert!(
+        finding.is_anomalous,
+        "Chunked and Content-Length conflict must be detected as anomaly"
+    );
     assert_eq!(finding.finding_status, "LABORATORY_RESEARCH_FINDING");
     assert!(finding.baseline_subtracted);
 
@@ -109,7 +127,10 @@ async fn test_arm107_cedar_target_allowlist_enforcement() {
     };
 
     let ext_result = supervisor.evaluate_probe(external_req).await;
-    assert!(ext_result.is_err(), "External host must be rejected fail-closed");
+    assert!(
+        ext_result.is_err(),
+        "External host must be rejected fail-closed"
+    );
     let err_msg = format!("{}", ext_result.unwrap_err());
     assert!(
         err_msg.contains("not authorized by Cedar Policy 8") || err_msg.contains("FAIL-CLOSED"),
@@ -149,7 +170,10 @@ async fn test_arm107_handoff_to_arm106_differential_engine() {
     };
 
     let report = supervisor.handoff_to_arm106(handoff).await;
-    assert!(report.is_ok(), "Handoff to Arm 106 differential engine must complete");
+    assert!(
+        report.is_ok(),
+        "Handoff to Arm 106 differential engine must complete"
+    );
     let diff_report = report.unwrap();
     assert!(!diff_report.report_id.is_empty());
     assert!(!diff_report.primary_verdict.is_empty());
@@ -161,7 +185,10 @@ async fn test_arm107_containment_ring_allocation() {
     let rings = ArmRingRegistry::new(50, secret_seed);
 
     let ring = rings.get_ring(107).await;
-    assert!(ring.is_some(), "Ring #107 must be pre-allocated in registry");
+    assert!(
+        ring.is_some(),
+        "Ring #107 must be pre-allocated in registry"
+    );
     let ring_arc = ring.unwrap();
     assert_eq!(ring_arc.role, ArmRole::AutonomousProtocolResearch);
     assert_eq!(ring_arc.arm_id, 107);
@@ -177,8 +204,14 @@ async fn test_arm107_rfc_index_synchronization() {
     let sync = RfcIndexSynchronizer::new(Arc::clone(&kb));
 
     let report = sync.sync_index().await.expect("Sync pass must succeed");
-    assert!(report.total_rfcs_in_db > 0, "Synchronizer must index RFC specifications");
-    assert!(report.fragments_indexed > 0, "Synchronizer must extract normative statements");
+    assert!(
+        report.total_rfcs_in_db > 0,
+        "Synchronizer must index RFC specifications"
+    );
+    assert!(
+        report.fragments_indexed > 0,
+        "Synchronizer must extract normative statements"
+    );
     assert_eq!(report.status, "SYNCHRONIZATION_SUCCESSFUL");
 
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -209,7 +242,10 @@ async fn test_arm107_destination_egress_and_dns_rebinding_defense() {
 
     // 3. Link-local cloud metadata (169.254.169.254) must be blocked fail-closed
     let metadata_dest = supervisor.validate_and_resolve_destination("169.254.169.254", 80);
-    assert!(metadata_dest.is_err(), "Cloud metadata destination must be rejected");
+    assert!(
+        metadata_dest.is_err(),
+        "Cloud metadata destination must be rejected"
+    );
 
     // 4. Non-standard dword/integer IP format (2130706433) must be blocked fail-closed
     let dword_dest = supervisor.validate_and_resolve_destination("2130706433", 80);
@@ -245,15 +281,32 @@ async fn test_arm107_structured_transport_outcomes_no_synthetic_http() {
     };
 
     let result = supervisor.evaluate_probe(closed_port_req).await;
-    assert!(result.is_ok(), "Evaluation must execute and return structured outcome");
+    assert!(
+        result.is_ok(),
+        "Evaluation must execute and return structured outcome"
+    );
     let finding = result.unwrap();
 
     // Verify structured transport outcome
-    assert!(matches!(finding.transport_outcome, TransportOutcome::ConnectionRefused { .. }));
+    assert!(matches!(
+        finding.transport_outcome,
+        TransportOutcome::ConnectionRefused { .. }
+    ));
     // Verify raw_response does NOT contain fabricated HTTP status lines
-    assert!(!finding.raw_response.contains("HTTP/1.1 504 Gateway Timeout"), "Must NOT synthesize 504 response");
-    assert!(!finding.raw_response.contains("HTTP/1.1 502 Bad Gateway"), "Must NOT synthesize 502 response");
-    assert_eq!(finding.raw_response, "", "Failed connection must leave actual received bytes empty");
+    assert!(
+        !finding
+            .raw_response
+            .contains("HTTP/1.1 504 Gateway Timeout"),
+        "Must NOT synthesize 504 response"
+    );
+    assert!(
+        !finding.raw_response.contains("HTTP/1.1 502 Bad Gateway"),
+        "Must NOT synthesize 502 response"
+    );
+    assert_eq!(
+        finding.raw_response, "",
+        "Failed connection must leave actual received bytes empty"
+    );
 }
 
 #[tokio::test]
@@ -261,7 +314,9 @@ async fn test_arm107_differential_baseline_response_comparison() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // Spin up a genuine loopback TCP server for protocol research differential testing
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("Bind test listener");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Bind test listener");
     let server_addr = listener.local_addr().expect("Get local addr");
     let port = server_addr.port();
 
@@ -272,7 +327,8 @@ async fn test_arm107_differential_baseline_response_comparison() {
                 let mut buf = vec![0u8; 4096];
                 if let Ok(n) = stream.read(&mut buf).await {
                     let req = String::from_utf8_lossy(&buf[..n]);
-                    if req.contains("Transfer-Encoding: chunked") && req.contains("Content-Length:") {
+                    if req.contains("Transfer-Encoding: chunked") && req.contains("Content-Length:")
+                    {
                         let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 15\r\n\r\nFraming Conflict";
                         let _ = stream.write_all(resp.as_bytes()).await;
                     } else {
@@ -305,15 +361,35 @@ async fn test_arm107_differential_baseline_response_comparison() {
     };
 
     let result = supervisor.evaluate_probe(eval_req).await;
-    assert!(result.is_ok(), "Differential probe evaluation must succeed: {:?}", result.as_ref().err());
+    assert!(
+        result.is_ok(),
+        "Differential probe evaluation must succeed: {:?}",
+        result.as_ref().err()
+    );
     let finding = result.unwrap();
 
-    assert!(finding.is_anomalous, "Divergence between baseline (200) and probe (400) must be detected");
-    assert!(finding.baseline_subtracted, "Baseline subtraction must be flagged as active");
-    assert!(matches!(finding.transport_outcome, TransportOutcome::ResponseReceived { .. }));
+    assert!(
+        finding.is_anomalous,
+        "Divergence between baseline (200) and probe (400) must be detected"
+    );
+    assert!(
+        finding.baseline_subtracted,
+        "Baseline subtraction must be flagged as active"
+    );
+    assert!(matches!(
+        finding.transport_outcome,
+        TransportOutcome::ResponseReceived { .. }
+    ));
     assert!(finding.raw_response.contains("HTTP/1.1 400 Bad Request"));
-    assert!(finding.baseline_response.as_ref().unwrap().contains("HTTP/1.1 200 OK"));
-    assert_eq!(finding.confirmation_count, 2, "Reproducible divergence must have confirmation count of 2");
+    assert!(finding
+        .baseline_response
+        .as_ref()
+        .unwrap()
+        .contains("HTTP/1.1 200 OK"));
+    assert_eq!(
+        finding.confirmation_count, 2,
+        "Reproducible divergence must have confirmation count of 2"
+    );
 }
 
 #[tokio::test]
@@ -322,7 +398,9 @@ async fn test_arm107_transient_non_reproducible_anomaly_downgrade() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // Server returns divergent response on 1st request, but concordant response on repeat request
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("Bind test listener");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Bind test listener");
     let server_addr = listener.local_addr().expect("Get local addr");
     let port = server_addr.port();
     let probe_attempts = Arc::new(AtomicUsize::new(0));
@@ -380,9 +458,18 @@ async fn test_arm107_transient_non_reproducible_anomaly_downgrade() {
     let finding = result.unwrap();
 
     // Verification: Transient non-reproducible divergence must be downgraded!
-    assert!(!finding.is_anomalous, "Non-reproducible anomaly must be downgraded to is_anomalous: false");
-    assert_eq!(finding.finding_status, "NON_REPRODUCIBLE_TRANSIENT", "Status must be downgraded to NON_REPRODUCIBLE_TRANSIENT");
-    assert!(finding.details.contains("Downgraded"), "Details must explain downgrade due to failed reproducibility");
+    assert!(
+        !finding.is_anomalous,
+        "Non-reproducible anomaly must be downgraded to is_anomalous: false"
+    );
+    assert_eq!(
+        finding.finding_status, "NON_REPRODUCIBLE_TRANSIENT",
+        "Status must be downgraded to NON_REPRODUCIBLE_TRANSIENT"
+    );
+    assert!(
+        finding.details.contains("Downgraded"),
+        "Details must explain downgrade due to failed reproducibility"
+    );
 }
 
 #[tokio::test]
@@ -421,23 +508,41 @@ fn test_arm107_worker_packaging_validation_and_fail_closed() {
     let valid_dir = PathBuf::from("vendor").join("rfchunt");
     if valid_dir.exists() {
         let hash_res = PythonWorkerBridge::validate_worker_packaging(&valid_dir);
-        assert!(hash_res.is_ok(), "Managed worker packaging validation must succeed: {:?}", hash_res.err());
+        assert!(
+            hash_res.is_ok(),
+            "Managed worker packaging validation must succeed: {:?}",
+            hash_res.err()
+        );
         let hash = hash_res.unwrap();
-        assert_eq!(hash.len(), 64, "SHA-256 hash must be 64 hexadecimal characters");
+        assert_eq!(
+            hash.len(),
+            64,
+            "SHA-256 hash must be 64 hexadecimal characters"
+        );
     }
 
     // 2. Corrupt / Missing worker directory must fail closed
     let invalid_dir = PathBuf::from("nonexistent_worker_directory_xyz");
     let corrupt_res = PythonWorkerBridge::validate_worker_packaging(&invalid_dir);
-    assert!(corrupt_res.is_err(), "Non-existent directory must fail closed");
+    assert!(
+        corrupt_res.is_err(),
+        "Non-existent directory must fail closed"
+    );
 
     // 3. Incomplete packaging (missing required dependencies) must fail closed
-    let temp_incomplete = std::env::temp_dir().join(format!("incomplete_worker_{}", std::process::id()));
+    let temp_incomplete =
+        std::env::temp_dir().join(format!("incomplete_worker_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&temp_incomplete);
-    let _ = std::fs::write(temp_incomplete.join("mcp_server.py"), "#!/usr/bin/env python3\nprint('hello')\n");
+    let _ = std::fs::write(
+        temp_incomplete.join("mcp_server.py"),
+        "#!/usr/bin/env python3\nprint('hello')\n",
+    );
     // Missing database.py, rfc_chunker.py, rfc_fetcher.py
     let incomplete_res = PythonWorkerBridge::validate_worker_packaging(&temp_incomplete);
-    assert!(incomplete_res.is_err(), "Worker directory with missing modules must fail closed");
+    assert!(
+        incomplete_res.is_err(),
+        "Worker directory with missing modules must fail closed"
+    );
     let _ = std::fs::remove_dir_all(&temp_incomplete);
 }
 
@@ -445,7 +550,9 @@ fn test_arm107_worker_packaging_validation_and_fail_closed() {
 async fn test_arm107_multi_trial_repetition_stable_baseline_and_arm106_confirmation() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("Bind test listener");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Bind test listener");
     let test_port = listener.local_addr().expect("Get local addr").port();
 
     tokio::spawn(async move {
@@ -454,7 +561,8 @@ async fn test_arm107_multi_trial_repetition_stable_baseline_and_arm106_confirmat
                 let mut buf = vec![0u8; 4096];
                 if let Ok(n) = stream.read(&mut buf).await {
                     let req = String::from_utf8_lossy(&buf[..n]);
-                    if req.contains("Transfer-Encoding: chunked") && req.contains("Content-Length:") {
+                    if req.contains("Transfer-Encoding: chunked") && req.contains("Content-Length:")
+                    {
                         let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 16\r\n\r\nFraming Anomaly!";
                         let _ = stream.write_all(resp.as_bytes()).await;
                     } else {
@@ -488,17 +596,45 @@ async fn test_arm107_multi_trial_repetition_stable_baseline_and_arm106_confirmat
     };
 
     let result = supervisor.evaluate_probe(eval_req).await;
-    assert!(result.is_ok(), "Multi-trial evaluation must succeed: {:?}", result.as_ref().err());
+    assert!(
+        result.is_ok(),
+        "Multi-trial evaluation must succeed: {:?}",
+        result.as_ref().err()
+    );
     let finding = result.unwrap();
 
-    assert!(finding.is_anomalous, "Anomaly must be detected across trials");
-    assert_eq!(finding.total_trials, 5, "Total trials must equal requested 5");
-    assert_eq!(finding.confirmation_count, 5, "All 5 trials must confirm the anomaly");
-    assert!(finding.baseline_stable, "Baseline response must be confirmed stable across all 5 trials");
-    assert!((finding.reproducibility_rate - 1.0).abs() < 1e-6, "Reproducibility rate must be 100%");
-    assert!(finding.ci95_low > 0.40, "95% confidence interval lower bound must be positive");
-    assert!(finding.ci95_high <= 1.0, "95% confidence interval upper bound must be <= 1.0");
-    assert!(finding.arm106_validated, "Arm 106 differential analysis must validate the framing anomaly");
+    assert!(
+        finding.is_anomalous,
+        "Anomaly must be detected across trials"
+    );
+    assert_eq!(
+        finding.total_trials, 5,
+        "Total trials must equal requested 5"
+    );
+    assert_eq!(
+        finding.confirmation_count, 5,
+        "All 5 trials must confirm the anomaly"
+    );
+    assert!(
+        finding.baseline_stable,
+        "Baseline response must be confirmed stable across all 5 trials"
+    );
+    assert!(
+        (finding.reproducibility_rate - 1.0).abs() < 1e-6,
+        "Reproducibility rate must be 100%"
+    );
+    assert!(
+        finding.ci95_low > 0.40,
+        "95% confidence interval lower bound must be positive"
+    );
+    assert!(
+        finding.ci95_high <= 1.0,
+        "95% confidence interval upper bound must be <= 1.0"
+    );
+    assert!(
+        finding.arm106_validated,
+        "Arm 106 differential analysis must validate the framing anomaly"
+    );
     assert_eq!(
         finding.finding_status,
         "CONFIRMED_VULNERABILITY",
@@ -516,7 +652,10 @@ fn test_rfc_http_response_parsing_and_chunked_body_decoding() {
     // 1. Multiple header blocks (e.g. 100 Continue preceding 200 OK)
     let multi_block = "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, World!";
     let (status, headers, body) = parse_http_wire_response(multi_block);
-    assert_eq!(status, 200, "Must extract 200 OK from secondary header block");
+    assert_eq!(
+        status, 200,
+        "Must extract 200 OK from secondary header block"
+    );
     assert_eq!(headers.get("content-type"), Some(&"text/plain".to_string()));
     assert_eq!(headers.get("content-length"), Some(&"13".to_string()));
     assert_eq!(body, "Hello, World!");
@@ -525,7 +664,10 @@ fn test_rfc_http_response_parsing_and_chunked_body_decoding() {
     let chunked_stream = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\nWiki\r\n6;ext=foo\r\npedia \r\n0\r\n\r\n";
     let (chunk_status, chunk_headers, chunk_body) = parse_http_wire_response(chunked_stream);
     assert_eq!(chunk_status, 200);
-    assert_eq!(chunk_headers.get("transfer-encoding"), Some(&"chunked".to_string()));
+    assert_eq!(
+        chunk_headers.get("transfer-encoding"),
+        Some(&"chunked".to_string())
+    );
     assert_eq!(chunk_body, "Wikipedia ");
 
     // 3. Raw decode_chunked_body unit verification
@@ -537,7 +679,8 @@ fn test_rfc_http_response_parsing_and_chunked_body_decoding() {
     let sample_rfc = "This is a non-normative introduction paragraph.\n\nAn HTTP server MUST NOT send a Content-Length header with chunked transfer.\n\nClients SHOULD close connections when timeouts occur.";
     let chunks = chunk_rfc_content(9112, "HTTP/1.1", sample_rfc, 2000);
     assert_eq!(chunks.len(), 1, "Short RFC must produce 1 chunk");
-    assert!(chunks[0].2, "Chunk with MUST NOT and SHOULD must be flagged as normative");
+    assert!(
+        chunks[0].2,
+        "Chunk with MUST NOT and SHOULD must be flagged as normative"
+    );
 }
-
-

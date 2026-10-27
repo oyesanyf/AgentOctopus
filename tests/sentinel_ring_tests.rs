@@ -28,19 +28,16 @@ async fn test_1_positive_baseline_control_and_heartbeat_flow() {
     assert!(!snap.is_locked_down);
 
     // Supervisor sends valid authenticated heartbeat sequence 1
-    let hb1 = create_authenticated_heartbeat(
-        "supervisor_alpha",
-        1,
-        1,
-        1000,
-        TEST_SECRET_SEED,
-    );
+    let hb1 = create_authenticated_heartbeat("supervisor_alpha", 1, 1, 1000, TEST_SECRET_SEED);
     let res = sentinel.ingest_supervisor_heartbeat(hb1).await;
     assert!(res.is_ok(), "Healthy heartbeat must be accepted");
 
     // Telemetry observation for healthy arm 17
     let obs = SentinelObservation::healthy(17, 8);
-    let action = sentinel.evaluate_observation(&obs).await.expect("Evaluation must succeed");
+    let action = sentinel
+        .evaluate_observation(&obs)
+        .await
+        .expect("Evaluation must succeed");
     assert_eq!(action, SentinelAction::Continue);
 }
 
@@ -52,7 +49,8 @@ async fn test_2_heartbeat_anti_replay_and_sequence_protection() {
     assert!(sentinel.ingest_supervisor_heartbeat(hb1).await.is_ok());
 
     // Replay sequence 1: MUST be rejected and trigger lockdown
-    let replay_hb1 = create_authenticated_heartbeat("supervisor_alpha", 1, 1, 1000, TEST_SECRET_SEED);
+    let replay_hb1 =
+        create_authenticated_heartbeat("supervisor_alpha", 1, 1, 1000, TEST_SECRET_SEED);
     let replay_res = sentinel.ingest_supervisor_heartbeat(replay_hb1).await;
     assert!(replay_res.is_err(), "Replayed sequence 1 must be rejected");
 
@@ -69,7 +67,8 @@ async fn test_3_heartbeat_uptime_rollback_protection() {
     assert!(sentinel.ingest_supervisor_heartbeat(hb1).await.is_ok());
 
     // Seq 2 arrives with reversed monotonic uptime (4000 < 5000)
-    let hb2_rollback = create_authenticated_heartbeat("supervisor_alpha", 1, 2, 4000, TEST_SECRET_SEED);
+    let hb2_rollback =
+        create_authenticated_heartbeat("supervisor_alpha", 1, 2, 4000, TEST_SECRET_SEED);
     let res = sentinel.ingest_supervisor_heartbeat(hb2_rollback).await;
     assert!(res.is_err(), "Monotonic clock rollback must be rejected");
 
@@ -80,7 +79,8 @@ async fn test_3_heartbeat_uptime_rollback_protection() {
 async fn test_4_policy_and_containment_digest_tampering() {
     let sentinel = SentinelSupervisor::new(TEST_SECRET_SEED, 50);
 
-    let mut tampered_hb = create_authenticated_heartbeat("supervisor_alpha", 1, 1, 1000, TEST_SECRET_SEED);
+    let mut tampered_hb =
+        create_authenticated_heartbeat("supervisor_alpha", 1, 1, 1000, TEST_SECRET_SEED);
     tampered_hb.policy_digest[0] ^= 0xFF; // Deliberately corrupt policy digest
 
     let res = sentinel.ingest_supervisor_heartbeat(tampered_hb).await;
@@ -108,7 +108,10 @@ async fn test_5_process_identity_and_anti_pid_reuse() {
     let w17 = workers.iter().find(|w| w.identity.arm_id == 17).unwrap();
     assert_eq!(w17.identity.pid, current_pid);
     assert_eq!(w17.identity.generation, 8);
-    assert!(w17.identity.job_object_guid.contains("AgentOctopus.ArmJob.Arm17"));
+    assert!(w17
+        .identity
+        .job_object_guid
+        .contains("AgentOctopus.ArmJob.Arm17"));
     assert!(w17.identity.appcontainer_sid.contains("S-1-15-2-1017"));
 }
 
@@ -132,7 +135,9 @@ async fn test_6_zombie_worker_autonomous_os_termination() {
 
     // Verify forensic audit record was generated out-of-band
     let records = sentinel.forensic_audit.get_records().await;
-    assert!(records.iter().any(|r| r.event_type == "ZOMBIE_WORKER_DETECTED"));
+    assert!(records
+        .iter()
+        .any(|r| r.event_type == "ZOMBIE_WORKER_DETECTED"));
 }
 
 #[tokio::test]
@@ -168,7 +173,10 @@ async fn test_7_network_containment_and_google_egress_invariant() {
         .verify_egress(17, "http://192.168.1.100:8080/admin", true)
         .await
         .unwrap();
-    assert!(matches!(v4, NetworkVerificationVerdict::BlockedPrivateSubnet(_)));
+    assert!(matches!(
+        v4,
+        NetworkVerificationVerdict::BlockedPrivateSubnet(_)
+    ));
 
     // Denied: Unapproved external domain
     let v5 = sentinel
@@ -176,7 +184,10 @@ async fn test_7_network_containment_and_google_egress_invariant() {
         .verify_egress(17, "https://malicious-c2.evil.com/exfil", true)
         .await
         .unwrap();
-    assert!(matches!(v5, NetworkVerificationVerdict::BlockedUnauthorizedDomain(_)));
+    assert!(matches!(
+        v5,
+        NetworkVerificationVerdict::BlockedUnauthorizedDomain(_)
+    ));
 
     // Denied: Direct raw socket without routing through egress proxy
     let v6 = sentinel
@@ -228,7 +239,10 @@ async fn test_9_complete_primary_supervisor_compromise_simulation() {
     // Boot supervisor and send initial heartbeat
     let hb1 = create_authenticated_heartbeat("supervisor_alpha", 1, 1, 1000, TEST_SECRET_SEED);
     assert!(sentinel.ingest_supervisor_heartbeat(hb1).await.is_ok());
-    assert_eq!(sentinel.snapshot().await.system_state, SentinelSystemState::Healthy);
+    assert_eq!(
+        sentinel.snapshot().await.system_state,
+        SentinelSystemState::Healthy
+    );
 
     // SIMULATE COMPROMISE: Primary supervisor is abruptly killed without shutdown signal.
     // Sentinel detects missing heartbeat (> 5s elapsed)
@@ -244,7 +258,7 @@ async fn test_9_complete_primary_supervisor_compromise_simulation() {
         authorization_healthy: false, // Compromise breaks authorization channel
         sandbox_verified: false,
         unauthorized_egress_detected: false,
-        supervisor_healthy: false,    // Primary supervisor is down
+        supervisor_healthy: false, // Primary supervisor is down
         termination_deadline_exceeded: false,
         proxy_enforcement_intact: false,
         timestamp_secs: 1000,
@@ -255,7 +269,10 @@ async fn test_9_complete_primary_supervisor_compromise_simulation() {
 
     // System is locked down
     assert!(sentinel.lockdown_controller.is_locked_down());
-    assert!(sentinel.lockdown_controller.assert_not_locked_down().is_err());
+    assert!(sentinel
+        .lockdown_controller
+        .assert_not_locked_down()
+        .is_err());
 
     // Execute 5-phase verified recovery
     let recovery_rep = sentinel
@@ -274,15 +291,24 @@ async fn test_9_complete_primary_supervisor_compromise_simulation() {
 
     // Verify stale Gen 8 credentials are permanently rejected
     let stale_check = sentinel.epoch_registry.is_generation_active(17, 8).await;
-    assert!(stale_check.is_err(), "Stale Gen 8 credentials must be denied");
+    assert!(
+        stale_check.is_err(),
+        "Stale Gen 8 credentials must be denied"
+    );
 
     // Release lockdown with authoritative administrative recovery token
-    std::env::set_var("SENTINEL_RECOVERY_TOKEN", "RECOVERY_AUTHORIZED_TEST_TOKEN_32_BYTES");
+    std::env::set_var(
+        "SENTINEL_RECOVERY_TOKEN",
+        "RECOVERY_AUTHORIZED_TEST_TOKEN_32_BYTES",
+    );
     let bad_release = sentinel
         .lockdown_controller
         .release_lockdown("WRONG_RECOVERY_TOKEN")
         .await;
-    assert!(bad_release.is_err(), "Unauthorized recovery token must be rejected");
+    assert!(
+        bad_release.is_err(),
+        "Unauthorized recovery token must be rejected"
+    );
 
     let release_res = sentinel
         .lockdown_controller
@@ -299,8 +325,13 @@ async fn test_10_sentinel_crash_fail_closed_invariant() {
 
     // Even if watchdog is explicitly deactivated, lockdown assertion and epoch boundaries fail closed
     sentinel.set_watchdog_active(false);
-    sentinel.trigger_lockdown("Sentinel Crash", "Simulated sentinel crash").await;
+    sentinel
+        .trigger_lockdown("Sentinel Crash", "Simulated sentinel crash")
+        .await;
 
     assert!(sentinel.lockdown_controller.is_locked_down());
-    assert!(sentinel.lockdown_controller.assert_not_locked_down().is_err());
+    assert!(sentinel
+        .lockdown_controller
+        .assert_not_locked_down()
+        .is_err());
 }

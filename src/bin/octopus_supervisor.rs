@@ -17,7 +17,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("============================================================");
 
     let supervisor_pid = std::process::id();
-    let secret_seed = agent_octopus::security::cedar_arm::authorization::load_or_generate_cedar_secret();
+    let secret_seed =
+        agent_octopus::security::cedar_arm::authorization::load_or_generate_cedar_secret();
     let policy_fp = "cedar_v4_13_octopus_v1";
 
     println!("[SUPERVISOR] Process PID: {}", supervisor_pid);

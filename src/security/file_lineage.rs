@@ -112,9 +112,11 @@ impl FileLineageTracker {
             || norm.starts_with("crates/")
             || norm.starts_with("tests/")
             || norm.starts_with("scripts/")
-            || exact_or_suffix
-                .iter()
-                .any(|m| norm == m.trim_start_matches('/') || norm.ends_with(m) || (m.ends_with('/') && norm.contains(m)))
+            || exact_or_suffix.iter().any(|m| {
+                norm == m.trim_start_matches('/')
+                    || norm.ends_with(m)
+                    || (m.ends_with('/') && norm.contains(m))
+            })
     }
 
     /// Registers a synthetic canary honeyfile path and its content digest.
@@ -141,7 +143,10 @@ impl FileLineageTracker {
             || self.canary_digests.read().unwrap().contains(&digest);
 
         if is_tainted_external && !Self::is_path_immune(&norm) {
-            self.poisoned_digests.write().unwrap().insert(digest.clone());
+            self.poisoned_digests
+                .write()
+                .unwrap()
+                .insert(digest.clone());
         }
 
         let now_secs = SystemTime::now()

@@ -30,10 +30,30 @@ impl SandboxConfinementPolicy {
     pub fn validate_process_confinement(&self, command: &str) -> Result<(), OctopusSecurityError> {
         let lower = command.to_lowercase();
         let forbidden_commands = [
-            "cmd.exe", "cmd ", "powershell", "pwsh", "bash", "sh ", "/bin/sh",
-            "sh.exe", "wscript", "cscript", "mshta", "rundll32", "conhost",
-            "taskkill", "net user", "reg add", "reg delete", "system(", "popen(",
-            "fork(", "exec(", "spawn(", "process::", "std::process",
+            "cmd.exe",
+            "cmd ",
+            "powershell",
+            "pwsh",
+            "bash",
+            "sh ",
+            "/bin/sh",
+            "sh.exe",
+            "wscript",
+            "cscript",
+            "mshta",
+            "rundll32",
+            "conhost",
+            "taskkill",
+            "net user",
+            "reg add",
+            "reg delete",
+            "system(",
+            "popen(",
+            "fork(",
+            "exec(",
+            "spawn(",
+            "process::",
+            "std::process",
         ];
 
         for &forbidden in &forbidden_commands {
@@ -49,7 +69,10 @@ impl SandboxConfinementPolicy {
     }
 
     /// Validates that an agent cannot read or write to host filesystems, escape via path traversal, or touch system files.
-    pub fn validate_filesystem_confinement(&self, target_path: &str) -> Result<(), OctopusSecurityError> {
+    pub fn validate_filesystem_confinement(
+        &self,
+        target_path: &str,
+    ) -> Result<(), OctopusSecurityError> {
         let lower = target_path.to_lowercase();
 
         // 1. Path traversal attacks (including single-dot or mixed percent-encoded traversal `%2e.` / `.%2e` and `%00`)
@@ -69,9 +92,22 @@ impl SandboxConfinementPolicy {
 
         // 2. Sensitive OS paths and credentials
         let forbidden_paths = [
-            "/etc/passwd", "/etc/shadow", "c:\\windows", "c:\\users",
-            "id_rsa", ".ssh", ".aws", ".env", "config\\sam", "config/sam", "system32",
-            "\\pipe\\", "\\\\.\\", "/dev/", "/proc/", "/sys/",
+            "/etc/passwd",
+            "/etc/shadow",
+            "c:\\windows",
+            "c:\\users",
+            "id_rsa",
+            ".ssh",
+            ".aws",
+            ".env",
+            "config\\sam",
+            "config/sam",
+            "system32",
+            "\\pipe\\",
+            "\\\\.\\",
+            "/dev/",
+            "/proc/",
+            "/sys/",
         ];
 
         for &forbidden in &forbidden_paths {
@@ -90,7 +126,9 @@ impl SandboxConfinementPolicy {
                 .iter()
                 .any(|prefix| lower.starts_with(prefix));
 
-            if !is_allowed && (lower.starts_with("file://") || lower.contains(":\\") || lower.starts_with("/")) {
+            if !is_allowed
+                && (lower.starts_with("file://") || lower.contains(":\\") || lower.starts_with("/"))
+            {
                 return Err(OctopusSecurityError::IsolationViolation(format!(
                     "Unconfined filesystem path '{}' is outside authorized sandbox prefixes",
                     target_path

@@ -49,13 +49,15 @@ impl ArmRuntime {
         let containment_ring = Arc::new(ContainmentRing::default());
         let default_name = format!("arm-{:?}-0", role);
         let capability_token = match role {
-            ArmRole::AccountingLedgerWrite => Some(containment_ring.capability_gate.issue_capability(
-                "supervisor",
-                &default_name,
-                ArmRole::AccountingLedgerWrite,
-                "ledger_writer",
-                "s3://accounting/",
-            )),
+            ArmRole::AccountingLedgerWrite => {
+                Some(containment_ring.capability_gate.issue_capability(
+                    "supervisor",
+                    &default_name,
+                    ArmRole::AccountingLedgerWrite,
+                    "ledger_writer",
+                    "s3://accounting/",
+                ))
+            }
             ArmRole::NetworkEgress => Some(containment_ring.capability_gate.issue_capability(
                 "supervisor",
                 &default_name,
@@ -109,29 +111,34 @@ impl ArmRuntime {
         let name = self.arm_name();
         match self.role {
             ArmRole::AccountingLedgerWrite => {
-                self.capability_token = Some(self.containment_ring.capability_gate.issue_capability(
-                    "supervisor",
-                    &name,
-                    ArmRole::AccountingLedgerWrite,
-                    "ledger_writer",
-                    "s3://accounting/",
-                ));
+                self.capability_token =
+                    Some(self.containment_ring.capability_gate.issue_capability(
+                        "supervisor",
+                        &name,
+                        ArmRole::AccountingLedgerWrite,
+                        "ledger_writer",
+                        "s3://accounting/",
+                    ));
             }
             ArmRole::NetworkEgress => {
-                self.capability_token = Some(self.containment_ring.capability_gate.issue_capability(
-                    "supervisor",
-                    &name,
-                    ArmRole::NetworkEgress,
-                    "http_egress",
-                    "https://www.google.com/",
-                ));
+                self.capability_token =
+                    Some(self.containment_ring.capability_gate.issue_capability(
+                        "supervisor",
+                        &name,
+                        ArmRole::NetworkEgress,
+                        "http_egress",
+                        "https://www.google.com/",
+                    ));
             }
             _ => {}
         }
         self
     }
 
-    pub fn with_arm_ring(mut self, arm_ring: Arc<crate::containment_ring::ArmContainmentRing>) -> Self {
+    pub fn with_arm_ring(
+        mut self,
+        arm_ring: Arc<crate::containment_ring::ArmContainmentRing>,
+    ) -> Self {
         self.generation = arm_ring.current_generation();
         self.arm_ring = Some(arm_ring);
         self
@@ -140,7 +147,8 @@ impl ArmRuntime {
     pub fn with_generation(mut self, gen: u64) -> Self {
         self.generation = gen;
         if let Some(ref ring) = self.arm_ring {
-            ring.generation.store(gen, std::sync::atomic::Ordering::SeqCst);
+            ring.generation
+                .store(gen, std::sync::atomic::Ordering::SeqCst);
         }
         self
     }
@@ -150,22 +158,24 @@ impl ArmRuntime {
         let name = self.arm_name();
         match self.role {
             ArmRole::AccountingLedgerWrite => {
-                self.capability_token = Some(self.containment_ring.capability_gate.issue_capability(
-                    "supervisor",
-                    &name,
-                    ArmRole::AccountingLedgerWrite,
-                    "ledger_writer",
-                    "s3://accounting/",
-                ));
+                self.capability_token =
+                    Some(self.containment_ring.capability_gate.issue_capability(
+                        "supervisor",
+                        &name,
+                        ArmRole::AccountingLedgerWrite,
+                        "ledger_writer",
+                        "s3://accounting/",
+                    ));
             }
             ArmRole::NetworkEgress => {
-                self.capability_token = Some(self.containment_ring.capability_gate.issue_capability(
-                    "supervisor",
-                    &name,
-                    ArmRole::NetworkEgress,
-                    "http_egress",
-                    "https://www.google.com/",
-                ));
+                self.capability_token =
+                    Some(self.containment_ring.capability_gate.issue_capability(
+                        "supervisor",
+                        &name,
+                        ArmRole::NetworkEgress,
+                        "http_egress",
+                        "https://www.google.com/",
+                    ));
             }
             _ => {}
         }
@@ -182,22 +192,24 @@ impl ArmRuntime {
         let name = self.arm_name();
         match self.role {
             ArmRole::AccountingLedgerWrite => {
-                self.capability_token = Some(self.containment_ring.capability_gate.issue_capability(
-                    "supervisor",
-                    &name,
-                    ArmRole::AccountingLedgerWrite,
-                    "ledger_writer",
-                    "s3://accounting/",
-                ));
+                self.capability_token =
+                    Some(self.containment_ring.capability_gate.issue_capability(
+                        "supervisor",
+                        &name,
+                        ArmRole::AccountingLedgerWrite,
+                        "ledger_writer",
+                        "s3://accounting/",
+                    ));
             }
             ArmRole::NetworkEgress => {
-                self.capability_token = Some(self.containment_ring.capability_gate.issue_capability(
-                    "supervisor",
-                    &name,
-                    ArmRole::NetworkEgress,
-                    "http_egress",
-                    "https://www.google.com/",
-                ));
+                self.capability_token =
+                    Some(self.containment_ring.capability_gate.issue_capability(
+                        "supervisor",
+                        &name,
+                        ArmRole::NetworkEgress,
+                        "http_egress",
+                        "https://www.google.com/",
+                    ));
             }
             _ => {}
         }
@@ -256,7 +268,10 @@ impl ArmRuntime {
 
     fn is_cancelled_or_killed(&self) -> bool {
         self.kill_switch.is_tripped()
-            || self.cancel_token.as_ref().map_or(false, |t| t.is_cancelled())
+            || self
+                .cancel_token
+                .as_ref()
+                .map_or(false, |t| t.is_cancelled())
     }
 
     /// Primary execution loop running inside an asynchronous task
@@ -264,7 +279,12 @@ impl ArmRuntime {
         let agent_name = self.arm_name();
         if self.generation > 1 {
             let target_arm_id = self.arm_id.unwrap_or(0);
-            if let Some(reg_ring) = self.containment_ring.arm_registry.get_ring(target_arm_id).await {
+            if let Some(reg_ring) = self
+                .containment_ring
+                .arm_registry
+                .get_ring(target_arm_id)
+                .await
+            {
                 if reg_ring.current_generation() < self.generation {
                     reg_ring
                         .generation
@@ -300,7 +320,8 @@ impl ArmRuntime {
                 None => {
                     self.kill_switch.trip();
                     let _ = response_tx.send(Err(OctopusSecurityError::IsolationViolation(
-                        "Execution halted: Missing mandatory Level 1 ArmContainmentRing".to_string(),
+                        "Execution halted: Missing mandatory Level 1 ArmContainmentRing"
+                            .to_string(),
                     )));
                     break;
                 }
@@ -308,7 +329,11 @@ impl ArmRuntime {
 
             // Check hardware/atomic circuit breaker, cancellation, isolation manager status, and Level 1 ring severance
             if self.is_cancelled_or_killed()
-                || !self.containment_ring.isolation_manager.is_arm_active(&agent_name).await
+                || !self
+                    .containment_ring
+                    .isolation_manager
+                    .is_arm_active(&agent_name)
+                    .await
                 || ring.is_severed()
             {
                 self.kill_switch.trip();
@@ -334,11 +359,15 @@ impl ArmRuntime {
                         // Instantly trip the atomic kill switch, quarantine state, sever Level 1 ring, and halt execution!
                         self.kill_switch.trip();
                         self.deterministic_layer.quarantine();
-                        ring.sever("Breach detected during directive execution").await;
+                        ring.sever("Breach detected during directive execution")
+                            .await;
                         let _ = self
                             .containment_ring
                             .isolation_manager
-                            .terminate_arm(&agent_name, "Breach detected during directive execution")
+                            .terminate_arm(
+                                &agent_name,
+                                "Breach detected during directive execution",
+                            )
                             .await;
                     }
                     _ => {}
@@ -346,7 +375,11 @@ impl ArmRuntime {
             }
             let _ = response_tx.send(result);
             if self.kill_switch.is_tripped()
-                || !self.containment_ring.isolation_manager.is_arm_active(&agent_name).await
+                || !self
+                    .containment_ring
+                    .isolation_manager
+                    .is_arm_active(&agent_name)
+                    .await
                 || ring.is_severed()
             {
                 break; // Stop arm execution loop immediately
@@ -420,7 +453,10 @@ impl ArmRuntime {
         }
 
         // Get raw payload from directive or source uri
-        let raw_payload = directive.raw_payload.as_deref().unwrap_or(directive.source_uri.as_str());
+        let raw_payload = directive
+            .raw_payload
+            .as_deref()
+            .unwrap_or(directive.source_uri.as_str());
 
         // Step 2: Digest raw content in peripheral scratchpad
         current_step += 1;
@@ -543,8 +579,11 @@ impl ArmRuntime {
                     match role_for_exec {
                         ArmRole::UntrustedDocIngest => {
                             let extractor = SafeDocumentExtractor::new();
-                            let artifact = extractor
-                                .extract_artifact(&raw_payload_str, merkle_root_for_exec, current_step)?;
+                            let artifact = extractor.extract_artifact(
+                                &raw_payload_str,
+                                merkle_root_for_exec,
+                                current_step,
+                            )?;
                             serde_json::to_vec(&artifact).map_err(|e| {
                                 OctopusSecurityError::DeterministicLayerViolation(format!(
                                     "Serialization error: {}",
@@ -579,13 +618,14 @@ impl ArmRuntime {
 
         match self.role {
             ArmRole::UntrustedDocIngest => {
-                let artifact: crate::core::types::VerifiedInvoiceArtifact =
-                    if let Ok(art) = serde_json::from_slice(&output_bytes) {
-                        art
-                    } else {
-                        let extractor = SafeDocumentExtractor::new();
-                        extractor.extract_artifact(raw_payload, merkle_root.clone(), current_step)?
-                    };
+                let artifact: crate::core::types::VerifiedInvoiceArtifact = if let Ok(art) =
+                    serde_json::from_slice(&output_bytes)
+                {
+                    art
+                } else {
+                    let extractor = SafeDocumentExtractor::new();
+                    extractor.extract_artifact(raw_payload, merkle_root.clone(), current_step)?
+                };
 
                 // Gate 4: Final Schema Assertion & Spending Cap & FSM Completion
                 self.deterministic_layer.finalize_artifact(&artifact)?;

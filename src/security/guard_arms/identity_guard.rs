@@ -28,10 +28,7 @@ impl IdentityGuard {
     }
 
     /// Verifies the authenticity, cryptographic signature, and replay freshness of an incoming agent message.
-    pub fn verify_message(
-        &self,
-        message: &SignedAgentMessage,
-    ) -> Result<(), OctopusSecurityError> {
+    pub fn verify_message(&self, message: &SignedAgentMessage) -> Result<(), OctopusSecurityError> {
         // 1. Check if identity is known
         let identity = self
             .trusted_identities
@@ -60,7 +57,9 @@ impl IdentityGuard {
         if identity.role() != expected_role {
             return Err(OctopusSecurityError::IdentitySpoofingDetected(format!(
                 "Agent {} role '{:?}' does not match expected role '{:?}'",
-                agent_id, identity.role(), expected_role
+                agent_id,
+                identity.role(),
+                expected_role
             )));
         }
 

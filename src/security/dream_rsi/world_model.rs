@@ -79,17 +79,20 @@ impl ProtocolWorldModel {
 
         for ev in events {
             let key = Self::state_key(ev.rfc_number, &ev.mutation_type);
-            let trans = self.transitions.entry(key).or_insert_with(|| WorldModelTransition {
-                rfc_number: ev.rfc_number,
-                mutation_type: ev.mutation_type.clone(),
-                sample_count: 0,
-                alpha_anomalies: 1.0,
-                beta_clean: 5.0,
-                predicted_divergence: 0.16,
-                predicted_reproducibility: 0.85,
-                information_entropy: Self::calculate_entropy(0.16),
-                last_updated: now,
-            });
+            let trans = self
+                .transitions
+                .entry(key)
+                .or_insert_with(|| WorldModelTransition {
+                    rfc_number: ev.rfc_number,
+                    mutation_type: ev.mutation_type.clone(),
+                    sample_count: 0,
+                    alpha_anomalies: 1.0,
+                    beta_clean: 5.0,
+                    predicted_divergence: 0.16,
+                    predicted_reproducibility: 0.85,
+                    information_entropy: Self::calculate_entropy(0.16),
+                    last_updated: now,
+                });
 
             trans.sample_count += 1;
             if ev.is_anomalous {
@@ -112,7 +115,11 @@ impl ProtocolWorldModel {
         }
     }
 
-    pub fn get_transition(&self, rfc_number: u32, mutation_type: &str) -> Option<&WorldModelTransition> {
+    pub fn get_transition(
+        &self,
+        rfc_number: u32,
+        mutation_type: &str,
+    ) -> Option<&WorldModelTransition> {
         let key = Self::state_key(rfc_number, mutation_type);
         self.transitions.get(&key)
     }
@@ -146,7 +153,13 @@ impl ProtocolWorldModel {
 
         if rfc_keys.is_empty() || mut_keys.is_empty() {
             return DreamRolloutReport {
-                rollout_id: format!("rollout-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()),
+                rollout_id: format!(
+                    "rollout-{}",
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis()
+                ),
                 policy_id: policy.policy_id.clone(),
                 simulated_steps: 0,
                 projected_yield: 0.0,
@@ -160,14 +173,19 @@ impl ProtocolWorldModel {
 
         // Fast PRNG for simulation rollout
         let mut next_rand = || -> f64 {
-            rng_seed = rng_seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng_seed = rng_seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             ((rng_seed >> 32) as f64) / (u32::MAX as f64)
         };
 
         for _ in 0..steps {
             // Select RFC according to policy weights
             let rfc = {
-                let total_weight: f64 = rfc_keys.iter().map(|k| policy.rfc_weights.get(k).unwrap_or(&1.0)).sum();
+                let total_weight: f64 = rfc_keys
+                    .iter()
+                    .map(|k| policy.rfc_weights.get(k).unwrap_or(&1.0))
+                    .sum();
                 let pick = next_rand() * total_weight;
                 let mut acc = 0.0;
                 let mut chosen = rfc_keys[0];
@@ -183,7 +201,10 @@ impl ProtocolWorldModel {
 
             // Select Mutation according to policy weights
             let mut_type = {
-                let total_weight: f64 = mut_keys.iter().map(|k| policy.mutation_weights.get(k).unwrap_or(&1.0)).sum();
+                let total_weight: f64 = mut_keys
+                    .iter()
+                    .map(|k| policy.mutation_weights.get(k).unwrap_or(&1.0))
+                    .sum();
                 let pick = next_rand() * total_weight;
                 let mut acc = 0.0;
                 let mut chosen = &mut_keys[0];
@@ -209,7 +230,9 @@ impl ProtocolWorldModel {
                 last_updated: 0,
             };
 
-            let trans = self.get_transition(rfc, &mut_type).unwrap_or(&default_trans);
+            let trans = self
+                .get_transition(rfc, &mut_type)
+                .unwrap_or(&default_trans);
             initial_entropy += trans.information_entropy;
 
             // Simulated probe rollout outcome
@@ -227,15 +250,26 @@ impl ProtocolWorldModel {
 
                 if confirmed >= (trial_budget * 2 / 3) {
                     anomalies_discovered += 1;
-                    cumulative_yield += trans.predicted_divergence * trans.predicted_reproducibility;
+                    cumulative_yield +=
+                        trans.predicted_divergence * trans.predicted_reproducibility;
                 } else {
                     false_positives_filtered += 1;
                 }
             }
 
             // Post-simulation updated entropy
-            let new_alpha = trans.alpha_anomalies + if outcome_roll < trans.predicted_divergence { 1.0 } else { 0.0 };
-            let new_beta = trans.beta_clean + if outcome_roll >= trans.predicted_divergence { 1.0 } else { 0.0 };
+            let new_alpha = trans.alpha_anomalies
+                + if outcome_roll < trans.predicted_divergence {
+                    1.0
+                } else {
+                    0.0
+                };
+            let new_beta = trans.beta_clean
+                + if outcome_roll >= trans.predicted_divergence {
+                    1.0
+                } else {
+                    0.0
+                };
             let new_p = new_alpha / (new_alpha + new_beta);
             final_entropy += Self::calculate_entropy(new_p);
         }
@@ -243,15 +277,25 @@ impl ProtocolWorldModel {
         let entropy_reduction = ((initial_entropy - final_entropy) / (steps as f64)).max(0.0);
         let projected_yield = (cumulative_yield / (steps as f64)) * 100.0;
         let avg_reproducibility = if anomalies_discovered + false_positives_filtered > 0 {
-            (anomalies_discovered as f64) / ((anomalies_discovered + false_positives_filtered) as f64)
+            (anomalies_discovered as f64)
+                / ((anomalies_discovered + false_positives_filtered) as f64)
         } else {
             0.0
         };
 
-        let duration_ms = start_time.elapsed().map(|d| d.as_millis() as u64).unwrap_or(1);
+        let duration_ms = start_time
+            .elapsed()
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(1);
 
         DreamRolloutReport {
-            rollout_id: format!("rollout-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()),
+            rollout_id: format!(
+                "rollout-{}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis()
+            ),
             policy_id: policy.policy_id.clone(),
             simulated_steps: steps,
             projected_yield,

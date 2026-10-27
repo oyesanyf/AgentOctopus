@@ -53,11 +53,17 @@ impl SwarmManager {
         if let Some(token) = self.arm_cancel_tokens.get(&arm_id) {
             token.cancel();
         }
-        self.containment_ring.arm_registry.sever_arm(arm_id, reason).await
+        self.containment_ring
+            .arm_registry
+            .sever_arm(arm_id, reason)
+            .await
     }
 
     pub async fn regenerate_arm(&self, arm_id: usize) -> Result<u64, OctopusSecurityError> {
-        self.containment_ring.arm_registry.sever_and_regenerate(arm_id).await
+        self.containment_ring
+            .arm_registry
+            .sever_and_regenerate(arm_id)
+            .await
     }
 }
 
@@ -92,15 +98,11 @@ impl SwarmManager {
                     _ => ArmRole::NetworkEgress,
                 };
 
-                let arm = ArmRuntime::new(
-                    role.clone(),
-                    rx,
-                    telemetry_tx.clone(),
-                    kill_switch.clone(),
-                )
-                .with_containment_ring(containment_ring.clone())
-                .with_arm_id(arm_id)
-                .with_cancellation_token(cancel_token.clone());
+                let arm =
+                    ArmRuntime::new(role.clone(), rx, telemetry_tx.clone(), kill_switch.clone())
+                        .with_containment_ring(containment_ring.clone())
+                        .with_arm_id(arm_id)
+                        .with_cancellation_token(cancel_token.clone());
 
                 tokio::spawn(arm.run());
 
@@ -135,11 +137,17 @@ impl SwarmManager {
         &self,
         tasks: Vec<StrategicDirective>,
         timeout_per_task: Duration,
-    ) -> (Vec<Result<ArmExecutionReport, OctopusSecurityError>>, SwarmBatchSummary) {
+    ) -> (
+        Vec<Result<ArmExecutionReport, OctopusSecurityError>>,
+        SwarmBatchSummary,
+    ) {
         // Zero-size swarm concurrency safety: prevent division-by-zero panics
         if self.concurrency_size == 0 || self.dispatch_table.is_empty() {
             let total = tasks.len();
-            let results = tasks.into_iter().map(|_| Err(OctopusSecurityError::ZeroSwarmCapacity)).collect();
+            let results = tasks
+                .into_iter()
+                .map(|_| Err(OctopusSecurityError::ZeroSwarmCapacity))
+                .collect();
             let summary = SwarmBatchSummary {
                 total_dispatched: total,
                 successful_completions: 0,
@@ -176,12 +184,17 @@ impl SwarmManager {
             let handle = tokio::spawn(async move {
                 // Full lifecycle deadline wrapping: wrap semaphore acquisition, channel send, and task execution inside timeout
                 let lifecycle_future = async {
-                    let permit = sem.acquire().await.map_err(|_| OctopusSecurityError::ChannelSevered)?;
+                    let permit = sem
+                        .acquire()
+                        .await
+                        .map_err(|_| OctopusSecurityError::ChannelSevered)?;
                     let (resp_tx, resp_rx) = oneshot::channel();
                     if channel.send((directive, resp_tx)).await.is_err() {
                         return Err(OctopusSecurityError::ChannelSevered);
                     }
-                    let report_res = resp_rx.await.map_err(|_| OctopusSecurityError::ChannelSevered)?;
+                    let report_res = resp_rx
+                        .await
+                        .map_err(|_| OctopusSecurityError::ChannelSevered)?;
                     drop(permit);
                     report_res
                 };
@@ -206,7 +219,9 @@ impl SwarmManager {
         let mut autotomy_tripped_count = 0;
 
         for handle in handles {
-            let res = handle.await.unwrap_or_else(|_| Err(OctopusSecurityError::ChannelSevered));
+            let res = handle
+                .await
+                .unwrap_or_else(|_| Err(OctopusSecurityError::ChannelSevered));
             match &res {
                 Ok(report) if report.success => successful_completions += 1,
                 Err(OctopusSecurityError::DeterministicLayerViolation(_))
@@ -255,19 +270,22 @@ mod tests {
         let zero_swarm = SwarmManager::new(0, tx);
         assert_eq!(zero_swarm.size(), 0);
 
-        let tasks = vec![
-            StrategicDirective {
-                directive_id: "T-0".to_string(),
-                source_uri: "s3://invoices/1.pdf".to_string(),
-                instruction: "extract".to_string(),
-                raw_payload: None,
-                max_step_budget: 2,
-            },
-        ];
+        let tasks = vec![StrategicDirective {
+            directive_id: "T-0".to_string(),
+            source_uri: "s3://invoices/1.pdf".to_string(),
+            instruction: "extract".to_string(),
+            raw_payload: None,
+            max_step_budget: 2,
+        }];
 
-        let (results, summary) = zero_swarm.dispatch_swarm_batch(tasks, Duration::from_millis(100)).await;
+        let (results, summary) = zero_swarm
+            .dispatch_swarm_batch(tasks, Duration::from_millis(100))
+            .await;
         assert_eq!(results.len(), 1);
-        assert!(matches!(results[0], Err(OctopusSecurityError::ZeroSwarmCapacity)));
+        assert!(matches!(
+            results[0],
+            Err(OctopusSecurityError::ZeroSwarmCapacity)
+        ));
         assert_eq!(summary.total_dispatched, 1);
         assert_eq!(summary.successful_completions, 0);
     }
@@ -291,7 +309,10 @@ mod tests {
             raw_payload: Some("ACC-1234-USD".to_string()),
             max_step_budget: 3,
         };
-        assert_eq!(ledger_directive.target_role(), ArmRole::AccountingLedgerWrite);
+        assert_eq!(
+            ledger_directive.target_role(),
+            ArmRole::AccountingLedgerWrite
+        );
 
         let egress_directive = StrategicDirective {
             directive_id: "T-EGRESS".to_string(),

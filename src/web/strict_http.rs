@@ -66,24 +66,22 @@ fn fail(signal: Signal, details: &'static str) -> Reject {
 
 fn token(bytes: &[u8]) -> bool {
     !bytes.is_empty()
-        && bytes.iter().all(|b| {
-            b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(b)
-        })
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(b))
 }
 
 /// Validates raw header bytes without lossy UTF-8 conversion.
 /// Rejects ambiguous or unsupported protocol forms and novel desync triggers.
 pub fn validate_header(raw: &[u8]) -> Result<Frame, Reject> {
     if raw.len() > 16 * 1024 {
-        return Err(fail(
-            Signal::InvalidHeaderSyntax,
-            "headers too large",
-        ));
+        return Err(fail(Signal::InvalidHeaderSyntax, "headers too large"));
     }
 
     if raw.contains(&0)
         || raw.iter().any(|b| *b == b'\n')
-            && raw.windows(2)
+            && raw
+                .windows(2)
                 .filter(|x| x[1] == b'\n')
                 .any(|x| x[0] != b'\r')
     {
@@ -95,13 +93,13 @@ pub fn validate_header(raw: &[u8]) -> Result<Frame, Reject> {
 
     let mut lines = raw.split(|b| *b == b'\n');
 
-    let first = lines.next().ok_or_else(|| {
-        fail(Signal::InvalidRequestLine, "missing request line")
-    })?;
+    let first = lines
+        .next()
+        .ok_or_else(|| fail(Signal::InvalidRequestLine, "missing request line"))?;
 
-    let first = first.strip_suffix(b"\r").ok_or_else(|| {
-        fail(Signal::InvalidRequestLine, "request line missing CR")
-    })?;
+    let first = first
+        .strip_suffix(b"\r")
+        .ok_or_else(|| fail(Signal::InvalidRequestLine, "request line missing CR"))?;
 
     let fields: Vec<_> = first.split(|b| *b == b' ').collect();
 
@@ -109,9 +107,7 @@ pub fn validate_header(raw: &[u8]) -> Result<Frame, Reject> {
     if fields.len() != 3
         || !token(fields[0])
         || fields[1].is_empty()
-        || fields[1]
-            .iter()
-            .any(|b| b.is_ascii_control() || *b >= 127)
+        || fields[1].iter().any(|b| b.is_ascii_control() || *b >= 127)
     {
         return Err(fail(
             Signal::InvalidRequestLine,
@@ -137,23 +133,13 @@ pub fn validate_header(raw: &[u8]) -> Result<Frame, Reject> {
 
     // Defense against protocol token tampering (e.g. GET / COW< or HTTP/1.0 desync)
     if fields[2] != b"HTTP/1.1" {
-        return Err(fail(
-            Signal::UnsupportedProtocol,
-            "HTTP/1.1 required",
-        ));
+        return Err(fail(Signal::UnsupportedProtocol, "HTTP/1.1 required"));
     }
 
     let method = fields[0];
 
-    if method != b"GET"
-        && method != b"HEAD"
-        && method != b"POST"
-        && method != b"OPTIONS"
-    {
-        return Err(fail(
-            Signal::InvalidRequestLine,
-            "method not allowed",
-        ));
+    if method != b"GET" && method != b"HEAD" && method != b"POST" && method != b"OPTIONS" {
+        return Err(fail(Signal::InvalidRequestLine, "method not allowed"));
     }
 
     let mut host_count = 0;
@@ -167,72 +153,50 @@ pub fn validate_header(raw: &[u8]) -> Result<Frame, Reject> {
         let line = if i + 1 == all_lines.len() {
             *raw_line
         } else {
-            raw_line.strip_suffix(b"\r").ok_or_else(|| {
-                fail(Signal::InvalidHeaderSyntax, "header missing CR")
-            })?
+            raw_line
+                .strip_suffix(b"\r")
+                .ok_or_else(|| fail(Signal::InvalidHeaderSyntax, "header missing CR"))?
         };
 
         if line.is_empty() {
-            return Err(fail(
-                Signal::InvalidHeaderSyntax,
-                "unexpected blank header",
-            ));
+            return Err(fail(Signal::InvalidHeaderSyntax, "unexpected blank header"));
         }
 
         if line[0] == b' ' || line[0] == b'\t' {
-            return Err(fail(
-                Signal::InvalidHeaderSyntax,
-                "obsolete folded header",
-            ));
+            return Err(fail(Signal::InvalidHeaderSyntax, "obsolete folded header"));
         }
 
-        let split = line.iter().position(|b| *b == b':')
-            .ok_or_else(|| {
-                fail(Signal::InvalidHeaderSyntax, "header lacks colon")
-            })?;
+        let split = line
+            .iter()
+            .position(|b| *b == b':')
+            .ok_or_else(|| fail(Signal::InvalidHeaderSyntax, "header lacks colon"))?;
 
         let name = &line[..split];
 
         if !token(name) {
-            return Err(fail(
-                Signal::InvalidHeaderSyntax,
-                "invalid header name",
-            ));
+            return Err(fail(Signal::InvalidHeaderSyntax, "invalid header name"));
         }
 
         let value = &line[split + 1..];
 
-        if value.iter().any(|b| {
-            *b == b'\r'
-                || *b == 0
-                || (*b < 32 && *b != b'\t')
-                || *b == 127
-        }) {
-            return Err(fail(
-                Signal::InvalidHeaderSyntax,
-                "invalid header value",
-            ));
+        if value
+            .iter()
+            .any(|b| *b == b'\r' || *b == 0 || (*b < 32 && *b != b'\t') || *b == 127)
+        {
+            return Err(fail(Signal::InvalidHeaderSyntax, "invalid header value"));
         }
 
         header_count += 1;
 
         if header_count > 100 {
-            return Err(fail(
-                Signal::InvalidHeaderSyntax,
-                "too many headers",
-            ));
+            return Err(fail(Signal::InvalidHeaderSyntax, "too many headers"));
         }
 
         if name.eq_ignore_ascii_case(b"host") {
             host_count += 1;
 
-            if value.iter().all(|b| b.is_ascii_whitespace())
-                || value.contains(&b',')
-            {
-                return Err(fail(
-                    Signal::InvalidHeaderSyntax,
-                    "invalid host",
-                ));
+            if value.iter().all(|b| b.is_ascii_whitespace()) || value.contains(&b',') {
+                return Err(fail(Signal::InvalidHeaderSyntax, "invalid host"));
             }
         }
 
@@ -255,9 +219,7 @@ pub fn validate_header(raw: &[u8]) -> Result<Frame, Reject> {
 
             let value = value.strip_prefix(b" ").unwrap_or(value);
 
-            if value.is_empty()
-                || !value.iter().all(u8::is_ascii_digit)
-            {
+            if value.is_empty() || !value.iter().all(u8::is_ascii_digit) {
                 return Err(fail(
                     Signal::InvalidContentLength,
                     "content length must be ASCII digits",
@@ -325,9 +287,7 @@ pub fn validate_header(raw: &[u8]) -> Result<Frame, Reject> {
             ));
         }
 
-        if name.eq_ignore_ascii_case(b"content-location")
-            || name.eq_ignore_ascii_case(b"range")
-        {
+        if name.eq_ignore_ascii_case(b"content-location") || name.eq_ignore_ascii_case(b"range") {
             signals.push(Signal::SuspiciousHeader);
         }
     }
@@ -354,10 +314,7 @@ pub fn validate_header(raw: &[u8]) -> Result<Frame, Reject> {
     })
 }
 
-pub fn validate_complete_body(
-    buffered_body: usize,
-    expected: usize,
-) -> Result<(), Reject> {
+pub fn validate_complete_body(buffered_body: usize, expected: usize) -> Result<(), Reject> {
     if buffered_body != expected {
         return Err(fail(
             Signal::UnexpectedTrailingBytes,
@@ -386,11 +343,9 @@ mod tests {
         );
 
         assert_eq!(
-            check(
-                "POST /api/test HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3"
-            )
-            .unwrap()
-            .content_length,
+            check("POST /api/test HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3")
+                .unwrap()
+                .content_length,
             3
         );
     }
@@ -446,27 +401,47 @@ mod tests {
     fn reject_novel_desync_triggers() {
         // Transfer-Encoding: gzip (F5 Big-IP trigger)
         let gzip_te = "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip\r\nContent-Length: 5";
-        assert_eq!(check(gzip_te).unwrap_err().signal, Signal::TransferEncodingPresent);
+        assert_eq!(
+            check(gzip_te).unwrap_err().signal,
+            Signal::TransferEncodingPresent
+        );
 
         // Early-Data (Azure/Akamai desync)
-        let early_data = "POST / HTTP/1.1\r\nHost: x\r\nEarly-Data: experimental\r\nContent-Length: 5";
-        assert_eq!(check(early_data).unwrap_err().signal, Signal::NovelDesyncTrigger);
+        let early_data =
+            "POST / HTTP/1.1\r\nHost: x\r\nEarly-Data: experimental\r\nContent-Length: 5";
+        assert_eq!(
+            check(early_data).unwrap_err().signal,
+            Signal::NovelDesyncTrigger
+        );
 
         // Max-Forwards on non-OPTIONS (Apache Traffic Server CVE-2026-63078 defense)
         let max_forwards = "POST /foo HTTP/1.1\r\nHost: x\r\nMax-Forwards: 0\r\nContent-Length: 0";
-        assert_eq!(check(max_forwards).unwrap_err().signal, Signal::NovelDesyncTrigger);
+        assert_eq!(
+            check(max_forwards).unwrap_err().signal,
+            Signal::NovelDesyncTrigger
+        );
 
         // Asterisk request target (OPTIONS *?xyz early-response gadget)
         let asterisk = "OPTIONS *?xyz HTTP/1.1\r\nHost: x";
-        assert_eq!(check(asterisk).unwrap_err().signal, Signal::AsteriskUriAnomaly);
+        assert_eq!(
+            check(asterisk).unwrap_err().signal,
+            Signal::AsteriskUriAnomaly
+        );
 
         // Status-line injection attempt
         let status_inj = "GET / COW< HTTP/1.1\r\nHost: x";
-        assert_eq!(check(status_inj).unwrap_err().signal, Signal::InvalidRequestLine);
+        assert_eq!(
+            check(status_inj).unwrap_err().signal,
+            Signal::InvalidRequestLine
+        );
 
         // Dual matching Content-Length (Citrix NetScaler / SSO exploit)
-        let dual_matching = "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 28\r\nContent-Length: 28";
-        assert_eq!(check(dual_matching).unwrap_err().signal, Signal::DuplicateContentLength);
+        let dual_matching =
+            "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 28\r\nContent-Length: 28";
+        assert_eq!(
+            check(dual_matching).unwrap_err().signal,
+            Signal::DuplicateContentLength
+        );
     }
 
     #[test]
@@ -478,10 +453,7 @@ mod tests {
 
     #[test]
     fn detect_unusual_but_nonfatal_headers() {
-        let frame = check(
-            "GET / HTTP/1.1\r\nHost: x\r\nRange: bytes=1-2"
-        )
-        .unwrap();
+        let frame = check("GET / HTTP/1.1\r\nHost: x\r\nRange: bytes=1-2").unwrap();
 
         assert!(frame.signals.contains(&Signal::SuspiciousHeader));
     }

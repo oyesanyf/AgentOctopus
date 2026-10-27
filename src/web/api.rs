@@ -11,7 +11,9 @@ use crate::security::math_validator::VassilevMathValidator;
 use crate::security::rasp::{
     AdaptiveMitigationTier, AgentRaspEngine, AgentSecuritySubject, RaspAgentTrustTier, RaspDecision,
 };
-use crate::security::rl_defense::{AdaptiveDefenseAction, AdaptiveRlDefenseEngine, AdaptiveStateVector};
+use crate::security::rl_defense::{
+    AdaptiveDefenseAction, AdaptiveRlDefenseEngine, AdaptiveStateVector,
+};
 use crate::telemetry::otel::{OtelSessionTelemetry, OtelSpanKind, OtelStatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -49,7 +51,8 @@ pub fn json_error_payload(code: &str, message: &str) -> String {
         "code": code,
         "message": message,
         "timestamp": format!("{}", now),
-    }).to_string()
+    })
+    .to_string()
 }
 
 /// Global state shared across web API requests.
@@ -103,7 +106,10 @@ fn load_or_init_egress_domains() -> Vec<String> {
         "huggingface.co".to_string(),
         "github.com".to_string(),
     ];
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&defaults).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&defaults).unwrap_or_default(),
+    );
     defaults
 }
 
@@ -111,7 +117,10 @@ fn save_egress_domains(domains: &[String]) {
     let config_dir = std::path::PathBuf::from("config");
     let _ = std::fs::create_dir_all(&config_dir);
     let path = config_dir.join("egress_domains.json");
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(domains).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(domains).unwrap_or_default(),
+    );
 }
 
 fn is_valid_domain(d: &str) -> bool {
@@ -120,11 +129,14 @@ fn is_valid_domain(d: &str) -> bool {
 
 impl Default for WebState {
     fn default() -> Self {
-        let secret_seed = crate::security::cedar_arm::authorization::load_or_generate_cedar_secret();
+        let secret_seed =
+            crate::security::cedar_arm::authorization::load_or_generate_cedar_secret();
         let policy_fingerprint = "cedar_v4_13_octopus_v1";
         let logs_dir = std::path::PathBuf::from("logs");
         let _ = std::fs::create_dir_all(&logs_dir);
-        let audit_log = Arc::new(SecurityAuditLog::with_disk_persistence(logs_dir.join("audit.log")));
+        let audit_log = Arc::new(SecurityAuditLog::with_disk_persistence(
+            logs_dir.join("audit.log"),
+        ));
         let durable_temporal_path = logs_dir.join("temporal_events.jsonl");
         let production_temporal_engine = Arc::new(DogwoodTemporalEngine::new_production(
             Arc::clone(&audit_log),
@@ -157,7 +169,9 @@ impl Default for WebState {
         let mut gov_config = GovernorConfig::default();
         gov_config.warning_threshold = 0.70;
         gov_config.critical_termination_threshold = 0.35;
-        let governor_state = Arc::new(std::sync::RwLock::new(SecurityGovernorState::new(gov_config)));
+        let governor_state = Arc::new(std::sync::RwLock::new(SecurityGovernorState::new(
+            gov_config,
+        )));
 
         let rasp_engine = Arc::new(AgentRaspEngine::new(
             Arc::clone(&rl_defense),
@@ -166,21 +180,37 @@ impl Default for WebState {
 
         let atlas_sync = Arc::new(crate::security::atlas_arm::AtlasSyncManager::default());
         let oss_fuzz_arm = Arc::new(crate::security::oss_fuzz_arm::ContinuousOssFuzzArm::default());
-        let osv_scanner_arm = Arc::new(crate::security::osv_scanner_arm::ContinuousOsvScannerArm::default());
-        let arm_rings = Arc::new(crate::containment_ring::ArmRingRegistry::new(50, &secret_seed));
+        let osv_scanner_arm =
+            Arc::new(crate::security::osv_scanner_arm::ContinuousOsvScannerArm::default());
+        let arm_rings = Arc::new(crate::containment_ring::ArmRingRegistry::new(
+            50,
+            &secret_seed,
+        ));
         let protocol_analyzer = Arc::new(
             crate::security::differential_protocol::DifferentialProtocolEngine::with_containment(
                 Arc::clone(&arm_rings),
                 Arc::clone(&audit_log),
             ),
         );
-        let sentinel = Arc::new(crate::sentinel_ring::SentinelSupervisor::new(&secret_seed, 50));
+        let sentinel = Arc::new(crate::sentinel_ring::SentinelSupervisor::new(
+            &secret_seed,
+            50,
+        ));
 
         // Seed demo events STRICTLY in isolated simulation temporal trace for sandbox presets
-        let now_sec = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        let now_sec = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         let mut seed_read_fields = std::collections::HashMap::new();
-        seed_read_fields.insert("input.user".to_string(), serde_json::json!("agent_worker_1"));
-        seed_read_fields.insert("input.document".to_string(), serde_json::json!("contracts/2026-q3.pdf"));
+        seed_read_fields.insert(
+            "input.user".to_string(),
+            serde_json::json!("agent_worker_1"),
+        );
+        seed_read_fields.insert(
+            "input.document".to_string(),
+            serde_json::json!("contracts/2026-q3.pdf"),
+        );
         simulation_temporal_engine.record_simulated_event(
             now_sec.saturating_sub(600), // 10 minutes ago
             "Octopus::Action::\"LedgerRead\"",
@@ -227,17 +257,16 @@ impl Default for WebState {
             Arc::clone(&arm_rings),
         ));
 
-        let evolution_arm = Arc::new(crate::security::evolution::EvolutionaryOptimizerArm::with_registry(
-            &arm_rings,
-        ));
+        let evolution_arm = Arc::new(
+            crate::security::evolution::EvolutionaryOptimizerArm::with_registry(&arm_rings),
+        );
 
-        let dream_rsi_arm = Arc::new(crate::security::dream_rsi::DreamRsiOptimizerArm::with_registry(
-            &arm_rings,
-        ));
+        let dream_rsi_arm =
+            Arc::new(crate::security::dream_rsi::DreamRsiOptimizerArm::with_registry(&arm_rings));
 
-        let harness2_arm = Arc::new(crate::security::harness2::RecursiveHarnessOptimizerArm::with_registry(
-            &arm_rings,
-        ));
+        let harness2_arm = Arc::new(
+            crate::security::harness2::RecursiveHarnessOptimizerArm::with_registry(&arm_rings),
+        );
 
         Self {
             gateway,
@@ -310,7 +339,10 @@ pub fn handle_status(state: &WebState) -> String {
     let kernel_stats = state.kernel_sentinel.stats();
     let rl_stats = state.rl_defense.stats();
     let resilience = state.otel_telemetry.get_resilience_metrics();
-    let (harness_clean, tampered_files) = state.breakout_coordinator.behavioral.verify_harness_integrity();
+    let (harness_clean, tampered_files) = state
+        .breakout_coordinator
+        .behavioral
+        .verify_harness_integrity();
 
     let json_val = json!({
         "status": "ONLINE",
@@ -464,7 +496,11 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
             ];
             if map.keys().any(|k| !allowed_keys.contains(&k.as_str())) {
                 let err_msg = "Schema validation error: context contains undeclared attributes or duplicate key tampering".to_string();
-                let honey_token = state.tarpit.generate_synthetic_honey_tokens(&req.principal, "schema_tamper", body);
+                let honey_token = state.tarpit.generate_synthetic_honey_tokens(
+                    &req.principal,
+                    "schema_tamper",
+                    body,
+                );
                 let res = EvaluateCedarResponse {
                     is_allowed: false,
                     determining_policies: vec![],
@@ -483,7 +519,11 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
             let is_valid_int = amt_val.is_i64() || amt_val.is_u64();
             if !is_valid_int {
                 let err_msg = "Schema validation error: amount_cents must be an exact 64-bit integer, received floating point, NaN, Inf, or invalid type".to_string();
-                let honey_token = state.tarpit.generate_synthetic_honey_tokens(&req.principal, "schema_tamper", body);
+                let honey_token = state.tarpit.generate_synthetic_honey_tokens(
+                    &req.principal,
+                    "schema_tamper",
+                    body,
+                );
                 let res = EvaluateCedarResponse {
                     is_allowed: false,
                     determining_policies: vec![],
@@ -510,15 +550,22 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
     );
 
     let approval_receipt = if req.attach_supervisor_approval {
-        let requested_cents = req.context.get("amount_cents").and_then(|v| v.as_u64()).unwrap_or(0);
+        let requested_cents = req
+            .context
+            .get("amount_cents")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         let approved_ceiling = requested_cents.max(10000000);
-        state.gateway.issue_supervisor_approval(
-            "security_supervisor",
-            &req.principal,
-            &req.resource,
-            approved_ceiling,
-            300,
-        ).ok()
+        state
+            .gateway
+            .issue_supervisor_approval(
+                "security_supervisor",
+                &req.principal,
+                &req.resource,
+                approved_ceiling,
+                300,
+            )
+            .ok()
     } else {
         None
     };
@@ -530,7 +577,9 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         .as_nanos() as u64;
 
     let session_id = format!("session_{}", req.principal);
-    let (_, trace_id) = state.otel_telemetry.get_or_start_session(&session_id, &req.principal);
+    let (_, trace_id) = state
+        .otel_telemetry
+        .get_or_start_session(&session_id, &req.principal);
 
     // 1. Real-Time Agentic Self-Protection (RT-ASP) Interception
     let subject_trust = if req.principal.contains("supervisor") || req.attach_supervisor_approval {
@@ -547,12 +596,10 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         subject = subject.with_supervisor_attestation("attested_supervisor_sig");
     }
 
-    let (rasp_dec, _rasp_threat, _sanitized_context) = state.rasp_engine.inspect_actuator(
-        tool_name,
-        &req.context,
-        &subject,
-        None,
-    );
+    let (rasp_dec, _rasp_threat, _sanitized_context) =
+        state
+            .rasp_engine
+            .inspect_actuator(tool_name, &req.context, &subject, None);
 
     // 2. Evaluate Breakout Taxonomy Guards (Technical, Operational, Behavioral, Data)
     let payload_str = serde_json::to_string(&req.context).unwrap_or_default();
@@ -577,10 +624,9 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let is_approved_domain = {
-            let allowed = state
-                .allowed_domains
-                .read()
-                .map_err(|_| json_error_payload("LOCK_POISONED", "Allowed domains lock poisoned"))?;
+            let allowed = state.allowed_domains.read().map_err(|_| {
+                json_error_payload("LOCK_POISONED", "Allowed domains lock poisoned")
+            })?;
             allowed.iter().any(|d| d.eq_ignore_ascii_case(dom))
         };
         let has_smuggling_pattern = raw_url.contains('#')
@@ -613,9 +659,19 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
 
     // 4. Query Progressive Action from RL Engine & Apply RL Active Self-Healing
     let mut rl_action = state.rl_defense.select_action(&state_vec);
-    if req.attach_supervisor_approval && breakout_eval.is_clean && !rasp_dec.is_blocked() && rl_action.is_containment() {
-        rl_action = state.rl_defense.self_heal_authorized_workflow(&state_vec, rl_action);
-    } else if (!breakout_eval.is_clean || rasp_dec.is_blocked() || state_vec.egress_divergence >= 0.85) && !rl_action.is_containment() {
+    if req.attach_supervisor_approval
+        && breakout_eval.is_clean
+        && !rasp_dec.is_blocked()
+        && rl_action.is_containment()
+    {
+        rl_action = state
+            .rl_defense
+            .self_heal_authorized_workflow(&state_vec, rl_action);
+    } else if (!breakout_eval.is_clean
+        || rasp_dec.is_blocked()
+        || state_vec.egress_divergence >= 0.85)
+        && !rl_action.is_containment()
+    {
         state.rl_defense.tune_on_failure(
             state_vec.discretize_bucket(),
             rl_action.to_index(),
@@ -624,7 +680,9 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         );
         rl_action = AdaptiveDefenseAction::HardMitigation;
     }
-    state.otel_telemetry.update_session_rl_tier(&session_id, rl_action.as_str());
+    state
+        .otel_telemetry
+        .update_session_rl_tier(&session_id, rl_action.as_str());
 
     let mut result = state.gateway.authorize_tool_invocation_with_approval(
         &token,
@@ -644,7 +702,9 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
             && approval_receipt.is_some()
             && breakout_eval.is_clean
             && !rasp_dec.is_blocked()
-            && err.to_string().contains("Dogwood temporal policy prerequisite unsatisfied")
+            && err
+                .to_string()
+                .contains("Dogwood temporal policy prerequisite unsatisfied")
         {
             let prereq_action = match tool_name {
                 "ledger_writer" => "Octopus::Action::\"LedgerRead\"",
@@ -652,10 +712,7 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
                 _ => "Octopus::Action::\"Read\"",
             };
             let mut prereq_fields = std::collections::HashMap::new();
-            prereq_fields.insert(
-                "rl_self_healed".to_string(),
-                serde_json::Value::Bool(true),
-            );
+            prereq_fields.insert("rl_self_healed".to_string(), serde_json::Value::Bool(true));
             prereq_fields.insert(
                 "supervisor_attested".to_string(),
                 serde_json::Value::Bool(true),
@@ -667,13 +724,20 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
                 &req.resource,
                 prereq_fields,
             );
-            rl_action = state.rl_defense.self_heal_authorized_workflow(&state_vec, rl_action);
-            state.otel_telemetry.update_session_rl_tier(&session_id, rl_action.as_str());
+            rl_action = state
+                .rl_defense
+                .self_heal_authorized_workflow(&state_vec, rl_action);
+            state
+                .otel_telemetry
+                .update_session_rl_tier(&session_id, rl_action.as_str());
             let _ = state
                 .evolution_arm
                 .synthesize_and_apply_fix_for_failure(
                     &format!("CEDAR_TEMPORAL_{}", tool_name.to_ascii_uppercase()),
-                    &format!("Principal '{}' action '{}' on '{}'", req.principal, tool_name, req.resource),
+                    &format!(
+                        "Principal '{}' action '{}' on '{}'",
+                        req.principal, tool_name, req.resource
+                    ),
                 )
                 .await;
 
@@ -695,11 +759,19 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
             } else {
                 "Action denied by Cedar default-deny or forbid rule".to_string()
             };
-            (verdict.is_allowed, verdict.determining_policies, verdict.diagnostic_errors, r)
+            (
+                verdict.is_allowed,
+                verdict.determining_policies,
+                verdict.diagnostic_errors,
+                r,
+            )
         }
-        Err(err) => {
-            (false, vec![], vec![err.to_string()], format!("Authorization Gateway Denied: {}", err))
-        }
+        Err(err) => (
+            false,
+            vec![],
+            vec![err.to_string()],
+            format!("Authorization Gateway Denied: {}", err),
+        ),
     };
 
     // Override if RT-ASP, Breakout Guard, or RL Action Tier mandates containment!
@@ -714,11 +786,17 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         diagnostic_errors.push(r_msg);
     } else if !breakout_eval.is_clean {
         is_allowed = false;
-        reason = format!("VETO BY BREAKOUT TAXONOMY: {}", breakout_eval.composite_verdict);
+        reason = format!(
+            "VETO BY BREAKOUT TAXONOMY: {}",
+            breakout_eval.composite_verdict
+        );
         diagnostic_errors.push(breakout_eval.composite_verdict.clone());
     } else if rl_action.is_containment() && state_vec.composite_threat_severity() > 0.0 {
         is_allowed = false;
-        reason = format!("VETO BY RL ADAPTIVE DEFENSE: Escalated to {}", rl_action.as_str());
+        reason = format!(
+            "VETO BY RL ADAPTIVE DEFENSE: Escalated to {}",
+            rl_action.as_str()
+        );
         diagnostic_errors.push(format!("RL_DEFENSE_ESCALATION_{}", rl_action.as_str()));
     }
 
@@ -738,11 +816,25 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         span_attrs.insert("agent.principal".to_string(), req.principal.clone());
         span_attrs.insert("tool.name".to_string(), tool_name.to_string());
         span_attrs.insert("resource".to_string(), req.resource.clone());
-        span_attrs.insert("security.verdict".to_string(), if is_allowed { "ALLOW".to_string() } else { "DENY".to_string() });
-        span_attrs.insert("breakout.composite".to_string(), breakout_eval.composite_verdict.clone());
+        span_attrs.insert(
+            "security.verdict".to_string(),
+            if is_allowed {
+                "ALLOW".to_string()
+            } else {
+                "DENY".to_string()
+            },
+        );
+        span_attrs.insert(
+            "breakout.composite".to_string(),
+            breakout_eval.composite_verdict.clone(),
+        );
         span_attrs.insert("rl.action_tier".to_string(), rl_action.as_str().to_string());
 
-        let status_code = if is_allowed { OtelStatusCode::Ok } else { OtelStatusCode::Error };
+        let status_code = if is_allowed {
+            OtelStatusCode::Ok
+        } else {
+            OtelStatusCode::Error
+        };
         state.otel_telemetry.record_span(
             &trace_id,
             None,
@@ -761,14 +853,19 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
     let hash = state.audit_log.record_event(
         "CEDAR_POLICY_EVAL",
         &req.principal,
-        &format!("Action: '{}' on Resource: '{}' | Context: {}", tool_name, req.resource, req.context),
+        &format!(
+            "Action: '{}' on Resource: '{}' | Context: {}",
+            tool_name, req.resource, req.context
+        ),
         decision_str,
     );
 
     // Measure TRUE end-to-end latency AFTER OTel & Audit I/O so RL observes real I/O stalls and self-heals them
     let duration_ms = start_instant.elapsed().as_secs_f64() * 1000.0;
     if duration_ms > 100.0 {
-        state.rl_defense.self_heal_latency_spike(&state_vec, duration_ms);
+        state
+            .rl_defense
+            .self_heal_latency_spike(&state_vec, duration_ms);
     }
 
     // Track resilience (MTTD/MTTR)
@@ -777,7 +874,9 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
     } else {
         (0.0, 0.0)
     };
-    state.otel_telemetry.record_resilience_event(mttd_ms, mttr_ms, Some(&session_id));
+    state
+        .otel_telemetry
+        .record_resilience_event(mttd_ms, mttr_ms, Some(&session_id));
 
     // RL Step Update
     let mut next_state_vec = state_vec.clone();
@@ -796,11 +895,14 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
     let should_engage = req.engage_tarpit.unwrap_or(true);
     let (tarpit_engaged, decoy_honey_token) = if !is_allowed && should_engage {
         let adv_id = req.adversary_id.as_deref().unwrap_or(&req.principal);
-        let engagement = state.tarpit.engage_adversary(
-            adv_id,
-            &req.action,
-            &serde_json::to_string(&req.context).unwrap_or_default(),
-        ).await;
+        let engagement = state
+            .tarpit
+            .engage_adversary(
+                adv_id,
+                &req.action,
+                &serde_json::to_string(&req.context).unwrap_or_default(),
+            )
+            .await;
         (Some(true), Some(engagement.synthetic_honey_tokens))
     } else {
         (None, None)
@@ -825,7 +927,11 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         is_allowed,
         verdict: decision_str.to_string(),
         reason: reason.clone(),
-        policy: if is_allowed { "Cedar Permit Rule".to_string() } else { "Cedar Forbid / Default-Deny".to_string() },
+        policy: if is_allowed {
+            "Cedar Permit Rule".to_string()
+        } else {
+            "Cedar Forbid / Default-Deny".to_string()
+        },
         record_hash: hash,
     });
 
@@ -850,23 +956,33 @@ pub struct UpdateEgressDomainsRequest {
 }
 
 pub fn handle_get_egress_domains(state: &WebState) -> String {
-    let domains = state.allowed_domains.read().unwrap_or_else(|e| e.into_inner()).clone();
+    let domains = state
+        .allowed_domains
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     json!({
         "success": true,
         "count": domains.len(),
         "domains": domains
-    }).to_string()
+    })
+    .to_string()
 }
 
 pub fn handle_update_egress_domains(state: &WebState, body: &str) -> Result<String, String> {
     let req: UpdateEgressDomainsRequest = serde_json::from_str(body)
         .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON request: {}", e)))?;
 
-    let mut domains = state.allowed_domains.write().unwrap_or_else(|e| e.into_inner());
+    let mut domains = state
+        .allowed_domains
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
 
     match req.action.to_ascii_lowercase().as_str() {
         "add" => {
-            let raw_domain = req.domain.ok_or_else(|| json_error_payload("MISSING_PARAMETER", "Missing 'domain' parameter"))?;
+            let raw_domain = req.domain.ok_or_else(|| {
+                json_error_payload("MISSING_PARAMETER", "Missing 'domain' parameter")
+            })?;
             let clean_domain = raw_domain.trim().to_ascii_lowercase();
             if !is_valid_domain(&clean_domain) {
                 return Err(json_error_payload(
@@ -888,7 +1004,9 @@ pub fn handle_update_egress_domains(state: &WebState, body: &str) -> Result<Stri
             );
         }
         "remove" => {
-            let raw_domain = req.domain.ok_or_else(|| json_error_payload("MISSING_PARAMETER", "Missing 'domain' parameter"))?;
+            let raw_domain = req.domain.ok_or_else(|| {
+                json_error_payload("MISSING_PARAMETER", "Missing 'domain' parameter")
+            })?;
             let clean_domain = raw_domain.trim().to_ascii_lowercase();
             domains.retain(|d| d != &clean_domain);
             state.audit_log.record_event(
@@ -914,7 +1032,15 @@ pub fn handle_update_egress_domains(state: &WebState, body: &str) -> Result<Stri
                 "CONFIG_UPDATE",
             );
         }
-        _ => return Err(json_error_payload("UNKNOWN_ACTION", &format!("Unknown action '{}': supported actions are 'add', 'remove', 'reset'", req.action))),
+        _ => {
+            return Err(json_error_payload(
+                "UNKNOWN_ACTION",
+                &format!(
+                    "Unknown action '{}': supported actions are 'add', 'remove', 'reset'",
+                    req.action
+                ),
+            ))
+        }
     }
 
     save_egress_domains(&domains);
@@ -924,7 +1050,8 @@ pub fn handle_update_egress_domains(state: &WebState, body: &str) -> Result<Stri
         "success": true,
         "count": domains.len(),
         "domains": domains.clone()
-    }).to_string())
+    })
+    .to_string())
 }
 
 pub fn handle_rl_defense_status(state: &WebState) -> String {
@@ -979,10 +1106,18 @@ pub fn handle_rl_evaluate_action(state: &WebState, body: &str) -> Result<String,
         AdaptiveStateVector::default()
     };
 
-    if !breakout_eval.technical.is_clean { state_vec.credential_access_pressure = state_vec.credential_access_pressure.max(0.95); }
-    if !breakout_eval.operational.is_clean { state_vec.credential_access_pressure = state_vec.credential_access_pressure.max(0.85); }
-    if !breakout_eval.behavioral.is_clean { state_vec.eval_harness_tamper_signal = state_vec.eval_harness_tamper_signal.max(0.95); }
-    if !breakout_eval.data.is_clean { state_vec.cross_agent_scratchpad_leak = state_vec.cross_agent_scratchpad_leak.max(0.9); }
+    if !breakout_eval.technical.is_clean {
+        state_vec.credential_access_pressure = state_vec.credential_access_pressure.max(0.95);
+    }
+    if !breakout_eval.operational.is_clean {
+        state_vec.credential_access_pressure = state_vec.credential_access_pressure.max(0.85);
+    }
+    if !breakout_eval.behavioral.is_clean {
+        state_vec.eval_harness_tamper_signal = state_vec.eval_harness_tamper_signal.max(0.95);
+    }
+    if !breakout_eval.data.is_clean {
+        state_vec.cross_agent_scratchpad_leak = state_vec.cross_agent_scratchpad_leak.max(0.9);
+    }
 
     let action = state.rl_defense.select_action(&state_vec);
 
@@ -995,7 +1130,8 @@ pub fn handle_rl_evaluate_action(state: &WebState, body: &str) -> Result<String,
         "rl_tier_description": action.tier_description(),
         "is_containment": action.is_containment(),
         "threat_severity": state_vec.composite_threat_severity()
-    }).to_string())
+    })
+    .to_string())
 }
 
 pub fn handle_otel_sessions(state: &WebState) -> String {
@@ -1014,7 +1150,10 @@ pub fn handle_resilience_metrics(state: &WebState) -> String {
 }
 
 pub fn handle_breakout_guards_status(state: &WebState) -> String {
-    let (harness_clean, tampered) = state.breakout_coordinator.behavioral.verify_harness_integrity();
+    let (harness_clean, tampered) = state
+        .breakout_coordinator
+        .behavioral
+        .verify_harness_integrity();
     json!({
         "status": "ONLINE",
         "technical_guard": {
@@ -1064,8 +1203,9 @@ pub fn handle_validate_sisyphean(_state: &WebState, body: &str) -> Result<String
             gamma: None,
         }
     } else {
-        serde_json::from_str(body)
-            .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON request: {}", e)))?
+        serde_json::from_str(body).map_err(|e| {
+            json_error_payload("INVALID_JSON", &format!("Invalid JSON request: {}", e))
+        })?
     };
 
     let trajectories = req.trajectories.unwrap_or(10_000).clamp(100, 100_000);
@@ -1092,7 +1232,8 @@ pub fn handle_validate_sisyphean(_state: &WebState, body: &str) -> Result<String
     );
 
     let p_infty = VassilevMathValidator::compute_rl_asymptotic_floor(rl_epsilon_0, lambda, gamma);
-    let static_analytical = VassilevMathValidator::compute_static_survival_bound(steps, epsilon_min);
+    let static_analytical =
+        VassilevMathValidator::compute_static_survival_bound(steps, epsilon_min);
 
     Ok(json!({
         "status": "SUCCESS",
@@ -1127,19 +1268,13 @@ pub fn handle_validate_sisyphean(_state: &WebState, body: &str) -> Result<String
             "verdict": verdict,
             "h0_rejected": p < 0.001,
         }
-    }).to_string())
+    })
+    .to_string())
 }
 
 pub fn handle_vassilev_proof(_state: &WebState) -> String {
-    let report = VassilevMathValidator::generate_validation_report(
-        500,
-        0.01,
-        0.05,
-        0.05,
-        1.25,
-        10_000,
-        &[],
-    );
+    let report =
+        VassilevMathValidator::generate_validation_report(500, 0.01, 0.05, 0.05, 1.25, 10_000, &[]);
     json!({
         "paper_title": "Beyond One and Done: Agent Breakouts and Continuous Security for Agentic AI Systems",
         "paper_author": "Femi Oyesanya, October 2026",
@@ -1167,7 +1302,10 @@ pub struct InjectGovernorSampleRequest {
 }
 
 pub fn handle_governor_status(state: &WebState) -> String {
-    let gov = state.governor_state.read().unwrap_or_else(|e| e.into_inner());
+    let gov = state
+        .governor_state
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
     let metrics = gov.get_metrics_summary();
     let history: Vec<_> = gov.history.iter().rev().take(20).cloned().collect();
     let is_halted = gov.current_survival_prob <= gov.config.critical_termination_threshold;
@@ -1192,7 +1330,8 @@ pub fn handle_governor_status(state: &WebState) -> String {
             "mean_time_to_remediate_ms": metrics.mean_time_to_remediate.as_secs_f64() * 1000.0,
             "total_containment_failures": metrics.total_containment_failures,
         }
-    }).to_string()
+    })
+    .to_string()
 }
 
 pub fn handle_governor_inject_sample(state: &WebState, body: &str) -> Result<String, String> {
@@ -1214,7 +1353,11 @@ pub fn handle_governor_inject_sample(state: &WebState, body: &str) -> Result<Str
             is_whitelisted_endpoint: !is_malicious,
         },
         "restricted_fs" | "virtual_fs" => KernelEventKind::FileAccess {
-            path: if is_malicious { std::path::PathBuf::from("/proc/kcore") } else { std::path::PathBuf::from("/workspace/src/lib.rs") },
+            path: if is_malicious {
+                std::path::PathBuf::from("/proc/kcore")
+            } else {
+                std::path::PathBuf::from("/workspace/src/lib.rs")
+            },
             is_read_only: true,
             is_restricted_virtual_fs: is_malicious,
         },
@@ -1230,7 +1373,10 @@ pub fn handle_governor_inject_sample(state: &WebState, body: &str) -> Result<Str
         },
     };
 
-    let mut gov = state.governor_state.write().unwrap_or_else(|e| e.into_inner());
+    let mut gov = state
+        .governor_state
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
     let next_step = gov.current_step + 1;
 
     let sample = TelemetrySample {
@@ -1245,7 +1391,7 @@ pub fn handle_governor_inject_sample(state: &WebState, body: &str) -> Result<Str
     };
 
     let raw_epsilon = gov.compute_step_risk(&sample.event);
-    
+
     // Demonstrate Code Adaptation & Improvement:
     // If use_rl is enabled, consult the RL engine to attenuate hazard via learned containment
     let (effective_epsilon, rl_action_name, mitigation_factor) = if use_rl && is_malicious {
@@ -1259,9 +1405,17 @@ pub fn handle_governor_inject_sample(state: &WebState, body: &str) -> Result<Str
             AdaptiveDefenseAction::TraceElevation => 0.25,
             AdaptiveDefenseAction::PassiveObserve => 0.05,
         };
-        (raw_epsilon * (1.0 - factor), action.as_str().to_string(), factor)
+        (
+            raw_epsilon * (1.0 - factor),
+            action.as_str().to_string(),
+            factor,
+        )
     } else {
-        (raw_epsilon, "StaticBaseline (No RL Mitigation)".to_string(), 0.0)
+        (
+            raw_epsilon,
+            "StaticBaseline (No RL Mitigation)".to_string(),
+            0.0,
+        )
     };
 
     gov.current_step = next_step;
@@ -1300,11 +1454,15 @@ pub fn handle_governor_inject_sample(state: &WebState, body: &str) -> Result<Str
         "is_anomaly": is_anomaly,
         "warning_triggered": is_warned,
         "circuit_breaker_tripped": is_tripped,
-    }).to_string())
+    })
+    .to_string())
 }
 
 pub fn handle_governor_reset(state: &WebState) -> String {
-    let mut gov = state.governor_state.write().unwrap_or_else(|e| e.into_inner());
+    let mut gov = state
+        .governor_state
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
     gov.current_step = 0;
     gov.current_survival_prob = 1.0;
     gov.history.clear();
@@ -1327,7 +1485,8 @@ pub fn handle_rasp_telemetry(state: &WebState, limit: usize) -> String {
     json!({
         "metrics": metrics,
         "events": events
-    }).to_string()
+    })
+    .to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -1347,7 +1506,10 @@ fn default_agent_id() -> String {
 
 pub fn handle_rasp_intercept_prompt(state: &WebState, body: &str) -> Result<String, String> {
     let req: RaspPromptInterceptRequest = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_JSON", &format!("Invalid prompt intercept request: {}", e))
+        json_error_payload(
+            "INVALID_JSON",
+            &format!("Invalid prompt intercept request: {}", e),
+        )
     })?;
 
     let tier = match req.trust_tier.as_deref() {
@@ -1357,18 +1519,18 @@ pub fn handle_rasp_intercept_prompt(state: &WebState, body: &str) -> Result<Stri
     };
 
     let subject = AgentSecuritySubject::new(&req.agent_id, "worker", tier);
-    let (decision, threat) = state.rasp_engine.inspect_invocation(
-        &req.prompt,
-        req.language_code.as_deref(),
-        &subject,
-    );
+    let (decision, threat) =
+        state
+            .rasp_engine
+            .inspect_invocation(&req.prompt, req.language_code.as_deref(), &subject);
 
     Ok(json!({
         "verdict": decision.verdict_str(),
         "is_allowed": decision.is_allowed(),
         "threat_category": threat.map(|t| t.to_string()),
         "decision_details": decision,
-    }).to_string())
+    })
+    .to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -1383,10 +1545,14 @@ pub struct RaspToolInterceptRequest {
 
 pub fn handle_rasp_intercept_tool(state: &WebState, body: &str) -> Result<String, String> {
     let req: RaspToolInterceptRequest = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_JSON", &format!("Invalid tool intercept request: {}", e))
+        json_error_payload(
+            "INVALID_JSON",
+            &format!("Invalid tool intercept request: {}", e),
+        )
     })?;
 
-    let mut subject = AgentSecuritySubject::new(&req.agent_id, "worker", RaspAgentTrustTier::WorkerSandboxed);
+    let mut subject =
+        AgentSecuritySubject::new(&req.agent_id, "worker", RaspAgentTrustTier::WorkerSandboxed);
     if let Some(ref sig) = req.supervisor_signature {
         subject = subject.with_supervisor_attestation(sig);
     }
@@ -1404,7 +1570,8 @@ pub fn handle_rasp_intercept_tool(state: &WebState, body: &str) -> Result<String
         "threat_category": threat.map(|t| t.to_string()),
         "sanitized_params": params,
         "decision_details": decision,
-    }).to_string())
+    })
+    .to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -1419,10 +1586,14 @@ pub struct RaspMemoryInterceptRequest {
 
 pub fn handle_rasp_intercept_memory(state: &WebState, body: &str) -> Result<String, String> {
     let req: RaspMemoryInterceptRequest = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_JSON", &format!("Invalid memory intercept request: {}", e))
+        json_error_payload(
+            "INVALID_JSON",
+            &format!("Invalid memory intercept request: {}", e),
+        )
     })?;
 
-    let subject = AgentSecuritySubject::new(&req.agent_id, "worker", RaspAgentTrustTier::WorkerSandboxed);
+    let subject =
+        AgentSecuritySubject::new(&req.agent_id, "worker", RaspAgentTrustTier::WorkerSandboxed);
 
     match req.operation.to_ascii_lowercase().as_str() {
         "read" => {
@@ -1434,11 +1605,14 @@ pub fn handle_rasp_intercept_memory(state: &WebState, body: &str) -> Result<Stri
                 "is_allowed": decision.is_allowed(),
                 "threat_category": threat.map(|t| t.to_string()),
                 "decision_details": decision,
-            }).to_string())
+            })
+            .to_string())
         }
         "write" => {
             let content = req.content.unwrap_or_default();
-            let (decision, threat, sanitized) = state.rasp_engine.inspect_memory_write(&req.key, &content, &subject);
+            let (decision, threat, sanitized) = state
+                .rasp_engine
+                .inspect_memory_write(&req.key, &content, &subject);
             Ok(json!({
                 "operation": "write",
                 "key": req.key,
@@ -1447,9 +1621,13 @@ pub fn handle_rasp_intercept_memory(state: &WebState, body: &str) -> Result<Stri
                 "threat_category": threat.map(|t| t.to_string()),
                 "sanitized_content": sanitized,
                 "decision_details": decision,
-            }).to_string())
+            })
+            .to_string())
         }
-        other => Err(json_error_payload("INVALID_OPERATION", &format!("Unsupported memory operation: {}", other))),
+        other => Err(json_error_payload(
+            "INVALID_OPERATION",
+            &format!("Unsupported memory operation: {}", other),
+        )),
     }
 }
 
@@ -1460,7 +1638,10 @@ pub struct RaspCreateCanaryRequest {
 
 pub fn handle_rasp_create_canary(state: &WebState, body: &str) -> Result<String, String> {
     let req: RaspCreateCanaryRequest = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_JSON", &format!("Invalid canary creation request: {}", e))
+        json_error_payload(
+            "INVALID_JSON",
+            &format!("Invalid canary creation request: {}", e),
+        )
     })?;
 
     let token = state.rasp_engine.register_canary(&req.label);
@@ -1479,7 +1660,10 @@ pub struct RaspMitigationTierRequest {
 
 pub fn handle_rasp_set_mitigation_tier(state: &WebState, body: &str) -> Result<String, String> {
     let req: RaspMitigationTierRequest = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_JSON", &format!("Invalid mitigation tier request: {}", e))
+        json_error_payload(
+            "INVALID_JSON",
+            &format!("Invalid mitigation tier request: {}", e),
+        )
     })?;
 
     let tier = match req.tier.to_ascii_lowercase().as_str() {
@@ -1488,14 +1672,20 @@ pub fn handle_rasp_set_mitigation_tier(state: &WebState, body: &str) -> Result<S
         "level2" | "decoy" | "synthetic" => AdaptiveMitigationTier::Level2SyntheticDecoy,
         "level3" | "tarpit" => AdaptiveMitigationTier::Level3TarpitStall,
         "level4" | "revoke" | "quarantine" => AdaptiveMitigationTier::Level4HardRevoke,
-        other => return Err(json_error_payload("INVALID_TIER", &format!("Unknown mitigation tier: {}", other))),
+        other => {
+            return Err(json_error_payload(
+                "INVALID_TIER",
+                &format!("Unknown mitigation tier: {}", other),
+            ))
+        }
     };
 
     state.rasp_engine.policy_engine().set_mitigation_tier(tier);
     Ok(json!({
         "status": "UPDATED",
         "new_mitigation_tier": format!("{:?}", tier)
-    }).to_string())
+    })
+    .to_string())
 }
 
 // =========================================================================
@@ -1505,38 +1695,38 @@ pub fn handle_rasp_set_mitigation_tier(state: &WebState, body: &str) -> Result<S
 pub fn handle_atlas_status(state: &WebState) -> String {
     let cache_path = "data/atlas_stix/stix-atlas.json";
     match state.atlas_sync.sync_or_load_stix(cache_path) {
-        Ok((meta, kb)) => {
-            json!({
-                "status": "SYNCHRONIZED",
-                "dataset_version": meta.dataset_version,
-                "publication_date": meta.publication_date,
-                "source_url": meta.source_url,
-                "sha256_checksum": meta.sha256_checksum,
-                "synced_at_secs": meta.synced_at_secs,
-                "total_tactics": meta.total_tactics,
-                "total_techniques": meta.total_techniques,
-                "total_mitigations": meta.total_mitigations,
-                "total_case_studies": meta.total_case_studies,
-                "tactics_list": kb.tactics,
-            }).to_string()
-        }
-        Err(e) => {
-            json!({
-                "status": "NOT_SYNCED",
-                "error": e.to_string(),
-                "dataset_version": "Uninitialized",
-                "total_tactics": 0,
-                "total_techniques": 0,
-                "total_mitigations": 0,
-                "total_case_studies": 0
-            }).to_string()
-        }
+        Ok((meta, kb)) => json!({
+            "status": "SYNCHRONIZED",
+            "dataset_version": meta.dataset_version,
+            "publication_date": meta.publication_date,
+            "source_url": meta.source_url,
+            "sha256_checksum": meta.sha256_checksum,
+            "synced_at_secs": meta.synced_at_secs,
+            "total_tactics": meta.total_tactics,
+            "total_techniques": meta.total_techniques,
+            "total_mitigations": meta.total_mitigations,
+            "total_case_studies": meta.total_case_studies,
+            "tactics_list": kb.tactics,
+        })
+        .to_string(),
+        Err(e) => json!({
+            "status": "NOT_SYNCED",
+            "error": e.to_string(),
+            "dataset_version": "Uninitialized",
+            "total_tactics": 0,
+            "total_techniques": 0,
+            "total_mitigations": 0,
+            "total_case_studies": 0
+        })
+        .to_string(),
     }
 }
 
 pub fn handle_atlas_sync(state: &WebState) -> Result<String, String> {
     let cache_path = "data/atlas_stix/stix-atlas.json";
-    let (meta, _kb) = state.atlas_sync.sync_or_load_stix(cache_path)
+    let (meta, _kb) = state
+        .atlas_sync
+        .sync_or_load_stix(cache_path)
         .map_err(|e| json_error_payload("ATLAS_SYNC_FAILED", &e.to_string()))?;
 
     Ok(json!({
@@ -1550,12 +1740,15 @@ pub fn handle_atlas_sync(state: &WebState) -> Result<String, String> {
         "total_techniques": meta.total_techniques,
         "total_mitigations": meta.total_mitigations,
         "total_case_studies": meta.total_case_studies
-    }).to_string())
+    })
+    .to_string())
 }
 
 pub fn handle_atlas_dynamic_tests(state: &WebState) -> Result<String, String> {
     let cache_path = "data/atlas_stix/stix-atlas.json";
-    let (_meta, kb) = state.atlas_sync.sync_or_load_stix(cache_path)
+    let (_meta, kb) = state
+        .atlas_sync
+        .sync_or_load_stix(cache_path)
         .map_err(|e| json_error_payload("ATLAS_LOAD_FAILED", &e.to_string()))?;
 
     let tests = crate::security::atlas_arm::AtlasTestGenerator::generate_dynamic_test_suite(&kb);
@@ -1581,7 +1774,8 @@ pub fn handle_atlas_dynamic_tests(state: &WebState) -> Result<String, String> {
         "blocked_contained_count": blocked_count,
         "mitigation_rate_pct": 100.0,
         "tests": results
-    }).to_string())
+    })
+    .to_string())
 }
 
 // =========================================================================
@@ -1626,9 +1820,12 @@ pub fn handle_runtime_activity_stream(state: &WebState) -> String {
     // 1. Audit Log entries (Cedar policy decisions, cryptographic hashes)
     let audit_entries = state.audit_log.get_entries();
     for entry in audit_entries {
-        let is_allow = entry.decision.to_uppercase().contains("ALLOW") || entry.decision.to_uppercase().contains("PERMIT");
+        let is_allow = entry.decision.to_uppercase().contains("ALLOW")
+            || entry.decision.to_uppercase().contains("PERMIT");
         let verdict = if is_allow { "ALLOW" } else { "DENY" };
-        let subsystem = if entry.event_type.starts_with("HTTP_") || entry.event_type.starts_with("DIFFERENTIAL_") {
+        let subsystem = if entry.event_type.starts_with("HTTP_")
+            || entry.event_type.starts_with("DIFFERENTIAL_")
+        {
             "Strict-HTTP"
         } else {
             "Cedar-Policy"
@@ -1657,7 +1854,11 @@ pub fn handle_runtime_activity_stream(state: &WebState) -> String {
     let spans = state.otel_telemetry.get_recent_spans(50);
     for span in spans {
         let ts_sec = span.start_time_unix_nano / 1_000_000_000;
-        let actor = span.attributes.get("agent.principal").cloned().unwrap_or_else(|| "system".to_string());
+        let actor = span
+            .attributes
+            .get("agent.principal")
+            .cloned()
+            .unwrap_or_else(|| "system".to_string());
         let verdict = format!("{:?}", span.status);
         events.push(json!({
             "id": format!("otel_{}", span.span_id),
@@ -1676,9 +1877,16 @@ pub fn handle_runtime_activity_stream(state: &WebState) -> String {
 
     // 3. Continuous RL Evaluation Cycle Probes
     if let Some(latest_rl) = state.continuous_eval.get_latest_report() {
-        let rl_ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        let rl_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         for p in latest_rl.results_summary {
-            let verdict = if p.was_intercepted { "CONTAINED" } else { "PASS" };
+            let verdict = if p.was_intercepted {
+                "CONTAINED"
+            } else {
+                "PASS"
+            };
             events.push(json!({
                 "id": format!("rl_{}_{}", latest_rl.cycle_id, p.probe_id),
                 "timestamp_secs": rl_ts,
@@ -1696,7 +1904,11 @@ pub fn handle_runtime_activity_stream(state: &WebState) -> String {
     }
 
     // 4. Live Test Events
-    let live_ev = state.live_events.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let live_ev = state
+        .live_events
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     for ev in live_ev.iter().rev().take(30) {
         events.push(json!({
             "id": format!("live_test_{}", ev.id),
@@ -1715,8 +1927,14 @@ pub fn handle_runtime_activity_stream(state: &WebState) -> String {
 
     // Sort descending by timestamp
     events.sort_by(|a, b| {
-        let ts_b = b.get("timestamp_secs").and_then(|v| v.as_u64()).unwrap_or(0);
-        let ts_a = a.get("timestamp_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+        let ts_b = b
+            .get("timestamp_secs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let ts_a = a
+            .get("timestamp_secs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         ts_b.cmp(&ts_a)
     });
 
@@ -1806,19 +2024,32 @@ pub struct ArmSeverRequest {
 
 pub async fn handle_containment_ring_sever(state: &WebState, body: &str) -> Result<String, String> {
     let req: ArmSeverRequest = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_REQUEST", &format!("Malformed sever payload: {}", e))
+        json_error_payload(
+            "INVALID_REQUEST",
+            &format!("Malformed sever payload: {}", e),
+        )
     })?;
 
-    let reason = req.reason.unwrap_or_else(|| "Supervisor manual autotomy trigger".to_string());
+    let reason = req
+        .reason
+        .unwrap_or_else(|| "Supervisor manual autotomy trigger".to_string());
     match state.arm_rings.sever_arm(req.arm_id, &reason).await {
         Ok(()) => {
-            let _ = state.sentinel.epoch_registry.revoke_arm_generation(req.arm_id as u64, &reason).await;
-            let _ = state.sentinel.forensic_audit.append_event(
-                "ARM_AUTOTOMY_SEVERED",
-                Some(req.arm_id as u64),
-                "SeverArm",
-                &reason,
-            ).await;
+            let _ = state
+                .sentinel
+                .epoch_registry
+                .revoke_arm_generation(req.arm_id as u64, &reason)
+                .await;
+            let _ = state
+                .sentinel
+                .forensic_audit
+                .append_event(
+                    "ARM_AUTOTOMY_SEVERED",
+                    Some(req.arm_id as u64),
+                    "SeverArm",
+                    &reason,
+                )
+                .await;
             Ok(json!({
                 "error": false,
                 "arm_id": req.arm_id,
@@ -1837,20 +2068,34 @@ pub struct ArmRegenerateRequest {
     pub arm_id: usize,
 }
 
-pub async fn handle_containment_ring_regenerate(state: &WebState, body: &str) -> Result<String, String> {
+pub async fn handle_containment_ring_regenerate(
+    state: &WebState,
+    body: &str,
+) -> Result<String, String> {
     let req: ArmRegenerateRequest = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_REQUEST", &format!("Malformed regenerate payload: {}", e))
+        json_error_payload(
+            "INVALID_REQUEST",
+            &format!("Malformed regenerate payload: {}", e),
+        )
     })?;
 
     match state.arm_rings.sever_and_regenerate(req.arm_id).await {
         Ok(new_gen) => {
-            let report = state.sentinel.recovery_controller.execute_safe_recovery(req.arm_id as u64, None).await;
-            let _ = state.sentinel.forensic_audit.append_event(
-                "ARM_AUTOTOMY_REGENERATED",
-                Some(req.arm_id as u64),
-                "RegenerateArm",
-                &format!("new_generation={}", new_gen),
-            ).await;
+            let report = state
+                .sentinel
+                .recovery_controller
+                .execute_safe_recovery(req.arm_id as u64, None)
+                .await;
+            let _ = state
+                .sentinel
+                .forensic_audit
+                .append_event(
+                    "ARM_AUTOTOMY_REGENERATED",
+                    Some(req.arm_id as u64),
+                    "RegenerateArm",
+                    &format!("new_generation={}", new_gen),
+                )
+                .await;
             Ok(json!({
                 "error": false,
                 "arm_id": req.arm_id,
@@ -1871,9 +2116,15 @@ pub struct ArmStaleReplayRequest {
     pub presented_epoch: u64,
 }
 
-pub async fn handle_containment_ring_stale_replay(state: &WebState, body: &str) -> Result<String, String> {
+pub async fn handle_containment_ring_stale_replay(
+    state: &WebState,
+    body: &str,
+) -> Result<String, String> {
     let req: ArmStaleReplayRequest = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_REQUEST", &format!("Malformed stale replay payload: {}", e))
+        json_error_payload(
+            "INVALID_REQUEST",
+            &format!("Malformed stale replay payload: {}", e),
+        )
     })?;
 
     if let Some(ring) = state.arm_rings.get_ring(req.arm_id).await {
@@ -1887,14 +2138,22 @@ pub async fn handle_containment_ring_stale_replay(state: &WebState, body: &str) 
                 "current_epoch": current_gen,
                 "accepted": true,
                 "message": "Epoch match. Token accepted."
-            }).to_string()),
+            })
+            .to_string()),
             Err(e) => {
-                let _ = state.sentinel.forensic_audit.append_event(
-                    "STALE_EPOCH_REPLAY_REJECTED",
-                    Some(req.arm_id as u64),
-                    "ValidateEpoch",
-                    &format!("presented_epoch={} current_epoch={} err={}", req.presented_epoch, current_gen, e),
-                ).await;
+                let _ = state
+                    .sentinel
+                    .forensic_audit
+                    .append_event(
+                        "STALE_EPOCH_REPLAY_REJECTED",
+                        Some(req.arm_id as u64),
+                        "ValidateEpoch",
+                        &format!(
+                            "presented_epoch={} current_epoch={} err={}",
+                            req.presented_epoch, current_gen, e
+                        ),
+                    )
+                    .await;
                 Ok(json!({
                     "error": false,
                     "arm_id": req.arm_id,
@@ -1909,7 +2168,10 @@ pub async fn handle_containment_ring_stale_replay(state: &WebState, body: &str) 
             }
         }
     } else {
-        Err(json_error_payload("ARM_NOT_FOUND", &format!("Arm {} not found in fleet", req.arm_id)))
+        Err(json_error_payload(
+            "ARM_NOT_FOUND",
+            &format!("Arm {} not found in fleet", req.arm_id),
+        ))
     }
 }
 
@@ -1960,17 +2222,23 @@ pub async fn handle_sentinel_simulate_breach(
     }
 
     let req: SentinelBreachSimulationRequest = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_REQUEST", &format!("Malformed simulation payload: {}", e))
+        json_error_payload(
+            "INVALID_REQUEST",
+            &format!("Malformed simulation payload: {}", e),
+        )
     })?;
 
     let arm_id = req.arm_id.unwrap_or(17);
 
     match req.scenario.as_str() {
         "supervisor_timeout" => {
-            let report = state.sentinel.trigger_lockdown(
-                "Simulated Supervisor Crash",
-                "Heartbeat dropped > 5s; Sentinel Ring engaged emergency fail-closed lockdown",
-            ).await;
+            let report = state
+                .sentinel
+                .trigger_lockdown(
+                    "Simulated Supervisor Crash",
+                    "Heartbeat dropped > 5s; Sentinel Ring engaged emergency fail-closed lockdown",
+                )
+                .await;
             Ok(json!({
                 "error": false,
                 "scenario": "supervisor_timeout",
@@ -1990,9 +2258,16 @@ pub async fn handle_sentinel_simulate_breach(
                 supervisor_healthy: true,
                 termination_deadline_exceeded: true,
                 proxy_enforcement_intact: true,
-                timestamp_secs: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+                timestamp_secs: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
             };
-            let action = state.sentinel.evaluate_observation(&obs).await.map_err(|e| format!("{}", e))?;
+            let action = state
+                .sentinel
+                .evaluate_observation(&obs)
+                .await
+                .map_err(|e| format!("{}", e))?;
             Ok(json!({
                 "error": false,
                 "scenario": "zombie_worker",
@@ -2002,7 +2277,10 @@ pub async fn handle_sentinel_simulate_breach(
             }).to_string())
         }
         "manifest_tamper" => {
-            state.sentinel.integrity_monitor.trigger_simulated_tamper(true);
+            state
+                .sentinel
+                .integrity_monitor
+                .trigger_simulated_tamper(true);
             let obs = crate::sentinel_ring::SentinelObservation {
                 arm_id,
                 generation: 8,
@@ -2013,9 +2291,16 @@ pub async fn handle_sentinel_simulate_breach(
                 supervisor_healthy: true,
                 termination_deadline_exceeded: false,
                 proxy_enforcement_intact: false,
-                timestamp_secs: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+                timestamp_secs: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
             };
-            let action = state.sentinel.evaluate_observation(&obs).await.map_err(|e| format!("{}", e))?;
+            let action = state
+                .sentinel
+                .evaluate_observation(&obs)
+                .await
+                .map_err(|e| format!("{}", e))?;
             Ok(json!({
                 "error": false,
                 "scenario": "manifest_tamper",
@@ -2023,7 +2308,10 @@ pub async fn handle_sentinel_simulate_breach(
                 "message": "Ring 4 detected binary/policy tampering and initiated emergency system lockdown."
             }).to_string())
         }
-        _ => Err(json_error_payload("UNKNOWN_SCENARIO", "Unknown breach simulation scenario")),
+        _ => Err(json_error_payload(
+            "UNKNOWN_SCENARIO",
+            "Unknown breach simulation scenario",
+        )),
     }
 }
 
@@ -2057,23 +2345,39 @@ pub async fn handle_sentinel_reset_lockdown(
         recovery_token: String,
     }
     let req: ResetReq = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_REQUEST", &format!("Malformed reset payload: {}", e))
+        json_error_payload(
+            "INVALID_REQUEST",
+            &format!("Malformed reset payload: {}", e),
+        )
     })?;
 
-    match state.sentinel.lockdown_controller.release_lockdown(&req.recovery_token).await {
+    match state
+        .sentinel
+        .lockdown_controller
+        .release_lockdown(&req.recovery_token)
+        .await
+    {
         Ok(rep) => {
-            state.sentinel.integrity_monitor.trigger_simulated_tamper(false);
-            let _ = state.sentinel.forensic_audit.append_event(
-                "EMERGENCY_LOCKDOWN_RELEASED",
-                None,
-                "ReleaseLockdown",
-                "Authoritative supervisor recovery token accepted",
-            ).await;
+            state
+                .sentinel
+                .integrity_monitor
+                .trigger_simulated_tamper(false);
+            let _ = state
+                .sentinel
+                .forensic_audit
+                .append_event(
+                    "EMERGENCY_LOCKDOWN_RELEASED",
+                    None,
+                    "ReleaseLockdown",
+                    "Authoritative supervisor recovery token accepted",
+                )
+                .await;
             Ok(json!({
                 "error": false,
                 "lockdown_report": rep,
                 "message": "Emergency Sentinel Lockdown released successfully."
-            }).to_string())
+            })
+            .to_string())
         }
         Err(e) => Err(json_error_payload("RECOVERY_DENIED", &format!("{}", e))),
     }
@@ -2093,7 +2397,8 @@ pub async fn handle_protocol_analyzer_events(state: &WebState) -> Result<String,
         "desync_events": desync_events,
         "total_reports": reports.len(),
         "total_desync_events": desync_events.len()
-    }).to_string())
+    })
+    .to_string())
 }
 
 #[derive(Deserialize)]
@@ -2105,12 +2410,14 @@ pub async fn handle_protocol_analyzer_analyze(
     state: &WebState,
     body: &str,
 ) -> Result<String, String> {
-    let req: AnalyzePayloadReq = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_JSON", &format!("Invalid JSON request: {}", e))
-    })?;
+    let req: AnalyzePayloadReq = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON request: {}", e)))?;
 
     let unescaped = req.raw_http.replace("\\r\\n", "\r\n").replace("\\n", "\n");
-    let report = state.protocol_analyzer.evaluate_raw_stream(unescaped.as_bytes()).await;
+    let report = state
+        .protocol_analyzer
+        .evaluate_raw_stream(unescaped.as_bytes())
+        .await;
 
     Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
 }
@@ -2125,9 +2432,8 @@ pub struct DogwoodEvaluateRequest {
 }
 
 pub fn handle_dogwood_evaluate(state: &WebState, body: &str) -> Result<String, String> {
-    let req: DogwoodEvaluateRequest = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_JSON", &format!("Invalid JSON request: {}", e))
-    })?;
+    let req: DogwoodEvaluateRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON request: {}", e)))?;
 
     let now_sec = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2168,15 +2474,22 @@ pub fn handle_dogwood_evaluate(state: &WebState, body: &str) -> Result<String, S
                 "evaluation_duration_us": eval_duration_us,
                 "eval_target": if is_prod { "production" } else { "simulation" },
                 "engine": "Dogwood-MFOTL-v1.0"
-            }).to_string())
+            })
+            .to_string())
         }
         Err(err) => Err(json_error_payload("DOGWOOD_EVAL_ERROR", &err)),
     }
 }
 
 pub fn handle_dogwood_trace(state: &WebState) -> String {
-    let prod_events = state.production_temporal_engine.trace().get_history_up_to(None);
-    let sim_events = state.simulation_temporal_engine.trace().get_history_up_to(None);
+    let prod_events = state
+        .production_temporal_engine
+        .trace()
+        .get_history_up_to(None);
+    let sim_events = state
+        .simulation_temporal_engine
+        .trace()
+        .get_history_up_to(None);
     json!({
         "total_events": sim_events.len() + prod_events.len(),
         "total_production_events": prod_events.len(),
@@ -2184,7 +2497,8 @@ pub fn handle_dogwood_trace(state: &WebState) -> String {
         "total_simulation_events": sim_events.len(),
         "simulation_events": sim_events,
         "events": if !sim_events.is_empty() { sim_events } else { prod_events }
-    }).to_string()
+    })
+    .to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2200,9 +2514,8 @@ pub struct DogwoodSimulateTraceRequest {
 }
 
 pub fn handle_dogwood_simulate_trace(state: &WebState, body: &str) -> Result<String, String> {
-    let req: DogwoodSimulateTraceRequest = serde_json::from_str(body).map_err(|e| {
-        json_error_payload("INVALID_JSON", &format!("Invalid JSON request: {}", e))
-    })?;
+    let req: DogwoodSimulateTraceRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON request: {}", e)))?;
 
     let now_sec = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2231,7 +2544,8 @@ pub fn handle_dogwood_simulate_trace(state: &WebState, body: &str) -> Result<Str
         "production_trace_protected": true,
         "simulation_trace_length": state.simulation_temporal_engine.trace().len(),
         "production_trace_length": state.production_temporal_engine.trace().len()
-    }).to_string())
+    })
+    .to_string())
 }
 
 pub fn handle_dogwood_presets() -> String {
@@ -2315,12 +2629,22 @@ pub fn handle_protocol_research_knowledge_base(state: &WebState, query: &str) ->
         }
     }
     let fragments = if keyword.is_empty() {
-        state.protocol_research.knowledge_base().search_fragments("Transfer-Encoding", limit)
+        state
+            .protocol_research
+            .knowledge_base()
+            .search_fragments("Transfer-Encoding", limit)
     } else {
-        state.protocol_research.knowledge_base().search_fragments(&keyword, limit)
+        state
+            .protocol_research
+            .knowledge_base()
+            .search_fragments(&keyword, limit)
     };
-    let probes = state.protocol_research.knowledge_base().get_candidate_probes(limit);
-    let (rfcs, frags_total, probes_total, evals_total) = state.protocol_research.knowledge_base().get_full_counts();
+    let probes = state
+        .protocol_research
+        .knowledge_base()
+        .get_candidate_probes(limit);
+    let (rfcs, frags_total, probes_total, evals_total) =
+        state.protocol_research.knowledge_base().get_full_counts();
 
     serde_json::json!({
         "status": "OK",
@@ -2335,31 +2659,58 @@ pub fn handle_protocol_research_knowledge_base(state: &WebState, query: &str) ->
         "query_keyword": keyword,
         "matched_fragments": fragments,
         "candidate_probes": probes
-    }).to_string()
+    })
+    .to_string()
 }
 
-pub async fn handle_protocol_research_evaluate(state: &WebState, body: &str) -> Result<String, String> {
+pub async fn handle_protocol_research_evaluate(
+    state: &WebState,
+    body: &str,
+) -> Result<String, String> {
     let req: crate::security::protocol_research::EvaluationRequest = serde_json::from_str(body)
-        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid evaluation request: {}", e)))?;
+        .map_err(|e| {
+            json_error_payload(
+                "INVALID_JSON",
+                &format!("Invalid evaluation request: {}", e),
+            )
+        })?;
 
     match state.protocol_research.evaluate_probe(req).await {
-        Ok(finding) => Ok(serde_json::to_string_pretty(&finding).unwrap_or_else(|_| "{}".to_string())),
-        Err(e) => Err(json_error_payload("RESEARCH_EVALUATION_DENIED", &format!("{}", e))),
+        Ok(finding) => {
+            Ok(serde_json::to_string_pretty(&finding).unwrap_or_else(|_| "{}".to_string()))
+        }
+        Err(e) => Err(json_error_payload(
+            "RESEARCH_EVALUATION_DENIED",
+            &format!("{}", e),
+        )),
     }
 }
 
-pub async fn handle_protocol_research_validate_arm106(state: &WebState, body: &str) -> Result<String, String> {
-    let handoff: crate::security::protocol_research::Arm106ValidationHandoff = serde_json::from_str(body)
-        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid Arm 106 handoff: {}", e)))?;
+pub async fn handle_protocol_research_validate_arm106(
+    state: &WebState,
+    body: &str,
+) -> Result<String, String> {
+    let handoff: crate::security::protocol_research::Arm106ValidationHandoff =
+        serde_json::from_str(body).map_err(|e| {
+            json_error_payload("INVALID_JSON", &format!("Invalid Arm 106 handoff: {}", e))
+        })?;
 
     match state.protocol_research.handoff_to_arm106(handoff).await {
-        Ok(report) => Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string())),
-        Err(e) => Err(json_error_payload("ARM106_VALIDATION_FAILED", &format!("{}", e))),
+        Ok(report) => {
+            Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
+        }
+        Err(e) => Err(json_error_payload(
+            "ARM106_VALIDATION_FAILED",
+            &format!("{}", e),
+        )),
     }
 }
 
 pub fn handle_protocol_research_hypotheses(state: &WebState) -> String {
-    let probes = state.protocol_research.knowledge_base().get_candidate_probes(10);
+    let probes = state
+        .protocol_research
+        .knowledge_base()
+        .get_candidate_probes(10);
     serde_json::json!({
         "status": "OK",
         "arm": "Arm 107 (AutonomousProtocolResearch)",
@@ -2378,7 +2729,9 @@ pub fn handle_protocol_research_hypotheses(state: &WebState) -> String {
 
 pub async fn handle_protocol_research_sync_rfc(state: &WebState) -> Result<String, String> {
     match state.protocol_research.sync_rfc_index().await {
-        Ok(report) => Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string())),
+        Ok(report) => {
+            Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
+        }
         Err(e) => Err(json_error_payload("RFC_SYNC_FAILED", &format!("{}", e))),
     }
 }
@@ -2402,7 +2755,8 @@ pub async fn handle_protocol_research_swarm_status(state: &WebState) -> String {
         "fragment_count": status.fragment_count,
         "probe_count": status.probe_count,
         "evaluations_recorded": status.evaluations_recorded
-    }).to_string()
+    })
+    .to_string()
 }
 
 // ==========================================
@@ -2451,8 +2805,9 @@ pub async fn handle_pqc_generate_keypair(state: &WebState, body: &str) -> Result
     let req: PqcGenerateKeypairRequest = if body.trim().is_empty() {
         PqcGenerateKeypairRequest { algorithm: None }
     } else {
-        serde_json::from_str(body)
-            .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid keypair request: {}", e)))?
+        serde_json::from_str(body).map_err(|e| {
+            json_error_payload("INVALID_JSON", &format!("Invalid keypair request: {}", e))
+        })?
     };
 
     let algo = match req.algorithm.as_deref().unwrap_or("MlKem768") {
@@ -2462,8 +2817,15 @@ pub async fn handle_pqc_generate_keypair(state: &WebState, body: &str) -> Result
         "MlDsa44" | "ml-dsa-44" => crate::security::pqc_arm::types::PqcAlgorithm::MlDsa44,
         "MlDsa65" | "ml-dsa-65" => crate::security::pqc_arm::types::PqcAlgorithm::MlDsa65,
         "MlDsa87" | "ml-dsa-87" => crate::security::pqc_arm::types::PqcAlgorithm::MlDsa87,
-        "HybridX25519MlKem768" | "hybrid" => crate::security::pqc_arm::types::PqcAlgorithm::HybridX25519MlKem768,
-        other => return Err(json_error_payload("UNSUPPORTED_ALGORITHM", &format!("Unsupported PQC algorithm: {}", other))),
+        "HybridX25519MlKem768" | "hybrid" => {
+            crate::security::pqc_arm::types::PqcAlgorithm::HybridX25519MlKem768
+        }
+        other => {
+            return Err(json_error_payload(
+                "UNSUPPORTED_ALGORITHM",
+                &format!("Unsupported PQC algorithm: {}", other),
+            ))
+        }
     };
 
     match state.pqc_arm.generate_keypair(algo).await {
@@ -2473,30 +2835,55 @@ pub async fn handle_pqc_generate_keypair(state: &WebState, body: &str) -> Result
 }
 
 pub async fn handle_pqc_encapsulate(state: &WebState, body: &str) -> Result<String, String> {
-    let req: PqcEncapsulateRequest = serde_json::from_str(body)
-        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid encapsulate request: {}", e)))?;
+    let req: PqcEncapsulateRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload(
+            "INVALID_JSON",
+            &format!("Invalid encapsulate request: {}", e),
+        )
+    })?;
 
     let algo = match req.algorithm.as_deref().unwrap_or("MlKem768") {
         "MlKem512" | "ml-kem-512" => crate::security::pqc_arm::types::PqcAlgorithm::MlKem512,
         "MlKem768" | "ml-kem-768" => crate::security::pqc_arm::types::PqcAlgorithm::MlKem768,
         "MlKem1024" | "ml-kem-1024" => crate::security::pqc_arm::types::PqcAlgorithm::MlKem1024,
-        "HybridX25519MlKem768" | "hybrid" => crate::security::pqc_arm::types::PqcAlgorithm::HybridX25519MlKem768,
-        other => return Err(json_error_payload("UNSUPPORTED_ALGORITHM", &format!("Unsupported KEM algorithm: {}", other))),
+        "HybridX25519MlKem768" | "hybrid" => {
+            crate::security::pqc_arm::types::PqcAlgorithm::HybridX25519MlKem768
+        }
+        other => {
+            return Err(json_error_payload(
+                "UNSUPPORTED_ALGORITHM",
+                &format!("Unsupported KEM algorithm: {}", other),
+            ))
+        }
     };
 
     match state.pqc_arm.encapsulate(algo, &req.public_key_hex).await {
         Ok(res) => Ok(serde_json::to_string_pretty(&res).unwrap_or_else(|_| "{}".to_string())),
-        Err(e) => Err(json_error_payload("PQC_ENCAPSULATE_ERROR", &format!("{}", e))),
+        Err(e) => Err(json_error_payload(
+            "PQC_ENCAPSULATE_ERROR",
+            &format!("{}", e),
+        )),
     }
 }
 
 pub async fn handle_pqc_decapsulate(state: &WebState, body: &str) -> Result<String, String> {
-    let req: PqcDecapsulateRequest = serde_json::from_str(body)
-        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid decapsulate request: {}", e)))?;
+    let req: PqcDecapsulateRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload(
+            "INVALID_JSON",
+            &format!("Invalid decapsulate request: {}", e),
+        )
+    })?;
 
-    match state.pqc_arm.decapsulate(&req.key_id, &req.ciphertext_hex).await {
+    match state
+        .pqc_arm
+        .decapsulate(&req.key_id, &req.ciphertext_hex)
+        .await
+    {
         Ok(res) => Ok(serde_json::to_string_pretty(&res).unwrap_or_else(|_| "{}".to_string())),
-        Err(e) => Err(json_error_payload("PQC_DECAPSULATE_ERROR", &format!("{}", e))),
+        Err(e) => Err(json_error_payload(
+            "PQC_DECAPSULATE_ERROR",
+            &format!("{}", e),
+        )),
     }
 }
 
@@ -2505,40 +2892,56 @@ pub async fn handle_pqc_sign(state: &WebState, body: &str) -> Result<String, Str
         .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid sign request: {}", e)))?;
 
     let bytes = if req.encoding.as_deref() == Some("hex") {
-        hex::decode(&req.message).map_err(|e| json_error_payload("INVALID_HEX", &format!("Invalid hex string: {}", e)))?
+        hex::decode(&req.message)
+            .map_err(|e| json_error_payload("INVALID_HEX", &format!("Invalid hex string: {}", e)))?
     } else {
         req.message.as_bytes().to_vec()
     };
 
-    match state.pqc_arm.sign_audit_block_with_key(req.key_id.as_deref(), &bytes).await {
+    match state
+        .pqc_arm
+        .sign_audit_block_with_key(req.key_id.as_deref(), &bytes)
+        .await
+    {
         Ok(res) => Ok(serde_json::to_string_pretty(&res).unwrap_or_else(|_| "{}".to_string())),
         Err(e) => Err(json_error_payload("PQC_SIGN_ERROR", &format!("{}", e))),
     }
 }
 
 pub async fn handle_pqc_verify(state: &WebState, body: &str) -> Result<String, String> {
-    let req: PqcVerifyRequest = serde_json::from_str(body)
-        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid verify request: {}", e)))?;
+    let req: PqcVerifyRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_JSON", &format!("Invalid verify request: {}", e))
+    })?;
 
     let algo = match req.algorithm.as_deref().unwrap_or("MlDsa65") {
         "MlDsa44" | "ml-dsa-44" => crate::security::pqc_arm::types::PqcAlgorithm::MlDsa44,
         "MlDsa65" | "ml-dsa-65" => crate::security::pqc_arm::types::PqcAlgorithm::MlDsa65,
         "MlDsa87" | "ml-dsa-87" => crate::security::pqc_arm::types::PqcAlgorithm::MlDsa87,
-        other => return Err(json_error_payload("UNSUPPORTED_ALGORITHM", &format!("Unsupported DSA algorithm: {}", other))),
+        other => {
+            return Err(json_error_payload(
+                "UNSUPPORTED_ALGORITHM",
+                &format!("Unsupported DSA algorithm: {}", other),
+            ))
+        }
     };
 
     let bytes = if req.encoding.as_deref() == Some("hex") {
-        hex::decode(&req.message).map_err(|e| json_error_payload("INVALID_HEX", &format!("Invalid hex string: {}", e)))?
+        hex::decode(&req.message)
+            .map_err(|e| json_error_payload("INVALID_HEX", &format!("Invalid hex string: {}", e)))?
     } else {
         req.message.as_bytes().to_vec()
     };
 
-    match state.pqc_arm.verify_signature(algo, &req.public_key_hex, &bytes, &req.signature_hex) {
+    match state
+        .pqc_arm
+        .verify_signature(algo, &req.public_key_hex, &bytes, &req.signature_hex)
+    {
         Ok(valid) => Ok(json!({
             "verified": valid,
             "algorithm": algo.name(),
             "status": if valid { "SIGNATURE_VALID" } else { "SIGNATURE_INVALID" },
-        }).to_string()),
+        })
+        .to_string()),
         Err(e) => Err(json_error_payload("PQC_VERIFY_ERROR", &format!("{}", e))),
     }
 }
@@ -2580,21 +2983,34 @@ pub async fn handle_evolution_status(state: &WebState) -> String {
 }
 
 pub async fn handle_evolution_start(state: &WebState, body: &str) -> Result<String, String> {
-    let req: EvolutionStartRequest = serde_json::from_str(body)
-        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid start request: {}", e)))?;
-    let target = req.target_module.unwrap_or_else(|| "permutator".to_string());
+    let req: EvolutionStartRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_JSON", &format!("Invalid start request: {}", e))
+    })?;
+    let target = req
+        .target_module
+        .unwrap_or_else(|| "permutator".to_string());
     let iterations = req.iterations.unwrap_or(20);
 
-    match state.evolution_arm.start_evolution_job(&target, iterations).await {
+    match state
+        .evolution_arm
+        .start_evolution_job(&target, iterations)
+        .await
+    {
         Ok(job) => Ok(serde_json::to_string_pretty(&job).unwrap_or_else(|_| "{}".to_string())),
-        Err(e) => Err(json_error_payload("EVOLUTION_START_FAILED", &format!("{}", e))),
+        Err(e) => Err(json_error_payload(
+            "EVOLUTION_START_FAILED",
+            &format!("{}", e),
+        )),
     }
 }
 
 pub async fn handle_evolution_stop(state: &WebState) -> Result<String, String> {
     match state.evolution_arm.stop_evolution_job().await {
         Ok(msg) => Ok(serde_json::json!({ "status": "SUCCESS", "message": msg }).to_string()),
-        Err(e) => Err(json_error_payload("EVOLUTION_STOP_FAILED", &format!("{}", e))),
+        Err(e) => Err(json_error_payload(
+            "EVOLUTION_STOP_FAILED",
+            &format!("{}", e),
+        )),
     }
 }
 
@@ -2604,41 +3020,60 @@ pub async fn handle_evolution_candidates(state: &WebState) -> String {
         "status": "OK",
         "total_staged": candidates.len(),
         "candidates": candidates
-    }).to_string()
+    })
+    .to_string()
 }
 
 pub async fn handle_evolution_evaluate(state: &WebState, body: &str) -> Result<String, String> {
-    let req: EvolutionEvaluateRequest = serde_json::from_str(body)
-        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid evaluate request: {}", e)))?;
-    let target = req.target_module.unwrap_or_else(|| "permutator".to_string());
+    let req: EvolutionEvaluateRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_JSON", &format!("Invalid evaluate request: {}", e))
+    })?;
+    let target = req
+        .target_module
+        .unwrap_or_else(|| "permutator".to_string());
     let code = req.code.unwrap_or_default();
     if code.trim().is_empty() {
-        return Err(json_error_payload("EMPTY_CODE", "Candidate code cannot be empty."));
+        return Err(json_error_payload(
+            "EMPTY_CODE",
+            "Candidate code cannot be empty.",
+        ));
     }
 
-    match state.evolution_arm.evaluate_code_snippet(&code, &target).await {
-        Ok(candidate) => Ok(serde_json::to_string_pretty(&candidate).unwrap_or_else(|_| "{}".to_string())),
+    match state
+        .evolution_arm
+        .evaluate_code_snippet(&code, &target)
+        .await
+    {
+        Ok(candidate) => {
+            Ok(serde_json::to_string_pretty(&candidate).unwrap_or_else(|_| "{}".to_string()))
+        }
         Err(e) => Err(json_error_payload("EVALUATION_FAILED", &format!("{}", e))),
     }
 }
 
 pub async fn handle_evolution_approve(state: &WebState, body: &str) -> Result<String, String> {
-    let req: EvolutionApproveRequest = serde_json::from_str(body)
-        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid approve request: {}", e)))?;
-    let candidate_id = req.candidate_id.ok_or_else(|| {
-        json_error_payload("MISSING_PARAMETER", "Missing required candidate_id")
+    let req: EvolutionApproveRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_JSON", &format!("Invalid approve request: {}", e))
     })?;
+    let candidate_id = req
+        .candidate_id
+        .ok_or_else(|| json_error_payload("MISSING_PARAMETER", "Missing required candidate_id"))?;
 
     match state.evolution_arm.approve_promotion(&candidate_id).await {
-        Ok(promoted) => Ok(serde_json::to_string_pretty(&promoted).unwrap_or_else(|_| "{}".to_string())),
+        Ok(promoted) => {
+            Ok(serde_json::to_string_pretty(&promoted).unwrap_or_else(|_| "{}".to_string()))
+        }
         Err(e) => Err(json_error_payload("PROMOTION_FAILED", &format!("{}", e))),
     }
 }
 
 pub async fn handle_evolution_rollback(state: &WebState, body: &str) -> Result<String, String> {
-    let req: EvolutionRollbackRequest = serde_json::from_str(body)
-        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid rollback request: {}", e)))?;
-    let target = req.target_module.unwrap_or_else(|| "permutator".to_string());
+    let req: EvolutionRollbackRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_JSON", &format!("Invalid rollback request: {}", e))
+    })?;
+    let target = req
+        .target_module
+        .unwrap_or_else(|| "permutator".to_string());
 
     match state.evolution_arm.rollback(&target).await {
         Ok(msg) => Ok(serde_json::json!({ "status": "SUCCESS", "message": msg }).to_string()),
@@ -2653,10 +3088,15 @@ pub struct EvolutionAutoFixRequest {
 }
 
 pub async fn handle_evolution_auto_fix(state: &WebState, body: &str) -> Result<String, String> {
-    let req: EvolutionAutoFixRequest = serde_json::from_str(body)
-        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid auto-fix request: {}", e)))?;
-    let failure_id = req.failure_id.unwrap_or_else(|| "UNKNOWN_FAILURE".to_string());
-    let failure_context = req.failure_context.unwrap_or_else(|| "Runtime test failure".to_string());
+    let req: EvolutionAutoFixRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload("INVALID_JSON", &format!("Invalid auto-fix request: {}", e))
+    })?;
+    let failure_id = req
+        .failure_id
+        .unwrap_or_else(|| "UNKNOWN_FAILURE".to_string());
+    let failure_context = req
+        .failure_context
+        .unwrap_or_else(|| "Runtime test failure".to_string());
 
     // 1. Synthesize, AST-audit, and promote code patch via OpenEvolve (Arm 109)
     let candidate = state
@@ -2672,7 +3112,9 @@ pub async fn handle_evolution_auto_fix(state: &WebState, body: &str) -> Result<S
         state.rl_defense.self_heal_latency_spike(&state_vec, 1500.0);
     } else {
         let current_action = state.rl_defense.select_action(&state_vec);
-        let _ = state.rl_defense.self_heal_authorized_workflow(&state_vec, current_action);
+        let _ = state
+            .rl_defense
+            .self_heal_authorized_workflow(&state_vec, current_action);
     }
 
     Ok(serde_json::json!({
@@ -2713,7 +3155,8 @@ pub async fn handle_dream_rsi_policy(state: &WebState) -> String {
         "fitness_score": status.active_policy_fitness,
         "generation": status.active_generation,
         "latest_experiment_plan": status.latest_experiment_plan
-    }).to_string()
+    })
+    .to_string()
 }
 
 pub async fn handle_dream_rsi_train(state: &WebState, body: &str) -> Result<String, String> {
@@ -2725,15 +3168,16 @@ pub async fn handle_dream_rsi_train(state: &WebState, body: &str) -> Result<Stri
     let steps = req.steps.unwrap_or(1000);
 
     match state.dream_rsi_arm.train_offline(generations, steps).await {
-        Ok(status) => Ok(serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string())),
+        Ok(status) => {
+            Ok(serde_json::to_string_pretty(&status).unwrap_or_else(|_| "{}".to_string()))
+        }
         Err(e) => Err(json_error_payload("TRAINING_FAILED", &format!("{}", e))),
     }
 }
 
 pub async fn handle_dream_rsi_rollout(state: &WebState, body: &str) -> Result<String, String> {
-    let req: DreamRsiRolloutRequest = serde_json::from_str(body).unwrap_or(DreamRsiRolloutRequest {
-        steps: Some(1000),
-    });
+    let req: DreamRsiRolloutRequest =
+        serde_json::from_str(body).unwrap_or(DreamRsiRolloutRequest { steps: Some(1000) });
     let steps = req.steps.unwrap_or(1000);
     let report = state.dream_rsi_arm.run_rollout(steps).await;
     Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
@@ -2744,7 +3188,10 @@ pub async fn handle_dream_rsi_recommend_priorities(state: &WebState) -> String {
     serde_json::to_string_pretty(&plan).unwrap_or_else(|_| "{}".to_string())
 }
 
-pub async fn handle_dream_rsi_feed_trajectories(state: &WebState, body: &str) -> Result<String, String> {
+pub async fn handle_dream_rsi_feed_trajectories(
+    state: &WebState,
+    body: &str,
+) -> Result<String, String> {
     let req: DreamRsiFeedRequest = serde_json::from_str(body)
         .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid feed request: {}", e)))?;
     let events = req.events.unwrap_or_default();
@@ -2781,8 +3228,12 @@ pub async fn handle_harness2_run(state: &WebState, body: &str) -> Result<String,
             invoke_vendor_demo: Some(false),
         }
     } else {
-        serde_json::from_str(body)
-            .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid Harness² run request: {}", e)))?
+        serde_json::from_str(body).map_err(|e| {
+            json_error_payload(
+                "INVALID_JSON",
+                &format!("Invalid Harness² run request: {}", e),
+            )
+        })?
     };
 
     let domain = req.domain.unwrap_or_else(|| "accounting".to_string());
@@ -2796,7 +3247,9 @@ pub async fn handle_harness2_run(state: &WebState, body: &str) -> Result<String,
         .run_recursive_harnessing(&domain, &task_id, &mode, k, invoke_vendor)
         .await
     {
-        Ok(report) => Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string())),
+        Ok(report) => {
+            Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
+        }
         Err(e) => Err(json_error_payload("HARNESS2_RUN_FAILED", &format!("{}", e))),
     }
 }
@@ -2823,8 +3276,12 @@ pub async fn handle_harness2_library(state: &WebState, query: &str) -> String {
 }
 
 pub fn handle_harness2_validate_tree(state: &WebState, body: &str) -> Result<String, String> {
-    let req: Harness2ValidateTreeRequest = serde_json::from_str(body)
-        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid validate-tree request: {}", e)))?;
+    let req: Harness2ValidateTreeRequest = serde_json::from_str(body).map_err(|e| {
+        json_error_payload(
+            "INVALID_JSON",
+            &format!("Invalid validate-tree request: {}", e),
+        )
+    })?;
     let tree = req.tree.unwrap_or_default();
     let report = state.harness2_arm.validate_candidate_tree(tree);
     Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
@@ -2845,22 +3302,25 @@ pub fn handle_harness2_validate_tree(state: &WebState, body: &str) -> Result<Str
 /// - Windows Pre-Resume Confinement Gate (`WindowsConfinementPolicy`)
 /// - 5-Policy Standardized RL Benchmark (`run_standardized_5policy_benchmark`)
 pub async fn handle_oshoosiclaw_containment_status(state: &WebState) -> String {
-    let homological_report = crate::containment_ring::HomologicalBoundaryAuditor::audit_simplex_transition(
-        &crate::core::types::ArmRole::UntrustedDocIngest,
-        Some(&crate::core::types::ArmRole::AnomalyDetection),
-        &crate::core::types::ArmRole::AccountingLedgerWrite,
-    );
+    let homological_report =
+        crate::containment_ring::HomologicalBoundaryAuditor::audit_simplex_transition(
+            &crate::core::types::ArmRole::UntrustedDocIngest,
+            Some(&crate::core::types::ArmRole::AnomalyDetection),
+            &crate::core::types::ArmRole::AccountingLedgerWrite,
+        );
 
-    let trace_proof = crate::containment_ring::VanishingPolynomialTraceVerifier::verify_execution_trace(
-        &[100, 142, 200],
-        &[42, 58],
-    );
+    let trace_proof =
+        crate::containment_ring::VanishingPolynomialTraceVerifier::verify_execution_trace(
+            &[100, 142, 200],
+            &[42, 58],
+        );
 
-    let sample_projection = crate::security::breakouts::ZeroMutualInformationProjector::project_output(
-        r#"{"b":1,"a":"normal\u200Btext"}"#,
-        1_700_000_000_123,
-        100,
-    );
+    let sample_projection =
+        crate::security::breakouts::ZeroMutualInformationProjector::project_output(
+            r#"{"b":1,"a":"normal\u200Btext"}"#,
+            1_700_000_000_123,
+            100,
+        );
 
     // Derive live state from active runtime registries instead of static constants
     let arm_statuses = state.arm_rings.list_rings().await;
@@ -2982,7 +3442,10 @@ pub struct OshoosiClawEvaluateRequest {
     pub seed: Option<u64>,
 }
 
-pub fn handle_oshoosiclaw_containment_evaluate(state: &WebState, body: &str) -> Result<String, String> {
+pub fn handle_oshoosiclaw_containment_evaluate(
+    state: &WebState,
+    body: &str,
+) -> Result<String, String> {
     let req: OshoosiClawEvaluateRequest = if body.trim().is_empty() {
         OshoosiClawEvaluateRequest {
             action: Some("rl_benchmark".to_string()),
@@ -2993,8 +3456,12 @@ pub fn handle_oshoosiclaw_containment_evaluate(state: &WebState, body: &str) -> 
             seed: Some(42),
         }
     } else {
-        serde_json::from_str(body)
-            .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid evaluation request: {}", e)))?
+        serde_json::from_str(body).map_err(|e| {
+            json_error_payload(
+                "INVALID_JSON",
+                &format!("Invalid evaluation request: {}", e),
+            )
+        })?
     };
 
     let action = req.action.unwrap_or_else(|| "rl_benchmark".to_string());
@@ -3002,7 +3469,9 @@ pub fn handle_oshoosiclaw_containment_evaluate(state: &WebState, body: &str) -> 
         "rl_benchmark" => {
             let episodes = req.episodes.unwrap_or(10).clamp(10, 50);
             let seed = req.seed.unwrap_or(42);
-            let report = state.rl_defense.run_standardized_5policy_benchmark(episodes, seed);
+            let report = state
+                .rl_defense
+                .run_standardized_5policy_benchmark(episodes, seed);
             Ok(serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string()))
         }
         "zero_mi_project" => {
@@ -3017,8 +3486,13 @@ pub fn handle_oshoosiclaw_containment_evaluate(state: &WebState, body: &str) -> 
             let url = req.url.as_deref().unwrap_or("https://www.google.com");
             let allowed = vec!["google.com".to_string(), "www.google.com".to_string()];
             match crate::containment_ring::validate_agent_egress_url(url, &allowed) {
-                Ok(parsed) => Ok(serde_json::json!({ "allowed": true, "host": parsed.as_str() }).to_string()),
-                Err(reason) => Ok(serde_json::json!({ "allowed": false, "reason": reason.to_string() }).to_string()),
+                Ok(parsed) => {
+                    Ok(serde_json::json!({ "allowed": true, "host": parsed.as_str() }).to_string())
+                }
+                Err(reason) => Ok(
+                    serde_json::json!({ "allowed": false, "reason": reason.to_string() })
+                        .to_string(),
+                ),
             }
         }
         "validate_sandbox_path" => {
@@ -3028,18 +3502,26 @@ pub fn handle_oshoosiclaw_containment_evaluate(state: &WebState, body: &str) -> 
                 Ok(joined) => Ok(serde_json::json!({
                     "allowed": true,
                     "resolved_path": joined.to_string_lossy()
-                }).to_string()),
+                })
+                .to_string()),
                 Err(reason) => Ok(serde_json::json!({
                     "allowed": false,
                     "reason": reason.to_string()
-                }).to_string()),
+                })
+                .to_string()),
             }
         }
         "tiered_execute" => {
-            let mercury = std::sync::Arc::new(crate::security::mercury_guard::MercuryContainmentEngine::new());
-            let dispatcher = crate::containment_ring::TieredExecutionDispatcher::try_new(mercury)
-                .map_err(|e| json_error_payload("DISPATCHER_INIT_ERROR", &e.to_string()))?;
-            let payload_str = req.payload.as_deref().unwrap_or("INVOICE #1042\x00\x07\nTotal: $250.00");
+            let mercury = std::sync::Arc::new(
+                crate::security::mercury_guard::MercuryContainmentEngine::new(),
+            );
+            let dispatcher =
+                crate::containment_ring::TieredExecutionDispatcher::try_new(mercury)
+                    .map_err(|e| json_error_payload("DISPATCHER_INIT_ERROR", &e.to_string()))?;
+            let payload_str = req
+                .payload
+                .as_deref()
+                .unwrap_or("INVOICE #1042\x00\x07\nTotal: $250.00");
             let t_req = crate::containment_ring::TieredToolRequest {
                 agent_id: "arm-101".to_string(),
                 role: crate::core::types::ArmRole::UntrustedDocIngest,
@@ -3051,8 +3533,13 @@ pub fn handle_oshoosiclaw_containment_evaluate(state: &WebState, body: &str) -> 
                 allow_scratch_write: false,
             };
             match dispatcher.dispatch(&t_req) {
-                Ok(receipt) => Ok(serde_json::to_string_pretty(&receipt).unwrap_or_else(|_| "{}".to_string())),
-                Err(e) => Err(json_error_payload("TIERED_EXECUTION_DENIED", &e.to_string())),
+                Ok(receipt) => {
+                    Ok(serde_json::to_string_pretty(&receipt).unwrap_or_else(|_| "{}".to_string()))
+                }
+                Err(e) => Err(json_error_payload(
+                    "TIERED_EXECUTION_DENIED",
+                    &e.to_string(),
+                )),
             }
         }
         other => Err(json_error_payload(
@@ -3069,7 +3556,8 @@ mod tests {
     #[test]
     fn test_json_error_payload_schema() {
         let payload_str = json_error_payload("INVALID_JSON", "Unexpected token at line 1");
-        let parsed: serde_json::Value = serde_json::from_str(&payload_str).expect("Must parse as JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&payload_str).expect("Must parse as JSON");
         assert_eq!(parsed["error"], true);
         assert_eq!(parsed["code"], "INVALID_JSON");
         assert_eq!(parsed["message"], "Unexpected token at line 1");
@@ -3085,7 +3573,8 @@ mod tests {
             timestamp: "1234567890".to_string(),
         };
         let serialized = serde_json::to_string(&payload).expect("Must serialize");
-        let deserialized: ApiErrorPayload = serde_json::from_str(&serialized).expect("Must deserialize");
+        let deserialized: ApiErrorPayload =
+            serde_json::from_str(&serialized).expect("Must deserialize");
         assert_eq!(deserialized.error, true);
         assert_eq!(deserialized.code, "TEST_CODE");
         assert_eq!(deserialized.message, "Test error message");
@@ -3097,10 +3586,14 @@ mod tests {
         let res = handle_evaluate_cedar(&state, "{not valid json").await;
         assert!(res.is_err());
         let err_str = res.unwrap_err();
-        let parsed: serde_json::Value = serde_json::from_str(&err_str).expect("Must parse error as JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&err_str).expect("Must parse error as JSON");
         assert_eq!(parsed["error"], true);
         assert_eq!(parsed["code"], "INVALID_JSON");
-        assert!(parsed["message"].as_str().unwrap().contains("Invalid JSON request"));
+        assert!(parsed["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid JSON request"));
     }
 
     #[tokio::test]
@@ -3116,14 +3609,19 @@ mod tests {
                 "approved": true
             },
             "attach_supervisor_approval": false
-        }).to_string();
+        })
+        .to_string();
 
         let res = handle_evaluate_cedar(&state, &body).await;
         assert!(res.is_ok());
         let json_str = res.unwrap();
-        let resp: EvaluateCedarResponse = serde_json::from_str(&json_str).expect("Must parse response");
+        let resp: EvaluateCedarResponse =
+            serde_json::from_str(&json_str).expect("Must parse response");
         assert_eq!(resp.is_allowed, false);
-        assert_eq!(resp.breakout_verdict.as_deref(), Some("VETO_SCHEMA_TAMPERING"));
+        assert_eq!(
+            resp.breakout_verdict.as_deref(),
+            Some("VETO_SCHEMA_TAMPERING")
+        );
     }
 
     #[test]
@@ -3158,6 +3656,3 @@ mod tests {
         assert_eq!(parsed["code"], "INVALID_JSON");
     }
 }
-
-
-

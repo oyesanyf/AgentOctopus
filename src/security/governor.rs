@@ -246,46 +246,79 @@ impl SecurityGovernorState {
         };
 
         match event {
-            KernelEventKind::TechnicalBreakout { is_docker_socket, is_wasm_fuel_exhaust, is_ring0_driver, .. } => {
+            KernelEventKind::TechnicalBreakout {
+                is_docker_socket,
+                is_wasm_fuel_exhaust,
+                is_ring0_driver,
+                ..
+            } => {
                 if *is_docker_socket || *is_wasm_fuel_exhaust || *is_ring0_driver {
                     score += self.config.weights.weight_technical_breakout;
                 }
             }
-            KernelEventKind::OperationalBreakout { is_sts_token_leak, is_route_table_hijack, is_env_scrape, .. } => {
+            KernelEventKind::OperationalBreakout {
+                is_sts_token_leak,
+                is_route_table_hijack,
+                is_env_scrape,
+                ..
+            } => {
                 if *is_sts_token_leak || *is_route_table_hijack || *is_env_scrape {
                     score += self.config.weights.weight_operational_breakout;
                 }
             }
-            KernelEventKind::BehavioralBreakout { is_harness_tamper, is_prompt_injection, is_self_grading_bypass, .. } => {
+            KernelEventKind::BehavioralBreakout {
+                is_harness_tamper,
+                is_prompt_injection,
+                is_self_grading_bypass,
+                ..
+            } => {
                 if *is_harness_tamper || *is_prompt_injection || *is_self_grading_bypass {
                     score += self.config.weights.weight_behavioral_breakout;
                 }
             }
-            KernelEventKind::DataBreakout { is_scratchpad_pollution, is_memory_dump, .. } => {
+            KernelEventKind::DataBreakout {
+                is_scratchpad_pollution,
+                is_memory_dump,
+                ..
+            } => {
                 if *is_scratchpad_pollution || *is_memory_dump {
                     score += self.config.weights.weight_data_breakout;
                 }
             }
-            KernelEventKind::ProcessExec { is_interactive_shell_or_compiler, .. } => {
+            KernelEventKind::ProcessExec {
+                is_interactive_shell_or_compiler,
+                ..
+            } => {
                 if *is_interactive_shell_or_compiler {
                     score += self.config.weights.weight_shell_or_compiler;
                 }
             }
-            KernelEventKind::SocketConnect { is_whitelisted_endpoint, .. } => {
+            KernelEventKind::SocketConnect {
+                is_whitelisted_endpoint,
+                ..
+            } => {
                 if !*is_whitelisted_endpoint {
                     score += self.config.weights.weight_unauthorized_egress;
                 }
             }
-            KernelEventKind::FileAccess { is_restricted_virtual_fs, .. } => {
+            KernelEventKind::FileAccess {
+                is_restricted_virtual_fs,
+                ..
+            } => {
                 if *is_restricted_virtual_fs {
                     score += self.config.weights.weight_restricted_filesystem;
                 }
             }
-            KernelEventKind::ToolSchemaDrift { entropy_divergence, unrecognized_parameters, .. } => {
+            KernelEventKind::ToolSchemaDrift {
+                entropy_divergence,
+                unrecognized_parameters,
+                ..
+            } => {
                 if *entropy_divergence > 0.0 {
                     score += self.config.weights.weight_schema_drift * entropy_divergence;
                 }
-                score += self.config.weights.weight_unrecognized_params * (*unrecognized_parameters as f64);
+                score += self.config.weights.weight_unrecognized_params
+                    * (*unrecognized_parameters as f64);
             }
         }
 
@@ -293,7 +326,10 @@ impl SecurityGovernorState {
     }
 
     /// Evaluates sample with standard static hazard calculation
-    pub fn evaluate_sample(&mut self, sample: TelemetrySample) -> Result<(f64, f64), GovernorError> {
+    pub fn evaluate_sample(
+        &mut self,
+        sample: TelemetrySample,
+    ) -> Result<(f64, f64), GovernorError> {
         let (eps, surv, _act) = self.evaluate_sample_with_rl(sample, None)?;
         Ok((eps, surv))
     }
@@ -303,7 +339,14 @@ impl SecurityGovernorState {
         &mut self,
         sample: TelemetrySample,
         rl_engine: Option<&crate::security::rl_defense::AdaptiveRlDefenseEngine>,
-    ) -> Result<(f64, f64, Option<crate::security::rl_defense::AdaptiveDefenseAction>), GovernorError> {
+    ) -> Result<
+        (
+            f64,
+            f64,
+            Option<crate::security::rl_defense::AdaptiveDefenseAction>,
+        ),
+        GovernorError,
+    > {
         self.current_step = sample.step;
         let raw_epsilon = self.compute_step_risk(&sample.event);
 
@@ -311,11 +354,17 @@ impl SecurityGovernorState {
         let (effective_epsilon, action_opt) = if let Some(rl) = rl_engine {
             let mut s_vec = crate::security::rl_defense::AdaptiveStateVector::default();
             match &sample.event {
-                KernelEventKind::ProcessExec { is_interactive_shell_or_compiler: true, .. }
+                KernelEventKind::ProcessExec {
+                    is_interactive_shell_or_compiler: true,
+                    ..
+                }
                 | KernelEventKind::TechnicalBreakout { .. } => {
                     s_vec.credential_access_pressure = 0.95;
                 }
-                KernelEventKind::SocketConnect { is_whitelisted_endpoint: false, .. }
+                KernelEventKind::SocketConnect {
+                    is_whitelisted_endpoint: false,
+                    ..
+                }
                 | KernelEventKind::OperationalBreakout { .. } => {
                     s_vec.credential_access_pressure = 0.85;
                 }
@@ -323,10 +372,15 @@ impl SecurityGovernorState {
                     s_vec.eval_harness_tamper_signal = 0.95;
                 }
                 KernelEventKind::DataBreakout { .. }
-                | KernelEventKind::FileAccess { is_restricted_virtual_fs: true, .. } => {
+                | KernelEventKind::FileAccess {
+                    is_restricted_virtual_fs: true,
+                    ..
+                } => {
                     s_vec.cross_agent_scratchpad_leak = 0.90;
                 }
-                KernelEventKind::ToolSchemaDrift { entropy_divergence, .. } => {
+                KernelEventKind::ToolSchemaDrift {
+                    entropy_divergence, ..
+                } => {
                     s_vec.schema_tamper_score = *entropy_divergence as f32;
                 }
                 _ => {}
@@ -352,7 +406,8 @@ impl SecurityGovernorState {
         if self.history.len() >= self.config.max_history_capacity {
             self.history.pop_front();
         }
-        self.history.push_back((sample.step, effective_epsilon, self.current_survival_prob));
+        self.history
+            .push_back((sample.step, effective_epsilon, self.current_survival_prob));
 
         let is_anomaly = effective_epsilon > (self.config.weights.weight_baseline_noise * 5.0);
         if is_anomaly {
@@ -401,9 +456,13 @@ impl SecurityGovernorState {
 
         OperationalMetricsSummary {
             total_incidents: count,
-            mean_time_to_detect: total_mttd.checked_div(count as u32).unwrap_or(Duration::ZERO),
+            mean_time_to_detect: total_mttd
+                .checked_div(count as u32)
+                .unwrap_or(Duration::ZERO),
             mean_time_to_remediate: if contained_count > 0 {
-                total_mttr.checked_div(contained_count as u32).unwrap_or(Duration::ZERO)
+                total_mttr
+                    .checked_div(contained_count as u32)
+                    .unwrap_or(Duration::ZERO)
             } else {
                 Duration::ZERO
             },
@@ -450,7 +509,9 @@ impl OutOfBandCircuitBreaker {
         {
             // Windows native process termination via TerminateProcess
             use windows_sys::Win32::Foundation::CloseHandle;
-            use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+            use windows_sys::Win32::System::Threading::{
+                OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+            };
 
             unsafe {
                 let handle = OpenProcess(PROCESS_TERMINATE, 0, self.target_pid as u32);
@@ -458,11 +519,17 @@ impl OutOfBandCircuitBreaker {
                     let res = TerminateProcess(handle, 1);
                     CloseHandle(handle);
                     if res != 0 {
-                        info!(pid = self.target_pid, "Sandbox successfully terminated via Win32 TerminateProcess.");
+                        info!(
+                            pid = self.target_pid,
+                            "Sandbox successfully terminated via Win32 TerminateProcess."
+                        );
                         Ok(())
                     } else {
                         let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-                        error!(errno = err, "Failed to terminate target process via TerminateProcess.");
+                        error!(
+                            errno = err,
+                            "Failed to terminate target process via TerminateProcess."
+                        );
                         Err(GovernorError::SignalError(err))
                     }
                 } else {
@@ -515,7 +582,8 @@ impl ContinuousGovernorHandle {
             .await
             .map_err(|e| GovernorError::ChannelError(e.to_string()))?;
 
-        rx.await.map_err(|e| GovernorError::ChannelError(e.to_string()))
+        rx.await
+            .map_err(|e| GovernorError::ChannelError(e.to_string()))
     }
 
     pub async fn query_survival_prob(&self) -> Result<f64, GovernorError> {
@@ -525,7 +593,8 @@ impl ContinuousGovernorHandle {
             .await
             .map_err(|e| GovernorError::ChannelError(e.to_string()))?;
 
-        rx.await.map_err(|e| GovernorError::ChannelError(e.to_string()))
+        rx.await
+            .map_err(|e| GovernorError::ChannelError(e.to_string()))
     }
 
     pub async fn query_stage(&self) -> Result<GovernorStage, GovernorError> {
@@ -535,7 +604,8 @@ impl ContinuousGovernorHandle {
             .await
             .map_err(|e| GovernorError::ChannelError(e.to_string()))?;
 
-        rx.await.map_err(|e| GovernorError::ChannelError(e.to_string()))
+        rx.await
+            .map_err(|e| GovernorError::ChannelError(e.to_string()))
     }
 
     pub async fn shutdown(&self) -> Result<(), GovernorError> {

@@ -1,12 +1,12 @@
 use super::types::{EventKind, TemporalEvent};
+use crate::security::audit::SecurityAuditLog;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::security::audit::SecurityAuditLog;
-use sha2::{Digest, Sha256};
 
 /// Sliding window event store for historical temporal evaluation.
 /// Enforces strong separation between production (tamper-resistant, durable, cryptographically authenticated)
@@ -40,7 +40,10 @@ impl TemporalEventTrace {
 
     /// Creates an authoritative production trace anchored to the cryptographic SecurityAuditLog
     /// and durably persisted to an append-only JSONL log. Automatically recovers existing events on startup.
-    pub fn new_production<P: AsRef<Path>>(audit_log: Arc<SecurityAuditLog>, durable_path: P) -> Self {
+    pub fn new_production<P: AsRef<Path>>(
+        audit_log: Arc<SecurityAuditLog>,
+        durable_path: P,
+    ) -> Self {
         let path_buf = durable_path.as_ref().to_path_buf();
         let mut recovered_events = Vec::new();
 
@@ -198,7 +201,9 @@ impl TemporalEventTrace {
     /// Only isolated simulation traces may be cleared.
     pub fn clear(&self) -> Result<(), &'static str> {
         if !self.is_simulation {
-            return Err("TAMPER_PROTECTION: Production temporal event history cannot be erased or cleared");
+            return Err(
+                "TAMPER_PROTECTION: Production temporal event history cannot be erased or cleared",
+            );
         }
         let mut guard = self
             .events
@@ -222,7 +227,9 @@ impl TemporalEventTrace {
         let trace = self.events.read().unwrap();
         trace
             .iter()
-            .filter(|e| e.caller_principal == principal && max_id.map(|m| e.id <= m).unwrap_or(true))
+            .filter(|e| {
+                e.caller_principal == principal && max_id.map(|m| e.id <= m).unwrap_or(true)
+            })
             .cloned()
             .collect()
     }

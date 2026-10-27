@@ -158,12 +158,23 @@ impl DifferentialProtocolEngine {
         let max_cl_delta = max_cl.saturating_sub(min_cl);
 
         // Framing conflict: chunked vs CL disagreement, ambiguous CL, differing CLs, or header boundary desync
-        let chunked_flags = [p_strict.is_chunked, p_legacy.is_chunked, p_cdn.is_chunked, p_micro.is_chunked];
+        let chunked_flags = [
+            p_strict.is_chunked,
+            p_legacy.is_chunked,
+            p_cdn.is_chunked,
+            p_micro.is_chunked,
+        ];
         let any_chunked = chunked_flags.iter().any(|&c| c);
         let all_chunked = chunked_flags.iter().all(|&c| c);
-        let boundary_mismatch = (p_strict.header_end_offset > 0 && p_legacy.header_end_offset > 0 && p_strict.header_end_offset != p_legacy.header_end_offset)
+        let boundary_mismatch = (p_strict.header_end_offset > 0
+            && p_legacy.header_end_offset > 0
+            && p_strict.header_end_offset != p_legacy.header_end_offset)
             || (p_strict.header_end_offset == 0 && p_legacy.header_end_offset > 0);
-        if any_chunked != all_chunked || p_strict.has_ambiguous_framing || max_cl_delta > 0 || boundary_mismatch {
+        if any_chunked != all_chunked
+            || p_strict.has_ambiguous_framing
+            || max_cl_delta > 0
+            || boundary_mismatch
+        {
             framing_conflict = true;
         }
 
@@ -188,14 +199,23 @@ impl DifferentialProtocolEngine {
         }
 
         // Line termination divergence: bare LF or NUL anomalies
-        if p_strict.detected_anomalies.iter().any(|a| a.contains("BARE_LF") || a.contains("NUL"))
+        if p_strict
+            .detected_anomalies
+            .iter()
+            .any(|a| a.contains("BARE_LF") || a.contains("NUL"))
             || raw.contains(&0)
         {
             line_term_divergence = true;
         }
 
-        let shared_parser_confusion = p_strict.detected_anomalies.iter().any(|a| a.starts_with("SHARED_PARSER_CONFUSION"));
-        let novel_trigger_detected = p_strict.detected_anomalies.iter().any(|a| a.starts_with("NOVEL_DESYNC_TRIGGER") || a.contains("NUL"));
+        let shared_parser_confusion = p_strict
+            .detected_anomalies
+            .iter()
+            .any(|a| a.starts_with("SHARED_PARSER_CONFUSION"));
+        let novel_trigger_detected = p_strict
+            .detected_anomalies
+            .iter()
+            .any(|a| a.starts_with("NOVEL_DESYNC_TRIGGER") || a.contains("NUL"));
 
         for p in [&p_strict, &p_legacy, &p_cdn, &p_micro] {
             anomaly_count += p.detected_anomalies.len();
@@ -249,16 +269,22 @@ impl DifferentialProtocolEngine {
                 match registry.get_ring_or_fail(arm_id).await {
                     Ok(ring) => {
                         let active_gen = ring.current_generation();
-                        match ring.execute_quarantine_containment(
-                            &report_id,
-                            &payload_sha256,
-                            raw.len(),
-                            novelty_score,
-                        ).await {
+                        match ring
+                            .execute_quarantine_containment(
+                                &report_id,
+                                &payload_sha256,
+                                raw.len(),
+                                novelty_score,
+                            )
+                            .await
+                        {
                             Ok((hmac_proof, job_name, ac_sid, mem_limit, pid)) => {
                                 containment_proof_hmac = Some(hmac_proof.clone());
                                 quarantined_generation = Some(active_gen);
-                                let iso_details = format!("Windows NT Job Object (64MB) + AppContainer [{}] PID: {}", ac_sid, pid);
+                                let iso_details = format!(
+                                    "Windows NT Job Object (64MB) + AppContainer [{}] PID: {}",
+                                    ac_sid, pid
+                                );
                                 isolation_details = Some(iso_details.clone());
 
                                 if let Some(ref audit) = self.audit_log {
@@ -290,8 +316,9 @@ impl DifferentialProtocolEngine {
                                             "memory_limit": mem_limit,
                                             "pid": pid,
                                             "containment_proof_hmac": hmac_proof
-                                        }).to_string(),
-                                        "PROCESS_ISOLATED"
+                                        })
+                                        .to_string(),
+                                        "PROCESS_ISOLATED",
                                     );
 
                                     let details = serde_json::json!({
@@ -306,7 +333,8 @@ impl DifferentialProtocolEngine {
                                         "framing_conflict": framing_conflict,
                                         "shared_parser_confusion": shared_parser_confusion,
                                         "novel_trigger_detected": novel_trigger_detected,
-                                    }).to_string();
+                                    })
+                                    .to_string();
 
                                     let entry_hash = audit.record_event(
                                         "DIFFERENTIAL_PROTOCOL_ARM106_QUARANTINE",
@@ -324,7 +352,10 @@ impl DifferentialProtocolEngine {
                         }
                     }
                     Err(e) => {
-                        eprintln!("[CONTAINMENT-FAIL-CLOSED] Missing mandatory Arm {} ring: {:?}", arm_id, e);
+                        eprintln!(
+                            "[CONTAINMENT-FAIL-CLOSED] Missing mandatory Arm {} ring: {:?}",
+                            arm_id, e
+                        );
                         quarantined_verdict = "HIGH_DIVERGENCE_MISSING_RING_FAIL_CLOSED";
                     }
                 }

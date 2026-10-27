@@ -8,9 +8,9 @@ use super::isolation_manager::IsolationManager;
 use super::mesh_guard::MeshGuard;
 use super::resource_guard::ResourceGuard;
 use super::RingDecision;
-use rand::RngCore;
 use crate::core::types::{ArmRole, OctopusSecurityError};
 use crate::security::CapabilityToken;
+use rand::RngCore;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -89,12 +89,9 @@ impl ContainmentRing {
         let authorizer = Arc::new(CedarAuthorizer::new(cedar_gate.clone()));
         let executor = Arc::new(EnclaveToolExecutor::new(egress_proxy.clone()));
         let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(256);
-        let trusted_controller = RingController::new(
-            RingConfig::default(),
-            authorizer,
-            executor,
-            audit_tx,
-        ).expect("Containment Ring trusted controller initialized");
+        let trusted_controller =
+            RingController::new(RingConfig::default(), authorizer, executor, audit_tx)
+                .expect("Containment Ring trusted controller initialized");
 
         let isolation_manager = Arc::new(IsolationManager::with_controllers(
             super::SandboxConstraints::default(),
@@ -131,7 +128,8 @@ impl ContainmentRing {
         let identity_gate = Arc::new(IdentityGate::new());
         let (cedar_gate_val, cedar_token) = CedarGate::new_for_audit();
         let (cap_gate_val, cap_token) = CapabilityGate::new_for_audit(seed, 300);
-        let (egress_proxy_val, egress_token) = EgressProxy::new_for_audit(super::egress_proxy::EgressSecurityLevel::StrictGoogleOnly);
+        let (egress_proxy_val, egress_token) =
+            EgressProxy::new_for_audit(super::egress_proxy::EgressSecurityLevel::StrictGoogleOnly);
         let cedar_gate = Arc::new(cedar_gate_val);
         let capability_gate = Arc::new(cap_gate_val);
         let egress_proxy = Arc::new(egress_proxy_val);
@@ -145,12 +143,9 @@ impl ContainmentRing {
         let authorizer = Arc::new(CedarAuthorizer::new(cedar_gate.clone()));
         let executor = Arc::new(EnclaveToolExecutor::new(egress_proxy.clone()));
         let (audit_tx, _audit_rx) = tokio::sync::mpsc::channel(256);
-        let trusted_controller = RingController::new(
-            RingConfig::default(),
-            authorizer,
-            executor,
-            audit_tx,
-        ).expect("Containment Ring trusted controller initialized");
+        let trusted_controller =
+            RingController::new(RingConfig::default(), authorizer, executor, audit_tx)
+                .expect("Containment Ring trusted controller initialized");
 
         let isolation_manager = Arc::new(IsolationManager::with_controllers(
             super::SandboxConstraints::default(),
@@ -196,7 +191,10 @@ impl ContainmentRing {
         if !self.isolation_manager.is_arm_active(&req.agent_id).await {
             return (
                 RingDecision::Deny,
-                format!("Agent '{}' is terminated or quarantined by supervisory autotomy", req.agent_id),
+                format!(
+                    "Agent '{}' is terminated or quarantined by supervisory autotomy",
+                    req.agent_id
+                ),
             );
         }
 
@@ -238,9 +236,11 @@ impl ContainmentRing {
                 | ArmRole::DreamRsiOptimizer
                 | ArmRole::RecursiveHarnessOptimizer
         );
-        let is_security_arm_id = ["100", "101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "111"]
-            .iter()
-            .any(|&id| req.agent_id.ends_with(&format!("-{}", id)) || req.agent_id == id);
+        let is_security_arm_id = [
+            "100", "101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "111",
+        ]
+        .iter()
+        .any(|&id| req.agent_id.ends_with(&format!("-{}", id)) || req.agent_id == id);
 
         if is_security_role || is_security_arm_id {
             let epoch = match req.generation {
@@ -252,16 +252,30 @@ impl ContainmentRing {
                 Some(r) => r,
                 None => match self.arm_registry.get_security_ring(req.role.clone()).await {
                     Some(r) => r,
-                    None => return (RingDecision::Deny, format!("Fail-Closed: Missing containment ring for arm '{}'", req.agent_id)),
+                    None => {
+                        return (
+                            RingDecision::Deny,
+                            format!(
+                                "Fail-Closed: Missing containment ring for arm '{}'",
+                                req.agent_id
+                            ),
+                        )
+                    }
                 },
             };
 
-            if let Err(e) = arm_ring.validate_tool_invocation(&req.operation_type, &req.target, epoch).await {
+            if let Err(e) = arm_ring
+                .validate_tool_invocation(&req.operation_type, &req.target, epoch)
+                .await
+            {
                 return (RingDecision::Deny, format!("Level 1 Arm Ring veto: {}", e));
             }
         } else if let Some(epoch) = req.generation {
             if let Some(arm_ring) = self.arm_registry.get_ring_by_name(&req.agent_id).await {
-                if let Err(e) = arm_ring.validate_tool_invocation(&req.operation_type, &req.target, epoch).await {
+                if let Err(e) = arm_ring
+                    .validate_tool_invocation(&req.operation_type, &req.target, epoch)
+                    .await
+                {
                     return (RingDecision::Deny, format!("Level 1 Arm Ring veto: {}", e));
                 }
             }
@@ -278,7 +292,11 @@ impl ContainmentRing {
         }
 
         // 2. Outer Ring: Resource Budget & Step Limit Check
-        if let Err(e) = self.resource_guard.check_admission(&req.agent_id, req.step_count).await {
+        if let Err(e) = self
+            .resource_guard
+            .check_admission(&req.agent_id, req.step_count)
+            .await
+        {
             return (RingDecision::Deny, format!("Resource budget veto: {}", e));
         }
 
@@ -332,9 +350,18 @@ impl ContainmentRing {
             || target_lower.contains("%2e")
             || target_lower.contains("%2f")
             || target_lower.contains("%5c");
-        if has_local_path_or_traversal && (!is_non_file_uri || target_lower.contains("..") || target_lower.contains("%2e")) {
-            if let Err(e) = self.isolation_manager.validate_filesystem_access(&req.target).await {
-                return (RingDecision::Deny, format!("Filesystem sandbox veto: {}", e));
+        if has_local_path_or_traversal
+            && (!is_non_file_uri || target_lower.contains("..") || target_lower.contains("%2e"))
+        {
+            if let Err(e) = self
+                .isolation_manager
+                .validate_filesystem_access(&req.target)
+                .await
+            {
+                return (
+                    RingDecision::Deny,
+                    format!("Filesystem sandbox veto: {}", e),
+                );
             }
         }
 
@@ -349,14 +376,19 @@ impl ContainmentRing {
             if let Err(e) = self.egress_proxy.dispatch_egress(&egress_req).await {
                 // If lateral pivot / C2 detected, trigger quarantine
                 if req.target.contains("evil-c2.com") || req.target.contains("169.254.169.254") {
-                    return (RingDecision::Quarantine, format!("Hostile egress probe veto: {}", e));
+                    return (
+                        RingDecision::Quarantine,
+                        format!("Hostile egress probe veto: {}", e),
+                    );
                 }
                 return (RingDecision::Deny, format!("Egress proxy veto: {}", e));
             }
         }
 
         // 5. Inner Ring: Zero Ambient Authority Capability Token Enforcement
-        if self.capability_gate.is_enforced() && (req.operation_type == "ledger_writer" || req.operation_type == "http_egress") {
+        if self.capability_gate.is_enforced()
+            && (req.operation_type == "ledger_writer" || req.operation_type == "http_egress")
+        {
             match &req.capability_token {
                 None => {
                     return (
@@ -368,25 +400,39 @@ impl ContainmentRing {
                     );
                 }
                 Some(token) => {
-                    if let Err(e) = self.capability_gate.verify_capability(token, &req.agent_id, &req.operation_type, &req.target).await {
-                        return (RingDecision::Deny, format!("Capability token verification failure: {}", e));
+                    if let Err(e) = self
+                        .capability_gate
+                        .verify_capability(token, &req.agent_id, &req.operation_type, &req.target)
+                        .await
+                    {
+                        return (
+                            RingDecision::Deny,
+                            format!("Capability token verification failure: {}", e),
+                        );
                     }
                 }
             }
         }
 
         // 6. Inner Ring: AWS Cedar v4.13 Authorization
-        if let Err(e) = self.cedar_gate.evaluate_authorization(
-            &req.agent_id,
-            &req.role,
-            &req.operation_type,
-            &req.target,
-            req.amount_cents,
-        ).await {
+        if let Err(e) = self
+            .cedar_gate
+            .evaluate_authorization(
+                &req.agent_id,
+                &req.role,
+                &req.operation_type,
+                &req.target,
+                req.amount_cents,
+            )
+            .await
+        {
             return (RingDecision::Deny, format!("Cedar PARC policy veto: {}", e));
         }
 
-        (RingDecision::Allow, "Operation authorized by Dual Concentric Containment Ring".to_string())
+        (
+            RingDecision::Allow,
+            "Operation authorized by Dual Concentric Containment Ring".to_string(),
+        )
     }
 
     /// Primary Execution Broker:
@@ -420,11 +466,12 @@ impl ContainmentRing {
                 // Execute immediately inside the trusted broker
                 operation().await
             }
-            RingDecision::Deny => {
-                Err(OctopusSecurityError::DeterministicLayerViolation(reason))
-            }
+            RingDecision::Deny => Err(OctopusSecurityError::DeterministicLayerViolation(reason)),
             RingDecision::Quarantine => {
-                let _ = self.isolation_manager.terminate_arm(&req.agent_id, &reason).await;
+                let _ = self
+                    .isolation_manager
+                    .terminate_arm(&req.agent_id, &reason)
+                    .await;
                 self.capability_gate.revoke_for_agent(&req.agent_id).await;
                 let _ = self.trusted_controller.revoke(&req.agent_id).await;
                 Err(OctopusSecurityError::BreakoutDetected(format!(
@@ -433,7 +480,10 @@ impl ContainmentRing {
                 )))
             }
             RingDecision::Terminate => {
-                let _ = self.isolation_manager.terminate_arm(&req.agent_id, &reason).await;
+                let _ = self
+                    .isolation_manager
+                    .terminate_arm(&req.agent_id, &reason)
+                    .await;
                 self.capability_gate.revoke_for_agent(&req.agent_id).await;
                 let _ = self.trusted_controller.revoke(&req.agent_id).await;
                 Err(OctopusSecurityError::LimbKilled)
@@ -501,7 +551,10 @@ impl ContainmentRing {
             RingDecision::Allow => dispatcher.dispatch(tiered_req),
             RingDecision::Deny => Err(OctopusSecurityError::DeterministicLayerViolation(reason)),
             RingDecision::Quarantine => {
-                let _ = self.isolation_manager.terminate_arm(&req.agent_id, &reason).await;
+                let _ = self
+                    .isolation_manager
+                    .terminate_arm(&req.agent_id, &reason)
+                    .await;
                 self.capability_gate.revoke_for_agent(&req.agent_id).await;
                 let _ = self.trusted_controller.revoke(&req.agent_id).await;
                 Err(OctopusSecurityError::BreakoutDetected(format!(
@@ -510,7 +563,10 @@ impl ContainmentRing {
                 )))
             }
             RingDecision::Terminate => {
-                let _ = self.isolation_manager.terminate_arm(&req.agent_id, &reason).await;
+                let _ = self
+                    .isolation_manager
+                    .terminate_arm(&req.agent_id, &reason)
+                    .await;
                 self.capability_gate.revoke_for_agent(&req.agent_id).await;
                 let _ = self.trusted_controller.revoke(&req.agent_id).await;
                 Err(OctopusSecurityError::LimbKilled)

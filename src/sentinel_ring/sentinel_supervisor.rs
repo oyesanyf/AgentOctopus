@@ -243,7 +243,10 @@ impl SentinelSupervisor {
             ));
         }
 
-        if !crate::security::constant_time_eq(&hb.containment_digest, &self.expected_containment_digest) {
+        if !crate::security::constant_time_eq(
+            &hb.containment_digest,
+            &self.expected_containment_digest,
+        ) {
             self.trigger_lockdown(
                 "Supervisor Containment Digest Tampering",
                 "Heartbeat containment digest does not match authoritative Sentinel manifest",
@@ -282,8 +285,10 @@ impl SentinelSupervisor {
             .as_secs();
 
         self.last_heartbeat_time.store(now, Ordering::SeqCst);
-        self.last_sequence_number.store(hb.sequence_number, Ordering::SeqCst);
-        self.last_uptime_ms.store(hb.monotonic_uptime_ms, Ordering::SeqCst);
+        self.last_sequence_number
+            .store(hb.sequence_number, Ordering::SeqCst);
+        self.last_uptime_ms
+            .store(hb.monotonic_uptime_ms, Ordering::SeqCst);
 
         let mut data = self.last_heartbeat_data.write().await;
         *data = Some(hb);
@@ -344,10 +349,7 @@ impl SentinelSupervisor {
         }
 
         // Check 2: Policy & Sandbox integrity
-        if !obs.authorization_healthy
-            || !obs.sandbox_verified
-            || !obs.proxy_enforcement_intact
-        {
+        if !obs.authorization_healthy || !obs.sandbox_verified || !obs.proxy_enforcement_intact {
             self.trigger_lockdown(
                 "Security Perimeter Failure",
                 "Cedar authorization, sandbox clamp, or proxy broker check failed",
@@ -431,7 +433,11 @@ impl SentinelSupervisor {
             .unwrap_or_default()
             .as_secs();
 
-        let last_ago = if last_time == 0 { 0 } else { now.saturating_sub(last_time) };
+        let last_ago = if last_time == 0 {
+            0
+        } else {
+            now.saturating_sub(last_time)
+        };
         let supervisor_ok = !is_locked
             && st == SentinelSystemState::Healthy
             && (last_time == 0 || last_ago <= self.heartbeat_timeout_secs);

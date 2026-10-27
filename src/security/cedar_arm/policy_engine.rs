@@ -126,7 +126,6 @@ impl CedarPolicyEngine {
         })
     }
 
-
     /// Creates a CedarPolicyEngine configured with custom policy rules (for testing / negative controls).
     pub fn from_custom_policy_set(policies: &str) -> Result<Self, CedarEngineError> {
         let policy_set = PolicySet::from_str(policies)
@@ -164,8 +163,9 @@ impl CedarPolicyEngine {
                 .parse()
                 .map_err(|e| CedarEngineError::EntityUidError(format!("{:?}", e)))?;
 
-            let context = Context::from_json_value(context_json, Some((self.schema.inner(), &action)))
-                .map_err(|e| CedarEngineError::ContextError(e.to_string()))?;
+            let context =
+                Context::from_json_value(context_json, Some((self.schema.inner(), &action)))
+                    .map_err(|e| CedarEngineError::ContextError(e.to_string()))?;
 
             let request = Request::new(
                 principal,
@@ -176,10 +176,18 @@ impl CedarPolicyEngine {
             )
             .map_err(|e| CedarEngineError::ContextError(e.to_string()))?;
 
-            let policies = self.policy_set.read().map_err(|e| CedarEngineError::ContextError(format!("Lock poisoned: {}", e)))?;
-            let entities = self.entities.read().map_err(|e| CedarEngineError::ContextError(format!("Lock poisoned: {}", e)))?;
+            let policies = self
+                .policy_set
+                .read()
+                .map_err(|e| CedarEngineError::ContextError(format!("Lock poisoned: {}", e)))?;
+            let entities = self
+                .entities
+                .read()
+                .map_err(|e| CedarEngineError::ContextError(format!("Lock poisoned: {}", e)))?;
 
-            let response: Response = self.authorizer.is_authorized(&request, &policies, &entities);
+            let response: Response = self
+                .authorizer
+                .is_authorized(&request, &policies, &entities);
 
             let is_allowed = matches!(response.decision(), Decision::Allow);
             let determining_policies = response
@@ -216,11 +224,14 @@ impl CedarPolicyEngine {
     }
 
     /// Adds a policy to the active policy set (e.g. after quorum approval).
-    pub fn add_policy(&self, policy_id: Option<&str>, policy_text: &str) -> Result<String, CedarEngineError> {
-        let mut policies = self
-            .policy_set
-            .write()
-            .map_err(|_| CedarEngineError::EvaluationPanic("Cedar policy_set write lock poisoned".to_string()))?;
+    pub fn add_policy(
+        &self,
+        policy_id: Option<&str>,
+        policy_text: &str,
+    ) -> Result<String, CedarEngineError> {
+        let mut policies = self.policy_set.write().map_err(|_| {
+            CedarEngineError::EvaluationPanic("Cedar policy_set write lock poisoned".to_string())
+        })?;
         let id_str = match policy_id {
             Some(id) => id.to_string(),
             None => format!("dynamic_policy_{}", policies.policies().count() + 1),
@@ -236,7 +247,10 @@ impl CedarPolicyEngine {
 
     /// Returns the count of active policies in the engine.
     pub fn policy_count(&self) -> usize {
-        self.policy_set.read().map(|g| g.policies().count()).unwrap_or(0)
+        self.policy_set
+            .read()
+            .map(|g| g.policies().count())
+            .unwrap_or(0)
     }
 
     /// Dynamically updates the authorized network egress domains in Cedar Policy #3.
@@ -316,10 +330,9 @@ permit (
 
         let new_set = PolicySet::from_str(&policies_text)
             .map_err(|e| CedarEngineError::PolicyParseError(e.to_string()))?;
-        let mut guard = self
-            .policy_set
-            .write()
-            .map_err(|_| CedarEngineError::EvaluationPanic("Cedar policy_set write lock poisoned".to_string()))?;
+        let mut guard = self.policy_set.write().map_err(|_| {
+            CedarEngineError::EvaluationPanic("Cedar policy_set write lock poisoned".to_string())
+        })?;
         *guard = new_set;
         Ok(())
     }

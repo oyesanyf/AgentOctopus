@@ -53,14 +53,19 @@ impl OperationalContainmentGuard {
                     || upper.contains(&format!("${}", key))
                     || upper.contains(&format!("%{}%", key))
                 {
-                    detected_leaks.push(format!("Unmanaged environment variable reference detected: '{}'", key));
+                    detected_leaks.push(format!(
+                        "Unmanaged environment variable reference detected: '{}'",
+                        key
+                    ));
                 }
             }
         }
 
         // 2. High-entropy token regex-style pattern heuristics (sk-..., ghp_..., etc.)
         if payload.contains("sk-proj-") || payload.contains("ghp_") || payload.contains("AKIA") {
-            detected_leaks.push("Live high-privilege credential pattern detected in untrusted context".to_string());
+            detected_leaks.push(
+                "Live high-privilege credential pattern detected in untrusted context".to_string(),
+            );
         }
 
         let is_clean = detected_leaks.is_empty();
@@ -68,7 +73,10 @@ impl OperationalContainmentGuard {
         let description = if is_clean {
             "Operational containment verified: dynamic least-privilege scoping active".to_string()
         } else {
-            format!("Operational containment defect: {} credential leak(s) intercepted", detected_leaks.len())
+            format!(
+                "Operational containment defect: {} credential leak(s) intercepted",
+                detected_leaks.len()
+            )
         };
 
         OperationalContainmentVerdict {
@@ -80,7 +88,12 @@ impl OperationalContainmentGuard {
     }
 
     /// Issues an ephemeral short-lived STS credential scoped exclusively to a task.
-    pub fn issue_short_lived_sts_token(&self, agent_id: &str, task_id: &str, ttl_secs: u64) -> String {
+    pub fn issue_short_lived_sts_token(
+        &self,
+        agent_id: &str,
+        task_id: &str,
+        ttl_secs: u64,
+    ) -> String {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

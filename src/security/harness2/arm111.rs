@@ -61,7 +61,10 @@ impl RecursiveHarnessOptimizerArm {
     }
 
     fn load_persisted_library(root: &Path) -> Vec<HarnessExperienceEntry> {
-        let lib_file = root.join("data").join("harness2").join("library_entries.json");
+        let lib_file = root
+            .join("data")
+            .join("harness2")
+            .join("library_entries.json");
         if lib_file.exists() {
             if let Ok(content) = fs::read_to_string(&lib_file) {
                 if let Ok(entries) = serde_json::from_str::<Vec<HarnessExperienceEntry>>(&content) {
@@ -163,7 +166,8 @@ impl RecursiveHarnessOptimizerArm {
             total_sessions_p: self.total_sessions_p.load(Ordering::Relaxed),
             experience_library_entries: lib.len(),
             domains_covered: domains,
-            budget_identity_formula: "R = 4k rollouts, P = 3k improvement stages (no duplicate labels)".to_string(),
+            budget_identity_formula:
+                "R = 4k rollouts, P = 3k improvement stages (no duplicate labels)".to_string(),
             vendor_path: "vendor/harness2".to_string(),
             latest_run: latest,
         }
@@ -201,7 +205,8 @@ impl RecursiveHarnessOptimizerArm {
         if let Some(ref r) = self.ring {
             if r.is_severed() {
                 return Err(OctopusSecurityError::CapabilityDenied(
-                    "Arm 111 (RecursiveHarnessOptimizer) is severed by supervisor autotomy".to_string(),
+                    "Arm 111 (RecursiveHarnessOptimizer) is severed by supervisor autotomy"
+                        .to_string(),
                 ));
             }
         }
@@ -342,14 +347,17 @@ impl RecursiveHarnessOptimizerArm {
                         "--mode",
                         cli_mode,
                     ])
-                    .output_logged("ARM-111 harness2 deterministic demo (python -m harness2.cli.demo)")
+                    .output_logged(
+                        "ARM-111 harness2 deterministic demo (python -m harness2.cli.demo)",
+                    )
                 {
                     if output.status.success() {
                         vendor_invoked = true;
                         let demo_json = out_dir.join("demo.json");
                         if let Ok(txt) = fs::read_to_string(demo_json) {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&txt) {
-                                if let Some(ec) = val.get("execution_count").and_then(|v| v.as_u64())
+                                if let Some(ec) =
+                                    val.get("execution_count").and_then(|v| v.as_u64())
                                 {
                                     execution_count = ec as usize;
                                 }
@@ -372,10 +380,7 @@ impl RecursiveHarnessOptimizerArm {
                 domain
             ),
         );
-        adopted_tree.insert(
-            "guardrails.md".to_string(),
-            String::new(),
-        );
+        adopted_tree.insert("guardrails.md".to_string(), String::new());
         adopted_tree.insert(
             "LongTermMEMORY.md".to_string(),
             format!(
@@ -461,16 +466,36 @@ impl RecursiveHarnessOptimizerArm {
             // `..` or `C:\` path traversal when joining to `self.library_root`.
             let safe_domain: String = domain
                 .chars()
-                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
                 .take(64)
                 .collect();
             let safe_task_id: String = task_id
                 .chars()
-                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
                 .take(64)
                 .collect();
-            let safe_domain = if safe_domain.is_empty() { "default_domain".to_string() } else { safe_domain };
-            let safe_task_id = if safe_task_id.is_empty() { "default_task".to_string() } else { safe_task_id };
+            let safe_domain = if safe_domain.is_empty() {
+                "default_domain".to_string()
+            } else {
+                safe_domain
+            };
+            let safe_task_id = if safe_task_id.is_empty() {
+                "default_task".to_string()
+            } else {
+                safe_task_id
+            };
             let dom_dir = data_dir.join("library").join(&safe_domain);
             let task_dir = dom_dir.join("harnesses").join(&safe_task_id);
             let _ = fs::create_dir_all(task_dir.join("harness"));
@@ -496,7 +521,10 @@ impl RecursiveHarnessOptimizerArm {
 
         self.total_runs.fetch_add(1, Ordering::Relaxed);
         let report = HarnessRunReport {
-            run_id: format!("harness2-{}-{}-{}-k{}", domain, task_id, norm_mode, k_clamped),
+            run_id: format!(
+                "harness2-{}-{}-{}-k{}",
+                domain, task_id, norm_mode, k_clamped
+            ),
             domain: domain.to_string(),
             task_id: task_id.to_string(),
             mode: norm_mode.to_string(),
@@ -526,7 +554,13 @@ mod tests {
     async fn test_harness2_arm111_propose_probe_compose_and_budget_identity() {
         let arm = RecursiveHarnessOptimizerArm::new();
         let report = arm
-            .run_recursive_harnessing("security_policy", "cedar-ledger-reconcile", "both", 2, false)
+            .run_recursive_harnessing(
+                "security_policy",
+                "cedar-ledger-reconcile",
+                "both",
+                2,
+                false,
+            )
             .await
             .expect("Harness² recursive run should succeed");
 
@@ -539,9 +573,7 @@ mod tests {
             assert!(ledger.identity_verified);
         }
         assert!(report.adopted_harness_tree.contains_key("guardrails.md"));
-        assert!(
-            report.adopted_harness_tree["guardrails.md"]
-                .contains("load the `octopus_harness_guard` skill")
-        );
+        assert!(report.adopted_harness_tree["guardrails.md"]
+            .contains("load the `octopus_harness_guard` skill"));
     }
 }

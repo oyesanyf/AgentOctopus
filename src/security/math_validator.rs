@@ -102,7 +102,8 @@ impl VassilevMathValidator {
         let p_partial = Self::compute_rl_survival_prob(horizon, epsilon_0, lambda, gamma);
         // Integral tail of ln(1 - eps_t) ~= -eps_t:
         // \int_{H}^\infty \frac{eps_0}{(1 + lambda * x)^gamma} dx = \frac{eps_0}{lambda * (gamma - 1) * (1 + lambda * H)^(gamma - 1)}
-        let tail_sum = (epsilon_0) / (lambda * (gamma - 1.0) * (1.0 + lambda * (horizon as f64)).powf(gamma - 1.0));
+        let tail_sum = (epsilon_0)
+            / (lambda * (gamma - 1.0) * (1.0 + lambda * (horizon as f64)).powf(gamma - 1.0));
         let tail_factor = (-tail_sum).exp();
         p_partial * tail_factor
     }
@@ -113,7 +114,10 @@ impl VassilevMathValidator {
         if events.is_empty() {
             return 0.0;
         }
-        let total: f64 = events.iter().map(|e| (e.t_detect_ms - e.t_breach_ms).max(0.0)).sum();
+        let total: f64 = events
+            .iter()
+            .map(|e| (e.t_detect_ms - e.t_breach_ms).max(0.0))
+            .sum();
         total / events.len() as f64
     }
 
@@ -123,7 +127,10 @@ impl VassilevMathValidator {
         if events.is_empty() {
             return 0.0;
         }
-        let total: f64 = events.iter().map(|e| (e.t_contained_ms - e.t_detect_ms).max(0.0)).sum();
+        let total: f64 = events
+            .iter()
+            .map(|e| (e.t_contained_ms - e.t_detect_ms).max(0.0))
+            .sum();
         total / events.len() as f64
     }
 
@@ -202,7 +209,8 @@ impl VassilevMathValidator {
             return (0.0, 1.0, "Indeterminate (Extreme Pool)".to_string());
         }
 
-        let se = (p_pool * (1.0 - p_pool) * (1.0 / rl_total as f64 + 1.0 / static_total as f64)).sqrt();
+        let se =
+            (p_pool * (1.0 - p_pool) * (1.0 / rl_total as f64 + 1.0 / static_total as f64)).sqrt();
         let z = (p1 - p2) / se;
 
         // Approximate one-tailed p-value for Z >= 0
@@ -215,9 +223,15 @@ impl VassilevMathValidator {
         let verdict = if p_value < 0.001 {
             format!("Statistically Significant Superiority (Z = {:.2}, p < 0.001). Reject H_0: Sisyphean bound defeated.", z)
         } else if p_value < 0.05 {
-            format!("Significant Superiority (Z = {:.2}, p = {:.4}). Reject H_0.", z, p_value)
+            format!(
+                "Significant Superiority (Z = {:.2}, p = {:.4}). Reject H_0.",
+                z, p_value
+            )
         } else {
-            format!("Inconclusive (Z = {:.2}, p = {:.4}). Cannot reject H_0.", z, p_value)
+            format!(
+                "Inconclusive (Z = {:.2}, p = {:.4}). Cannot reject H_0.",
+                z, p_value
+            )
         };
 
         (z, p_value, verdict)
@@ -237,7 +251,8 @@ impl VassilevMathValidator {
         let rl_bound = Self::compute_rl_survival_prob(steps, rl_eps_0, lambda, gamma);
         let asymptotic_floor = Self::compute_rl_asymptotic_floor(rl_eps_0, lambda, gamma);
 
-        let mc = Self::simulate_monte_carlo(trajectories, steps, static_eps, rl_eps_0, lambda, gamma);
+        let mc =
+            Self::simulate_monte_carlo(trajectories, steps, static_eps, rl_eps_0, lambda, gamma);
         let (z, p, verdict) = Self::hypothesis_test(
             mc.rl_survivors,
             mc.total_trajectories,

@@ -22,7 +22,9 @@ pub mod research_arms;
 pub mod rl_defense;
 pub mod windows_sandbox;
 
-pub use agentjacking_guard::{AgentjackingGuard, AgentjackingPhase, AgentjackingVerdict, SessionTaintState};
+pub use agentjacking_guard::{
+    AgentjackingGuard, AgentjackingPhase, AgentjackingVerdict, SessionTaintState,
+};
 pub use log_sanitizer::LogSanitizer;
 pub use oss_fuzz_arm::{ContinuousOssFuzzArm, OssFuzzCycleReport, TargetTelemetry};
 pub use osv_scanner_arm::{ContinuousOsvScannerArm, OsvScanReport};
@@ -34,7 +36,9 @@ pub use breakouts::{
 };
 pub use capabilities::{CapabilityToken, ExternalAuthorizationEngine};
 pub use cedar_arm::{CedarAuthorizationGateway, CedarPolicyEngine, CedarSchema};
-pub use continuous_eval::{ContinuousCycleReport, ContinuousEvaluationEngine, ContinuousProbeResult};
+pub use continuous_eval::{
+    ContinuousCycleReport, ContinuousEvaluationEngine, ContinuousProbeResult,
+};
 pub use delegation::DelegationScopeGuard;
 pub use differential_protocol::{
     DifferentialAction, DifferentialAnalysisReport, DifferentialEngineStats,
@@ -45,7 +49,9 @@ pub use governor::{
     GovernorError, GovernorStage, IncidentRecord, KernelEventKind, OperationalMetricsSummary,
     OutOfBandCircuitBreaker, SecurityGovernorState, TelemetrySample, WeightMatrix,
 };
-pub use identity::{constant_time_eq, constant_time_eq_hex, hmac_sha256, AgentIdentity, SignedAgentMessage};
+pub use identity::{
+    constant_time_eq, constant_time_eq_hex, hmac_sha256, AgentIdentity, SignedAgentMessage,
+};
 pub use isolation::SandboxConfinementPolicy;
 pub use math_validator::{
     MonteCarloSimulationResult, ResilienceBreachEvent, SisypheanValidationReport,
@@ -68,20 +74,27 @@ pub use windows_sandbox::{
     WindowsRestrictedTokenPolicy,
 };
 
-pub mod protocol_research;
 pub mod pqc_arm;
-pub use pqc_arm::{CbomScanner, PostQuantumArm, PqcAlgorithm, PqcArmStatus, PqcDsaEngine, PqcKemEngine};
+pub mod protocol_research;
+pub use pqc_arm::{
+    CbomScanner, PostQuantumArm, PqcAlgorithm, PqcArmStatus, PqcDsaEngine, PqcKemEngine,
+};
 pub mod evolution;
-pub use evolution::{EvolutionArmStatus, EvolutionCandidate, EvolutionMetrics, EvolutionaryOptimizerArm, PromotionState, SecurityInvariantGuard};
+pub use evolution::{
+    EvolutionArmStatus, EvolutionCandidate, EvolutionMetrics, EvolutionaryOptimizerArm,
+    PromotionState, SecurityInvariantGuard,
+};
 pub mod dream_rsi;
-pub use dream_rsi::{DreamRsiOptimizerArm, DreamRsiPolicyOptimizer, DreamRsiStatus, DreamRolloutReport, ResearchPolicy, RsiExperimentPlan, TrajectoryEvent, WorldModelTransition};
+pub use dream_rsi::{
+    DreamRolloutReport, DreamRsiOptimizerArm, DreamRsiPolicyOptimizer, DreamRsiStatus,
+    ResearchPolicy, RsiExperimentPlan, TrajectoryEvent, WorldModelTransition,
+};
 pub mod harness2;
 pub use harness2::{
     Harness2ArmStatus, HarnessBudgetLedger, HarnessComponentKind, HarnessExperienceEntry,
     HarnessRunReport, HarnessStageResult, HarnessSurfaceSpec, HarnessTreeValidationReport,
     HarnessTreeValidator, RecursiveHarnessOptimizerArm,
 };
-
 
 pub mod agent_classifier;
 pub mod alignment_scanner;
@@ -126,9 +139,7 @@ pub use windows_sandbox::{
     AppContainerTokenVerification, Tier2ConfinedChildResult, WindowsConfinementPolicy,
 };
 #[cfg(windows)]
-pub use windows_sandbox::{
-    spawn_tier2_appcontainer_command, verify_process_appcontainer_token,
-};
+pub use windows_sandbox::{spawn_tier2_appcontainer_command, verify_process_appcontainer_token};
 
 pub mod executable_identity;
 pub use executable_identity::{
@@ -137,13 +148,13 @@ pub use executable_identity::{
 };
 
 pub mod token_posture;
-pub use token_posture::{
-    current_token_posture, relaunch_deelevated_or_fail, TokenPosture, DANGEROUS_PRIVILEGES,
-    DEELEVATED_ENV_MARKER, INTEGRITY_HIGH, INTEGRITY_MEDIUM,
-};
 #[cfg(windows)]
 pub use token_posture::{
     create_deelevated_token, spawn_deelevated, spawn_deelevated_in_job, DeelevatedChild, OwnedToken,
+};
+pub use token_posture::{
+    current_token_posture, relaunch_deelevated_or_fail, TokenPosture, DANGEROUS_PRIVILEGES,
+    DEELEVATED_ENV_MARKER, INTEGRITY_HIGH, INTEGRITY_MEDIUM,
 };
 
 pub mod hidden_process_ledger;
@@ -170,7 +181,7 @@ pub mod rate_limit_backoff;
 pub use rate_limit_backoff::{
     global_rate_limit_ensemble, global_rete_engine, BackoffEvaluationReport,
     CorrelatedEvidenceBundle, DeterministicPhysicsVoter, EdrAction, GenerativeLlmVoter,
-    GoogleApiBackoffAnalyzer, HarEntrySample, HarFlowFact, NetworkProtocol,
-    OpenJevDecisionVoter, OsqueryProcessFact, RateLimitAllowlist, RateLimitReleaseEntry,
-    RateLimitVoterEnsemble, ReaBinaryFact, ReteEngine, VoterConsensus, VoterVerdict,
+    GoogleApiBackoffAnalyzer, HarEntrySample, HarFlowFact, NetworkProtocol, OpenJevDecisionVoter,
+    OsqueryProcessFact, RateLimitAllowlist, RateLimitReleaseEntry, RateLimitVoterEnsemble,
+    ReaBinaryFact, ReteEngine, VoterConsensus, VoterVerdict,
 };

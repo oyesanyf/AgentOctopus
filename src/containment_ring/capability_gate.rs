@@ -36,9 +36,17 @@ impl CapabilityGate {
         (gate, token)
     }
 
-    pub(crate) fn with_audit_token(secret_seed: &[u8], token_ttl_secs: u64, audit_token: Arc<String>) -> Self {
+    pub(crate) fn with_audit_token(
+        secret_seed: &[u8],
+        token_ttl_secs: u64,
+        audit_token: Arc<String>,
+    ) -> Self {
         Self {
-            auth_engine: Arc::new(ExternalAuthorizationEngine::new(secret_seed, token_ttl_secs, "ring_policy_v1")),
+            auth_engine: Arc::new(ExternalAuthorizationEngine::new(
+                secret_seed,
+                token_ttl_secs,
+                "ring_policy_v1",
+            )),
             revoked_token_ids: Arc::new(RwLock::new(HashSet::new())),
             enforcement_enabled: Arc::new(AtomicBool::new(true)),
             audit_control_token: audit_token,
@@ -52,8 +60,15 @@ impl CapabilityGate {
 
     /// Enables or deliberately disables capability token enforcement for negative-control sensitivity tests.
     /// FAIL-CLOSED: Requires presenting the cryptographically unforgeable `NegativeControlToken`.
-    pub fn set_enforcement_enabled(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
-        if !crate::security::constant_time_eq(token.as_str().as_bytes(), self.audit_control_token.as_bytes()) {
+    pub fn set_enforcement_enabled(
+        &self,
+        enabled: bool,
+        token: &NegativeControlToken,
+    ) -> Result<(), OctopusSecurityError> {
+        if !crate::security::constant_time_eq(
+            token.as_str().as_bytes(),
+            self.audit_control_token.as_bytes(),
+        ) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Modification of capability gate enforcement state requires authoritative NegativeControlToken".to_string(),
             ));
@@ -71,7 +86,8 @@ impl CapabilityGate {
         tool: &str,
         target_resource: &str,
     ) -> CapabilityToken {
-        self.auth_engine.issue_capability(issuer_id, subject_id, role, tool, target_resource)
+        self.auth_engine
+            .issue_capability(issuer_id, subject_id, role, tool, target_resource)
     }
 
     /// Verifies that a capability token is valid, matches the subject, tool, and target resource,
@@ -99,7 +115,8 @@ impl CapabilityGate {
             )));
         }
 
-        self.auth_engine.verify_capability(token, agent_id, tool, target_resource)
+        self.auth_engine
+            .verify_capability(token, agent_id, tool, target_resource)
     }
 
     /// Revokes a specific capability token instantly.

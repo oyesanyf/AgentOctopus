@@ -1,6 +1,6 @@
 use super::policy_optimizer::DreamRsiPolicyOptimizer;
 use super::types::{
-    DreamRsiStatus, DreamRolloutReport, ResearchPolicy, RsiExperimentPlan, TrajectoryEvent,
+    DreamRolloutReport, DreamRsiStatus, ResearchPolicy, RsiExperimentPlan, TrajectoryEvent,
 };
 use crate::containment_ring::arm_ring::{ArmContainmentRing, ArmRingRegistry};
 use crate::core::types::OctopusSecurityError;
@@ -39,7 +39,11 @@ impl DreamRsiOptimizerArm {
         arm.try_ingest_historical_traces(&root);
 
         // Generate initial baseline plan
-        let plan = arm.optimizer.try_read().map(|o| o.generate_experiment_plan()).ok();
+        let plan = arm
+            .optimizer
+            .try_read()
+            .map(|o| o.generate_experiment_plan())
+            .ok();
         if let Some(p) = plan {
             *arm.latest_plan.try_write().unwrap() = Some(p);
         }
@@ -81,7 +85,10 @@ impl DreamRsiOptimizerArm {
     }
 
     fn try_ingest_historical_traces(&self, root: &Path) {
-        let history_file = root.join("data").join("protocol_research").join("evaluation_history.jsonl");
+        let history_file = root
+            .join("data")
+            .join("protocol_research")
+            .join("evaluation_history.jsonl");
         if history_file.exists() {
             if let Ok(content) = fs::read_to_string(&history_file) {
                 let mut events = Vec::new();
@@ -137,10 +144,16 @@ impl DreamRsiOptimizerArm {
     }
 
     /// Train research policy offline over N generations of simulated world-model rollouts.
-    pub async fn train_offline(&self, iterations: usize, steps_per_candidate: usize) -> Result<DreamRsiStatus, OctopusSecurityError> {
+    pub async fn train_offline(
+        &self,
+        iterations: usize,
+        steps_per_candidate: usize,
+    ) -> Result<DreamRsiStatus, OctopusSecurityError> {
         if let Some(ref r) = self.ring {
             if r.is_severed() {
-                return Err(OctopusSecurityError::CapabilityDenied("Arm 110 is severed".to_string()));
+                return Err(OctopusSecurityError::CapabilityDenied(
+                    "Arm 110 is severed".to_string(),
+                ));
             }
         }
 
@@ -172,7 +185,9 @@ impl DreamRsiOptimizerArm {
     /// Execute a simulated policy rollout against the offline world model.
     pub async fn run_rollout(&self, steps: usize) -> DreamRolloutReport {
         let opt = self.optimizer.read().await;
-        let report = opt.world_model().simulate_rollout(opt.active_policy(), steps);
+        let report = opt
+            .world_model()
+            .simulate_rollout(opt.active_policy(), steps);
         self.total_rollouts.fetch_add(1, Ordering::Relaxed);
         report
     }
@@ -197,11 +212,19 @@ impl DreamRsiOptimizerArm {
         opt.world_model_mut().ingest_trajectories(&events);
 
         // Append to evaluation_history.jsonl
-        let history_file = self.workspace_root.join("data").join("protocol_research").join("evaluation_history.jsonl");
+        let history_file = self
+            .workspace_root
+            .join("data")
+            .join("protocol_research")
+            .join("evaluation_history.jsonl");
         if let Some(parent) = history_file.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&history_file) {
+        if let Ok(mut file) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&history_file)
+        {
             use std::io::Write;
             for ev in &events {
                 if let Ok(line) = serde_json::to_string(ev) {

@@ -93,7 +93,10 @@ impl DependencyManifestParser {
         let py_reqs = root.join("vendor").join("rfchunt").join("requirements.txt");
         if py_reqs.exists() {
             if let Ok(content) = std::fs::read_to_string(&py_reqs) {
-                all_deps.extend(Self::parse_requirements_txt(&content, "vendor/rfchunt/requirements.txt"));
+                all_deps.extend(Self::parse_requirements_txt(
+                    &content,
+                    "vendor/rfchunt/requirements.txt",
+                ));
             }
         }
 

@@ -107,7 +107,12 @@ impl QuantumWalkSimulator {
     /// Simulates a Continuous-Time Quantum Walk (CTQW):
     /// |psi(t)> = exp(-i * H * t) |psi(0)>
     /// Returns the probability distribution P(j) = |<j|psi(t)>|^2 over all 50 agent nodes.
-    pub fn simulate_continuous_walk(&self, start_node: usize, total_time: f64, steps: usize) -> Vec<f64> {
+    pub fn simulate_continuous_walk(
+        &self,
+        start_node: usize,
+        total_time: f64,
+        steps: usize,
+    ) -> Vec<f64> {
         let n = self.num_nodes;
         assert!(start_node < n, "start_node out of bounds");
 
@@ -222,7 +227,8 @@ impl QuantumWalkSimulator {
 
     /// Compares lateral movement propagation speed between Quantum Walk and Classical Walk.
     pub fn compare_spread(&self, start_node: usize, time_or_steps: usize) -> WalkComparison {
-        let quantum_probs = self.simulate_continuous_walk(start_node, time_or_steps as f64 * 0.4, 25);
+        let quantum_probs =
+            self.simulate_continuous_walk(start_node, time_or_steps as f64 * 0.4, 25);
         let classical_probs = self.simulate_classical_walk(start_node, time_or_steps);
 
         let q_entropy = shannon_entropy(&quantum_probs);

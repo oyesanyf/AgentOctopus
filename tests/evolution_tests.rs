@@ -73,30 +73,50 @@ def arbitrary_exec(payload):
     let audit = SecurityInvariantGuard::audit_code(malicious_code);
     assert!(!audit.passed, "eval and exec must fail invariant audit");
     assert!(
-        audit.violations.iter().any(|v| v.contains("eval(") || v.contains("exec(")),
+        audit
+            .violations
+            .iter()
+            .any(|v| v.contains("eval(") || v.contains("exec(")),
         "Violations must detect eval/exec"
     );
 }
 
 #[test]
 fn test_invariant_guard_whitelisted_module_paths() {
-    assert!(SecurityInvariantGuard::is_module_whitelisted("vendor/rfchunt/permutator.py"));
-    assert!(SecurityInvariantGuard::is_module_whitelisted("vendor/rfchunt/anomaly_detector.py"));
-    assert!(SecurityInvariantGuard::is_module_whitelisted("vendor/rfchunt/engine/abnf_engine.py"));
+    assert!(SecurityInvariantGuard::is_module_whitelisted(
+        "vendor/rfchunt/permutator.py"
+    ));
+    assert!(SecurityInvariantGuard::is_module_whitelisted(
+        "vendor/rfchunt/anomaly_detector.py"
+    ));
+    assert!(SecurityInvariantGuard::is_module_whitelisted(
+        "vendor/rfchunt/engine/abnf_engine.py"
+    ));
     assert!(SecurityInvariantGuard::is_module_whitelisted("permutator"));
-    assert!(SecurityInvariantGuard::is_module_whitelisted("anomaly_detector"));
+    assert!(SecurityInvariantGuard::is_module_whitelisted(
+        "anomaly_detector"
+    ));
     assert!(SecurityInvariantGuard::is_module_whitelisted("abnf_engine"));
 
     // Forbidden paths: Rust core, Cedar policies, Cargo.toml
-    assert!(!SecurityInvariantGuard::is_module_whitelisted("src/core/types.rs"));
-    assert!(!SecurityInvariantGuard::is_module_whitelisted("config/cedar_policy.cedar"));
+    assert!(!SecurityInvariantGuard::is_module_whitelisted(
+        "src/core/types.rs"
+    ));
+    assert!(!SecurityInvariantGuard::is_module_whitelisted(
+        "config/cedar_policy.cedar"
+    ));
     assert!(!SecurityInvariantGuard::is_module_whitelisted("Cargo.toml"));
-    assert!(!SecurityInvariantGuard::is_module_whitelisted("vendor/rfchunt/arbitrary_file.py"));
+    assert!(!SecurityInvariantGuard::is_module_whitelisted(
+        "vendor/rfchunt/arbitrary_file.py"
+    ));
 }
 
 #[tokio::test]
 async fn test_evolutionary_arm_staging_and_status() {
-    let registry = Arc::new(ArmRingRegistry::new(50, b"test_seed_evolution_12345678901234567890"));
+    let registry = Arc::new(ArmRingRegistry::new(
+        50,
+        b"test_seed_evolution_12345678901234567890",
+    ));
     let arm = EvolutionaryOptimizerArm::with_registry(&registry);
 
     let status = arm.get_status().await;
@@ -104,12 +124,17 @@ async fn test_evolutionary_arm_staging_and_status() {
     assert_eq!(status.role, "EvolutionaryOptimizer (Arm 109)");
     assert_eq!(status.is_severed, false);
     assert_eq!(status.is_contained, true);
-    assert!(status.whitelisted_modules.contains(&"permutator".to_string()));
+    assert!(status
+        .whitelisted_modules
+        .contains(&"permutator".to_string()));
 }
 
 #[tokio::test]
 async fn test_evolutionary_arm_evaluates_and_rejects_malicious_candidate() {
-    let registry = Arc::new(ArmRingRegistry::new(50, b"test_seed_evolution_12345678901234567890"));
+    let registry = Arc::new(ArmRingRegistry::new(
+        50,
+        b"test_seed_evolution_12345678901234567890",
+    ));
     let arm = EvolutionaryOptimizerArm::with_registry(&registry);
 
     let evil_code = "import subprocess\nsubprocess.Popen('calc.exe')\n";
@@ -129,22 +154,39 @@ async fn test_evolutionary_arm_evaluates_and_rejects_malicious_candidate() {
 async fn test_human_in_the_loop_mandatory_gate_and_promotion_rollback() {
     let temp_dir = std::env::temp_dir().join(format!("octopus_evo_test_{}", std::process::id()));
     let _ = fs::create_dir_all(temp_dir.join("vendor").join("rfchunt"));
-    let target_file = temp_dir.join("vendor").join("rfchunt").join("permutator.py");
-    fs::write(&target_file, "# Original permutator baseline\ndef baseline(): pass\n").unwrap();
+    let target_file = temp_dir
+        .join("vendor")
+        .join("rfchunt")
+        .join("permutator.py");
+    fs::write(
+        &target_file,
+        "# Original permutator baseline\ndef baseline(): pass\n",
+    )
+    .unwrap();
 
-    let registry = Arc::new(ArmRingRegistry::new(50, b"test_seed_evolution_12345678901234567890"));
+    let registry = Arc::new(ArmRingRegistry::new(
+        50,
+        b"test_seed_evolution_12345678901234567890",
+    ));
     let arm = EvolutionaryOptimizerArm::with_registry(&registry).with_workspace(temp_dir.clone());
 
     // 1. Evaluate safe candidate
     let safe_code = "# Evolved safe permutator\ndef evolved_boundary(): return True\n";
-    let candidate = arm.evaluate_code_snippet(safe_code, "permutator").await
+    let candidate = arm
+        .evaluate_code_snippet(safe_code, "permutator")
+        .await
         .expect("Safe code evaluation must succeed");
 
     assert!(candidate.security_audit.passed);
-    assert_eq!(candidate.promotion_state, PromotionState::QuarantinedPendingHitl);
+    assert_eq!(
+        candidate.promotion_state,
+        PromotionState::QuarantinedPendingHitl
+    );
 
     // 2. Approve & Promote candidate
-    let promoted = arm.approve_promotion(&candidate.candidate_id).await
+    let promoted = arm
+        .approve_promotion(&candidate.candidate_id)
+        .await
         .expect("HITL Promotion must succeed");
 
     assert_eq!(promoted.promotion_state, PromotionState::ApprovedActive);
@@ -154,13 +196,21 @@ async fn test_human_in_the_loop_mandatory_gate_and_promotion_rollback() {
     assert!(current_content.contains("def evolved_boundary"));
 
     // Verify backup (.bak) was created
-    let backup_file = temp_dir.join("vendor").join("rfchunt").join("permutator.py.openevolve.bak");
-    assert!(backup_file.exists(), "Backup file (.openevolve.bak) must exist after promotion");
+    let backup_file = temp_dir
+        .join("vendor")
+        .join("rfchunt")
+        .join("permutator.py.openevolve.bak");
+    assert!(
+        backup_file.exists(),
+        "Backup file (.openevolve.bak) must exist after promotion"
+    );
     let backup_content = fs::read_to_string(&backup_file).unwrap();
     assert!(backup_content.contains("def baseline"));
 
     // 3. Rollback to backup
-    let rollback_msg = arm.rollback("permutator").await
+    let rollback_msg = arm
+        .rollback("permutator")
+        .await
         .expect("Rollback must succeed");
     assert!(rollback_msg.contains("restored") || rollback_msg.contains("rolled back"));
 
@@ -174,8 +224,13 @@ async fn test_human_in_the_loop_mandatory_gate_and_promotion_rollback() {
 
 #[tokio::test]
 async fn test_arm109_containment_ring_autotomy_and_severance() {
-    let registry = Arc::new(ArmRingRegistry::new(50, b"test_seed_evolution_12345678901234567890"));
-    let arm_ring = registry.get_ring_sync(109).expect("Arm 109 ring must be registered");
+    let registry = Arc::new(ArmRingRegistry::new(
+        50,
+        b"test_seed_evolution_12345678901234567890",
+    ));
+    let arm_ring = registry
+        .get_ring_sync(109)
+        .expect("Arm 109 ring must be registered");
 
     assert_eq!(arm_ring.role, ArmRole::EvolutionaryOptimizer);
     assert_eq!(arm_ring.arm_id, 109);
@@ -183,5 +238,8 @@ async fn test_arm109_containment_ring_autotomy_and_severance() {
 
     // Trip autotomy circuit breaker
     arm_ring.sever("test autotomy").await;
-    assert!(arm_ring.is_severed(), "Arm 109 ring must report severed after autotomy");
+    assert!(
+        arm_ring.is_severed(),
+        "Arm 109 ring must report severed after autotomy"
+    );
 }

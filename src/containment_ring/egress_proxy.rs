@@ -156,8 +156,15 @@ impl EgressProxy {
 
     /// Enables or deliberately disables domain allowlist enforcement for negative-control sensitivity tests.
     /// FAIL-CLOSED: Requires presenting the cryptographically unforgeable `NegativeControlToken`.
-    pub fn set_allowlist_enabled(&self, enabled: bool, token: &NegativeControlToken) -> Result<(), OctopusSecurityError> {
-        if !crate::security::constant_time_eq(token.as_str().as_bytes(), self.audit_control_token.as_bytes()) {
+    pub fn set_allowlist_enabled(
+        &self,
+        enabled: bool,
+        token: &NegativeControlToken,
+    ) -> Result<(), OctopusSecurityError> {
+        if !crate::security::constant_time_eq(
+            token.as_str().as_bytes(),
+            self.audit_control_token.as_bytes(),
+        ) {
             return Err(OctopusSecurityError::CapabilityDenied(
                 "UNAUTHORIZED_CALL_PATH: Modification of egress proxy allowlist state requires authoritative NegativeControlToken".to_string(),
             ));
@@ -167,7 +174,10 @@ impl EgressProxy {
     }
 
     /// Validates and adds an allowed domain (`AO-FIND-12`).
-    pub async fn try_add_allowed_domain(&self, domain: &str) -> Result<String, OctopusSecurityError> {
+    pub async fn try_add_allowed_domain(
+        &self,
+        domain: &str,
+    ) -> Result<String, OctopusSecurityError> {
         let normalized = validate_egress_allowlist_domain(domain)?;
         let mut domains = self.allowed_domains.write().await;
         domains.insert(normalized.clone());
@@ -325,12 +335,10 @@ impl EgressProxy {
         if self.is_allowlist_enabled() {
             let domains = self.allowed_domains.read().await;
             let is_allowed = match level {
-                EgressSecurityLevel::StrictGoogleOnly => {
-                    domains.iter().any(|d| host_lower == *d)
-                }
-                EgressSecurityLevel::ApprovedEnterpriseTier => {
-                    domains.iter().any(|d| host_lower == *d || host_lower.ends_with(&format!(".{}", d)))
-                }
+                EgressSecurityLevel::StrictGoogleOnly => domains.iter().any(|d| host_lower == *d),
+                EgressSecurityLevel::ApprovedEnterpriseTier => domains
+                    .iter()
+                    .any(|d| host_lower == *d || host_lower.ends_with(&format!(".{}", d))),
                 EgressSecurityLevel::QuarantineSinkhole => false,
             };
             if !is_allowed {
@@ -397,7 +405,11 @@ impl EgressProxy {
         }
 
         // Simulated trusted network response (zero socket leakage from agent)
-        let body = format!("{{\"status\":\"success\",\"destination\":\"{}\",\"echo_payload_len\":{}}}", host, sanitized_payload.len());
+        let body = format!(
+            "{{\"status\":\"success\",\"destination\":\"{}\",\"echo_payload_len\":{}}}",
+            host,
+            sanitized_payload.len()
+        );
         let bytes_transferred = body.len();
 
         Ok(EgressResponse {
@@ -407,7 +419,6 @@ impl EgressProxy {
         })
     }
 }
-
 
 /// Mathematical IPv4/IPv6 SSRF & DNS Rebinding Range Classifier (`RULE[containment_ring_breakout_invariants.md]`).
 ///
@@ -489,7 +500,7 @@ pub fn is_restricted_rebinding_ip(ip: &std::net::IpAddr) -> bool {
             let seg = v6.segments();
             let is_unique_local = (o[0] & 0xfe) == 0xfc; // fc00::/7
             let is_link_local_v6 = o[0] == 0xfe && (o[1] & 0xc0) == 0x80; // fe80::/10
-            // NAT64 (64:ff9b::/96 & 64:ff9b:1::/48) and 6to4 (2002::/16) — CIS 3.3
+                                                                          // NAT64 (64:ff9b::/96 & 64:ff9b:1::/48) and 6to4 (2002::/16) — CIS 3.3
             let is_nat64 = (seg[0] == 0x0064
                 && seg[1] == 0xff9b
                 && seg[2] == 0
@@ -502,7 +513,13 @@ pub fn is_restricted_rebinding_ip(ip: &std::net::IpAddr) -> bool {
                 && (seg[1] == 0x0000 || seg[1] == 0x0db8))
                 || (seg[0] == 0x0100 && seg[1] == 0 && seg[2] == 0 && seg[3] == 0);
             // RFC 2765 SIIT IPv4-translated prefix ::ffff:0:0/96
-            if seg[0] == 0 && seg[1] == 0 && seg[2] == 0 && seg[3] == 0 && seg[4] == 0xffff && seg[5] == 0 {
+            if seg[0] == 0
+                && seg[1] == 0
+                && seg[2] == 0
+                && seg[3] == 0
+                && seg[4] == 0xffff
+                && seg[5] == 0
+            {
                 let embedded_v4 = std::net::Ipv4Addr::new(
                     (seg[6] >> 8) as u8,
                     (seg[6] & 0xff) as u8,
@@ -519,7 +536,8 @@ pub fn is_restricted_rebinding_ip(ip: &std::net::IpAddr) -> bool {
                 }
             }
             if let Some(compat_v4) = v6.to_ipv4() {
-                if !v6.is_loopback() && is_restricted_rebinding_ip(&std::net::IpAddr::V4(compat_v4)) {
+                if !v6.is_loopback() && is_restricted_rebinding_ip(&std::net::IpAddr::V4(compat_v4))
+                {
                     return true;
                 }
             }
@@ -664,7 +682,6 @@ pub fn validate_agent_egress_url(
 
     Ok(parsed)
 }
-
 
 /// DNS-pinned outbound egress target (Finding 6: prevents DNS rebinding between validation and connect).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -834,4 +851,3 @@ pub fn validate_resolved_socket_addr(
     }
     Ok(())
 }
-

@@ -158,15 +158,26 @@ impl BehavioralBreakoutGuard {
     }
 
     /// Evaluates candidate agent actions for behavioral boundary subversion.
-    pub fn evaluate_action(&self, action_name: &str, target_resource: &str, payload: &str) -> BehavioralBreakoutVerdict {
+    pub fn evaluate_action(
+        &self,
+        action_name: &str,
+        target_resource: &str,
+        payload: &str,
+    ) -> BehavioralBreakoutVerdict {
         let mut detected_deviations = Vec::new();
         let lower_res = target_resource.to_ascii_lowercase();
         let lower_pay = payload.to_ascii_lowercase();
         let lower_act = action_name.to_ascii_lowercase();
 
         // 1. Check for test harness tampering attempts
-        if lower_res.contains("strix") || lower_res.contains("exhaustive") || lower_res.contains("test_report") {
-            if lower_act.contains("write") || lower_act.contains("delete") || lower_act.contains("modify") {
+        if lower_res.contains("strix")
+            || lower_res.contains("exhaustive")
+            || lower_res.contains("test_report")
+        {
+            if lower_act.contains("write")
+                || lower_act.contains("delete")
+                || lower_act.contains("modify")
+            {
                 detected_deviations.push(format!(
                     "Specification gaming / self-grading bypass intercepted: attempted write to '{}'",
                     target_resource
@@ -183,14 +194,20 @@ impl BehavioralBreakoutGuard {
         // 2. Network evasion & routing probes
         for &cmd in &self.network_evasion_commands {
             if lower_res.contains(cmd) || lower_pay.contains(cmd) {
-                detected_deviations.push(format!("Network evasion / routing probe detected: '{}'", cmd));
+                detected_deviations.push(format!(
+                    "Network evasion / routing probe detected: '{}'",
+                    cmd
+                ));
             }
         }
 
         // 3. Unauthorized third-party communication (email/webhook/exfil channels)
         for &dest in &self.unauthorized_destinations {
             if lower_res.contains(dest) || lower_pay.contains(dest) {
-                detected_deviations.push(format!("Unauthorized external third-party communication channel: '{}'", dest));
+                detected_deviations.push(format!(
+                    "Unauthorized external third-party communication channel: '{}'",
+                    dest
+                ));
             }
         }
 
@@ -199,7 +216,10 @@ impl BehavioralBreakoutGuard {
         let description = if is_clean {
             "Behavioral alignment confirmed: no reward hacking or harness tampering".to_string()
         } else {
-            format!("Behavioral breakout intercepted: {} deviation(s) identified", detected_deviations.len())
+            format!(
+                "Behavioral breakout intercepted: {} deviation(s) identified",
+                detected_deviations.len()
+            )
         };
 
         BehavioralBreakoutVerdict {

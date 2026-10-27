@@ -143,7 +143,11 @@ impl AttackGraph {
                 _ => (
                     ArmRole::AccountingLedgerWrite,
                     5,
-                    vec!["master_auth".to_string(), "circuit_breaker".to_string(), "revoke_token".to_string()],
+                    vec![
+                        "master_auth".to_string(),
+                        "circuit_breaker".to_string(),
+                        "revoke_token".to_string(),
+                    ],
                     true,
                     false,
                 ),
@@ -423,7 +427,14 @@ impl AttackGraph {
         let mut visited = vec![false; self.nodes.len()];
         visited[start] = true;
 
-        self.dfs_paths(start, target, max_depth, &mut current_path, &mut visited, &mut all_paths);
+        self.dfs_paths(
+            start,
+            target,
+            max_depth,
+            &mut current_path,
+            &mut visited,
+            &mut all_paths,
+        );
         all_paths
     }
 
