@@ -758,6 +758,19 @@ flowchart TD
 
 ---
 
+## 🔬 Universal REA + All-Voter Threat Gate & Runtime P2P Swarm Isolation Control
+
+In lockstep with `OshoosiClaw`, Agent Octopus enforces two defense-in-depth runtime invariants across Threat Intelligence and P2P Mesh synchronization:
+
+1. **Universal REA (`AutonomousReaEngine`) & Multi-Voter Quorum Gate**:
+   - Every Threat Intelligence candidate (`StaticAnalyzer`, `FileMonitor`, `ProcessCreation`, and `handle_threat`) is adjudicated by **both `AutonomousReaEngine` (`REA-Voter` + `OpenJEV-Voter`) AND the 24+ `PolicyEngine` Voters** (`adjudicate_threat_signature_with_rea_and_voters`).
+   - Uncorroborated single-voter statistical heuristics (`independent=1` lineage/phase-lock/trajectory drift on signed developer binaries) and informational/anti-debug YARA-X rules (`antisb_threatExpert`, `anti_dbg`, `vmdetect`, `win_files_operation`, `RIPEMD160_Constants`) are automatically vetoed, purged from Threat Intelligence, and recorded as `benign` in `consensus_findings` while multi-voter exploit detections and `%TEMP%` staging alerts remain 100% enforced.
+2. **Connected Peers Count & Runtime Peer-to-Peer (`p2p_enabled`) Isolation Switch**:
+   - Exposes live **Connected Peers Count** (`GET /api/mesh-stats`, `GET /api/mesh/p2p`) and a runtime **Enable/Disable Peer-to-Peer (P2P)** toggle (`POST /api/mesh/p2p` persisted to `[wire] p2p_enabled = true/false` in `osoosi.toml`).
+   - When P2P is disabled by the operator, outbound GossipSub/Nostr broadcasts and peer dials fail closed immediately and the node operates in standalone local-only mode (`0` connected peers).
+
+---
+
 ## 📜 Security Policy & Disclosure
 
 Agent Octopus is developed under zero-mock, production-grade security invariants. All cryptographic hash chains use genuine SHA-256 primitives, all policy checks route through AWS Cedar v4.13, and all memory constraints bind directly to Windows Job Objects and Ring-0 kernel drivers.
