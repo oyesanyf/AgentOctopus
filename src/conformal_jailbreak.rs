@@ -294,6 +294,95 @@ impl PersistDetector {
     }
 }
 
+/// Shiryaev-Roberts Multi-Source Conformal Change-Point Detector (`SR-DKW`).
+#[derive(Debug, Clone)]
+pub struct SrDetector {
+    pub calibration: MultiSourceCalibration,
+    pub dkw_epsilons: Vec<f64>,
+    pub use_dkw: bool,
+    pub lambda: f64,
+    pub threshold: f64,
+    pub r_state: f64,
+    pub current_step: usize,
+    pub first_alarm_step: Option<usize>,
+}
+
+impl SrDetector {
+    pub fn new(
+        calibration: MultiSourceCalibration,
+        beta: f64,
+        use_dkw: bool,
+        lambda: f64,
+        threshold: f64,
+    ) -> Self {
+        let k_float = calibration.sources.len() as f64;
+        let dkw_epsilons = calibration
+            .sources
+            .iter()
+            .map(|src| {
+                let n_k = src.calibration_scores.len() as f64;
+                if n_k > 0.0 {
+                    ((2.0 * k_float / beta.max(1e-12)).ln() / (2.0 * n_k)).sqrt()
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+
+        Self {
+            calibration,
+            dkw_epsilons,
+            use_dkw,
+            lambda: lambda.clamp(0.0, 1.0),
+            threshold,
+            r_state: 0.0,
+            current_step: 0,
+            first_alarm_step: None,
+        }
+    }
+
+    pub fn default_calibrated(calibration: MultiSourceCalibration) -> Self {
+        Self::new(calibration, 0.05, true, 0.5, 10.0)
+    }
+
+    pub fn observe(&mut self, x: &[f64]) -> (f64, bool) {
+        self.current_step += 1;
+        let raw_p = self.calibration.p_values(x);
+
+        let p_fam = raw_p
+            .into_iter()
+            .enumerate()
+            .map(|(k, p_k)| {
+                if self.use_dkw {
+                    (p_k + self.dkw_epsilons[k]).min(1.0)
+                } else {
+                    p_k
+                }
+            })
+            .fold(0.0_f64, f64::max);
+
+        let g_val = 1.0 + self.lambda * (1.0 - 2.0 * p_fam);
+        self.r_state = (1.0 + self.r_state) * g_val;
+
+        let alarm = self.r_state >= self.threshold;
+        if alarm && self.first_alarm_step.is_none() {
+            self.first_alarm_step = Some(self.current_step);
+        }
+
+        (self.r_state, alarm)
+    }
+
+    pub fn r_state(&self) -> f64 {
+        self.r_state
+    }
+
+    pub fn reset(&mut self) {
+        self.r_state = 0.0;
+        self.current_step = 0;
+        self.first_alarm_step = None;
+    }
+}
+
 /// Theoretical finite-sample bounds from Section 4 of Qian et al. (2026).
 pub mod bounds {
     pub fn overlap_weight_sum_sq(w: usize, l: usize) -> usize {

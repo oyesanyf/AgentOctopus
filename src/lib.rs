@@ -15,12 +15,18 @@ pub mod security;
 pub mod sentinel_ring;
 pub mod swarm;
 pub mod telemetry;
+pub mod research_ingest;
 pub mod web;
 
 pub use adversary::{
     AdversarialAttack, AttackCategory, AttackEvaluation, CampaignSummary, PromptInjectionEngine,
 };
 pub use arm::ArmRuntime;
+pub use research_ingest::{
+    evaluate_research_ingest, run_live_regression_probe, LiveRegressionProbeResult,
+    ResearchCoverageReport, ResearchExtractionItem, ResearchIngestRequest, ResearchIngestResponse,
+    ALREADY_IMPLEMENTED_ARXIV_IDS,
+};
 pub use brain::CentralBrain;
 pub use containment_ring::{
     ArmContainmentRing, ArmRingConfig, ArmRingMeshMessage, ArmRingRegistry, AuditEvent, Authorizer,
