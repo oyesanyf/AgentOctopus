@@ -145,6 +145,232 @@ pub struct ResearchIngestResponse {
     pub novel_enhancement_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestedResearchDefenseRule {
+    pub rule_id: String,
+    pub arxiv_id: String,
+    pub title: String,
+    pub attack_vector: String,
+    pub target_boundary: String,
+    pub match_patterns: Vec<String>,
+    pub synthesized_cedar: String,
+    pub enforced: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingResearchApprovalItem {
+    pub approval_id: String,
+    pub arxiv_id: String,
+    pub title: String,
+    pub attack_vector: String,
+    pub target_boundary: String,
+    pub candidate_rule: IngestedResearchDefenseRule,
+    pub status: String,
+    pub staged_at: String,
+}
+
+pub static GLOBAL_RESEARCH_DEFENSE_REGISTRY: std::sync::LazyLock<
+    std::sync::RwLock<Vec<IngestedResearchDefenseRule>>,
+> = std::sync::LazyLock::new(|| {
+    std::sync::RwLock::new(vec![
+        IngestedResearchDefenseRule {
+            rule_id: "arxiv_2603_02277v3_uk_aisi_sandbox_escape".to_string(),
+            arxiv_id: "2603.02277v3".to_string(),
+            title: "Can LLM Agents Escape Their Container Sandbox? (UK AISI / Alan Turing Institute)".to_string(),
+            attack_vector: "Docker socket mount, shared host PID namespace, unmasked /proc/sysfs".to_string(),
+            target_boundary: "container_sandbox".to_string(),
+            match_patterns: vec![
+                "/var/run/docker.sock".to_string(),
+                "nsenter --target 1".to_string(),
+                "/proc/1/root".to_string(),
+                "/proc/sysrq-trigger".to_string(),
+            ],
+            synthesized_cedar: "forbid(principal, action == Action::\"ContainerEscape\", resource);".to_string(),
+            enforced: true,
+        },
+        IngestedResearchDefenseRule {
+            rule_id: "arxiv_2604_20496v1_mythos_z3_sandbox".to_string(),
+            arxiv_id: "2604.20496v1".to_string(),
+            title: "Before Mythos Escapes the Sandbox: Formal Z3 Verification of Container Configs".to_string(),
+            attack_vector: "CAP_SYS_ADMIN, seccomp=unconfined, host network/IPC namespace sharing".to_string(),
+            target_boundary: "container_config".to_string(),
+            match_patterns: vec![
+                "seccomp=unconfined".to_string(),
+                "seccomp:unconfined".to_string(),
+                "apparmor=unconfined".to_string(),
+                "cap_sys_admin".to_string(),
+            ],
+            synthesized_cedar: "forbid(principal, action == Action::\"UnconfinedSandboxConfig\", resource);".to_string(),
+            enforced: true,
+        },
+        IngestedResearchDefenseRule {
+            rule_id: "arxiv_2610_20437v1_rl_priv_esc_cve_2026_65616".to_string(),
+            arxiv_id: "2610.20437v1".to_string(),
+            title: "Discovering Emergent Privilege Escalation by LLM Agents Trained with RL (CVE-2026-65616)".to_string(),
+            attack_vector: "RL reward hacking via SUID chmod, sudoers injection, /etc/passwd mutation".to_string(),
+            target_boundary: "privilege_boundary".to_string(),
+            match_patterns: vec![
+                "chmod u+s".to_string(),
+                "chmod 4755".to_string(),
+                "/etc/sudoers".to_string(),
+                "nopasswd: all".to_string(),
+                "cve-2026-65616".to_string(),
+            ],
+            synthesized_cedar: "forbid(principal, action == Action::\"PrivilegeEscalation\", resource);".to_string(),
+            enforced: true,
+        },
+        IngestedResearchDefenseRule {
+            rule_id: "arxiv_2601_11893v1_mac_agent_priv_esc".to_string(),
+            arxiv_id: "2601.11893v1".to_string(),
+            title: "Preventing Rogue LLM Agents From Gaining Root Access via Mandatory Access Control".to_string(),
+            attack_vector: "Cross-UID credential harvesting and MAC bypass (setenforce 0 / aa-teardown)".to_string(),
+            target_boundary: "mac_policy".to_string(),
+            match_patterns: vec![
+                "setenforce 0".to_string(),
+                "aa-teardown".to_string(),
+                "/etc/shadow".to_string(),
+                "/root/.ssh/id_rsa".to_string(),
+            ],
+            synthesized_cedar: "forbid(principal, action == Action::\"MacPolicyBypass\", resource);".to_string(),
+            enforced: true,
+        },
+    ])
+});
+
+pub static PENDING_RESEARCH_APPROVALS: std::sync::LazyLock<
+    std::sync::RwLock<Vec<PendingResearchApprovalItem>>,
+> = std::sync::LazyLock::new(|| std::sync::RwLock::new(Vec::new()));
+
+pub fn register_ingested_research_rule(rule: IngestedResearchDefenseRule) -> usize {
+    let mut guard = GLOBAL_RESEARCH_DEFENSE_REGISTRY
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(existing) = guard
+        .iter_mut()
+        .find(|r| r.rule_id == rule.rule_id || (r.arxiv_id == rule.arxiv_id && r.attack_vector == rule.attack_vector))
+    {
+        *existing = rule;
+    } else {
+        guard.push(rule);
+    }
+    guard.len()
+}
+
+pub fn list_ingested_research_rules() -> Vec<IngestedResearchDefenseRule> {
+    GLOBAL_RESEARCH_DEFENSE_REGISTRY
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+pub fn evaluate_ingested_research_defenses(payload: &str) -> Vec<String> {
+    let lower = payload.to_ascii_lowercase();
+    let mut hits = Vec::new();
+    if let Ok(rules) = GLOBAL_RESEARCH_DEFENSE_REGISTRY.read() {
+        for rule in rules.iter().filter(|r| r.enforced) {
+            for pat in &rule.match_patterns {
+                let p_low = pat.trim().to_ascii_lowercase();
+                if p_low.len() >= 4 && lower.contains(&p_low) {
+                    hits.push(format!(
+                        "[ArXiv-Active-Defense:{}]: Blocked by '{}' ({})",
+                        rule.arxiv_id, rule.rule_id, rule.attack_vector
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+    hits
+}
+
+fn build_ingested_research_rule(ext: &ResearchExtractionItem) -> IngestedResearchDefenseRule {
+    let clean_id = normalize_arxiv_id(&ext.arxiv_id)
+        .replace('.', "_")
+        .replace('-', "_")
+        .replace('/', "_");
+    let vec_slug: String = ext
+        .attack_vector
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .take(36)
+        .collect();
+    let rule_id = format!("arxiv_{}_{}", clean_id, vec_slug.trim_matches('_'));
+    let mut match_patterns = Vec::new();
+    if let Some(ref q) = ext.source_quote {
+        let trimmed = q.trim();
+        if trimmed.len() >= 4 {
+            match_patterns.push(trimmed.to_string());
+            for sub in trimmed.split("&&").flat_map(|s| s.split(';')) {
+                let st = sub.trim();
+                if st.len() >= 4 && st != trimmed {
+                    match_patterns.push(st.to_string());
+                }
+            }
+        }
+    }
+    if ext.attack_vector.trim().len() >= 4 {
+        match_patterns.push(ext.attack_vector.trim().to_string());
+    }
+    IngestedResearchDefenseRule {
+        rule_id: rule_id.clone(),
+        arxiv_id: ext.arxiv_id.clone(),
+        title: ext.title.clone(),
+        attack_vector: ext.attack_vector.clone(),
+        target_boundary: ext.target_boundary.clone(),
+        match_patterns,
+        synthesized_cedar: format!(
+            "forbid(principal, action, resource) when {{ context.research_rule == \"{}\" }};",
+            rule_id
+        ),
+        enforced: true,
+    }
+}
+
+pub fn list_pending_research_approvals() -> Vec<PendingResearchApprovalItem> {
+    PENDING_RESEARCH_APPROVALS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|i| i.status == "pending_approval")
+        .cloned()
+        .collect()
+}
+
+pub fn approve_pending_research_item(approval_id_or_arxiv: &str) -> usize {
+    let mut approved = 0;
+    if let Ok(mut q) = PENDING_RESEARCH_APPROVALS.write() {
+        for item in q.iter_mut() {
+            if item.status == "pending_approval"
+                && (approval_id_or_arxiv == "all"
+                    || item.approval_id == approval_id_or_arxiv
+                    || item.arxiv_id == approval_id_or_arxiv)
+            {
+                item.status = "approved".to_string();
+                let mut rule = item.candidate_rule.clone();
+                rule.enforced = true;
+                register_ingested_research_rule(rule);
+                approved += 1;
+            }
+        }
+    }
+    approved
+}
+
+pub fn reject_pending_research_item(approval_id_or_arxiv: &str) -> usize {
+    let mut rejected = 0;
+    if let Ok(mut q) = PENDING_RESEARCH_APPROVALS.write() {
+        for item in q.iter_mut() {
+            if item.status == "pending_approval"
+                && (item.approval_id == approval_id_or_arxiv || item.arxiv_id == approval_id_or_arxiv)
+            {
+                item.status = "rejected".to_string();
+                rejected += 1;
+            }
+        }
+    }
+    rejected
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LangGraphSwarmRequest {
     #[serde(default)]
@@ -161,6 +387,8 @@ pub struct LangGraphSwarmRequest {
     pub auto_enroll_conformal_source: Option<bool>,
     #[serde(default)]
     pub only_novel_enhancements: Option<bool>,
+    #[serde(default)]
+    pub require_user_approval: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +427,8 @@ pub struct LangGraphSwarmResponse {
     pub enrolled_conformal_sources: Vec<String>,
     pub post_calibration_conformal_verified: bool,
     pub synthesized_cedar_rules: Vec<String>,
+    #[serde(default)]
+    pub pending_approvals_staged: Vec<PendingResearchApprovalItem>,
     pub ingest_report: ResearchIngestResponse,
     pub timestamp: String,
 }
@@ -426,6 +656,10 @@ pub fn evaluate_research_ingest(req: &ResearchIngestRequest) -> ResearchIngestRe
             probe_res.probe_name, probe_res.executed, probe_res.blocked, probe_res.probe_details
         );
 
+        if req.auto_synthesize_rules.unwrap_or(false) {
+            register_ingested_research_rule(build_ingested_research_rule(ext));
+        }
+
         coverage_reports.push(ResearchCoverageReport {
             attack_vector: ext.attack_vector.clone(),
             target_boundary: ext.target_boundary.clone(),
@@ -494,6 +728,8 @@ pub fn execute_langgraph_research_swarm(req: LangGraphSwarmRequest) -> LangGraph
     let max_recursion_limit = req.max_recursion_limit.unwrap_or(8).clamp(1, 16);
     let auto_enroll = req.auto_enroll_conformal_source.unwrap_or(true);
     let only_novel = req.only_novel_enhancements.unwrap_or(true);
+    let require_user_approval = req.require_user_approval.unwrap_or(false);
+    let mut pending_approvals_staged: Vec<PendingResearchApprovalItem> = Vec::new();
 
     let mut candidate_extractions: Vec<ResearchExtractionItem> = req
         .extractions
@@ -785,7 +1021,7 @@ pub fn execute_langgraph_research_swarm(req: LangGraphSwarmRequest) -> LangGraph
                 let t0 = Instant::now();
                 ingest_report = evaluate_research_ingest(&ResearchIngestRequest {
                     extractions: grounded_extractions.clone(),
-                    auto_synthesize_rules: Some(true),
+                    auto_synthesize_rules: Some(!require_user_approval),
                 });
                 tool_invocations.push(AgenticToolInvocation {
                     arm_id: 3,
@@ -842,23 +1078,64 @@ pub fn execute_langgraph_research_swarm(req: LangGraphSwarmRequest) -> LangGraph
 
                 if !calibration_completed && auto_enroll && ingest_report.novel_enhancement_count > 0
                 {
-                    edge_step += 1;
-                    edge_transitions.push(LangGraphEdgeTransition {
-                        step: edge_step,
-                        from_node: "arm_3_edr_live_probe".to_string(),
-                        to_node: "arm_4_edr_calibrator".to_string(),
-                        condition_evaluated: "UnseenNovelSourceRequiresCalibration".to_string(),
-                        hmac_signature_hex: sign_edge_transition(
-                            &run_id,
-                            edge_step,
-                            "arm_3_edr_live_probe",
-                            "arm_4_edr_calibrator",
-                            "UnseenNovelSourceRequiresCalibration",
+                    if require_user_approval {
+                        let ts = format!("{}.{:03}Z", now.as_secs(), now.subsec_millis());
+                        for (idx, item) in grounded_extractions.iter().enumerate() {
+                            let mut rule = build_ingested_research_rule(item);
+                            rule.enforced = false;
+                            let approval_item = PendingResearchApprovalItem {
+                                approval_id: format!("approval_{}_{}", run_id, idx + 1),
+                                arxiv_id: item.arxiv_id.clone(),
+                                title: item.title.clone(),
+                                attack_vector: item.attack_vector.clone(),
+                                target_boundary: item.target_boundary.clone(),
+                                candidate_rule: rule,
+                                status: "pending_approval".to_string(),
+                                staged_at: ts.clone(),
+                            };
+                            if let Ok(mut q) = PENDING_RESEARCH_APPROVALS.write() {
+                                q.push(approval_item.clone());
+                            }
+                            pending_approvals_staged.push(approval_item);
+                        }
+                        stopping_reason = "AwaitingUserApproval".to_string();
+                        edge_step += 1;
+                        edge_transitions.push(LangGraphEdgeTransition {
+                            step: edge_step,
+                            from_node: "arm_3_edr_live_probe".to_string(),
+                            to_node: "END".to_string(),
+                            condition_evaluated: "AwaitingOperatorApprovalGate".to_string(),
+                            hmac_signature_hex: sign_edge_transition(
+                                &run_id,
+                                edge_step,
+                                "arm_3_edr_live_probe",
+                                "END",
+                                "AwaitingOperatorApprovalGate",
+                                generation_epoch,
+                            ),
                             generation_epoch,
-                        ),
-                        generation_epoch,
-                    });
-                    current_node = "arm_4_edr_calibrator".to_string();
+                        });
+                        visited_nodes.push("END".to_string());
+                        current_node = "END".to_string();
+                    } else {
+                        edge_step += 1;
+                        edge_transitions.push(LangGraphEdgeTransition {
+                            step: edge_step,
+                            from_node: "arm_3_edr_live_probe".to_string(),
+                            to_node: "arm_4_edr_calibrator".to_string(),
+                            condition_evaluated: "UnseenNovelSourceRequiresCalibration".to_string(),
+                            hmac_signature_hex: sign_edge_transition(
+                                &run_id,
+                                edge_step,
+                                "arm_3_edr_live_probe",
+                                "arm_4_edr_calibrator",
+                                "UnseenNovelSourceRequiresCalibration",
+                                generation_epoch,
+                            ),
+                            generation_epoch,
+                        });
+                        current_node = "arm_4_edr_calibrator".to_string();
+                    }
                 } else {
                     post_calibration_conformal_verified = ingest_report.all_live_probes_executed
                         && ingest_report.coverage_percentage >= 100.0
@@ -959,6 +1236,9 @@ pub fn execute_langgraph_research_swarm(req: LangGraphSwarmRequest) -> LangGraph
                         policy_id, item.arxiv_id, item.target_boundary
                     );
                     synthesized_cedar_rules.push(cedar_rule.clone());
+                    let mut live_rule = build_ingested_research_rule(item);
+                    live_rule.synthesized_cedar = cedar_rule.clone();
+                    register_ingested_research_rule(live_rule);
                     if let Ok(mut global_rules) = synthesized_cedar_policies().write() {
                         if !global_rules.contains(&cedar_rule) {
                             global_rules.push(cedar_rule);
@@ -1026,6 +1306,7 @@ pub fn execute_langgraph_research_swarm(req: LangGraphSwarmRequest) -> LangGraph
         enrolled_conformal_sources,
         post_calibration_conformal_verified,
         synthesized_cedar_rules,
+        pending_approvals_staged,
         ingest_report,
         timestamp: format!("{}.{:03}Z", now.as_secs(), now.subsec_millis()),
     }
@@ -1171,12 +1452,13 @@ mod tests {
                 target_boundary: "container".to_string(),
                 source_char_start: Some(10),
                 source_char_end: Some(65),
-                source_quote: Some("nsenter --target 1 --mount /bin/sh".to_string()),
+                source_quote: Some("nsenter --target 1 --mount /bin/sh && novel_octopus_marker_881".to_string()),
                 ..Default::default()
             }],
             max_recursion_limit: Some(8),
             auto_enroll_conformal_source: Some(true),
             only_novel_enhancements: Some(true),
+            require_user_approval: Some(false),
         };
 
         let resp = execute_langgraph_research_swarm(novel_req);
@@ -1228,5 +1510,35 @@ mod tests {
             vec!["START", "arm_1_arxiv_scout", "END"]
         );
         assert_eq!(early.edge_transitions.len(), 2);
+
+        // Verify live enforcement of ingested rule and HITL approval gate
+        let hits = evaluate_ingested_research_defenses("sh -c 'novel_octopus_marker_881'");
+        assert!(!hits.is_empty());
+
+        let gated_req = LangGraphSwarmRequest {
+            arxiv_id: Some("2612.88888".to_string()),
+            title: Some("Gated Research Paper".to_string()),
+            query: Some("gated exploit".to_string()),
+            extractions: vec![ResearchExtractionItem {
+                arxiv_id: "2612.88888".to_string(),
+                title: "Gated Research Paper".to_string(),
+                attack_vector: "Gated exploit vector".to_string(),
+                target_boundary: "container".to_string(),
+                source_char_start: Some(0),
+                source_char_end: Some(32),
+                source_quote: Some("gated_octopus_marker_992".to_string()),
+                ..Default::default()
+            }],
+            max_recursion_limit: Some(8),
+            auto_enroll_conformal_source: Some(true),
+            only_novel_enhancements: Some(true),
+            require_user_approval: Some(true),
+        };
+        let gated_resp = execute_langgraph_research_swarm(gated_req);
+        assert_eq!(gated_resp.stopping_reason, "AwaitingUserApproval");
+        assert_eq!(gated_resp.pending_approvals_staged.len(), 1);
+        assert!(evaluate_ingested_research_defenses("gated_octopus_marker_992").is_empty());
+        assert_eq!(approve_pending_research_item("2612.88888"), 1);
+        assert!(!evaluate_ingested_research_defenses("gated_octopus_marker_992").is_empty());
     }
 }
