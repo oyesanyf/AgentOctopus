@@ -1,6 +1,7 @@
 pub mod adversary;
 pub mod arm;
 pub mod brain;
+pub mod conformal_jailbreak;
 pub mod containment_ring;
 pub mod core;
 pub mod deterministic;
