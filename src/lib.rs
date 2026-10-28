@@ -23,9 +23,10 @@ pub use adversary::{
 };
 pub use arm::ArmRuntime;
 pub use research_ingest::{
-    evaluate_research_ingest, run_live_regression_probe, LiveRegressionProbeResult,
-    ResearchCoverageReport, ResearchExtractionItem, ResearchIngestRequest, ResearchIngestResponse,
-    ALREADY_IMPLEMENTED_ARXIV_IDS,
+    evaluate_research_ingest, execute_langgraph_research_swarm, run_live_regression_probe,
+    AgenticToolInvocation, LangGraphEdgeTransition, LangGraphSwarmRequest, LangGraphSwarmResponse,
+    LiveRegressionProbeResult, ResearchCoverageReport, ResearchExtractionItem,
+    ResearchIngestRequest, ResearchIngestResponse, ALREADY_IMPLEMENTED_ARXIV_IDS,
 };
 pub use brain::CentralBrain;
 pub use containment_ring::{
