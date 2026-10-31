@@ -101,6 +101,7 @@ pub mod alignment_scanner;
 pub mod console_defense;
 pub mod dlp_lineage;
 pub mod file_lineage;
+pub mod glm_fusion_calibration;
 pub mod mercury_guard;
 pub mod spider_physics;
 
@@ -109,6 +110,10 @@ pub use agent_classifier::{
 };
 pub use alignment_scanner::{
     AlignmentScanVerdict, RuntimeAlignmentScanner, SessionIntentContract, ToolCallTraceStep,
+};
+pub use glm_fusion_calibration::{
+    calibrate_glm_for_hardware, probe_ollama_installed_tags_fast, GlmFusionCalibrationReport,
+    GlmHardwareSpec, GlmModelTier,
 };
 pub use breakouts::{
     open_confined, validate_agent_filesystem_access, validate_sandbox_relative_path,

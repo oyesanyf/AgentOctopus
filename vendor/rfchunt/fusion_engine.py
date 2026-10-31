@@ -100,10 +100,17 @@ class FusionArbiter:
         else:
             self.sec_model = self._resolve_model(["fenkohq/foundation-sec-8b:latest", "qwen2.5:7b", "strix-qwen:latest", "qwen2.5:32b"], fallback="fenkohq/foundation-sec-8b:latest")
         self.arbiter_model = self._resolve_model(["deepseek-r1:1.5b", "strix-deepseek:latest", "deepseek-r1:32b"], fallback="deepseek-r1:1.5b")
+        try:
+            from model_adapter import calibrate_glm_specialist
+            self.glm_model = calibrate_glm_specialist(self.available_tags)
+        except Exception:
+            self.glm_model = None
 
         print(f"[ModelFusion] Panel Initialized:")
         print(f"  - Protocol Specialist : {self.gemma_model}")
         print(f"  - Boundary Specialist : {self.sec_model}")
+        if self.glm_model:
+            print(f"  - GLM Specialist      : {self.glm_model} (Resource-Calibrated Active)")
         print(f"  - Reasoning Arbiter   : {self.arbiter_model}")
 
     def _fetch_available_tags(self) -> List[str]:
@@ -233,6 +240,22 @@ class FusionArbiter:
                 raw_request=self._normalize_crlf(item.get("raw_request", "")),
                 is_clean=bool(item.get("is_clean", False)),
             ))
+
+        # ------------------------------------------------------------------
+        # Phase 2.5: Z.ai GLM Specialist (Resource-Gated Active Only When Available)
+        # ------------------------------------------------------------------
+        if getattr(self, "glm_model", None) and self.glm_model not in participating_models:
+            glm_out = self._query_model(self.glm_model, sec_prompt, sec_sys)
+            participating_models.append(self.glm_model)
+            for item in self._parse_json(glm_out):
+                proposals.append(CandidateProposal(
+                    candidate_id=f"cand_glm_{len(proposals)+1}",
+                    model=self.glm_model,
+                    specialist_type="GLM Structural Specialist",
+                    rationale=item.get("rationale", "GLM boundary probe"),
+                    raw_request=self._normalize_crlf(item.get("raw_request", "")),
+                    is_clean=bool(item.get("is_clean", False)),
+                ))
 
         # ------------------------------------------------------------------
         # Gate 1: Single Candidate Bypass

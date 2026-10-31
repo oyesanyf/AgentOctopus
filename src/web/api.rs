@@ -3549,6 +3549,13 @@ pub fn handle_oshoosiclaw_containment_evaluate(
     }
 }
 
+/// Evaluates live hardware resources and returns the Z.ai GLM ModelFusion calibration report.
+pub fn handle_glm_fusion_calibration(_state: &WebState) -> String {
+    let hw = crate::security::glm_fusion_calibration::GlmHardwareSpec::detect_live();
+    let report = crate::security::glm_fusion_calibration::calibrate_glm_for_hardware(&hw);
+    serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

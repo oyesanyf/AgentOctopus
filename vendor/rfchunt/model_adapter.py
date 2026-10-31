@@ -5,13 +5,118 @@ Enables 24/7 zero-cost local LLM inference using Google Gemma (gemma2:9b, gemma2
 Qwen (qwen2.5), and Foundation-Sec, with multi-model panel fusion and fallback to Gemini API.
 """
 
+import ctypes
 import json
 import logging
 import os
 import re
+import subprocess
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import httpx
+
+
+def detect_runtime_available_memory_gb() -> Tuple[float, float]:
+    """
+    Returns (free_ram_gb, free_vram_gb) strictly evaluating runtime available memory.
+    Never uses total physical RAM to size models (Anti-OOM Law).
+    """
+    free_ram_gb = 0.0
+    free_vram_gb = 0.0
+    try:
+        if os.name == "nt":
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                free_ram_gb = float(stat.ullAvailPhys) / (1024.0 ** 3)
+        elif os.path.exists("/proc/meminfo"):
+            with open("/proc/meminfo", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        free_ram_gb = float(line.split()[1]) / (1024.0 ** 2)
+                        break
+    except Exception:
+        pass
+
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=1.5,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            first_line = proc.stdout.strip().splitlines()[0].strip()
+            free_vram_gb = float(first_line) / 1024.0
+    except Exception:
+        pass
+
+    return (free_ram_gb, free_vram_gb)
+
+
+def calibrate_glm_specialist(
+    available_tags: Optional[List[str]] = None,
+    free_ram_gb: Optional[float] = None,
+    free_vram_gb: Optional[float] = None,
+) -> Optional[str]:
+    """
+    Calibrates a Z.ai GLM specialist for ModelFusion ONLY when runtime memory resources are available:
+    - Requires at least 6.0 GB free VRAM or 8.0 GB free system RAM.
+    - Returns None when resources are insufficient.
+    """
+    if available_tags is None:
+        try:
+            endpoint = os.environ.get("OLLAMA_ENDPOINT", "http://127.0.0.1:11434")
+            resp = httpx.get(f"{endpoint}/api/tags", timeout=0.4)
+            if resp.status_code == 200:
+                available_tags = [m["name"] for m in resp.json().get("models", []) if "name" in m]
+            else:
+                available_tags = []
+        except Exception:
+            available_tags = []
+
+    if free_ram_gb is None or free_vram_gb is None:
+        detected_ram, detected_vram = detect_runtime_available_memory_gb()
+        if free_ram_gb is None:
+            free_ram_gb = detected_ram
+        if free_vram_gb is None:
+            free_vram_gb = detected_vram
+
+    if free_vram_gb < 6.0 and free_ram_gb < 8.0:
+        return None
+
+    # Prefer pure in-VRAM 9B on 6-16GB GPUs for instant response, or GLM-4.7-Flash when >=20GB VRAM / >=24GB RAM
+    preferred_candidates: List[str] = []
+    if free_vram_gb >= 20.0:
+        preferred_candidates = ["glm-4.7-flash:q8_0", "glm-4.7-flash:q4_K_M", "glm-4.7-flash:latest", "glm4:9b"]
+    elif free_vram_gb >= 6.0:
+        preferred_candidates = ["glm4:9b", "glm-4.7-flash:latest", "glm-4.7-flash:q4_K_M"]
+    elif free_ram_gb >= 24.0:
+        preferred_candidates = ["glm-4.7-flash:latest", "glm-4.7-flash:q4_K_M", "glm4:9b"]
+    else:
+        preferred_candidates = ["glm4:9b", "glm4:latest"]
+
+    for cand in preferred_candidates:
+        cand_base = cand.split(":")[0]
+        for tag in available_tags:
+            if tag == cand or tag.startswith(cand_base + ":"):
+                return tag
+
+    return None
 
 try:
     from google import genai
@@ -186,6 +291,10 @@ class ModelFusionAdapter:
             fusion_panel.append(gemma_model)
         if sec_model and sec_model not in fusion_panel:
             fusion_panel.append(sec_model)
+
+        glm_model = calibrate_glm_specialist(self.available_tags)
+        if glm_model and glm_model not in fusion_panel:
+            fusion_panel.append(glm_model)
 
         if not fusion_panel:
             fusion_panel = [self.active_model]

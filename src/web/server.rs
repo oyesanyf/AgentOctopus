@@ -8,7 +8,8 @@ use super::api::{
     handle_dream_rsi_train, handle_evaluate_cedar, handle_evolution_approve,
     handle_evolution_auto_fix, handle_evolution_candidates, handle_evolution_evaluate,
     handle_evolution_rollback, handle_evolution_start, handle_evolution_status,
-    handle_evolution_stop, handle_get_egress_domains, handle_governor_inject_sample,
+    handle_evolution_stop, handle_get_egress_domains, handle_glm_fusion_calibration,
+    handle_governor_inject_sample,
     handle_governor_reset, handle_governor_status, handle_harness2_library, handle_harness2_run,
     handle_harness2_status, handle_harness2_validate_tree, handle_kernel_stats, handle_live_tests,
     handle_oshoosiclaw_containment_evaluate, handle_oshoosiclaw_containment_status,
@@ -1166,6 +1167,16 @@ async fn handle_connection(
 
         ("GET", "/api/pqc/status") => {
             let json_body = handle_pqc_status(&state).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/fusion/glm-calibration") => {
+            let json_body = handle_glm_fusion_calibration(&state);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
