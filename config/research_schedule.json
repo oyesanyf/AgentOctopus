@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "frequency": "daily",
+  "interval_seconds": 86400,
+  "query": "LLM agent sandbox escape prompt injection code",
+  "max_results": 5,
+  "auto_enroll_code_papers": true,
+  "min_auto_enroll_score": 75.0,
+  "last_run_utc": "2026-11-01T12:58:19Z",
+  "next_run_utc": "2026-11-01T12:58:19Z",
+  "total_scheduled_runs": 1
+}

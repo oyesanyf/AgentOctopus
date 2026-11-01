@@ -15,12 +15,14 @@ pub mod arm_ring;
 pub mod attestation;
 pub mod audit;
 pub mod auditor;
+pub mod bounded_agents_apc;
 pub mod capability_gate;
 pub mod cedar_gate;
 pub mod egress_proxy;
 pub mod identity_gate;
 pub mod isolation_manager;
 pub mod mesh_guard;
+pub mod oso_aws_containment;
 pub mod primitives;
 pub mod resource_guard;
 pub mod ring_controller;
@@ -51,6 +53,8 @@ pub use mesh_guard::{
     role_trust_tier, HomologicalAuditReport, HomologicalBoundaryAuditor, MeshGuard, TrustTier,
     VerifiedMeshMessage, MAX_RELAY_HOPS,
 };
+pub use bounded_agents_apc::*;
+pub use oso_aws_containment::*;
 pub use primitives::{
     now_micros, DiracDeltaCapabilityTicket, IndependentTrustBoundaryVerifier, MeshWatchOutSignal,
     MultiLayerGateVerdict, PinnedToolObjectBinding, ZeroCopyImmutableToolBuffer,

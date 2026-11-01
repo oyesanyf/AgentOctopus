@@ -23,10 +23,34 @@ pub use adversary::{
 };
 pub use arm::ArmRuntime;
 pub use research_ingest::{
-    evaluate_research_ingest, execute_langgraph_research_swarm, run_live_regression_probe,
-    AgenticToolInvocation, LangGraphEdgeTransition, LangGraphSwarmRequest, LangGraphSwarmResponse,
-    LiveRegressionProbeResult, ResearchCoverageReport, ResearchExtractionItem,
-    ResearchIngestRequest, ResearchIngestResponse, ALREADY_IMPLEMENTED_ARXIV_IDS,
+    approve_ingested_research_rule, approve_pending_research_item, auto_correct_research_rule,
+    canonical_research_rule_id, check_paper_to_code_semantic_domain_alignment,
+    clear_all_ingested_research_rules, clear_or_restore_research_rules,
+    compute_pending_item_priority, default_seeded_research_defense_rules,
+    detect_verified_code_repo, evaluate_research_ingest, evaluate_research_novelty_check,
+    execute_langgraph_research_swarm, get_pending_research_queue, get_research_schedule,
+    get_research_status, is_canonical_m12_research_arxiv_id, is_current_research_arxiv_id,
+    is_research_rule_operator_approved, is_research_rule_pinned, is_valid_technical_indicator,
+    is_valid_verified_repo_url, list_ingested_research_rules, normalize_base_arxiv_id,
+    parse_arxiv_year_month, pin_ingested_research_rule, register_ingested_research_rule,
+    reject_pending_research_item, remove_ingested_research_rule, reset_research_defense_registry,
+    restore_default_research_rules, run_live_regression_probe, run_paper2agent_accuracy_suite,
+    safe_arxiv_abs_url, safe_arxiv_pdf_url, search_research_papers, synthesize_rust_guard_snippet,
+    trim_pending_research_queue, update_research_schedule, validate_pending_research_item,
+    validate_research_rule_acceptance, verify_generated_guard_code_accuracy,
+    verify_rule_against_canary_benign_corpus, AgenticToolInvocation, GlmMultiModelFusionEvaluator,
+    GroundedBreakoutExtraction, IngestedResearchDefenseRule, LangGraphEdge,
+    LangGraphEdgeTransition, LangGraphNodeExecution, LangGraphSwarmRequest, LangGraphSwarmResponse,
+    LiveRegressionProbeReport, LiveRegressionProbeResult, LlmFusionArmReport, LlmFusionConsensus,
+    Paper2AgentAccuracySuiteResult, Paper2AgentCompiler, PaperNoveltyEvaluation,
+    PendingResearchItem, ResearchAcceptanceVerdict, ResearchApprovalRequest,
+    ResearchApprovalResponse, ResearchClearRequest, ResearchClearResponse, ResearchCoverageReport,
+    ResearchExtractionItem, ResearchIngestRequest, ResearchIngestResponse,
+    ResearchNoveltyCheckRequest, ResearchNoveltyCheckResponse, ResearchScheduleConfig,
+    ResearchScheduleResponse, ResearchScheduleUpdateRequest, ResearchSearchRequest,
+    ResearchSearchResponse, ResearchStatusResponse, ResearchValidationResponse, RingProbeVerdict,
+    RuleAccuracyReport, VectorCoverageVerdict, ALREADY_IMPLEMENTED_ARXIV_IDS,
+    CANARY_BENIGN_TELEMETRY_CORPUS, CODE_REPO_PRIORITY_BOOST, MIN_CURRENT_RESEARCH_ARXIV_YY,
 };
 pub use brain::CentralBrain;
 pub use containment_ring::{

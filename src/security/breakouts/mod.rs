@@ -43,7 +43,60 @@ impl Default for BreakoutDefenseCoordinator {
 }
 
 impl BreakoutDefenseCoordinator {
-    /// Comprehensive audit of an agent action across all 4 taxonomy categories.
+    /// Decodes a standard Base64 token (both UTF-8 and UTF-16LE PowerShell `-EncodedCommand`)
+    /// into lowercase ASCII text for zero-evasion Paper2Agent indicator matching.
+    fn decode_base64_fragment(input: &str) -> Option<String> {
+        let trimmed = input.trim();
+        if trimmed.len() < 8 {
+            return None;
+        }
+        const B64_CHARS: &[u8] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = Vec::with_capacity(trimmed.len() * 3 / 4);
+        let mut buf = 0u32;
+        let mut bits = 0u8;
+        for &b in trimmed.as_bytes() {
+            if b == b'=' {
+                break;
+            }
+            let val = B64_CHARS.iter().position(|&c| c == b)? as u32;
+            buf = (buf << 6) | val;
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push(((buf >> bits) & 0xFF) as u8);
+            }
+        }
+        if out.is_empty() {
+            return None;
+        }
+        // Check UTF-16LE (every odd byte is 0x00)
+        if out.len() >= 4 && out.len() % 2 == 0 && out.iter().skip(1).step_by(2).all(|&b| b == 0) {
+            let utf16_ascii: String = out
+                .iter()
+                .step_by(2)
+                .filter(|&&b| b.is_ascii_graphic() || b == b' ')
+                .map(|&b| (b as char).to_ascii_lowercase())
+                .collect();
+            if !utf16_ascii.is_empty() {
+                return Some(utf16_ascii);
+            }
+        }
+        let ascii: String = out
+            .iter()
+            .filter(|&&b| b.is_ascii_graphic() || b == b' ')
+            .map(|&b| (b as char).to_ascii_lowercase())
+            .collect();
+        if ascii.len() >= 3 {
+            Some(ascii)
+        } else {
+            None
+        }
+    }
+
+    /// Comprehensive audit of an agent action across all 4 taxonomy categories,
+    /// Z.ai GLM Multi-Model Fusion semantic classification, and the hot-reloaded
+    /// `IngestedResearchDefenseRule` registry.
     pub fn evaluate_action(
         &self,
         principal: &str,
@@ -51,10 +104,149 @@ impl BreakoutDefenseCoordinator {
         resource: &str,
         payload: &str,
     ) -> UnifiedBreakoutEvaluation {
-        let tech_res = self.technical.evaluate_execution(resource, payload);
+        let mut tech_res = self.technical.evaluate_execution(resource, payload);
         let oper_res = self.operational.evaluate_context_leakage(payload);
         let behav_res = self.behavioral.evaluate_action(action, resource, payload);
         let data_res = self.data.evaluate_data_access(principal, resource, payload);
+
+        // Multi-Layer De-Obfuscation & Paper2Agent Active Research Registry Enforcement
+        let mut parsed_tokens_flat = String::new();
+        if let Some(ref inv) = tech_res.parsed_invocation {
+            parsed_tokens_flat.push_str(&inv.executable_stem);
+            parsed_tokens_flat.push(' ');
+            for arg in &inv.argv {
+                parsed_tokens_flat.push_str(arg);
+                parsed_tokens_flat.push(' ');
+            }
+            if let crate::security::command_line::EncodedCommandState::Decoded {
+                ref decoded_utf16le,
+                ..
+            } = inv.encoded_command
+            {
+                parsed_tokens_flat.push_str(decoded_utf16le);
+                parsed_tokens_flat.push(' ');
+            }
+            for nested in &inv.nested {
+                parsed_tokens_flat.push_str(&nested.executable_stem);
+                parsed_tokens_flat.push(' ');
+                for narg in &nested.argv {
+                    parsed_tokens_flat.push_str(narg);
+                    parsed_tokens_flat.push(' ');
+                }
+                if let crate::security::command_line::EncodedCommandState::Decoded {
+                    ref decoded_utf16le,
+                    ..
+                } = nested.encoded_command
+                {
+                    parsed_tokens_flat.push_str(decoded_utf16le);
+                    parsed_tokens_flat.push(' ');
+                }
+            }
+        }
+
+        // Unwrap Base64, Hex, and URL-percent encoded segments from payload
+        let mut decoded_layers = String::new();
+        for tok in payload
+            .split(|c: char| c.is_whitespace() || matches!(c, '\'' | '"' | '(' | ')' | ';' | ','))
+        {
+            let clean_tok = tok.trim_start_matches("0x").trim_start_matches("\\x");
+            if clean_tok.len() >= 6
+                && clean_tok.len() % 2 == 0
+                && clean_tok.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                if let Ok(bytes) = hex::decode(clean_tok) {
+                    let s: String = bytes
+                        .into_iter()
+                        .filter(|b| b.is_ascii_graphic() || *b == b' ')
+                        .map(|b| b as char)
+                        .collect();
+                    decoded_layers.push_str(&s);
+                    decoded_layers.push(' ');
+                }
+            } else if let Some(b64_decoded) = Self::decode_base64_fragment(tok) {
+                decoded_layers.push_str(&b64_decoded);
+                decoded_layers.push(' ');
+            }
+        }
+
+        // URL percent-decoding (`%2fvar%2frun%2fdocker.sock`)
+        if payload.contains('%') {
+            let mut pct_decoded = String::with_capacity(payload.len());
+            let bytes = payload.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == b'%' && i + 2 < bytes.len() {
+                    if let Ok(hex_str) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                        if let Ok(val) = u8::from_str_radix(hex_str, 16) {
+                            pct_decoded.push(val as char);
+                            i += 3;
+                            continue;
+                        }
+                    }
+                }
+                pct_decoded.push(bytes[i] as char);
+                i += 1;
+            }
+            decoded_layers.push_str(&pct_decoded);
+            decoded_layers.push(' ');
+        }
+
+        let dequoted_payload: String = payload
+            .chars()
+            .filter(|c| !matches!(c, '"' | '\'' | '`' | '^'))
+            .collect();
+
+        let mut inspection_corpus_lc = format!(
+            "{} {} {} {} {} {} {}",
+            principal.to_ascii_lowercase(),
+            action.to_ascii_lowercase(),
+            resource.to_ascii_lowercase(),
+            payload.to_ascii_lowercase(),
+            dequoted_payload.to_ascii_lowercase(),
+            parsed_tokens_flat.to_ascii_lowercase(),
+            decoded_layers.to_ascii_lowercase()
+        );
+
+        // Run Z.ai GLM Multi-Model Fusion Semantic Classifier
+        let fusion_tokens =
+            crate::research_ingest::GlmMultiModelFusionEvaluator::evaluate_and_emit_classification_tokens(
+                principal,
+                action,
+                resource,
+                payload,
+                &inspection_corpus_lc,
+            );
+        if !fusion_tokens.is_empty() {
+            for tok in fusion_tokens {
+                inspection_corpus_lc.push(' ');
+                inspection_corpus_lc.push_str(tok);
+            }
+        }
+
+        // Evaluate all active rules in the hot-reloaded IngestedResearchDefenseRule registry
+        for rule in crate::research_ingest::list_ingested_research_rules() {
+            let base_id = crate::research_ingest::normalize_base_arxiv_id(&rule.arxiv_id);
+            for pat in rule.indicator_pattern.split('|') {
+                let pat_trimmed = pat.trim().to_ascii_lowercase();
+                if crate::research_ingest::is_valid_technical_indicator(&pat_trimmed)
+                    && inspection_corpus_lc.contains(&pat_trimmed)
+                {
+                    tech_res.is_clean = false;
+                    tech_res.sandbox_quarantine_required = true;
+                    tech_res.detected_vectors.push(format!(
+                        "[ArXiv-Active-Defense:{}] [ArXiv-Active-Defense:{}]: Blocked by ingested research rule '{}' ({})",
+                        rule.arxiv_id, base_id, rule.rule_id, rule.attack_vector
+                    ));
+                    if tech_res.description.starts_with("Technical isolation") {
+                        tech_res.description = format!(
+                            "Technical breakout blocked by active arXiv research rule '{}' ({})",
+                            rule.rule_id, rule.arxiv_id
+                        );
+                    }
+                    break;
+                }
+            }
+        }
 
         let is_clean =
             tech_res.is_clean && oper_res.is_clean && behav_res.is_clean && data_res.is_clean;

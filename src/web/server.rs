@@ -24,7 +24,12 @@ use super::api::{
     handle_protocol_research_sync_rfc, handle_protocol_research_validate_arm106,
     handle_rasp_create_canary, handle_rasp_intercept_memory, handle_rasp_intercept_prompt,
     handle_rasp_intercept_tool, handle_rasp_set_mitigation_tier, handle_rasp_status,
-    handle_rasp_telemetry, handle_resilience_metrics, handle_rl_defense_latest_cycle,
+    handle_rasp_telemetry, handle_research_active_rules, handle_research_approve,
+    handle_research_clear, handle_research_ingest, handle_research_langgraph_swarm,
+    handle_research_novelty_check, handle_research_pending, handle_research_reject,
+    handle_research_schedule_get, handle_research_schedule_update, handle_research_search,
+    handle_research_status, handle_research_validate, handle_research_verify_accuracy,
+    handle_resilience_metrics, handle_rl_defense_latest_cycle,
     handle_rl_defense_status, handle_rl_defense_train_cycle, handle_rl_evaluate_action,
     handle_runtime_activity_stream, handle_sentinel_reset_lockdown,
     handle_sentinel_simulate_breach, handle_status, handle_update_egress_domains,
@@ -1177,6 +1182,184 @@ async fn handle_connection(
 
         ("GET", "/api/fusion/glm-calibration") => {
             let json_body = handle_glm_fusion_calibration(&state);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/research/status") | ("GET", "/research/status") => {
+            let json_body = handle_research_status();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/research/schedule") | ("GET", "/research/schedule") => {
+            let json_body = handle_research_schedule_get();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/research/schedule") | ("POST", "/research/schedule") => {
+            let (status_code, json_body) = match handle_research_schedule_update(body) {
+                Ok(b) => ("200 OK", b),
+                Err(e) => ("400 Bad Request", e),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/research/search") | ("POST", "/research/search") => {
+            let (status_code, json_body) = match handle_research_search(body) {
+                Ok(b) => ("200 OK", b),
+                Err(e) => ("400 Bad Request", e),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/research/pending") | ("GET", "/research/pending") => {
+            let json_body = handle_research_pending();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/research/active-rules") | ("GET", "/research/active-rules") => {
+            let json_body = handle_research_active_rules();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/research/approve") | ("POST", "/research/approve") => {
+            let (status_code, json_body) = match handle_research_approve(body) {
+                Ok(b) => ("200 OK", b),
+                Err(e) => ("400 Bad Request", e),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/research/reject") | ("POST", "/research/reject") => {
+            let (status_code, json_body) = match handle_research_reject(body) {
+                Ok(b) => ("200 OK", b),
+                Err(e) => ("400 Bad Request", e),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/research/clear") | ("POST", "/research/clear") => {
+            let (status_code, json_body) = match handle_research_clear(body) {
+                Ok(b) => ("200 OK", b),
+                Err(e) => ("400 Bad Request", e),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/research/validate") | ("POST", "/research/validate") => {
+            let (status_code, json_body) = match handle_research_validate(body) {
+                Ok(b) => ("200 OK", b),
+                Err(e) => ("400 Bad Request", e),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/research/ingest") | ("POST", "/research/ingest") => {
+            let (status_code, json_body) = match handle_research_ingest(body) {
+                Ok(b) => ("200 OK", b),
+                Err(e) => ("400 Bad Request", e),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/research/langgraph-swarm") | ("POST", "/research/langgraph-swarm") => {
+            let (status_code, json_body) = match handle_research_langgraph_swarm(body) {
+                Ok(b) => ("200 OK", b),
+                Err(e) => ("400 Bad Request", e),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/research/novelty-check") | ("POST", "/research/novelty-check") => {
+            let (status_code, json_body) = match handle_research_novelty_check(body) {
+                Ok(b) => ("200 OK", b),
+                Err(e) => ("400 Bad Request", e),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/v1/research/verify-accuracy")
+        | ("POST", "/api/research/verify-accuracy")
+        | ("POST", "/research/verify-accuracy") => {
+            let json_body = handle_research_verify_accuracy();
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),

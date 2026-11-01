@@ -3556,6 +3556,124 @@ pub fn handle_glm_fusion_calibration(_state: &WebState) -> String {
     serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string())
 }
 
+// ============================================================================
+// Autonomous Security Research Ingestion & Paper2Agent Endpoints
+// ============================================================================
+
+pub fn handle_research_status() -> String {
+    let status = crate::research_ingest::get_research_status();
+    serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub fn handle_research_schedule_get() -> String {
+    let sched = crate::research_ingest::get_research_schedule();
+    serde_json::to_string(&sched).unwrap_or_else(|_| "{}".to_string())
+}
+
+pub fn handle_research_schedule_update(body: &str) -> Result<String, String> {
+    let req: crate::research_ingest::ResearchScheduleUpdateRequest = if body.trim().is_empty() {
+        crate::research_ingest::ResearchScheduleUpdateRequest {
+            enabled: None,
+            frequency: None,
+            query: None,
+            max_results: None,
+            auto_enroll_code_papers: None,
+            min_auto_enroll_score: None,
+            run_immediately: None,
+        }
+    } else {
+        serde_json::from_str(body)
+            .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON: {}", e)))?
+    };
+    let resp = crate::research_ingest::update_research_schedule(&req);
+    Ok(serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()))
+}
+
+pub fn handle_research_search(body: &str) -> Result<String, String> {
+    let req: crate::research_ingest::ResearchSearchRequest = if body.trim().is_empty() {
+        crate::research_ingest::ResearchSearchRequest {
+            query: None,
+            max_results: None,
+        }
+    } else {
+        serde_json::from_str(body)
+            .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON: {}", e)))?
+    };
+    let resp = crate::research_ingest::search_research_papers(&req);
+    Ok(serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()))
+}
+
+pub fn handle_research_pending() -> String {
+    let queue = crate::research_ingest::get_pending_research_queue();
+    serde_json::to_string(&queue).unwrap_or_else(|_| "[]".to_string())
+}
+
+pub fn handle_research_active_rules() -> String {
+    let rules = crate::research_ingest::list_ingested_research_rules();
+    serde_json::to_string(&rules).unwrap_or_else(|_| "[]".to_string())
+}
+
+pub fn handle_research_approve(body: &str) -> Result<String, String> {
+    let req: crate::research_ingest::ResearchApprovalRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON: {}", e)))?;
+    let resp = crate::research_ingest::approve_pending_research_item(&req);
+    Ok(serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()))
+}
+
+pub fn handle_research_reject(body: &str) -> Result<String, String> {
+    let req: crate::research_ingest::ResearchApprovalRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON: {}", e)))?;
+    let resp = crate::research_ingest::reject_pending_research_item(&req);
+    Ok(serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()))
+}
+
+pub fn handle_research_clear(body: &str) -> Result<String, String> {
+    let req: crate::research_ingest::ResearchClearRequest = if body.trim().is_empty() {
+        crate::research_ingest::ResearchClearRequest {
+            restore_defaults: false,
+            clear_pending_queue: false,
+        }
+    } else {
+        serde_json::from_str(body)
+            .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON: {}", e)))?
+    };
+    let resp = crate::research_ingest::clear_or_restore_research_rules(&req);
+    Ok(serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()))
+}
+
+pub fn handle_research_validate(body: &str) -> Result<String, String> {
+    let req: crate::research_ingest::ResearchApprovalRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON: {}", e)))?;
+    let resp = crate::research_ingest::validate_pending_research_item(&req);
+    Ok(serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()))
+}
+
+pub fn handle_research_ingest(body: &str) -> Result<String, String> {
+    let req: crate::research_ingest::ResearchIngestRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON: {}", e)))?;
+    let resp = crate::research_ingest::evaluate_research_ingest(&req);
+    Ok(serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()))
+}
+
+pub fn handle_research_langgraph_swarm(body: &str) -> Result<String, String> {
+    let req: crate::research_ingest::LangGraphSwarmRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON: {}", e)))?;
+    let resp = crate::research_ingest::execute_langgraph_research_swarm(&req);
+    Ok(serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()))
+}
+
+pub fn handle_research_novelty_check(body: &str) -> Result<String, String> {
+    let req: crate::research_ingest::ResearchNoveltyCheckRequest = serde_json::from_str(body)
+        .map_err(|e| json_error_payload("INVALID_JSON", &format!("Invalid JSON: {}", e)))?;
+    let resp = crate::research_ingest::evaluate_research_novelty_check(&req);
+    Ok(serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string()))
+}
+
+pub fn handle_research_verify_accuracy() -> String {
+    let suite = crate::research_ingest::run_paper2agent_accuracy_suite();
+    serde_json::to_string(&suite).unwrap_or_else(|_| "{}".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
