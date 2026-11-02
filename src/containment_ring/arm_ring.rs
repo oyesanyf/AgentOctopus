@@ -23,6 +23,7 @@ use crate::containment_ring::mesh_guard::{
 use crate::core::types::{ArmRole, OctopusSecurityError};
 use crate::neural_mesh::MessageKind;
 use crate::security::CapabilityToken;
+use crate::security::cage_governance::{CageGovernanceEngine, CageRoutingSeal, SealRejection};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -30,6 +31,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use thiserror::Error;
 use tokio::sync::RwLock;
 
 /// Configuration for an individual arm containment ring.
@@ -363,6 +365,10 @@ pub struct ArmContainmentRing {
     >,
     /// Sticky information-flow taint for the current epoch: (lowest accepted trust tier, provenance).
     taint_state: Arc<RwLock<(TrustTier, Vec<ProvenanceHop>)>>,
+    /// Optional attached CAGE governance engine for seal validation and actuation trace emission.
+    pub(crate) cage_engine: Arc<
+        std::sync::RwLock<Option<Arc<crate::security::cage_governance::CageGovernanceEngine>>>,
+    >,
 }
 
 impl ArmContainmentRing {
@@ -553,7 +559,24 @@ impl ArmContainmentRing {
             audit_control_token: audit_token,
             quarantined_instances: Arc::new(RwLock::new(HashMap::new())),
             taint_state: Arc::new(RwLock::new((initial_tier, Vec::new()))),
+            cage_engine: Arc::new(std::sync::RwLock::new(None)),
         }
+    }
+
+    /// Attaches a CAGE governance engine using the builder pattern.
+    pub fn with_cage_engine(self, engine: Arc<CageGovernanceEngine>) -> Self {
+        *self.cage_engine.write().unwrap() = Some(engine);
+        self
+    }
+
+    /// Dynamically attaches or updates the CAGE governance engine on this ring.
+    pub fn attach_cage_engine(&self, engine: Arc<CageGovernanceEngine>) {
+        *self.cage_engine.write().unwrap() = Some(engine);
+    }
+
+    /// Returns a reference-counted handle to the attached CAGE governance engine, if configured.
+    pub fn cage_engine(&self) -> Option<Arc<CageGovernanceEngine>> {
+        self.cage_engine.read().unwrap().clone()
     }
 
     /// Creates an arm containment ring alongside an authoritative NegativeControlToken for audit harnesses.
@@ -1512,6 +1535,148 @@ impl ArmContainmentRing {
         locked_req.payload = verified_slice.to_vec();
         dispatcher.dispatch(&locked_req)
     }
+
+    /// Executes a tool request gated by an evidence-bound cryptographic routing seal (Requirement R2, Feature F15/F16).
+    ///
+    /// Invariant: NoDirectBind
+    /// - Verifies and atomically consumes `seal` against the action and parameter digest before actuation.
+    /// - Rejects replayed, expired, or mismatched seals with fail-closed errors.
+    /// - Dispatches to Tier 1 Wasm or Tier 2 AppContainer via `execute_tiered_tool_confined`.
+    /// - Confirms fiscal debit reservations upon successful execution.
+    /// - Emits conforming `ACTUATION_RECEIPT` into the audit hash chain.
+    pub async fn execute_tool_with_cage_seal(
+        &self,
+        ticket: &mut super::primitives::DiracDeltaCapabilityTicket,
+        seal: &CageRoutingSeal,
+        resource: &str,
+        req: &super::tiered_executor::TieredToolRequest,
+        dispatcher: &super::tiered_executor::TieredExecutionDispatcher,
+        observed_canary_hash: Option<&str>,
+        debit_id: Option<&str>,
+    ) -> Result<super::tiered_executor::TieredExecutionReceipt, ArmExecutionError> {
+        let engine = self.cage_engine().ok_or(ArmExecutionError::EngineNotConfigured {
+            arm_id: self.arm_id,
+        })?;
+
+        self.execute_tool_with_cage_seal_and_engine(
+            &engine,
+            ticket,
+            seal,
+            resource,
+            req,
+            dispatcher,
+            observed_canary_hash,
+            debit_id,
+        )
+        .await
+    }
+
+    /// Explicit-engine variant allowing direct injection for testing or custom orchestration.
+    pub async fn execute_tool_with_cage_seal_and_engine(
+        &self,
+        engine: &CageGovernanceEngine,
+        ticket: &mut super::primitives::DiracDeltaCapabilityTicket,
+        seal: &CageRoutingSeal,
+        resource: &str,
+        req: &super::tiered_executor::TieredToolRequest,
+        dispatcher: &super::tiered_executor::TieredExecutionDispatcher,
+        observed_canary_hash: Option<&str>,
+        debit_id: Option<&str>,
+    ) -> Result<super::tiered_executor::TieredExecutionReceipt, ArmExecutionError> {
+        // Step 2: Compute expected action digest from req.tool_name and req.payload
+        let params_val: serde_json::Value = serde_json::from_slice(&req.payload)
+            .unwrap_or_else(|_| {
+                serde_json::json!({
+                    "raw_sha256": hex::encode(sha2::Sha256::digest(&req.payload)),
+                    "byte_len": req.payload.len(),
+                    "resource": resource,
+                })
+            });
+        let expected_digest = engine.compute_action_digest(&req.tool_name, &params_val);
+
+        // Step 3: Call engine.verify_and_consume_seal(seal, &req.tool_name, &expected_digest)
+        // Fail-closed immediately on any rejection.
+        if let Err(rej) = engine.verify_and_consume_seal(seal, &req.tool_name, &expected_digest) {
+            let mut err = ArmExecutionError::from(rej);
+            match &mut err {
+                ArmExecutionError::InvalidCageSeal { seal_id, .. } if seal_id == "unknown" => {
+                    *seal_id = seal.seal_id.clone();
+                }
+                ArmExecutionError::SealExpired { seal_id, .. } if seal_id == "unknown" => {
+                    *seal_id = seal.seal_id.clone();
+                }
+                _ => {}
+            }
+            return Err(err);
+        }
+
+        // Step 4: Record GOVERNANCE_SEAL_CONSUMED event in SecurityAuditLog
+        let seal_consumed_details = serde_json::json!({
+            "event_type": "GOVERNANCE_SEAL_CONSUMED",
+            "seal_id": seal.seal_id,
+            "decision_record_hash": seal.record_hash,
+            "action_digest": seal.action_digest,
+            "policy_version_id": seal.policy_version_id,
+            "action": req.tool_name,
+            "arm_id": self.arm_id,
+        })
+        .to_string();
+        engine.audit_log().record_event(
+            "GOVERNANCE_SEAL_CONSUMED",
+            &self.agent_name,
+            &seal_consumed_details,
+            "CONSUMED",
+        );
+
+        // Step 5: Execute via self.execute_tiered_tool_confined(...)
+        let receipt = match self
+            .execute_tiered_tool_confined(ticket, resource, req, dispatcher, observed_canary_hash)
+            .await
+        {
+            Ok(receipt) => receipt,
+            Err(e) => {
+                // Step 6: If execution fails, rollback fiscal debit reservation if debit_id was provided, and return error.
+                if let Some(did) = debit_id {
+                    let _ = engine.ledger().rollback(did);
+                }
+
+                let refusal_details = serde_json::json!({
+                    "event_type": "ACTUATION_REFUSAL_RECEIPT",
+                    "seal_id": seal.seal_id,
+                    "action": req.tool_name,
+                    "agent_id": self.agent_name,
+                    "error": e.to_string(),
+                })
+                .to_string();
+                let _ = engine.audit_log().record_event(
+                    "ACTUATION_REFUSAL_RECEIPT",
+                    &self.agent_name,
+                    &refusal_details,
+                    "FAILURE",
+                );
+
+                return Err(ArmExecutionError::from(e));
+            }
+        };
+
+        // Step 7: If execution succeeds, confirm fiscal debit reservation (engine.confirm_fiscal_reservation(debit_id))
+        if let Some(did) = debit_id {
+            engine.confirm_fiscal_reservation(did).map_err(|e| {
+                ArmExecutionError::FiscalSettlementFailed {
+                    debit_id: did.to_string(),
+                    reason: e.to_string(),
+                }
+            })?;
+        }
+
+        // Step 8: Record and emit conforming ACTUATION_RECEIPT trace event via engine.record_actuation_trace()
+        engine
+            .record_actuation_trace(&seal.seal_id, &req.tool_name, &receipt)
+            .map_err(ArmExecutionError::TraceEmissionFailed)?;
+
+        // Step 9: Return the execution receipt
+        Ok(receipt)
+    }
 }
 
 /// A supervisor-managed registry containing the Level 1 containment rings
@@ -1521,6 +1686,10 @@ pub struct ArmRingRegistry {
     pub rings: Arc<RwLock<std::collections::HashMap<usize, Arc<ArmContainmentRing>>>>,
     master_seed: [u8; 32],
     watchout_signals: Arc<RwLock<Vec<super::primitives::MeshWatchOutSignal>>>,
+    /// Fleet-wide CAGE governance engine attached to all arm rings.
+    pub(crate) cage_engine: Arc<
+        std::sync::RwLock<Option<Arc<crate::security::cage_governance::CageGovernanceEngine>>>,
+    >,
 }
 
 impl ArmRingRegistry {
@@ -1573,6 +1742,7 @@ impl ArmRingRegistry {
             rings: Arc::new(RwLock::new(map)),
             master_seed: seed,
             watchout_signals: Arc::new(RwLock::new(Vec::new())),
+            cage_engine: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -1643,8 +1813,47 @@ impl ArmRingRegistry {
         rings.values().find(|r| r.agent_name == agent_name).cloned()
     }
 
+    /// Attaches a CAGE governance engine to this registry and propagates to all active rings.
+    pub fn with_cage_engine(self, engine: Arc<CageGovernanceEngine>) -> Self {
+        *self.cage_engine.write().unwrap() = Some(Arc::clone(&engine));
+        if let Ok(rings) = self.rings.try_read() {
+            for ring in rings.values() {
+                ring.attach_cage_engine(Arc::clone(&engine));
+            }
+        }
+        self
+    }
+
+    /// Fleet-wide dynamic attachment: propagates CAGE engine across all active rings in the registry.
+    pub async fn attach_cage_engine(&self, engine: Arc<CageGovernanceEngine>) {
+        *self.cage_engine.write().unwrap() = Some(Arc::clone(&engine));
+        let rings = self.rings.read().await;
+        for ring in rings.values() {
+            ring.attach_cage_engine(Arc::clone(&engine));
+        }
+    }
+
+    /// Synchronous variant of attach_cage_engine for non-async contexts.
+    pub fn attach_cage_engine_sync(&self, engine: Arc<CageGovernanceEngine>) {
+        *self.cage_engine.write().unwrap() = Some(Arc::clone(&engine));
+        if let Ok(rings) = self.rings.try_read() {
+            for ring in rings.values() {
+                ring.attach_cage_engine(Arc::clone(&engine));
+            }
+        }
+    }
+
+    /// Returns the fleet-wide attached CAGE governance engine, if configured.
+    pub fn cage_engine(&self) -> Option<Arc<CageGovernanceEngine>> {
+        self.cage_engine.read().unwrap().clone()
+    }
+
     /// Registers a new or custom arm containment ring into the fleet registry.
+    /// If a fleet CAGE engine is attached, it is automatically propagated to the registered ring.
     pub async fn register_ring(&self, ring: Arc<ArmContainmentRing>) {
+        if let Some(engine) = self.cage_engine() {
+            ring.attach_cage_engine(engine);
+        }
         let mut rings = self.rings.write().await;
         rings.insert(ring.arm_id, ring);
     }
@@ -1713,5 +1922,176 @@ impl ArmRingRegistry {
             }
         }
         list
+    }
+}
+
+/// Strongly typed error taxonomy for CAGE actuator confinement seal gating.
+#[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize)]
+pub enum ArmExecutionError {
+    #[error("Missing CAGE routing seal for action '{action}': {details}")]
+    MissingCageSeal { action: String, details: String },
+
+    #[error("Invalid CAGE routing seal '{seal_id}': {reason}")]
+    InvalidCageSeal { seal_id: String, reason: String },
+
+    #[error("Policy version mismatch: expected active version '{expected}', seal specifies '{actual}'")]
+    PolicyVersionMismatch { expected: String, actual: String },
+
+    #[error("CAGE governance pipeline rejected action '{action}': verdict={verdict}, reason={reason}")]
+    CageRejected {
+        action: String,
+        verdict: String,
+        reason: String,
+    },
+
+    #[error("CAGE routing seal '{seal_id}' has already been consumed (replay attack detected)")]
+    SealAlreadyConsumed { seal_id: String },
+
+    #[error("CAGE routing seal '{seal_id}' has expired: expires_at={expires_at}, current_time={current_time}")]
+    SealExpired {
+        seal_id: String,
+        expires_at: u64,
+        current_time: u64,
+    },
+
+    #[error("Action digest mismatch: expected '{expected}', seal specifies '{actual}'")]
+    ActionDigestMismatch { expected: String, actual: String },
+
+    #[error("CAGE governance engine not configured on ArmContainmentRing {arm_id}")]
+    EngineNotConfigured { arm_id: usize },
+
+    #[error("CAGE fiscal reservation confirmation failed for debit '{debit_id}': {reason}")]
+    FiscalSettlementFailed { debit_id: String, reason: String },
+
+    #[error("GOVERNANCE_TRACE execution event emission failed: {0}")]
+    TraceEmissionFailed(String),
+
+    #[error("Containment security violation: {0}")]
+    SecurityViolation(String),
+}
+
+impl From<SealRejection> for ArmExecutionError {
+    fn from(err: SealRejection) -> Self {
+        match err {
+            SealRejection::InvalidSignature => ArmExecutionError::InvalidCageSeal {
+                seal_id: "unknown".to_string(),
+                reason: "Cryptographic HMAC-SHA256 signature is invalid or tampered".to_string(),
+            },
+            SealRejection::Expired {
+                current_time,
+                expires_at,
+            } => ArmExecutionError::SealExpired {
+                seal_id: "unknown".to_string(),
+                expires_at,
+                current_time,
+            },
+            SealRejection::FutureTimestamp {
+                current_time,
+                issued_at,
+            } => ArmExecutionError::InvalidCageSeal {
+                seal_id: "unknown".to_string(),
+                reason: format!(
+                    "Future timestamp detected: current={}, issued={}",
+                    current_time, issued_at
+                ),
+            },
+            SealRejection::AlreadyConsumed(seal_id) => {
+                ArmExecutionError::SealAlreadyConsumed { seal_id }
+            }
+            SealRejection::PolicyVersionMismatch { expected, actual } => {
+                ArmExecutionError::PolicyVersionMismatch { expected, actual }
+            }
+            SealRejection::ActionDigestMismatch { expected, actual } => {
+                ArmExecutionError::ActionDigestMismatch { expected, actual }
+            }
+            SealRejection::RecordHashMismatch { expected, actual } => {
+                ArmExecutionError::InvalidCageSeal {
+                    seal_id: "unknown".to_string(),
+                    reason: format!(
+                        "Record hash chain mismatch: expected={}, actual={}",
+                        expected, actual
+                    ),
+                }
+            }
+            SealRejection::UnanchoredEvidence(reason) => ArmExecutionError::InvalidCageSeal {
+                seal_id: "unknown".to_string(),
+                reason: format!("Unanchored audit evidence: {}", reason),
+            },
+            SealRejection::MalformedSeal(reason) => ArmExecutionError::InvalidCageSeal {
+                seal_id: "unknown".to_string(),
+                reason: format!("Malformed seal: {}", reason),
+            },
+        }
+    }
+}
+
+impl From<OctopusSecurityError> for ArmExecutionError {
+    fn from(err: OctopusSecurityError) -> Self {
+        ArmExecutionError::SecurityViolation(err.to_string())
+    }
+}
+
+impl From<ArmExecutionError> for OctopusSecurityError {
+    fn from(err: ArmExecutionError) -> Self {
+        match err {
+            ArmExecutionError::MissingCageSeal { action, details } => {
+                OctopusSecurityError::CapabilityDenied(format!(
+                    "MISSING_CAGE_SEAL [{}]: {}",
+                    action, details
+                ))
+            }
+            ArmExecutionError::InvalidCageSeal { seal_id, reason } => {
+                OctopusSecurityError::CapabilityDenied(format!(
+                    "INVALID_CAGE_SEAL [{}]: {}",
+                    seal_id, reason
+                ))
+            }
+            ArmExecutionError::PolicyVersionMismatch { expected, actual } => {
+                OctopusSecurityError::DeterministicLayerViolation(format!(
+                    "CAGE_POLICY_VERSION_MISMATCH: expected='{}', actual='{}'",
+                    expected, actual
+                ))
+            }
+            ArmExecutionError::CageRejected {
+                action,
+                verdict,
+                reason,
+            } => OctopusSecurityError::CapabilityDenied(format!(
+                "CAGE_VERDICT_REJECTED [{}]: verdict={}, reason={}",
+                action, verdict, reason
+            )),
+            ArmExecutionError::SealAlreadyConsumed { seal_id } => {
+                OctopusSecurityError::CapabilityDenied(format!(
+                    "CAGE_SEAL_ALREADY_CONSUMED: {}",
+                    seal_id
+                ))
+            }
+            ArmExecutionError::SealExpired { .. } => OctopusSecurityError::ExecutionTimeout,
+            ArmExecutionError::ActionDigestMismatch { expected, actual } => {
+                OctopusSecurityError::MerkleTamperDetected(format!(
+                    "CAGE_ACTION_DIGEST_MISMATCH: expected='{}', actual='{}'",
+                    expected, actual
+                ))
+            }
+            ArmExecutionError::EngineNotConfigured { arm_id } => {
+                OctopusSecurityError::IsolationViolation(format!(
+                    "CAGE_ENGINE_NOT_CONFIGURED: Arm {}",
+                    arm_id
+                ))
+            }
+            ArmExecutionError::FiscalSettlementFailed { debit_id, reason } => {
+                OctopusSecurityError::ResourceQuotaExceeded(format!(
+                    "CAGE_FISCAL_SETTLEMENT_FAILED [{}]: {}",
+                    debit_id, reason
+                ))
+            }
+            ArmExecutionError::TraceEmissionFailed(err) => {
+                OctopusSecurityError::DeterministicLayerViolation(format!(
+                    "CAGE_TRACE_EMISSION_FAILED: {}",
+                    err
+                ))
+            }
+            ArmExecutionError::SecurityViolation(msg) => OctopusSecurityError::CapabilityDenied(msg),
+        }
     }
 }

@@ -54,13 +54,13 @@ pub use research_ingest::{
 };
 pub use brain::CentralBrain;
 pub use containment_ring::{
-    ArmContainmentRing, ArmRingConfig, ArmRingMeshMessage, ArmRingRegistry, AuditEvent, Authorizer,
-    BoxFuture, BudgetQuota, CapabilityGate, CedarAuthorizer, CedarGate, ContainmentRing,
-    EgressProxy, EgressRequest, EgressResponse, EgressSecurityLevel, EnclaveToolExecutor,
-    IdentityGate, IsolationManager, MeshGuard, Operation, PolicyAttestationRecord, ResourceGuard,
-    RingAttestation, RingAuditEntry, RingAuditLedger, RingConfig, RingController, RingDecision,
-    RingError, RingOperationRequest, RingRequest, SandboxConstraints, ToolExecutor,
-    TrustedArmHandle,
+    ArmContainmentRing, ArmExecutionError, ArmRingConfig, ArmRingMeshMessage, ArmRingRegistry,
+    AuditEvent, Authorizer, BoxFuture, BudgetQuota, CapabilityGate, CedarAuthorizer, CedarGate,
+    ContainmentRing, EgressProxy, EgressRequest, EgressResponse, EgressSecurityLevel,
+    EnclaveToolExecutor, IdentityGate, IsolationManager, MeshGuard, Operation,
+    PolicyAttestationRecord, ResourceGuard, RingAttestation, RingAuditEntry, RingAuditLedger,
+    RingConfig, RingController, RingDecision, RingError, RingOperationRequest, RingRequest,
+    SandboxConstraints, ToolExecutor, TrustedArmHandle,
 };
 pub use core::circuit_breaker::KillSwitch;
 pub use core::merkle::{

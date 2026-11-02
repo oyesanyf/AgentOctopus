@@ -7,10 +7,16 @@
 //!
 //! Includes rigorous Positive Controls, Negative Controls, and Execution Epoch verification.
 
-use agent_octopus::containment_ring::{ArmContainmentRing, ArmRingRegistry};
+use agent_octopus::containment_ring::{
+    ArmContainmentRing, ArmExecutionError, ArmRingRegistry, ExecutionTier,
+    TieredExecutionDispatcher, TieredToolRequest,
+};
 use agent_octopus::core::types::{ArmRole, OctopusSecurityError, StrategicDirective};
 use agent_octopus::neural_mesh::MessageKind;
+use agent_octopus::security::cage_governance::CageGovernanceEngine;
 use agent_octopus::swarm::orchestrator::SwarmManager;
+use sha2::Digest;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -592,4 +598,564 @@ async fn test_mesh_guard_pascal_case_and_security_arms_107_to_110_enforcement() 
         );
         assert!(reason.contains("Missing required generation epoch"));
     }
+}
+
+fn new_test_dispatcher() -> TieredExecutionDispatcher {
+    let mercury = Arc::new(agent_octopus::security::mercury_guard::MercuryContainmentEngine::new());
+    TieredExecutionDispatcher::try_new(mercury).expect("dispatcher init")
+}
+
+fn create_test_seal_for_request(
+    engine: &CageGovernanceEngine,
+    agent_id: &str,
+    tool_name: &str,
+    resource: &str,
+    payload: &[u8],
+    offset_secs: i64,
+) -> agent_octopus::security::cage_governance::CageRoutingSeal {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let issued_at = if offset_secs < 0 {
+        now.saturating_sub((-offset_secs) as u64)
+    } else {
+        now.saturating_add(offset_secs as u64)
+    };
+
+    let params_val: serde_json::Value = serde_json::from_slice(payload).unwrap_or_else(|_| {
+        serde_json::json!({
+            "raw_sha256": hex::encode(sha2::Sha256::digest(payload)),
+            "byte_len": payload.len(),
+            "resource": resource,
+        })
+    });
+    let action_digest = engine.compute_action_digest(tool_name, &params_val);
+    let record_hash = engine.audit_log().record_event(
+        "CAGE_GOVERNANCE_DECISION",
+        agent_id,
+        &serde_json::json!({
+            "event_type": "GOVERNANCE_DECISION",
+            "verdict": "ALLOW",
+            "seal_present": true,
+            "stages_evaluated": [
+                {"stage_name": "ftra"},
+                {"stage_name": "stpa"},
+                {"stage_name": "cedar"},
+                {"stage_name": "confidence"},
+                {"stage_name": "consensus"},
+                {"stage_name": "cbf"},
+                {"stage_name": "fiscal"},
+            ],
+        })
+        .to_string(),
+        "ALLOW",
+    );
+    engine
+        .seal_signer()
+        .issue_seal(&action_digest, &record_hash, issued_at)
+        .expect("seal issuance should succeed")
+}
+
+#[tokio::test]
+async fn test_execute_tool_with_valid_cage_seal_succeeds_and_emits_trace() {
+    let engine = Arc::new(CageGovernanceEngine::default());
+    let ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED)
+        .with_cage_engine(Arc::clone(&engine));
+
+    let scratch_dir = std::env::temp_dir().join(format!("octopus_cage_test_{}", std::process::id()));
+    let dispatcher = new_test_dispatcher();
+
+    let mut ticket = ring
+        .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+        .await
+        .expect("issue dirac ticket");
+
+    let payload = b"INVOICE #1001: Amount $500.00 Approved".to_vec();
+    let tiered_req = TieredToolRequest {
+        agent_id: ring.agent_name.clone(),
+        role: ArmRole::UntrustedDocIngest,
+        tool_name: "doc_extractor".to_string(),
+        payload: payload.clone(),
+        custom_wat: None,
+        native_command: None,
+        scratchpad_root: scratch_dir.clone(),
+        allow_scratch_write: false,
+    };
+
+    let seal = create_test_seal_for_request(
+        &engine,
+        &ring.agent_name,
+        "doc_extractor",
+        "s3://invoices/inv_01.pdf",
+        &payload,
+        0,
+    );
+
+    // Actuate with valid seal
+    let receipt = ring
+        .execute_tool_with_cage_seal(
+            &mut ticket,
+            &seal,
+            "s3://invoices/inv_01.pdf",
+            &tiered_req,
+            &dispatcher,
+            None,
+            None,
+        )
+        .await
+        .expect("Execution with authentic seal must succeed");
+
+    assert_eq!(receipt.selected_tier, ExecutionTier::Tier1InProcessWasm);
+    assert!(receipt.exit_code >= 0, "Tier 1 Wasm execution should return non-negative exit code, got {}", receipt.exit_code);
+
+    // Verify audit log has GOVERNANCE_SEAL_CONSUMED and ACTUATION_RECEIPT
+    let entries = engine.audit_log().get_entries();
+    let has_consumed = entries.iter().any(|e| {
+        e.event_type == "GOVERNANCE_SEAL_CONSUMED" && e.details.contains(&seal.seal_id)
+    });
+    assert!(has_consumed, "GOVERNANCE_SEAL_CONSUMED must be present in audit ledger");
+
+    let has_receipt = entries.iter().any(|e| {
+        e.event_type == "ACTUATION_RECEIPT" && e.details.contains(&seal.seal_id)
+    });
+    assert!(has_receipt, "ACTUATION_RECEIPT must be present in audit ledger");
+
+    // Verify full trace stream conformance against all 7 rules
+    let traces: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| serde_json::to_value(e).unwrap())
+        .collect();
+    let report = engine
+        .verify_trace_conformance(&traces)
+        .expect("trace verification");
+    assert!(
+        report.status.is_conformant(),
+        "Trace stream must be conformant: {:?}",
+        report.findings
+    );
+    assert_eq!(report.findings_count, 0);
+}
+
+#[tokio::test]
+async fn test_execute_tool_with_replayed_cage_seal_fails_closed() {
+    let engine = Arc::new(CageGovernanceEngine::default());
+    let ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED)
+        .with_cage_engine(Arc::clone(&engine));
+
+    let scratch_dir = std::env::temp_dir().join(format!("octopus_cage_replay_{}", std::process::id()));
+    let dispatcher = new_test_dispatcher();
+
+    let mut ticket1 = ring
+        .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+        .await
+        .expect("issue dirac ticket");
+
+    let payload = b"INVOICE #1002: Replay Test".to_vec();
+    let tiered_req = TieredToolRequest {
+        agent_id: ring.agent_name.clone(),
+        role: ArmRole::UntrustedDocIngest,
+        tool_name: "doc_extractor".to_string(),
+        payload: payload.clone(),
+        custom_wat: None,
+        native_command: None,
+        scratchpad_root: scratch_dir.clone(),
+        allow_scratch_write: false,
+    };
+
+    let seal = create_test_seal_for_request(
+        &engine,
+        &ring.agent_name,
+        "doc_extractor",
+        "s3://invoices/inv_01.pdf",
+        &payload,
+        0,
+    );
+
+    // First execution succeeds
+    let _ = ring
+        .execute_tool_with_cage_seal(
+            &mut ticket1,
+            &seal,
+            "s3://invoices/inv_01.pdf",
+            &tiered_req,
+            &dispatcher,
+            None,
+            None,
+        )
+        .await
+        .expect("First execution must succeed");
+
+    // Second execution with identical seal must fail-closed (Replay detected)
+    let mut ticket2 = ring
+        .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+        .await
+        .expect("issue dirac ticket");
+
+    let replay_err = ring
+        .execute_tool_with_cage_seal(
+            &mut ticket2,
+            &seal,
+            "s3://invoices/inv_01.pdf",
+            &tiered_req,
+            &dispatcher,
+            None,
+            None,
+        )
+        .await
+        .expect_err("Replayed seal must be rejected");
+
+    assert!(
+        matches!(replay_err, ArmExecutionError::SealAlreadyConsumed { ref seal_id } if seal_id == &seal.seal_id),
+        "Expected SealAlreadyConsumed error, got: {:?}",
+        replay_err
+    );
+
+    let sec_err = OctopusSecurityError::from(replay_err);
+    assert!(
+        matches!(sec_err, OctopusSecurityError::CapabilityDenied(ref msg) if msg.contains("CAGE_SEAL_ALREADY_CONSUMED")),
+        "Expected CAGE_SEAL_ALREADY_CONSUMED in CapabilityDenied, got: {:?}",
+        sec_err
+    );
+}
+
+#[tokio::test]
+async fn test_execute_tool_with_expired_cage_seal_fails_closed() {
+    let engine = Arc::new(CageGovernanceEngine::default());
+    let ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED)
+        .with_cage_engine(Arc::clone(&engine));
+
+    let scratch_dir = std::env::temp_dir().join(format!("octopus_cage_expired_{}", std::process::id()));
+    let dispatcher = new_test_dispatcher();
+
+    let mut ticket = ring
+        .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+        .await
+        .expect("issue dirac ticket");
+
+    let payload = b"INVOICE #1003: Expired Test".to_vec();
+    let tiered_req = TieredToolRequest {
+        agent_id: ring.agent_name.clone(),
+        role: ArmRole::UntrustedDocIngest,
+        tool_name: "doc_extractor".to_string(),
+        payload: payload.clone(),
+        custom_wat: None,
+        native_command: None,
+        scratchpad_root: scratch_dir.clone(),
+        allow_scratch_write: false,
+    };
+
+    // Issue seal issued 35 seconds in the past (exceeding 30s TTL)
+    let expired_seal = create_test_seal_for_request(
+        &engine,
+        &ring.agent_name,
+        "doc_extractor",
+        "s3://invoices/inv_01.pdf",
+        &payload,
+        -35,
+    );
+
+    let expired_err = ring
+        .execute_tool_with_cage_seal(
+            &mut ticket,
+            &expired_seal,
+            "s3://invoices/inv_01.pdf",
+            &tiered_req,
+            &dispatcher,
+            None,
+            None,
+        )
+        .await
+        .expect_err("Expired seal must be rejected");
+
+    assert!(
+        matches!(expired_err, ArmExecutionError::SealExpired { .. }),
+        "Expected SealExpired error, got: {:?}",
+        expired_err
+    );
+
+    let sec_err = OctopusSecurityError::from(expired_err);
+    assert_eq!(sec_err, OctopusSecurityError::ExecutionTimeout);
+}
+
+#[tokio::test]
+async fn test_execute_tool_with_action_digest_mismatch_fails_closed() {
+    let engine = Arc::new(CageGovernanceEngine::default());
+    let ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED)
+        .with_cage_engine(Arc::clone(&engine));
+
+    let scratch_dir = std::env::temp_dir().join(format!("octopus_cage_mismatch_{}", std::process::id()));
+    let dispatcher = new_test_dispatcher();
+
+    let mut ticket = ring
+        .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+        .await
+        .expect("issue dirac ticket");
+
+    let payload = b"INVOICE #1004: Real Payload".to_vec();
+    let tiered_req = TieredToolRequest {
+        agent_id: ring.agent_name.clone(),
+        role: ArmRole::UntrustedDocIngest,
+        tool_name: "doc_extractor".to_string(),
+        payload: payload.clone(),
+        custom_wat: None,
+        native_command: None,
+        scratchpad_root: scratch_dir.clone(),
+        allow_scratch_write: false,
+    };
+
+    // Issue seal for a DIFFERENT payload ("Tampered Payload")
+    let mismatched_seal = create_test_seal_for_request(
+        &engine,
+        &ring.agent_name,
+        "doc_extractor",
+        "s3://invoices/inv_01.pdf",
+        b"Tampered Payload",
+        0,
+    );
+
+    let mismatch_err = ring
+        .execute_tool_with_cage_seal(
+            &mut ticket,
+            &mismatched_seal,
+            "s3://invoices/inv_01.pdf",
+            &tiered_req,
+            &dispatcher,
+            None,
+            None,
+        )
+        .await
+        .expect_err("Mismatched action digest must be rejected");
+
+    assert!(
+        matches!(mismatch_err, ArmExecutionError::ActionDigestMismatch { .. }),
+        "Expected ActionDigestMismatch error, got: {:?}",
+        mismatch_err
+    );
+
+    let sec_err = OctopusSecurityError::from(mismatch_err);
+    assert!(
+        matches!(sec_err, OctopusSecurityError::MerkleTamperDetected(ref msg) if msg.contains("CAGE_ACTION_DIGEST_MISMATCH")),
+        "Expected CAGE_ACTION_DIGEST_MISMATCH, got: {:?}",
+        sec_err
+    );
+}
+
+#[tokio::test]
+async fn test_execute_tool_without_configured_engine_fails_closed() {
+    // Ring without attached engine
+    let ring = ArmContainmentRing::new(17, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED);
+    assert!(ring.cage_engine().is_none());
+
+    let scratch_dir = std::env::temp_dir().join(format!("octopus_cage_no_engine_{}", std::process::id()));
+    let dispatcher = new_test_dispatcher();
+
+    let mut ticket = ring
+        .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+        .await
+        .expect("issue dirac ticket");
+
+    let payload = b"INVOICE #1005: Unconfigured Engine Test".to_vec();
+    let tiered_req = TieredToolRequest {
+        agent_id: ring.agent_name.clone(),
+        role: ArmRole::UntrustedDocIngest,
+        tool_name: "doc_extractor".to_string(),
+        payload: payload.clone(),
+        custom_wat: None,
+        native_command: None,
+        scratchpad_root: scratch_dir.clone(),
+        allow_scratch_write: false,
+    };
+
+    // Dummy seal
+    let engine = CageGovernanceEngine::default();
+    let dummy_seal = create_test_seal_for_request(
+        &engine,
+        &ring.agent_name,
+        "doc_extractor",
+        "s3://invoices/inv_01.pdf",
+        &payload,
+        0,
+    );
+
+    let err = ring
+        .execute_tool_with_cage_seal(
+            &mut ticket,
+            &dummy_seal,
+            "s3://invoices/inv_01.pdf",
+            &tiered_req,
+            &dispatcher,
+            None,
+            None,
+        )
+        .await
+        .expect_err("Unconfigured engine must fail closed");
+
+    assert_eq!(err, ArmExecutionError::EngineNotConfigured { arm_id: 17 });
+    let sec_err = OctopusSecurityError::from(err);
+    assert_eq!(
+        sec_err,
+        OctopusSecurityError::IsolationViolation("CAGE_ENGINE_NOT_CONFIGURED: Arm 17".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_execute_tool_fiscal_debit_confirm_and_rollback() {
+    let engine = Arc::new(CageGovernanceEngine::default());
+    let ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED)
+        .with_cage_engine(Arc::clone(&engine));
+
+    let scratch_dir = std::env::temp_dir().join(format!("octopus_cage_fiscal_{}", std::process::id()));
+    let dispatcher = new_test_dispatcher();
+
+    // Part A: Successful actuation confirms fiscal pre-reservation
+    let debit_id = format!("debit-{}-doc_extractor-1", ring.agent_name);
+    let debit_commit = engine
+        .ledger()
+        .pre_reserve(50.0, &debit_id)
+        .expect("fiscal pre-reservation");
+    assert_eq!(debit_commit.debit_id, debit_id);
+    assert_eq!(engine.ledger().available_budget(), 950.0);
+
+    let mut ticket = ring
+        .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+        .await
+        .expect("issue dirac ticket");
+
+    let payload = b"INVOICE #1006: Fiscal Confirm Test".to_vec();
+    let tiered_req = TieredToolRequest {
+        agent_id: ring.agent_name.clone(),
+        role: ArmRole::UntrustedDocIngest,
+        tool_name: "doc_extractor".to_string(),
+        payload: payload.clone(),
+        custom_wat: None,
+        native_command: None,
+        scratchpad_root: scratch_dir.clone(),
+        allow_scratch_write: false,
+    };
+
+    let seal = create_test_seal_for_request(
+        &engine,
+        &ring.agent_name,
+        "doc_extractor",
+        "s3://invoices/inv_01.pdf",
+        &payload,
+        0,
+    );
+
+    let receipt = ring
+        .execute_tool_with_cage_seal(
+            &mut ticket,
+            &seal,
+            "s3://invoices/inv_01.pdf",
+            &tiered_req,
+            &dispatcher,
+            None,
+            Some(&debit_id),
+        )
+        .await
+        .expect("Successful actuation with fiscal debit");
+
+    assert!(receipt.exit_code >= 0, "Tier 1 Wasm execution should return non-negative exit code, got {}", receipt.exit_code);
+    // Confirm is settled: rollback attempt now returns error
+    assert!(engine.ledger().rollback(&debit_id).is_err());
+    assert_eq!(engine.ledger().available_budget(), 950.0);
+
+    // Part B: Actuation failure rolls back fiscal reservation with zero balance leakage
+    let debit_fail_id = format!("debit-{}-doc_extractor-fail", ring.agent_name);
+    let debit_fail = engine
+        .ledger()
+        .pre_reserve(50.0, &debit_fail_id)
+        .expect("second fiscal pre-reservation");
+    assert_eq!(debit_fail.debit_id, debit_fail_id);
+    assert_eq!(engine.ledger().available_budget(), 900.0);
+
+    let mut ticket2 = ring
+        .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+        .await
+        .expect("issue dirac ticket");
+
+    // Create a request with role mismatch (role says AccountingLedgerWrite while ring is UntrustedDocIngest)
+    // This triggers an identity validation error inside execute_tiered_tool_confined
+    let bad_req = TieredToolRequest {
+        agent_id: ring.agent_name.clone(),
+        role: ArmRole::AccountingLedgerWrite, // Identity mismatch
+        tool_name: "doc_extractor".to_string(),
+        payload: payload.clone(),
+        custom_wat: None,
+        native_command: None,
+        scratchpad_root: scratch_dir.clone(),
+        allow_scratch_write: false,
+    };
+
+    let seal2 = create_test_seal_for_request(
+        &engine,
+        &ring.agent_name,
+        "doc_extractor",
+        "s3://invoices/inv_01.pdf",
+        &payload,
+        0,
+    );
+
+    let fail_res = ring
+        .execute_tool_with_cage_seal(
+            &mut ticket2,
+            &seal2,
+            "s3://invoices/inv_01.pdf",
+            &bad_req,
+            &dispatcher,
+            None,
+            Some(&debit_fail_id),
+        )
+        .await;
+
+    assert!(fail_res.is_err(), "Actuation with role mismatch must fail");
+    // Verify fiscal rollback: 100.0 was restored to available balance with zero leakage
+    assert_eq!(
+        engine.ledger().available_budget(),
+        950.0,
+        "Fiscal balance must be fully restored after actuation failure (zero balance leakage)"
+    );
+}
+
+#[tokio::test]
+async fn test_arm_ring_registry_fleet_cage_engine_propagation() {
+    let registry = ArmRingRegistry::new(50, TEST_MASTER_SEED);
+    assert!(registry.cage_engine().is_none());
+
+    // Before attachment, rings have no cage engine
+    let ring0 = registry.get_ring(0).await.expect("ring 0");
+    assert!(ring0.cage_engine().is_none());
+
+    // Attach fleet engine
+    let engine = Arc::new(CageGovernanceEngine::default());
+    registry.attach_cage_engine(Arc::clone(&engine)).await;
+
+    assert!(registry.cage_engine().is_some());
+
+    // Verify all 50 worker rings and 12 security rings inherited the engine
+    for arm_id in 0..50 {
+        let ring = registry.get_ring(arm_id).await.expect("worker ring");
+        assert!(ring.cage_engine().is_some(), "Ring {} must have cage engine attached", arm_id);
+    }
+    for sec_id in 100..=111 {
+        let ring = registry.get_ring(sec_id).await.expect("security ring");
+        assert!(ring.cage_engine().is_some(), "Security ring {} must have cage engine attached", sec_id);
+    }
+
+    // Register a new custom ring into the registry; fleet engine must auto-propagate to it
+    let custom_ring = Arc::new(ArmContainmentRing::new(200, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED));
+    assert!(custom_ring.cage_engine().is_none());
+
+    registry.register_ring(Arc::clone(&custom_ring)).await;
+    assert!(
+        custom_ring.cage_engine().is_some(),
+        "Newly registered ring must inherit fleet cage engine automatically"
+    );
+
+    // Verify builder pattern with_cage_engine on registry
+    let registry_builder = ArmRingRegistry::new(10, TEST_MASTER_SEED).with_cage_engine(Arc::clone(&engine));
+    assert!(registry_builder.cage_engine().is_some());
+    let builder_ring = registry_builder.get_ring(5).await.expect("builder ring");
+    assert!(builder_ring.cage_engine().is_some());
 }

@@ -188,6 +188,17 @@ impl CageGovernanceEngine {
         Self::new(root_policy, 1000.0, 0.1, 10.0, secret_key, audit_log)
             .expect("Default engine initialization must succeed")
     }
+}
+
+impl Default for CageGovernanceEngine {
+    fn default() -> Self {
+        let audit_log = Arc::new(SecurityAuditLog::new());
+        let secret = b"cage_governance_engine_default_key_32_bytes";
+        Self::with_default_policy(audit_log, secret)
+    }
+}
+
+impl CageGovernanceEngine {
 
     /// Ingests and compiles a new policy specification, validating against optional expected version.
     pub fn ingest_policy(
@@ -327,11 +338,16 @@ impl CageGovernanceEngine {
         })
         .to_string();
 
+        let is_success = match receipt.selected_tier {
+            crate::containment_ring::ExecutionTier::Tier1InProcessWasm => receipt.exit_code >= 0,
+            crate::containment_ring::ExecutionTier::Tier2NativeWin32Confinement => receipt.exit_code == 0,
+        };
+
         let record_hash = self.audit_log.record_event(
             "ACTUATION_RECEIPT",
             &receipt.agent_id,
             &details,
-            if receipt.exit_code == 0 { "SUCCESS" } else { "FAILURE" },
+            if is_success { "SUCCESS" } else { "FAILURE" },
         );
 
         Ok(record_hash)

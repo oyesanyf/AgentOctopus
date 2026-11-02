@@ -1,76 +1,69 @@
 # Original User Request
 
-## Initial Request — 2026-10-10T10:34:01Z
+## Initial Request — 2026-11-02T15:39:11Z
 
-This is a single self-contained fix; keep it small and focused.
-
-Implement unified, robust error reporting and exception boundaries across the entire AgentOctopus stack (Rust backend, Web UI frontend, and Python test harnesses) so that runtime faults and network failures are captured, formatted with diagnostic context, and reported without crashing services or dropping security guarantees.
+Integrate Google Cybernetic Agent Governance Engine (CAGE) with AgentOctopus natively in Rust for production use, implementing the 7-tier two-phase governance pipeline, CAGE Substrate Contract v1.0, and evidence-bound routing seal verification.
 
 Working directory: d:\harfile\AgentOctopus
-Integrity mode: demo
+Integrity mode: development
+
+Reference:
+- Google CAGE: https://github.com/google/cybernetic-agent-governance-engine (Apache-2.0, arXiv:2606.12320)
+- Integration Plan: C:\Users\oyesanyf\.gemini\antigravity\brain\fa6f75de-b8c5-4c80-a440-d7d12a44e713\cage_integration_plan.md
 
 ## Requirements
 
-### R1. Rust Backend Panic & Result Resilience
-Wrap API dispatch handlers, Cedar policy evaluations, and system command executions with structured error types and panic boundaries (`std::panic::catch_unwind` where appropriate) returning structured JSON error payloads (`{"error": true, "code": "...", "message": "...", "timestamp": "..."}`) rather than panicking or dropping connections.
+### R1. Native Rust CAGE Governance Engine Core
+Implement the core CAGE governance module under `src/security/cage_governance/` with Apache-2.0 attribution notices:
+- `substrate_translator.rs`: Implement CAGE Substrate Contract v1.0 multi-format policy translation auto-detecting Microsoft ACS, LF AAIF, NIST OSCAL 1.1.x, Lula Validation, and Native CAGE YAML formats. Compile ingested policies into Cedar policies, STPA Unsafe Control Action (UCA) rules, and a deterministic 16-character hex SHA-256 `policy_version_id`, enforcing HTTP 409 Conflict on version mismatch.
+- `ftra_stpa.rs`: Implement Tier 0.5 Forward-Looking Trajectory Reachability Analyzer (`PlanGraphAnalyzer`) traversing linear or DAG execution steps with reversibility classification (`Reversible`, `Compensatable`, `ConditionalAutonomous`, `IrreversibleTerminal`) and fail-closed NaN/Inf confidence normalization. Implement Tier 1 STPA/STAMP UCA validation (`StpaValidator`) bound to authenticated `TrustedArmHandle` identities.
+- `cbf_fiscal.rs`: Implement Tier 3a Discrete-Time Control Barrier Function (`CbfSafetyEngine`) enforcing $h(S_{t+1}) \ge (1-\gamma)h(S_t) \ge 0$, sequence replay high-water marks, and monotonic fence epochs. Implement Tier 4 two-phase fiscal and resource pre-reservation (`DebitLedger` & `ReservationScope`) supporting `preview`, `commit`, `rollback`, and `confirm`.
+- `routing_seal.rs`: Implement CAGE Substrate Contract §3 Evidence-Bound Cryptographic Routing Seals bound to `SecurityAuditLog` SHA-256 chain hashes (`record_hash`) with a 30-second default TTL and atomic single-use consumption.
+- `pipeline.rs`: Implement the 7-tier two-phase pipeline (`run_pipeline`) across `Profile::{Full, PostHitl, DryRun}`, dynamically selecting `phase2_mode()` (`Skip`, `Preview`, `Commit`) and producing canonical CAGE verdicts (`ALLOW`, `NARROW`, `REQUIRE_APPROVAL`, `DEFER`, `DENY`).
+- `no_direct_bind_proof.rs`: Native Rust port of the BFS state machine formal model verifying the No-Direct-Bind invariant ($\text{NoDirectBind} \iff (\text{phase} = \text{EXECUTED}) \implies (\text{resolvedAllow} = \text{TRUE})$) across 34 gated states, generating counterexamples for ungated configurations, and verifying `GOVERNANCE_TRACE` schema v1 conformance across all 7 rules.
+- `mod.rs`: Export unified `CageGovernanceEngine` struct and public types.
 
-### R2. Web UI Frontend Exception Interception
-Wrap all Web UI JavaScript asynchronous network requests, DOM event listeners, and WebSocket/poll routines in `try { ... } catch (error)` blocks. When caught, format the error into an interactive diagnostic toast/banner displaying the HTTP status, message, and actionable retry button rather than silently failing in the browser console.
+### R2. Actuator Confinement Seal Enforcement
+Integrate CAGE seal enforcement into `ArmContainmentRing` (`src/containment_ring/arm_ring.rs`) and register the module in `src/security/mod.rs` and `src/lib.rs`:
+- Add `execute_tool_with_cage_seal` requiring an unconsumed, valid evidence-bound `CageRoutingSeal` before Tier-1 Wasm or Tier-2 AppContainer execution proceeds.
+- Record and emit `GOVERNANCE_TRACE` `EXECUTED` events tied to the consumed seal reference.
 
-### R3. Python Test Harness Fault Tolerance
-Wrap network requests and subprocess invocations in `tests/*.py` with explicit `try...except` blocks with typed exception handling (`requests.exceptions.RequestException`, `subprocess.SubprocessError`), logging clear failure diagnostics and error summaries without terminating the audit runner prematurely.
+### R3. CAGE Substrate Contract HTTP Endpoints
+Expose CAGE Substrate Contract v1.0 and proof endpoints in `src/web/api.rs` and route them in `src/web/server.rs`:
+- `POST /governance/ingest-policy` and `POST /api/cage/ingest-policy`
+- `GET /governance/policy-version` and `GET /api/cage/policy-version`
+- `POST /governance/validate-action`, `POST /v1/governance/validate-action`, and `POST /api/cage/validate-action`
+- `POST /governance/consume-seal` and `POST /api/cage/consume-seal`
+- `GET /api/cage/proof-status` and `POST /api/cage/trace-conformance`
 
-## Verification Resources
-- Unit & integration test suites in `tests/continuous_security_rl_tests.rs`.
-- Python test runners in `tests/exhaustive_adversarial_tester.py` and `tests/strix_llm_adversarial_tester.py`.
-- Static and API endpoints served via `src/web/server.rs`.
-
-## Acceptance Criteria
-
-### Rust Server Error Boundary
-- [ ] Passing malformed JSON or triggering simulated runtime faults on `/api/*` endpoints returns HTTP 400/500 with structured JSON diagnostic schema `{ "error": true, "code": ..., "message": ... }` and does not crash `start.exe`.
-- [ ] `cargo check --bin start` and `cargo test` pass cleanly with zero warnings/errors.
-
-### Web UI Error Reporting
-- [ ] Simulating network drop or bad response in the Web UI triggers an on-screen visual error alert/toast containing error details and a retry trigger.
-- [ ] No unhandled Promise rejections are logged in the browser console during API errors.
-
-### Python Suite Error Reporting
-- [ ] Simulating a down gateway or malformed probe payload in `tests/exhaustive_adversarial_tester.py` catches the error, increments a failed/intercepted tally, and outputs a formatted diagnostic traceback instead of unhandled script crash.
-
-
-## Follow-up — 2026-10-10T10:44:37Z
-
-User instruction update: specifically enforce try/catch (try...catch in JavaScript Web UI, try...except in Python test harnesses, and catch_unwind in Rust) across every execution and fetch boundary with structured error reporting.
-
-
-## Follow-up — 2026-10-11T21:28:11Z
-
-Achieve an A-Grade production security standard for Agent Octopus by eliminating runtime authorization bypass capabilities, establishing secure cryptographic secret management with live rotation, and enforcing strict RFC 3986 provenance and canonical URL validation across all threat intelligence and containment perimeters.
-
-Working directory: d:\harfile\AgentOctopus
-Integrity mode: benchmark
-
-## Requirements
-
-### R1. Total Elimination of Production Authorization Bypass Capabilities
-Ensure `CedarGate` and all related policy enforcement brokers cannot be disabled or bypassed via any permitted runtime call paths. Guard any negative-control sensitivity checks behind compile-time test flags (`#[cfg(test)]`) or cryptographically unforgeable, non-exportable capability tokens that cannot be acquired or invoked by runtime agents or external callers.
-
-### R2. Secure Key Management & Dynamic Secret Rotation
-Eliminate all static plaintext fallback secrets from the codebase. Implement runtime cryptographic key generation using system CSPRNG (`rand::thread_rng()`), provide secure environment and configuration loading (`OCTOPUS_CEDAR_SECRET`), and implement an atomic in-memory secret rotation protocol with rollback safety and audit logging.
-
-### R3. Strict RFC 3986 Threat Provenance & Canonical URL Parsing
-Eliminate all naive string splitting and prefix matching across ATLAS synchronization and AppContainer network brokers. Enforce strict RFC 3986 URL parsing, explicit host/path allowlist validation (preventing subdomain and prefix tricks like `attacker.com.google.com` or `atlas-data.attacker.com`), credential rejection, IPv6 literal handling, and ISO calendar versioning (`2024..=2030.01..=12`).
-
-### R4. Exhaustive Adversarial Verification & Negative Control Validation
-Verify that an attacker compromising an individual security component cannot bypass Cedar authorization, cross OS containment boundaries, or tamper with threat intelligence feeds. Validate across all native Rust test suites and continuous security loops.
+### R4. Comprehensive Integration Test Suite
+Implement an end-to-end integration test suite in `tests/cage_governance_integration_tests.rs`:
+- Provide synthetic policy fixtures for all 5 formats and verify compilation, version hashing, and 409 drift rejection.
+- Test FTRA graph analysis and irreversibility classification.
+- Test 2-phase CBF barrier validation and fiscal preview/commit/rollback cycles.
+- Test evidence-bound routing seal issuance, successful actuation, and replay rejection on duplicate consumption.
+- Test BFS state machine proof (confirming 34 gated states) and 7-rule trace conformance validation.
 
 ## Acceptance Criteria
 
-### Security Invariants & Containment
-- [ ] Cedar authorization enforcement is fail-closed and cannot be disabled in production runtime paths by any external caller.
-- [ ] Cedar gateway secret is loaded securely at runtime with CSPRNG entropy / environment variables, supporting live cryptographic rotation without service disruption.
-- [ ] ATLAS synchronization strictly rejects spoofed prefix domains and invalid version headers.
-- [ ] All URL and domain extractions handle IPv6 literals (`[::1]`), ports, and userinfo credentials safely without string-splitting flaws.
-- [ ] All 13+ integration test suites compile and pass with 0 failures under `cargo test`.
-- [ ] Live Agent Octopus dashboard on port 5005 runs continuously with 0 regressions.
+### Governance Core & Policy Translation
+- [ ] Substrate policy ingestion auto-detects and parses ACS, AAIF, OSCAL 1.1.x, Lula, and CAGE YAML formats into Cedar policies and STPA rules.
+- [ ] Ingestion computes a deterministic 16-character hex SHA-256 `policy_version_id` and rejects mismatched pinned versions with HTTP 409 Conflict.
+- [ ] FTRA graph reachability analyzer traverses execution plans, treats NaN/Inf confidence as 0.0 fail-closed, and flags irreversible terminal steps with `HitlRequired` or `Blocked`.
+- [ ] Discrete-Time Control Barrier Function enforces $h(S_{t+1}) \ge (1-\gamma)h(S_t) \ge 0$, rejects sequence replay regression, and verifies monotonic fence epochs.
+- [ ] Two-phase resource pre-reservation correctly performs `preview`, `commit`, `rollback`, and `confirm` without balance leakage.
+
+### Routing Seal & Containment Actuation
+- [ ] Cryptographic routing seals bind to `SecurityAuditLog` chain hash (`record_hash`) and enforce a 30s TTL.
+- [ ] `ArmContainmentRing::execute_tool_with_cage_seal` succeeds on first execution with a valid seal and atomically marks it consumed.
+- [ ] Replayed, duplicate, or expired routing seals are rejected before actuator invocation.
+- [ ] Actuator execution emits conforming `GOVERNANCE_TRACE` `EXECUTED` records.
+
+### Formal Proof & Trace Conformance
+- [ ] BFS state machine verifier exhaustively checks reachable states and proves No-Direct-Bind across exactly 34 gated states.
+- [ ] BFS verifier detects an explicit counterexample when run in ungated mode (17 reachable states).
+- [ ] Trace conformance verifier validates `GOVERNANCE_TRACE` streams against all 7 rules (`schema`, `plan`, `coverage`, `seal`, `reachable`, `no_direct_bind`, `single_use`).
+
+### HTTP Endpoints & Clean Build
+- [ ] Substrate HTTP endpoints in `src/web/server.rs` (`/governance/ingest-policy`, `/governance/policy-version`, `/governance/validate-action`, `/governance/consume-seal`, `/api/cage/proof-status`, `/api/cage/trace-conformance`) are wired and respond correctly.
+- [ ] `cargo test --test cage_governance_integration_tests` compiles and passes with all tests green.

@@ -790,6 +790,9 @@ impl FormalBfsModel {
                         || k.contains("prev_hash")
                     {
                         if let Some(v_str) = v.as_str() {
+                            if k.contains("prev_hash") && v_str.starts_with("GENESIS_") {
+                                continue;
+                            }
                             if !Self::is_64_hex_lowercase(v_str) {
                                 findings.push(StreamFinding {
                                     record_index: idx,
@@ -812,7 +815,16 @@ impl FormalBfsModel {
                 continue;
             }
 
-            let event_type = rec.get("event_type").and_then(|v| v.as_str()).unwrap_or("");
+            let details_obj = rec
+                .get("details")
+                .and_then(|d| d.as_str())
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+
+            let event_type = rec
+                .get("event_type")
+                .and_then(|v| v.as_str())
+                .or_else(|| details_obj.as_ref()?.get("event_type")?.as_str())
+                .unwrap_or("");
 
             // Rule 5: reachable state check
             if event_type == "STATE_TRANSITION" {
@@ -850,10 +862,19 @@ impl FormalBfsModel {
             }
 
             // Rule 3: coverage & Rule 4: seal
-            if event_type == "GOVERNANCE_DECISION" {
-                let verdict = rec.get("verdict").and_then(|v| v.as_str()).unwrap_or("");
+            if event_type == "GOVERNANCE_DECISION" || event_type == "CAGE_GOVERNANCE_DECISION" {
+                let verdict = rec
+                    .get("verdict")
+                    .or_else(|| rec.get("decision"))
+                    .or_else(|| details_obj.as_ref()?.get("verdict"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let rec_hash = rec.get("record_hash").and_then(|v| v.as_str()).unwrap_or("");
-                let seal_present = rec.get("seal_present").and_then(|v| v.as_bool()).unwrap_or(false);
+                let seal_present = rec
+                    .get("seal_present")
+                    .or_else(|| details_obj.as_ref()?.get("seal_present"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
 
                 // Rule 4: seal
                 if (verdict == "ALLOW" || verdict == "NARROW") && !seal_present {
@@ -865,7 +886,12 @@ impl FormalBfsModel {
                 }
 
                 // Rule 3: coverage (all stages present)
-                if let Some(stages) = rec.get("stages_evaluated").and_then(|v| v.as_array()) {
+                let stages_opt = rec
+                    .get("stages_evaluated")
+                    .or_else(|| details_obj.as_ref()?.get("stages_evaluated"))
+                    .and_then(|v| v.as_array());
+
+                if let Some(stages) = stages_opt {
                     let evaluated_names: HashSet<&str> = stages
                         .iter()
                         .filter_map(|s| s.get("stage_name").and_then(|n| n.as_str()))
@@ -891,9 +917,14 @@ impl FormalBfsModel {
 
             // Rule 6: no_direct_bind & Rule 7: single_use
             if event_type == "GOVERNANCE_SEAL_CONSUMED" {
-                let seal_id = rec.get("seal_id").and_then(|v| v.as_str()).unwrap_or("");
+                let seal_id = rec
+                    .get("seal_id")
+                    .or_else(|| details_obj.as_ref()?.get("seal_id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let decision_hash = rec
                     .get("decision_record_hash")
+                    .or_else(|| details_obj.as_ref()?.get("decision_record_hash"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
@@ -922,8 +953,18 @@ impl FormalBfsModel {
                 }
             }
 
-            if event_type == "ACTUATION_RECEIPT" || event_type == "ACTUATION_REFUSAL_RECEIPT" {
-                let seal_ref = rec.get("seal_id").and_then(|v| v.as_str()).unwrap_or("");
+            if event_type == "ACTUATION_RECEIPT"
+                || event_type == "ACTUATION_REFUSAL_RECEIPT"
+                || event_type == "ACTUATION_EXECUTED"
+                || event_type == "GOVERNANCE_EXECUTION"
+            {
+                let seal_ref = rec
+                    .get("seal_id")
+                    .or_else(|| rec.get("seal_ref"))
+                    .or_else(|| details_obj.as_ref()?.get("seal_id"))
+                    .or_else(|| details_obj.as_ref()?.get("seal_ref"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 if !seals_consumed.contains_key(seal_ref) {
                     findings.push(StreamFinding {
                         record_index: idx,

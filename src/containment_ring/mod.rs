@@ -31,8 +31,8 @@ pub mod tiered_executor;
 pub mod trusted_controller;
 
 pub use arm_ring::{
-    ArmContainmentRing, ArmRingConfig, ArmRingMeshMessage, ArmRingRegistry, ArmRingStatusDto,
-    ProvenanceHop,
+    ArmContainmentRing, ArmExecutionError, ArmRingConfig, ArmRingMeshMessage, ArmRingRegistry,
+    ArmRingStatusDto, ProvenanceHop,
 };
 pub use attestation::{PolicyAttestationRecord, RingAttestation};
 pub use audit::{RingAuditEntry, RingAuditLedger};
