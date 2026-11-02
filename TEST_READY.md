@@ -1,7 +1,7 @@
 # CAGE Governance Engine Test Suite Readiness Attestation (`TEST_READY.md`)
 
 **Date**: 2026-11-02  
-**Status**: **READY** (100% Pass Rate Across All 179 CAGE Tests)  
+**Status**: **READY** (100% Pass Rate Across All 193 CAGE Tests)  
 **Target Engine**: Google Cybernetic Agent Governance Engine (CAGE v4.0.0, arXiv:2606.12320, Apache-2.0) Native Rust Core  
 **Integration**: `AgentOctopus` Containment Ring, Web Substrate, & Security Framework  
 
@@ -9,9 +9,9 @@
 
 ## 1. Readiness Declaration
 
-The Google CAGE native Rust governance engine integration within `AgentOctopus` has achieved full test suite readiness across all 20 inventoried features (F01–F20) and all 4 test tiers (Feature Coverage, Boundary & Corner Cases, Cross-Feature Combinations, and Real-World Workload Scenarios).
+The Google CAGE native Rust governance engine integration within `AgentOctopus` has achieved full test suite readiness across all 20 inventoried features (F01–F20) and all 5 test tiers (Feature Coverage, Boundary & Corner Cases, Cross-Feature Combinations, Real-World Workload Scenarios, and Milestone 5 Phase 2 Adversarial Coverage Hardening).
 
-All 12 test targets compile cleanly with **0 compiler warnings and 0 compiler errors** on `cargo check --lib`, and all 179 CAGE governance tests pass without failure, timeout, or flakiness.
+All 13 test targets compile cleanly with **0 compiler warnings and 0 compiler errors** on `cargo check --lib`, and all 193 CAGE governance tests pass without failure, timeout, or flakiness.
 
 ---
 
@@ -19,19 +19,20 @@ All 12 test targets compile cleanly with **0 compiler warnings and 0 compiler er
 
 | # | Test Target / Command | Suite Description | Tests Passed | Tests Failed | Execution Time | Status |
 |---|---|---|---|---|---|---|
-| 0 | `cargo check --lib` | Compiler & Invariant Verification | Clean | 0 | 0.60s | **PASS** |
+| 0 | `cargo check --lib` | Compiler & Invariant Verification | Clean | 0 | 0.58s | **PASS** |
 | 1 | `cargo test --test cage_governance_integration_tests` | Comprehensive CAGE Integration Suite | 25 | 0 | 0.19s | **PASS** |
-| 2 | `cargo test --test adversarial_challenger_m4_tests` | Milestone 4 Adversarial Challenger | 15 | 0 | 0.22s | **PASS** |
-| 3 | `cargo test --test adversarial_challenger_m4_2_tests` | M4.2 Concurrency & 1,000-Trial Invariance | 8 | 0 | 0.86s | **PASS** |
-| 4 | `cargo test --test arm_containment_ring_tests` | Containment Ring, Autotomy, & Fleet Routing | 26 | 0 | 1.75s | **PASS** |
-| 5 | `cargo test --test adversarial_challenger_m2_tests` | Milestone 2 Actuator Containment Challenger | 8 | 0 | 0.35s | **PASS** |
-| 6 | `cargo test --test adversarial_challenger_m3_tests` | Milestone 3 HTTP & Substrate Contract Challenger | 14 | 0 | 0.22s | **PASS** |
-| 7 | `cargo test --test adversarial_challenger_m3_2_tests` | Milestone 3.2 Concurrency & Trace Stream Stress | 6 | 0 | 0.65s | **PASS** |
-| 8 | `cargo test --test cage_m1_adversarial_stress_tests` | Milestone 1 CBF, FTRA, & Debit Ledger Stress | 14 | 0 | 0.02s | **PASS** |
-| 9 | `cargo test --test adversarial_challenger_m1_tests` | Milestone 1 Formal BFS & JCS Challenger | 9 | 0 | 0.02s | **PASS** |
-| 10 | `cargo test --lib security::cage_governance` | Core Submodule & Pipeline Unit Tests | 32 | 0 | 0.04s | **PASS** |
-| 11 | `cargo test --lib web` | Web API, Request Guard, & Substrate Handlers | 22 | 0 | 0.21s | **PASS** |
-| **TOTAL** | **Full CAGE Battery (12 Targets)** | **Native Rust CAGE Integration Battery** | **179** | **0** | **~5.13s** | **100% PASS** |
+| 2 | `cargo test --test adversarial_challenger_m5_2_tests` | Milestone 5.2 Adversarial Challenger | 14 | 0 | 0.06s | **PASS** |
+| 3 | `cargo test --test adversarial_challenger_m4_tests` | Milestone 4 Adversarial Challenger | 15 | 0 | 0.22s | **PASS** |
+| 4 | `cargo test --test adversarial_challenger_m4_2_tests` | M4.2 Concurrency & 1,000-Trial Invariance | 8 | 0 | 0.86s | **PASS** |
+| 5 | `cargo test --test arm_containment_ring_tests` | Containment Ring, Autotomy, & Fleet Routing | 26 | 0 | 1.75s | **PASS** |
+| 6 | `cargo test --test adversarial_challenger_m2_tests` | Milestone 2 Actuator Containment Challenger | 8 | 0 | 0.35s | **PASS** |
+| 7 | `cargo test --test adversarial_challenger_m3_tests` | Milestone 3 HTTP & Substrate Contract Challenger | 14 | 0 | 0.22s | **PASS** |
+| 8 | `cargo test --test adversarial_challenger_m3_2_tests` | Milestone 3.2 Concurrency & Trace Stream Stress | 6 | 0 | 0.65s | **PASS** |
+| 9 | `cargo test --test cage_m1_adversarial_stress_tests` | Milestone 1 CBF, FTRA, & Debit Ledger Stress | 14 | 0 | 0.02s | **PASS** |
+| 10 | `cargo test --test adversarial_challenger_m1_tests` | Milestone 1 Formal BFS & JCS Challenger | 9 | 0 | 0.02s | **PASS** |
+| 11 | `cargo test --lib security::cage_governance` | Core Submodule & Pipeline Unit Tests | 32 | 0 | 0.04s | **PASS** |
+| 12 | `cargo test --lib web` | Web API, Request Guard, & Substrate Handlers | 22 | 0 | 0.21s | **PASS** |
+| **TOTAL** | **Full CAGE Battery (13 Targets)** | **Native Rust CAGE Integration Battery** | **193** | **0** | **~5.19s** | **100% PASS** |
 
 ---
 
@@ -76,7 +77,28 @@ test test_http_endpoint_proof_status_and_trace_conformance ... ok
 test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; finished in 0.19s
 ```
 
-### Target 2: `adversarial_challenger_m4_tests` (15 Tests)
+### Target 2: `adversarial_challenger_m5_2_tests` (14 Tests)
+```
+running 14 tests
+test test_m5_2_cbf_extreme_floats_nan_inf_subnormal_boundaries ... ok
+test test_m5_2_cbf_gamma_extremes_and_invalid_floor ... ok
+test test_m5_2_debit_ledger_boundary_state_transitions ... ok
+test test_m5_2_request_guard_csrf_origin_and_fetch_metadata ... ok
+test test_m5_2_request_guard_route_matching_and_key_gating ... ok
+test test_m5_2_ftra_dag_complex_topologies_and_priority_verdicts ... ok
+test test_m5_2_seal_tampered_expiry_and_format_invariants ... ok
+test test_m5_2_request_guard_dns_rebinding_and_host_evasion ... ok
+test test_m5_2_seal_timestamp_boundary_drift_vs_ttl ... ok
+test test_m5_2_ftra_reversibility_classification_lexical_precedence ... ok
+test test_m5_2_consumed_seals_memory_reclamation_and_pruning ... ok
+test test_m5_2_cbf_sequence_monotonicity_and_epoch_races ... ok
+test test_m5_2_consumed_seals_high_concurrency_race_single_winner ... ok
+test test_m5_2_pipeline_atomic_two_phase_integrity_and_zero_leakage ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; finished in 0.06s
+```
+
+### Target 3: `adversarial_challenger_m4_tests` (15 Tests)
 ```
 running 15 tests
 test test_challenge2_cbf_decaying_envelope_multi_step_trajectory ... ok

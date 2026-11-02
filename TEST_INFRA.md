@@ -68,13 +68,13 @@ The test suite is structured around a rigorous 4-tier methodology guaranteeing f
 | **F17** | CAGE Substrate Contract HTTP Handlers | `src/web/api.rs` | `adversarial_challenger_m3_tests`, `web::api::tests` | 12 | VERIFIED |
 | **F18** | Web Server Routing & Guard Exemption | `src/web/server.rs`, `src/web/request_guard.rs` | `adversarial_challenger_m3_tests`, `web::request_guard::tests` | 10 | VERIFIED |
 | **F19** | Comprehensive Integration Test Suite | `tests/cage_governance_integration_tests.rs` | `tests/cage_governance_integration_tests.rs` | 25 | VERIFIED |
-| **F20** | E2E Opaque-Box Suite & Adversarial Hardening | `tests/adversarial_challenger_m4*.rs` | `adversarial_challenger_m4_tests`, `adversarial_challenger_m4_2_tests` | 23 | VERIFIED |
+| **F20** | E2E Opaque-Box Suite & Adversarial Hardening | `tests/adversarial_challenger_m4*.rs`, `tests/adversarial_challenger_m5_2_tests.rs` | `adversarial_challenger_m4_tests`, `adversarial_challenger_m4_2_tests`, `adversarial_challenger_m5_2_tests` | 37 | VERIFIED |
 
 ---
 
-## 4. Comprehensive Test Suite Catalog (179 Tests)
+## 4. Comprehensive Test Suite Catalog (193 Tests)
 
-The test battery spans 12 distinct compilation and execution targets with a total of **179 passing tests and 0 failures**:
+The test battery spans 13 distinct compilation and execution targets with a total of **193 passing tests and 0 failures**:
 
 ### 1. `tests/cage_governance_integration_tests.rs` (25 Tests)
 Integration tests validating the end-to-end multi-format ingestion, 7-tier pipeline, CBF barriers, fiscal ledger, routing seals, formal proofs, and HTTP wire contracts:
@@ -288,11 +288,28 @@ HTTP layer, request guard, and substrate contract handler unit tests:
 - `web::api::tests::test_handle_evaluate_cedar_malformed_json_returns_error_payload`
 - `web::api::tests::test_cage_handlers_end_to_end`
 
+### 12. `tests/adversarial_challenger_m5_2_tests.rs` (14 Tests)
+Milestone 5 Phase 2 white-box adversarial coverage and stress hardening tests:
+- `test_m5_2_cbf_extreme_floats_nan_inf_subnormal_boundaries`: Asserts fail-closed handling on NaN, +Inf, -Inf, -0.0, and subnormal floats.
+- `test_m5_2_cbf_gamma_extremes_and_invalid_floor`: Validates gamma spectrum endpoints and non-negative reserve floor boundaries.
+- `test_m5_2_cbf_sequence_monotonicity_and_epoch_races`: Enforces replay sequence numbers and concurrent fence epoch monotonicity.
+- `test_m5_2_debit_ledger_boundary_state_transitions`: Validates preview, pre-reserve, confirm, rollback, and LIFO rollback invariants.
+- `test_m5_2_seal_timestamp_boundary_drift_vs_ttl`: Asserts exact 30s TTL expiration boundary and 5s clock drift window.
+- `test_m5_2_seal_tampered_expiry_and_format_invariants`: Detects mutated timestamps and corrupted HMAC signatures.
+- `test_m5_2_ftra_reversibility_classification_lexical_precedence`: Validates lexical keyword precedence in compound action names.
+- `test_m5_2_ftra_dag_complex_topologies_and_priority_verdicts`: Evaluates diamond DAGs, cyclic dependency deadlocks, and orphan steps.
+- `test_m5_2_request_guard_dns_rebinding_and_host_evasion`: Rejects hostname suffix attacks, subdomain spoofing, and port mismatches.
+- `test_m5_2_request_guard_csrf_origin_and_fetch_metadata`: Enforces Origin allowlists, null origin rejection, and Sec-Fetch-Site.
+- `test_m5_2_request_guard_route_matching_and_key_gating`: Verifies CAGE substrate route detection and Bearer token extraction.
+- `test_m5_2_consumed_seals_memory_reclamation_and_pruning`: Validates automated TTL-based memory reclamation of expired seals.
+- `test_m5_2_consumed_seals_high_concurrency_race_single_winner`: 64-thread concurrent race verifying single-winner consumption invariant.
+- `test_m5_2_pipeline_atomic_two_phase_integrity_and_zero_leakage`: Verifies atomic two-phase execution and zero balance leakage.
+
 ---
 
 ## 5. Execution Matrix & Unified Runner Commands
 
-To execute the entire 179-test CAGE governance battery with strict compiler verification:
+To execute the entire 193-test CAGE governance battery with strict compiler verification:
 
 ```powershell
 # 1. Compiler Invariant Check (0 warnings, 0 errors)
@@ -301,7 +318,8 @@ cargo check --lib
 # 2. Comprehensive CAGE Integration Suite (25 tests)
 cargo test --test cage_governance_integration_tests
 
-# 3. Adversarial Challenger Suites (M4, M4.2, M2, M3, M3.2, M1)
+# 3. Adversarial Challenger Suites (M5.2, M4, M4.2, M2, M3, M3.2, M1)
+cargo test --test adversarial_challenger_m5_2_tests     # 14 tests
 cargo test --test adversarial_challenger_m4_tests       # 15 tests
 cargo test --test adversarial_challenger_m4_2_tests     # 8 tests
 cargo test --test arm_containment_ring_tests           # 26 tests
@@ -320,8 +338,8 @@ cargo test --lib web                                   # 22 tests
 
 ## 6. Coverage Summary & Verification Attestation
 
-- **Total CAGE Tests**: 179
-- **Passing**: 179 (100.0%)
+- **Total CAGE Tests**: 193
+- **Passing**: 193 (100.0%)
 - **Failing**: 0
 - **Ignored / Filtered**: 0
 - **Compiler Warnings**: 0
