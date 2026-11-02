@@ -68,7 +68,7 @@ AgentOctopus integrates Google Cybernetic Agent Governance Engine (CAGE v4.0.0, 
 | M2 | Actuator Confinement Seal Enforcement | Integrate `execute_tool_with_cage_seal` and `GOVERNANCE_TRACE` `EXECUTED` emission into `src/containment_ring/arm_ring.rs` (Features F15-F16) | M1 | DONE (26 containment ring + 8 challenger tests pass, commits aa6ba08 & 1a041fa) |
 | M3 | CAGE Substrate Contract HTTP Endpoints | Wire `CageGovernanceEngine` into `WebState` (`src/web/api.rs`), implement substrate handlers, route in `src/web/server.rs`, exempt in `src/web/request_guard.rs` (Features F17-F18) | M1, M2 | DONE (22 web + 14 challenger m3 + 6 challenger m3.2 tests pass, commits 558b6bb, 93e337e, efc4769) |
 | M4 | Comprehensive Integration Test Suite | Implement `tests/cage_governance_integration_tests.rs` verifying 5 formats, FTRA, CBF, seals, single-use actuation, 34-state BFS proof, trace conformance (Feature F19) | M1, M2, M3 | DONE (25 integration + 15 challenger m4 + 8 challenger m4.2 tests pass, commits 8716fff, e2b78da, 1a98a70) |
-| M5 | Final Milestone: 100% E2E Pass & Adversarial Hardening | Pass 100% of E2E test suite (Tiers 1-4) published by E2E Testing Track, followed by Phase 2 adversarial coverage hardening (Tier 5) (Feature F20) | M4, E2E Track | IN_PROGRESS |
+| M5 | Final Milestone: 100% E2E Pass & Adversarial Hardening | Pass 100% of E2E test suite (Tiers 1-4) published by E2E Testing Track, followed by Phase 2 adversarial coverage hardening (Tier 5) (Feature F20) | M4, E2E Track | DONE (179 baseline e2e + 14 challenger m5.2 + 15 challenger m5.1 = 208 CAGE tests pass across 14 targets, commits 2c61bff, b799971, dc63cbe) |
 
 ---
 
