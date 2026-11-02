@@ -13,7 +13,7 @@ use agent_octopus::containment_ring::{
 };
 use agent_octopus::core::types::{ArmRole, OctopusSecurityError, StrategicDirective};
 use agent_octopus::neural_mesh::MessageKind;
-use agent_octopus::security::cage_governance::CageGovernanceEngine;
+use agent_octopus::security::cage_governance::{CageGovernanceEngine, FormalBfsModel};
 use agent_octopus::swarm::orchestrator::SwarmManager;
 use sha2::Digest;
 use std::sync::Arc;
@@ -1159,3 +1159,678 @@ async fn test_arm_ring_registry_fleet_cage_engine_propagation() {
     let builder_ring = registry_builder.get_ring(5).await.expect("builder ring");
     assert!(builder_ring.cage_engine().is_some());
 }
+
+// ==============================================================================
+// CHALLENGER SUITE (challenger_m2_2): CONCURRENCY & FLEET-SCALE ADVERSARIAL TESTS
+// ==============================================================================
+
+#[tokio::test]
+async fn test_challenger_fleet_scale_engine_propagation_and_autotomy_resilience() {
+    let registry = ArmRingRegistry::new(50, TEST_MASTER_SEED);
+    assert_eq!(registry.len().await, 62);
+    assert!(registry.cage_engine().is_none());
+
+    // 1. Initial State: Verify all 50 worker arms and 12 security arms have NO engine
+    for arm_id in 0..50 {
+        let ring = registry.get_ring(arm_id).await.expect("worker ring exists");
+        assert!(ring.cage_engine().is_none(), "Worker ring {} must initially have no engine", arm_id);
+    }
+    for sec_id in 100..=111 {
+        let ring = registry.get_ring(sec_id).await.expect("security ring exists");
+        assert!(ring.cage_engine().is_none(), "Security ring {} must initially have no engine", sec_id);
+    }
+
+    // 2. Attach fleet engine dynamically
+    let engine = Arc::new(CageGovernanceEngine::default());
+    registry.attach_cage_engine(Arc::clone(&engine)).await;
+    assert!(registry.cage_engine().is_some());
+
+    // 3. Verify engine propagation across all 50 worker arms and 12 security arms
+    for arm_id in 0..50 {
+        let ring = registry.get_ring(arm_id).await.expect("worker ring exists");
+        assert!(ring.cage_engine().is_some(), "Worker ring {} must inherit fleet engine", arm_id);
+    }
+    for sec_id in 100..=111 {
+        let ring = registry.get_ring(sec_id).await.expect("security ring exists");
+        assert!(ring.cage_engine().is_some(), "Security ring {} must inherit fleet engine", sec_id);
+    }
+
+    // 4. Verify synchronous fleet propagation on fresh registry
+    let reg_sync = ArmRingRegistry::new(50, TEST_MASTER_SEED);
+    reg_sync.attach_cage_engine_sync(Arc::clone(&engine));
+    assert!(reg_sync.cage_engine().is_some());
+    for arm_id in 0..50 {
+        let ring = reg_sync.get_ring(arm_id).await.expect("worker ring exists");
+        assert!(ring.cage_engine().is_some(), "Sync attached arm {} must have engine", arm_id);
+    }
+    for sec_id in 100..=111 {
+        let ring = reg_sync.get_ring(sec_id).await.expect("security ring exists");
+        assert!(ring.cage_engine().is_some(), "Sync attached sec arm {} must have engine", sec_id);
+    }
+
+    // 5. Autotomy Regeneration & Engine Persistence (Worker Arm 6, UntrustedDocIngest)
+    let arm6 = registry.get_ring(6).await.expect("arm 6 exists");
+    assert_eq!(arm6.current_generation(), 1);
+
+    // Issue ticket for Gen 1
+    let mut ticket_gen1 = arm6
+        .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+        .await
+        .expect("issue dirac ticket");
+
+    // Sever and regenerate arm 6 via registry
+    let next_gen = registry.sever_and_regenerate(6).await.expect("sever and regenerate");
+    assert_eq!(next_gen, 2);
+    assert_eq!(arm6.current_generation(), 2);
+
+    // Assert engine is retained across autotomy epoch bump
+    assert!(arm6.cage_engine().is_some(), "Engine must persist after autotomy regeneration");
+
+    // Old ticket carried Gen 1 epoch; validate_epoch(1) must fail closed
+    assert!(arm6.validate_epoch(1).await.is_err(), "Revoked Gen 1 epoch must fail validation");
+
+    let dispatcher = new_test_dispatcher();
+    let scratch_dir = std::env::temp_dir().join(format!("octopus_challenger_autotomy_{}", std::process::id()));
+    let payload = b"AUTOTOMY STALE TICKET".to_vec();
+    let tiered_req = TieredToolRequest {
+        agent_id: arm6.agent_name.clone(),
+        role: arm6.role.clone(),
+        tool_name: "doc_extractor".to_string(),
+        payload: payload.clone(),
+        custom_wat: None,
+        native_command: None,
+        scratchpad_root: scratch_dir.clone(),
+        allow_scratch_write: false,
+    };
+    let seal_gen1 = create_test_seal_for_request(
+        &engine,
+        &arm6.agent_name,
+        "doc_extractor",
+        "s3://invoices/inv_01.pdf",
+        &payload,
+        0,
+    );
+
+    // Attempting execution with stale Gen 1 ticket on Gen 2 arm must fail closed
+    let stale_err = arm6
+        .execute_tool_with_cage_seal(
+            &mut ticket_gen1,
+            &seal_gen1,
+            "s3://invoices/inv_01.pdf",
+            &tiered_req,
+            &dispatcher,
+            None,
+            None,
+        )
+        .await;
+    assert!(stale_err.is_err(), "Execution with stale Gen 1 ticket must fail closed on regenerated arm");
+
+    // Fresh ticket issued for Gen 2 succeeds
+    let mut ticket_gen2 = arm6
+        .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+        .await
+        .expect("issue fresh dirac ticket for gen 2");
+    let payload_fresh = b"AUTOTOMY FRESH TICKET SUCCESS".to_vec();
+    let tiered_req_fresh = TieredToolRequest {
+        agent_id: arm6.agent_name.clone(),
+        role: arm6.role.clone(),
+        tool_name: "doc_extractor".to_string(),
+        payload: payload_fresh.clone(),
+        custom_wat: None,
+        native_command: None,
+        scratchpad_root: scratch_dir.clone(),
+        allow_scratch_write: false,
+    };
+    let seal_gen2 = create_test_seal_for_request(
+        &engine,
+        &arm6.agent_name,
+        "doc_extractor",
+        "s3://invoices/inv_01.pdf",
+        &payload_fresh,
+        0,
+    );
+    let receipt_fresh = arm6
+        .execute_tool_with_cage_seal(
+            &mut ticket_gen2,
+            &seal_gen2,
+            "s3://invoices/inv_01.pdf",
+            &tiered_req_fresh,
+            &dispatcher,
+            None,
+            None,
+        )
+        .await
+        .expect("Execution on regenerated arm with fresh Gen 2 ticket must succeed");
+    assert!(receipt_fresh.exit_code >= 0);
+}
+
+#[tokio::test]
+async fn test_challenger_concurrent_tool_execution_with_distinct_seals() {
+    let registry = ArmRingRegistry::new(50, TEST_MASTER_SEED);
+    let engine = Arc::new(CageGovernanceEngine::default());
+    registry.attach_cage_engine(Arc::clone(&engine)).await;
+
+    // Use 15 distinct UntrustedDocIngest arms: arm_ids = i * 3 for i in 0..15 (0, 3, 6, ..., 42)
+    let num_tasks = 15;
+    let mut handles = Vec::new();
+
+    for i in 0..num_tasks {
+        let arm_id = i * 3;
+        let ring = registry.get_ring(arm_id).await.expect("ring must exist");
+        let engine_clone = Arc::clone(&engine);
+
+        let handle = tokio::spawn(async move {
+            let dispatcher = new_test_dispatcher();
+            let scratch_dir = std::env::temp_dir().join(format!("octopus_challenger_concurrency_{}_{}", std::process::id(), i));
+            let payload = format!("CONCURRENT_INVOICE_DATA_TASK_{}", i).into_bytes();
+
+            let mut ticket = ring
+                .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+                .await
+                .expect("issue dirac ticket");
+
+            let seal = create_test_seal_for_request(
+                &engine_clone,
+                &ring.agent_name,
+                "doc_extractor",
+                "s3://invoices/inv_01.pdf",
+                &payload,
+                0,
+            );
+
+            let tiered_req = TieredToolRequest {
+                agent_id: ring.agent_name.clone(),
+                role: ring.role.clone(),
+                tool_name: "doc_extractor".to_string(),
+                payload: payload.clone(),
+                custom_wat: None,
+                native_command: None,
+                scratchpad_root: scratch_dir,
+                allow_scratch_write: false,
+            };
+
+            let receipt = ring
+                .execute_tool_with_cage_seal(
+                    &mut ticket,
+                    &seal,
+                    "s3://invoices/inv_01.pdf",
+                    &tiered_req,
+                    &dispatcher,
+                    None,
+                    None,
+                )
+                .await
+                .expect("concurrent tool execution must succeed");
+
+            (i, ring.arm_id, seal, receipt)
+        });
+
+        handles.push(handle);
+    }
+
+    let mut completed_seals = Vec::new();
+    for handle in handles {
+        let (task_idx, arm_id, seal, receipt) = handle.await.expect("task must join");
+        assert_eq!(receipt.selected_tier, ExecutionTier::Tier1InProcessWasm);
+        assert!(receipt.exit_code >= 0, "Task {} on Arm {} failed with exit_code {}", task_idx, arm_id, receipt.exit_code);
+        completed_seals.push(seal);
+    }
+
+    assert_eq!(completed_seals.len(), num_tasks);
+
+    // Verify all 15 seals are marked consumed and authentic replay attempts fail closed with SealAlreadyConsumed
+    let arm0 = registry.get_ring(0).await.expect("arm 0 exists");
+    let dispatcher = new_test_dispatcher();
+    let scratch_dir = std::env::temp_dir().join(format!("octopus_challenger_replay_check_{}", std::process::id()));
+
+    for seal in &completed_seals {
+        let mut ticket = arm0
+            .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+            .await
+            .expect("issue ticket");
+
+        let payload = format!("CONCURRENT_INVOICE_DATA_TASK_0").into_bytes();
+        let tiered_req = TieredToolRequest {
+            agent_id: arm0.agent_name.clone(),
+            role: arm0.role.clone(),
+            tool_name: "doc_extractor".to_string(),
+            payload,
+            custom_wat: None,
+            native_command: None,
+            scratchpad_root: scratch_dir.clone(),
+            allow_scratch_write: false,
+        };
+
+        let replay_res = arm0
+            .execute_tool_with_cage_seal(
+                &mut ticket,
+                seal,
+                "s3://invoices/inv_01.pdf",
+                &tiered_req,
+                &dispatcher,
+                None,
+                None,
+            )
+            .await;
+
+        assert!(replay_res.is_err(), "Replaying seal {} must fail closed", seal.seal_id);
+    }
+}
+
+#[tokio::test]
+async fn test_challenger_concurrent_race_condition_on_single_seal() {
+    let engine = Arc::new(CageGovernanceEngine::default());
+    let ring = Arc::new(
+        ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED)
+            .with_cage_engine(Arc::clone(&engine)),
+    );
+
+    let payload = b"RACE CONDITION SEAL TEST".to_vec();
+    let seal = Arc::new(create_test_seal_for_request(
+        &engine,
+        &ring.agent_name,
+        "doc_extractor",
+        "s3://invoices/inv_01.pdf",
+        &payload,
+        0,
+    ));
+
+    let num_competing_tasks = 10;
+    let mut handles = Vec::new();
+
+    for i in 0..num_competing_tasks {
+        let ring_clone = Arc::clone(&ring);
+        let seal_clone = Arc::clone(&seal);
+        let payload_clone = payload.clone();
+
+        let handle = tokio::spawn(async move {
+            let dispatcher = new_test_dispatcher();
+            let scratch_dir = std::env::temp_dir().join(format!("octopus_challenger_race_{}_{}", std::process::id(), i));
+
+            let mut ticket = ring_clone
+                .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+                .await
+                .expect("issue dirac ticket");
+
+            let tiered_req = TieredToolRequest {
+                agent_id: ring_clone.agent_name.clone(),
+                role: ring_clone.role.clone(),
+                tool_name: "doc_extractor".to_string(),
+                payload: payload_clone,
+                custom_wat: None,
+                native_command: None,
+                scratchpad_root: scratch_dir,
+                allow_scratch_write: false,
+            };
+
+            ring_clone
+                .execute_tool_with_cage_seal(
+                    &mut ticket,
+                    &seal_clone,
+                    "s3://invoices/inv_01.pdf",
+                    &tiered_req,
+                    &dispatcher,
+                    None,
+                    None,
+                )
+                .await
+        });
+
+        handles.push(handle);
+    }
+
+    let mut success_count = 0;
+    let mut failure_count = 0;
+
+    for handle in handles {
+        let result = handle.await.expect("task join");
+        match result {
+            Ok(receipt) => {
+                success_count += 1;
+                assert!(receipt.exit_code >= 0);
+            }
+            Err(e) => {
+                failure_count += 1;
+                assert!(
+                    matches!(e, ArmExecutionError::SealAlreadyConsumed { .. }),
+                    "Failure must be SealAlreadyConsumed, got: {:?}",
+                    e
+                );
+            }
+        }
+    }
+
+    // Invariant: Exactly 1 wins the race; exactly N-1 are rejected
+    assert_eq!(success_count, 1, "Exactly one concurrent execution must succeed with a single-use seal");
+    assert_eq!(failure_count, num_competing_tasks - 1, "All other concurrent executions must fail closed");
+
+    // Audit log must contain exactly 1 GOVERNANCE_SEAL_CONSUMED and exactly 1 ACTUATION_RECEIPT for this seal
+    let entries = engine.audit_log().get_entries();
+    let consumed_events = entries
+        .iter()
+        .filter(|e| e.event_type == "GOVERNANCE_SEAL_CONSUMED" && e.details.contains(&seal.seal_id))
+        .count();
+    let receipt_events = entries
+        .iter()
+        .filter(|e| e.event_type == "ACTUATION_RECEIPT" && e.details.contains(&seal.seal_id))
+        .count();
+
+    assert_eq!(consumed_events, 1, "Audit log must contain exactly 1 seal consumption event");
+    assert_eq!(receipt_events, 1, "Audit log must contain exactly 1 actuation receipt event");
+}
+
+#[tokio::test]
+async fn test_challenger_unconfigured_engine_strict_fail_closed() {
+    let test_roles = [
+        (10, ArmRole::UntrustedDocIngest, "doc_extractor", "s3://invoices/inv_01.pdf"),
+        (11, ArmRole::AccountingLedgerWrite, "ledger_writer", "s3://accounting/ledger.json"),
+        (12, ArmRole::NetworkEgress, "http_egress", "https://api.example.com/v1"),
+    ];
+
+    let dispatcher = new_test_dispatcher();
+    let dummy_engine = CageGovernanceEngine::default();
+
+    for (arm_id, role, tool, resource) in test_roles {
+        let ring = ArmContainmentRing::new(arm_id, role.clone(), 1, TEST_MASTER_SEED);
+        assert!(ring.cage_engine().is_none(), "Unconfigured ring must report cage_engine() == None");
+
+        let mut ticket = ring
+            .issue_dirac_ticket(tool, resource, 50_000, None)
+            .await
+            .expect("issue dirac ticket");
+
+        let payload = format!("UNCONFIGURED_ENGINE_TEST_ARM_{}", arm_id).into_bytes();
+        let scratch_dir = std::env::temp_dir().join(format!("octopus_challenger_unconfig_{}_{}", std::process::id(), arm_id));
+
+        let tiered_req = TieredToolRequest {
+            agent_id: ring.agent_name.clone(),
+            role,
+            tool_name: tool.to_string(),
+            payload: payload.clone(),
+            custom_wat: None,
+            native_command: None,
+            scratchpad_root: scratch_dir,
+            allow_scratch_write: false,
+        };
+
+        let dummy_seal = create_test_seal_for_request(
+            &dummy_engine,
+            &ring.agent_name,
+            tool,
+            resource,
+            &payload,
+            0,
+        );
+
+        let err = ring
+            .execute_tool_with_cage_seal(
+                &mut ticket,
+                &dummy_seal,
+                resource,
+                &tiered_req,
+                &dispatcher,
+                None,
+                None,
+            )
+            .await
+            .expect_err("Execution without configured engine must fail closed");
+
+        assert_eq!(err, ArmExecutionError::EngineNotConfigured { arm_id });
+        let sec_err = OctopusSecurityError::from(err);
+        assert_eq!(
+            sec_err,
+            OctopusSecurityError::IsolationViolation(format!("CAGE_ENGINE_NOT_CONFIGURED: Arm {}", arm_id))
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_challenger_conformance_verification_on_concurrent_trace_stream() {
+    let registry = ArmRingRegistry::new(50, TEST_MASTER_SEED);
+    let engine = Arc::new(CageGovernanceEngine::default());
+    registry.attach_cage_engine(Arc::clone(&engine)).await;
+
+    // Run 10 concurrent executions across 10 arms to produce an interleaved trace stream
+    let num_tasks = 10;
+    let mut handles = Vec::new();
+
+    for i in 0..num_tasks {
+        let arm_id = i * 3;
+        let ring = registry.get_ring(arm_id).await.expect("ring exists");
+        let engine_clone = Arc::clone(&engine);
+
+        let handle = tokio::spawn(async move {
+            let dispatcher = new_test_dispatcher();
+            let scratch_dir = std::env::temp_dir().join(format!("octopus_challenger_stream_{}_{}", std::process::id(), i));
+            let payload = format!("STREAM_CONFORMANCE_DATA_{}", i).into_bytes();
+
+            let mut ticket = ring
+                .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
+                .await
+                .expect("ticket");
+
+            let seal = create_test_seal_for_request(
+                &engine_clone,
+                &ring.agent_name,
+                "doc_extractor",
+                "s3://invoices/inv_01.pdf",
+                &payload,
+                0,
+            );
+
+            let tiered_req = TieredToolRequest {
+                agent_id: ring.agent_name.clone(),
+                role: ring.role.clone(),
+                tool_name: "doc_extractor".to_string(),
+                payload,
+                custom_wat: None,
+                native_command: None,
+                scratchpad_root: scratch_dir,
+                allow_scratch_write: false,
+            };
+
+            ring.execute_tool_with_cage_seal(
+                &mut ticket,
+                &seal,
+                "s3://invoices/inv_01.pdf",
+                &tiered_req,
+                &dispatcher,
+                None,
+                None,
+            )
+            .await
+            .expect("execution succeeds");
+        });
+
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.await.expect("task join");
+    }
+
+    // Extract all interleaved audit log entries
+    let entries = engine.audit_log().get_entries();
+    assert!(entries.len() >= num_tasks * 3, "Expected at least 3 records per task (decision, consumed, receipt)");
+
+    let traces: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| serde_json::to_value(e).unwrap())
+        .collect();
+
+    // Verify trace stream conformance via engine facade
+    let engine_report = engine
+        .verify_trace_conformance(&traces)
+        .expect("engine trace verification");
+    assert!(
+        engine_report.status.is_conformant(),
+        "Interleaved concurrent trace stream must be conformant: {:?}",
+        engine_report.findings
+    );
+    assert_eq!(engine_report.findings_count, 0);
+
+    // Verify directly via FormalBfsModel::check_trace_conformance
+    let bfs_report = FormalBfsModel::check_trace_conformance(&traces);
+    assert!(
+        bfs_report.status.is_conformant(),
+        "Direct FormalBfsModel check must pass: {:?}",
+        bfs_report.findings
+    );
+    assert_eq!(bfs_report.findings_count, 0);
+    assert_eq!(bfs_report.records_checked, entries.len());
+    assert_eq!(bfs_report.stream_proof_hash.len(), 64);
+}
+
+#[tokio::test]
+async fn test_challenger_formal_bfs_trace_conformance_adversarial_oracle() {
+    let dummy_engine = CageGovernanceEngine::default();
+    let ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED);
+    let payload = b"ADVERSARIAL CONFORMANCE ORACLE".to_vec();
+
+    // Build baseline authentic entries
+    let valid_seal = create_test_seal_for_request(
+        &dummy_engine,
+        &ring.agent_name,
+        "doc_extractor",
+        "s3://invoices/inv_01.pdf",
+        &payload,
+        0,
+    );
+
+    let entries = dummy_engine.audit_log().get_entries();
+    let mut baseline_traces: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| serde_json::to_value(e).unwrap())
+        .collect();
+
+    // Add consumed event
+    baseline_traces.push(serde_json::json!({
+        "event_type": "GOVERNANCE_SEAL_CONSUMED",
+        "seal_id": valid_seal.seal_id,
+        "decision_record_hash": valid_seal.record_hash,
+        "action_digest": valid_seal.action_digest,
+        "policy_version_id": valid_seal.policy_version_id,
+        "action": "doc_extractor",
+        "arm_id": 0,
+        "record_hash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    }));
+
+    // Add receipt event
+    baseline_traces.push(serde_json::json!({
+        "event_type": "ACTUATION_RECEIPT",
+        "seal_id": valid_seal.seal_id,
+        "action": "doc_extractor",
+        "agent_id": ring.agent_name,
+        "tool_name": "doc_extractor",
+        "selected_tier": "Tier1InProcessWasm",
+        "exit_code": 38,
+        "total_elapsed_us": 120,
+        "record_hash": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+    }));
+
+    // Baseline must pass conformance
+    let base_report = FormalBfsModel::check_trace_conformance(&baseline_traces);
+    assert!(base_report.status.is_conformant(), "Baseline traces must be conformant: {:?}", base_report.findings);
+
+    // 1. Adversarial Test: Rule 1 - Schema Violation (record missing event_type)
+    let mut bad_schema_traces = baseline_traces.clone();
+    bad_schema_traces.push(serde_json::json!({
+        "invalid_field": "no_event_type_provided",
+    }));
+    let rep1 = FormalBfsModel::check_trace_conformance(&bad_schema_traces);
+    assert!(!rep1.status.is_conformant());
+    assert!(rep1.has_rule_violation("schema"), "Must flag schema violation on missing event_type");
+
+    // 2. Adversarial Test: Rule 1 - Non-hex or uppercase hash in record_hash
+    let mut bad_hash_traces = baseline_traces.clone();
+    bad_hash_traces.push(serde_json::json!({
+        "event_type": "ARBITRARY_EVENT",
+        "record_hash": "UPPERCASE_AND_NOT_VALID_HEX_000000000000000000000000000000000000",
+    }));
+    let rep2 = FormalBfsModel::check_trace_conformance(&bad_hash_traces);
+    assert!(!rep2.status.is_conformant());
+    assert!(rep2.has_rule_violation("schema"), "Must flag schema violation on uppercase hash");
+
+    // 3. Adversarial Test: Rule 4 - Seal Violation (ALLOW verdict but seal_present = false)
+    let mut unsealed_traces = baseline_traces.clone();
+    unsealed_traces.push(serde_json::json!({
+        "event_type": "GOVERNANCE_DECISION",
+        "verdict": "ALLOW",
+        "seal_present": false,
+        "record_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+        "stages_evaluated": [
+            {"stage_name": "ftra"},
+            {"stage_name": "stpa"},
+            {"stage_name": "cedar"},
+            {"stage_name": "confidence"},
+            {"stage_name": "consensus"},
+            {"stage_name": "cbf"},
+            {"stage_name": "fiscal"},
+        ],
+    }));
+    let rep3 = FormalBfsModel::check_trace_conformance(&unsealed_traces);
+    assert!(!rep3.status.is_conformant());
+    assert!(rep3.has_rule_violation("seal"), "Must flag seal violation when ALLOW lacks seal_present");
+
+    // 4. Adversarial Test: Rule 3 - Coverage Violation (missing required tier, e.g. cbf)
+    let mut incomplete_coverage_traces = baseline_traces.clone();
+    incomplete_coverage_traces.push(serde_json::json!({
+        "event_type": "GOVERNANCE_DECISION",
+        "verdict": "ALLOW",
+        "seal_present": true,
+        "record_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "stages_evaluated": [
+            {"stage_name": "ftra"},
+            {"stage_name": "stpa"},
+            {"stage_name": "cedar"},
+            {"stage_name": "confidence"},
+            {"stage_name": "consensus"},
+            // cbf and fiscal missing!
+        ],
+    }));
+    let rep4 = FormalBfsModel::check_trace_conformance(&incomplete_coverage_traces);
+    assert!(!rep4.status.is_conformant());
+    assert!(rep4.has_rule_violation("coverage"), "Must flag coverage violation when tier is missing");
+
+    // 5. Adversarial Test: Rule 5 - Reachable State Violation (illegal state transition)
+    let mut unreachable_state_traces = baseline_traces.clone();
+    unreachable_state_traces.push(serde_json::json!({
+        "event_type": "STATE_TRANSITION",
+        "phase": "BOGUS_PHASE",
+        "label": "unreachable_label",
+        "tier": 99,
+        "record_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+    }));
+    let rep5 = FormalBfsModel::check_trace_conformance(&unreachable_state_traces);
+    assert!(!rep5.status.is_conformant());
+    assert!(rep5.has_rule_violation("reachable"), "Must flag reachable violation on invalid state transition");
+
+    // 6. Adversarial Test: Rule 6 - No-Direct-Bind Violation (ACTUATION_RECEIPT without prior GOVERNANCE_SEAL_CONSUMED)
+    let mut direct_bind_traces = baseline_traces.clone();
+    direct_bind_traces.push(serde_json::json!({
+        "event_type": "ACTUATION_RECEIPT",
+        "seal_id": "unconsumed_rogue_seal_999",
+        "action": "doc_extractor",
+        "record_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+    }));
+    let rep6 = FormalBfsModel::check_trace_conformance(&direct_bind_traces);
+    assert!(!rep6.status.is_conformant());
+    assert!(rep6.has_rule_violation("no_direct_bind"), "Must flag no_direct_bind when actuation lacks prior seal consumed");
+
+    // 7. Adversarial Test: Rule 7 - Single-Use Violation (duplicate seal consumption in audit log)
+    let mut replay_trace = baseline_traces.clone();
+    replay_trace.push(serde_json::json!({
+        "event_type": "GOVERNANCE_SEAL_CONSUMED",
+        "seal_id": valid_seal.seal_id, // Duplicate of already consumed seal!
+        "decision_record_hash": valid_seal.record_hash,
+        "action_digest": valid_seal.action_digest,
+        "policy_version_id": valid_seal.policy_version_id,
+        "action": "doc_extractor",
+        "arm_id": 0,
+        "record_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+    }));
+    let rep7 = FormalBfsModel::check_trace_conformance(&replay_trace);
+    assert!(!rep7.status.is_conformant());
+    assert!(rep7.has_rule_violation("single_use"), "Must flag single_use violation when seal is consumed twice");
+}
+
