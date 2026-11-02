@@ -30,8 +30,94 @@ pub const SESSION_COOKIE_NAME: &str = "Octopus-Session";
 /// Endpoints consumed via `EventSource` (cannot send custom headers).
 pub const SSE_PATHS: &[&str] = &["/api/test-stream", "/api/runtime-activity/stream"];
 
+/// Header carrying optional CAGE Substrate API keys.
+pub const CAGE_KEY_HEADER: &str = "x-cage-key";
+
+/// Canonical CAGE Substrate Contract v1.0 endpoint paths exempt from the per-launch dashboard token.
+pub const CAGE_SUBSTRATE_PATHS: &[&str] = &[
+    "/governance/ingest-policy",
+    "/governance/policy-version",
+    "/governance/validate-action",
+    "/v1/governance/validate-action",
+    "/governance/consume-seal",
+    "/governance/proof-status",
+    "/governance/trace-conformance",
+    "/api/cage/ingest-policy",
+    "/api/cage/policy-version",
+    "/api/cage/validate-action",
+    "/api/cage/consume-seal",
+    "/api/cage/proof-status",
+    "/api/cage/trace-conformance",
+];
+
 /// Liveness endpoints exempt from the token (Host/Origin checks still apply; no sensitive data).
-pub const TOKEN_EXEMPT_PATHS: &[&str] = &["/health", "/api/health"];
+pub const TOKEN_EXEMPT_PATHS: &[&str] = &[
+    "/health",
+    "/api/health",
+    "/governance/ingest-policy",
+    "/governance/policy-version",
+    "/governance/validate-action",
+    "/v1/governance/validate-action",
+    "/governance/consume-seal",
+    "/governance/proof-status",
+    "/governance/trace-conformance",
+    "/api/cage/ingest-policy",
+    "/api/cage/policy-version",
+    "/api/cage/validate-action",
+    "/api/cage/consume-seal",
+    "/api/cage/proof-status",
+    "/api/cage/trace-conformance",
+];
+
+/// Returns true if the path belongs to the CAGE Substrate Contract v1.0 interface.
+pub fn is_cage_substrate_path(path: &str) -> bool {
+    let trimmed = path.trim_end_matches('/');
+    trimmed.starts_with("/governance/")
+        || trimmed == "/governance"
+        || trimmed.starts_with("/v1/governance/")
+        || trimmed == "/v1/governance"
+        || trimmed.starts_with("/api/cage/")
+        || trimmed == "/api/cage"
+        || CAGE_SUBSTRATE_PATHS.contains(&trimmed)
+}
+
+/// Returns true if the path is exempt from mandatory dashboard token checks on loopback.
+pub fn is_token_exempt_path(path: &str) -> bool {
+    let trimmed = path.trim_end_matches('/');
+    TOKEN_EXEMPT_PATHS.contains(&path)
+        || TOKEN_EXEMPT_PATHS.contains(&trimmed)
+        || is_cage_substrate_path(path)
+}
+
+/// Extracts a Bearer token from the `Authorization` header, if present.
+pub fn extract_bearer_token(headers: &str) -> Option<&str> {
+    for line in headers.lines() {
+        if line.to_ascii_lowercase().starts_with("authorization:") {
+            if let Some((_, val)) = line.split_once(':') {
+                let trimmed = val.trim();
+                if let Some(token) = trimmed.strip_prefix("Bearer ") {
+                    return Some(token.trim());
+                } else if let Some(token) = trimmed.strip_prefix("bearer ") {
+                    return Some(token.trim());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Resolves the configured CAGE API key from the environment, if present.
+pub fn configured_cage_api_key() -> Option<String> {
+    std::env::var("CAGE_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+        .or_else(|| {
+            std::env::var("CAGE_AUTH_TOKEN")
+                .ok()
+                .filter(|k| !k.trim().is_empty())
+        })
+}
+
 
 /// Response headers applied to every dashboard response instead of wildcard CORS.
 pub const SECURITY_HEADERS: &str = "X-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'\r\nReferrer-Policy: no-referrer\r\n";
@@ -269,9 +355,11 @@ pub fn authorize_request(req: &GuardRequest<'_>, token: &str) -> Result<(), Guar
 
     let is_api = req.path.starts_with("/api/") || req.path == "/api";
     let is_state_changing = !matches!(req.method, "GET" | "HEAD");
+    let is_cage = is_cage_substrate_path(req.path);
+    let is_exempt = is_token_exempt_path(req.path);
 
-    // 2. Origin / Sec-Fetch-Site
-    if is_api || is_state_changing {
+    // 2. Origin / Sec-Fetch-Site (enforced on API, state-changing, and CAGE endpoints)
+    if is_api || is_state_changing || is_cage {
         if let Some(site) = header_value(req.headers, "sec-fetch-site") {
             if site.eq_ignore_ascii_case("cross-site") {
                 return Err(GuardRejection::CrossOrigin(format!(
@@ -291,8 +379,28 @@ pub fn authorize_request(req: &GuardRequest<'_>, token: &str) -> Result<(), Guar
         }
     }
 
-    // 3. Token (accepts either authoritative master token or session-bound CSRF token paired with Octopus-Session cookie)
-    if is_api && !TOKEN_EXEMPT_PATHS.contains(&req.path) {
+    // 3. Token Authentication
+    if is_cage {
+        // If an explicit CAGE_API_KEY / CAGE_AUTH_TOKEN is configured in the environment,
+        // callers MUST supply a matching Bearer token, X-Cage-Key, or X-Octopus-Token.
+        if let Some(expected_key) = configured_cage_api_key() {
+            let presented = extract_bearer_token(req.headers)
+                .or_else(|| header_value(req.headers, CAGE_KEY_HEADER))
+                .or_else(|| header_value(req.headers, TOKEN_HEADER));
+            match presented {
+                Some(p)
+                    if constant_time_str_eq(p, &expected_key)
+                        || constant_time_str_eq(p, token) => {}
+                _ => return Err(GuardRejection::Unauthorized),
+            }
+        } else if let Some(presented) = header_value(req.headers, TOKEN_HEADER) {
+            // When accessed via the dashboard with an explicit X-Octopus-Token, validate it.
+            if !presented.is_empty() && !is_valid_token_or_session(req, presented, token) {
+                return Err(GuardRejection::Unauthorized);
+            }
+        }
+        // When CAGE_API_KEY is not set, local loopback callers proceed without mandatory token.
+    } else if is_api && !is_exempt {
         let presented = header_value(req.headers, TOKEN_HEADER).or_else(|| {
             if req.method == "GET" && SSE_PATHS.contains(&req.path) {
                 query_param(req.query, "token")
@@ -304,7 +412,7 @@ pub fn authorize_request(req: &GuardRequest<'_>, token: &str) -> Result<(), Guar
             Some(t) if is_valid_token_or_session(req, t, token) => {}
             _ => return Err(GuardRejection::Unauthorized),
         }
-    } else if is_state_changing && !is_api && req.method != "OPTIONS" {
+    } else if is_state_changing && !is_api && req.method != "OPTIONS" && !is_exempt {
         // Non-API state-changing requests are not part of the dashboard surface.
         let presented = header_value(req.headers, TOKEN_HEADER);
         match presented {
@@ -391,5 +499,69 @@ mod tests {
     fn accepts_same_origin_with_token() {
         let h = "POST /api/x HTTP/1.1\r\nHost: localhost:5005\r\nOrigin: http://localhost:5005\r\nX-Octopus-Token: abc";
         assert!(authorize_request(&req("POST", "/api/x", h), "abc").is_ok());
+    }
+
+    #[test]
+    fn accepts_cage_substrate_loopback_without_token() {
+        let endpoints = [
+            ("POST", "/governance/ingest-policy"),
+            ("GET", "/governance/policy-version"),
+            ("POST", "/governance/validate-action"),
+            ("POST", "/v1/governance/validate-action"),
+            ("POST", "/governance/consume-seal"),
+            ("GET", "/governance/proof-status"),
+            ("POST", "/governance/trace-conformance"),
+            ("POST", "/api/cage/ingest-policy"),
+            ("GET", "/api/cage/policy-version"),
+            ("POST", "/api/cage/validate-action"),
+            ("POST", "/api/cage/consume-seal"),
+            ("GET", "/api/cage/proof-status"),
+            ("POST", "/api/cage/trace-conformance"),
+        ];
+        for (method, path) in endpoints {
+            let h = format!("{} {} HTTP/1.1\r\nHost: 127.0.0.1:5005", method, path);
+            assert!(
+                authorize_request(&req(method, path, &h), "mock_master_token").is_ok(),
+                "Endpoint {} {} should be authorized on loopback without token",
+                method,
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_cage_substrate_cross_origin() {
+        let h = "POST /governance/validate-action HTTP/1.1\r\nHost: 127.0.0.1:5005\r\nOrigin: https://evil.example";
+        assert!(matches!(
+            authorize_request(&req("POST", "/governance/validate-action", h), "mock_token"),
+            Err(GuardRejection::CrossOrigin(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_cage_substrate_cross_site_fetch() {
+        let h = "POST /governance/validate-action HTTP/1.1\r\nHost: 127.0.0.1:5005\r\nSec-Fetch-Site: cross-site";
+        assert!(matches!(
+            authorize_request(&req("POST", "/governance/validate-action", h), "mock_token"),
+            Err(GuardRejection::CrossOrigin(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_cage_substrate_rebinding_host() {
+        let h = "POST /governance/validate-action HTTP/1.1\r\nHost: attacker-rebinding.example:5005";
+        assert!(matches!(
+            authorize_request(&req("POST", "/governance/validate-action", h), "mock_token"),
+            Err(GuardRejection::BadHost(_))
+        ));
+    }
+
+    #[test]
+    fn strictly_enforces_non_exempt_api_token() {
+        let h = "POST /api/run-rust-tests HTTP/1.1\r\nHost: 127.0.0.1:5005";
+        assert_eq!(
+            authorize_request(&req("POST", "/api/run-rust-tests", h), "mock_token"),
+            Err(GuardRejection::Unauthorized)
+        );
     }
 }

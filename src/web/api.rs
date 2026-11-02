@@ -18,6 +18,13 @@ use crate::telemetry::otel::{OtelSessionTelemetry, OtelSpanKind, OtelStatusCode}
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
+use crate::security::cage_governance::{
+    CageApiError, CageGovernanceEngine, GovernanceRequest,
+};
+#[cfg(test)]
+use crate::security::cage_governance::{
+    GovernanceEvaluationResult, GovernanceVerdict, ProofStatusResponse,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiveTestEvent {
@@ -83,6 +90,7 @@ pub struct WebState {
     pub evolution_arm: Arc<crate::security::evolution::EvolutionaryOptimizerArm>,
     pub dream_rsi_arm: Arc<crate::security::dream_rsi::DreamRsiOptimizerArm>,
     pub harness2_arm: Arc<crate::security::harness2::RecursiveHarnessOptimizerArm>,
+    pub cage_engine: Arc<CageGovernanceEngine>,
 }
 
 fn load_or_init_egress_domains() -> Vec<String> {
@@ -268,6 +276,13 @@ impl Default for WebState {
             crate::security::harness2::RecursiveHarnessOptimizerArm::with_registry(&arm_rings),
         );
 
+        let cage_engine = Arc::new(
+            CageGovernanceEngine::with_default_policy(
+                Arc::clone(&audit_log),
+                &secret_seed,
+            ),
+        );
+
         Self {
             gateway,
             audit_log,
@@ -295,7 +310,24 @@ impl Default for WebState {
             evolution_arm,
             dream_rsi_arm,
             harness2_arm,
+            cage_engine,
         }
+    }
+}
+
+impl WebState {
+    /// Returns a shared reference to the active CAGE governance engine.
+    pub fn cage_engine(&self) -> &Arc<CageGovernanceEngine> {
+        &self.cage_engine
+    }
+
+    /// Builder method to supply a custom or pre-configured CAGE governance engine.
+    pub fn with_cage_engine(
+        mut self,
+        engine: Arc<CageGovernanceEngine>,
+    ) -> Self {
+        self.cage_engine = engine;
+        self
     }
 }
 
@@ -3674,6 +3706,211 @@ pub fn handle_research_verify_accuracy() -> String {
     serde_json::to_string(&suite).unwrap_or_else(|_| "{}".to_string())
 }
 
+// ============================================================================
+// CAGE Substrate Contract v1.0 Handlers
+// ============================================================================
+
+/// Helper function to format a `CageApiError` into canonical HTTP status and standardized JSON error payload.
+pub fn cage_error_payload(err: &CageApiError) -> (&'static str, String) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let body = serde_json::json!({
+        "error": true,
+        "code": err.error_code(),
+        "message": err.to_string(),
+        "status": err.http_status_code(),
+        "timestamp": format!("{}", now),
+    })
+    .to_string();
+    (err.http_status_code(), body)
+}
+
+#[derive(Debug, Deserialize)]
+struct IngestPolicyPayload {
+    policy: Option<serde_json::Value>,
+    raw_policy: Option<serde_json::Value>,
+    expected_version: Option<String>,
+}
+
+/// Ingests, compiles, and activates a CAGE Substrate policy.
+///
+/// Supports raw policy documents (ACS, AAIF, OSCAL 1.1.x, Lula, Native CAGE YAML)
+/// as well as JSON envelope payloads (`{"policy": "...", "expected_version": "..."}`).
+/// Enforces version pinning if `expected_version` is specified (returns 409 Conflict on mismatch).
+pub fn handle_cage_ingest_policy(
+    state: &WebState,
+    body: &str,
+    expected_version_hint: Option<&str>,
+) -> (&'static str, String) {
+    let (raw_content, expected_ver_owned) = match serde_json::from_str::<IngestPolicyPayload>(body) {
+        Ok(payload) => {
+            let extracted = payload.policy.or(payload.raw_policy);
+            let raw_str = match extracted {
+                Some(serde_json::Value::String(s)) => s,
+                Some(other) => other.to_string(),
+                None => body.to_string(),
+            };
+            let exp = payload
+                .expected_version
+                .or_else(|| expected_version_hint.map(|s| s.to_string()));
+            (raw_str, exp)
+        }
+        Err(_) => (body.to_string(), expected_version_hint.map(|s| s.to_string())),
+    };
+
+    match state
+        .cage_engine
+        .ingest_policy(&raw_content, expected_ver_owned.as_deref())
+    {
+        Ok(resp) => {
+            let json_body = serde_json::to_string(&resp).unwrap_or_default();
+            ("200 OK", json_body)
+        }
+        Err(err) => cage_error_payload(&err),
+    }
+}
+
+/// Retrieves the active pinned 16-character hex SHA-256 policy version ID.
+pub fn handle_cage_policy_version(state: &WebState) -> (&'static str, String) {
+    let active_version = state.cage_engine.active_policy_version();
+    let json_body = serde_json::json!({
+        "policy_version_id": active_version,
+        "active_policy_version": active_version,
+        "active_version": active_version,
+        "status": "ACTIVE"
+    })
+    .to_string();
+    ("200 OK", json_body)
+}
+
+/// Evaluates a proposed action against the 7-tier dynamic governance pipeline.
+pub fn handle_cage_validate_action(state: &WebState, body: &str) -> (&'static str, String) {
+    handle_cage_validate_action_with_version(state, body, None)
+}
+
+/// Evaluates a proposed action with optional expected version hint from headers or query.
+pub fn handle_cage_validate_action_with_version(
+    state: &WebState,
+    body: &str,
+    expected_version_hint: Option<&str>,
+) -> (&'static str, String) {
+    let mut req: GovernanceRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                "400 Bad Request",
+                json_error_payload(
+                    "INVALID_REQUEST_PAYLOAD",
+                    &format!("Failed to parse GovernanceRequest: {}", e),
+                ),
+            );
+        }
+    };
+
+    if req.expected_policy_version.is_none() {
+        if let Some(exp) = expected_version_hint {
+            req.expected_policy_version = Some(exp.to_string());
+        }
+    }
+
+    match state.cage_engine.validate_action(&req) {
+        Ok(res) => {
+            let json_body = serde_json::to_string(&res).unwrap_or_default();
+            ("200 OK", json_body)
+        }
+        Err(err) => cage_error_payload(&err),
+    }
+}
+
+/// Atomically verifies and consumes a cryptographic routing seal.
+///
+/// Returns 200 OK on successful consumption, 409 Conflict if already consumed (replay),
+/// or 403 Forbidden if expired or tampered signature.
+pub fn handle_cage_consume_seal(state: &WebState, body: &str) -> (&'static str, String) {
+    let seal_json = match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(val) => {
+            if val.get("seal").is_some() {
+                val["seal"].to_string()
+            } else {
+                body.to_string()
+            }
+        }
+        Err(e) => {
+            return (
+                "400 Bad Request",
+                json_error_payload(
+                    "INVALID_REQUEST_PAYLOAD",
+                    &format!("Failed to parse seal payload: {}", e),
+                ),
+            );
+        }
+    };
+
+    match state.cage_engine.verify_and_consume_seal_direct(&seal_json) {
+        Ok(resp) => {
+            let json_body = serde_json::to_string(&resp).unwrap_or_default();
+            ("200 OK", json_body)
+        }
+        Err(err) => cage_error_payload(&err),
+    }
+}
+
+/// Evaluates the 34-state BFS model and counterexample, returning theorem proof status.
+pub fn handle_cage_proof_status(state: &WebState) -> (&'static str, String) {
+    let proof = state.cage_engine.proof_status();
+    let json_body = serde_json::to_string(&proof).unwrap_or_default();
+    ("200 OK", json_body)
+}
+
+/// Verifies audit log trace events against all 7 formal conformance rules.
+pub fn handle_cage_trace_conformance(state: &WebState, body: &str) -> (&'static str, String) {
+    let traces: Vec<serde_json::Value> = match serde_json::from_str::<Vec<serde_json::Value>>(body) {
+        Ok(list) => list,
+        Err(_) => {
+            #[derive(Deserialize)]
+            struct TraceWrapper {
+                traces: Vec<serde_json::Value>,
+            }
+            match serde_json::from_str::<TraceWrapper>(body) {
+                Ok(wrapper) => wrapper.traces,
+                Err(_) => {
+                    let mut parsed = Vec::new();
+                    for line in body.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        if let Ok(item) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                            parsed.push(item);
+                        }
+                    }
+                    if !parsed.is_empty() {
+                        parsed
+                    } else {
+                        return (
+                            "400 Bad Request",
+                            json_error_payload(
+                                "INVALID_REQUEST_PAYLOAD",
+                                "Expected array of trace events, {\"traces\": [...]}, or JSONL stream",
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    };
+
+    match state.cage_engine.verify_trace_conformance(&traces) {
+        Ok(report) => {
+            let json_body = serde_json::to_string(&report).unwrap_or_default();
+            ("200 OK", json_body)
+        }
+        Err(err) => cage_error_payload(&err),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3779,5 +4016,70 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&res.unwrap_err()).unwrap();
         assert_eq!(parsed["error"], true);
         assert_eq!(parsed["code"], "INVALID_JSON");
+    }
+
+    #[test]
+    fn test_cage_handlers_end_to_end() {
+        let state = WebState::default();
+
+        // 1. Policy version
+        let (s1, b1) = handle_cage_policy_version(&state);
+        assert_eq!(s1, "200 OK");
+        assert!(b1.contains("policy_version_id"));
+        assert!(b1.contains("ACTIVE"));
+
+        // 2. Ingest policy (success)
+        let yaml = "stpa_control_structure:\n  unsafe_control_actions: []\n";
+        let (s2, b2) = handle_cage_ingest_policy(&state, yaml, None);
+        assert_eq!(s2, "200 OK");
+        assert!(b2.contains("policy_version_id"));
+
+        // 3. Ingest policy (version mismatch -> 409 Conflict)
+        let (s3, b3) = handle_cage_ingest_policy(&state, yaml, Some("bad_version_0000"));
+        assert_eq!(s3, "409 Conflict");
+        assert!(b3.contains("POLICY_VERSION_MISMATCH"));
+
+        // 4. Validate action (Allow & Seal issuance)
+        let req = serde_json::json!({
+            "action_name": "list_files",
+            "principal": "arm-worker-1",
+            "resource": "workspace/tmp",
+            "parameters": {},
+            "caller_authority": 3,
+            "confidence_score": 0.98,
+            "consensus_score": 0.85,
+            "fuel_cost": 1.0,
+            "expected_policy_version": null,
+            "execution_profile": "Full"
+        }).to_string();
+        let (s4, b4) = handle_cage_validate_action(&state, &req);
+        assert_eq!(s4, "200 OK");
+        let eval_res: GovernanceEvaluationResult = serde_json::from_str(&b4).unwrap();
+        assert_eq!(eval_res.verdict, GovernanceVerdict::Allow);
+        assert!(eval_res.seal.is_some());
+
+        // Validate action with version mismatch -> 409 Conflict
+        let (s4_mismatch, b4_mismatch) = handle_cage_validate_action_with_version(&state, &req, Some("mismatch_version_id"));
+        assert_eq!(s4_mismatch, "409 Conflict");
+        assert!(b4_mismatch.contains("POLICY_VERSION_MISMATCH"));
+
+        // 5. Consume seal (success & replay rejection)
+        let seal_json = serde_json::to_string(&eval_res.seal.unwrap()).unwrap();
+        let (s5, _b5) = handle_cage_consume_seal(&state, &seal_json);
+        assert_eq!(s5, "200 OK");
+        let (s5_replay, b5_replay) = handle_cage_consume_seal(&state, &seal_json);
+        assert_eq!(s5_replay, "409 Conflict");
+        assert!(b5_replay.contains("SEAL_ALREADY_CONSUMED"));
+
+        // 6. Proof status
+        let (s6, b6) = handle_cage_proof_status(&state);
+        assert_eq!(s6, "200 OK");
+        let proof: ProofStatusResponse = serde_json::from_str(&b6).unwrap();
+        assert_eq!(proof.reachable_states, 34);
+        assert!(proof.no_direct_bind_proven);
+
+        // 7. Trace conformance
+        let (s7, _b7) = handle_cage_trace_conformance(&state, "[]");
+        assert_eq!(s7, "200 OK");
     }
 }

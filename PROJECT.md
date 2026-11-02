@@ -65,8 +65,8 @@ AgentOctopus integrates Google Cybernetic Agent Governance Engine (CAGE v4.0.0, 
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
 | M1 | Native Rust CAGE Governance Engine Core | Implement `src/security/cage_governance/` (all 6 core submodules + `mod.rs`), register in `src/security/mod.rs` and `src/lib.rs` (Features F01-F14) | none | DONE (32 unit + 14 stress + 9 challenger tests pass, commit 5696218) |
-| M2 | Actuator Confinement Seal Enforcement | Integrate `execute_tool_with_cage_seal` and `GOVERNANCE_TRACE` `EXECUTED` emission into `src/containment_ring/arm_ring.rs` (Features F15-F16) | M1 | PLANNED |
-| M3 | CAGE Substrate Contract HTTP Endpoints | Wire `CageGovernanceEngine` into `WebState` (`src/web/api.rs`), implement substrate handlers, route in `src/web/server.rs`, exempt in `src/web/request_guard.rs` (Features F17-F18) | M1, M2 | PLANNED |
+| M2 | Actuator Confinement Seal Enforcement | Integrate `execute_tool_with_cage_seal` and `GOVERNANCE_TRACE` `EXECUTED` emission into `src/containment_ring/arm_ring.rs` (Features F15-F16) | M1 | DONE (26 containment ring + 8 challenger tests pass, commits aa6ba08 & 1a041fa) |
+| M3 | CAGE Substrate Contract HTTP Endpoints | Wire `CageGovernanceEngine` into `WebState` (`src/web/api.rs`), implement substrate handlers, route in `src/web/server.rs`, exempt in `src/web/request_guard.rs` (Features F17-F18) | M1, M2 | IN_PROGRESS |
 | M4 | Comprehensive Integration Test Suite | Implement `tests/cage_governance_integration_tests.rs` verifying 5 formats, FTRA, CBF, seals, single-use actuation, 34-state BFS proof, trace conformance (Feature F19) | M1, M2, M3 | PLANNED |
 | M5 | Final Milestone: 100% E2E Pass & Adversarial Hardening | Pass 100% of E2E test suite (Tiers 1-4) published by E2E Testing Track, followed by Phase 2 adversarial coverage hardening (Tier 5) (Feature F20) | M4, E2E Track | PLANNED |
 

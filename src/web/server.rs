@@ -1,6 +1,9 @@
 use super::api::{
     handle_atlas_dynamic_tests, handle_atlas_status, handle_atlas_sync, handle_audit_log,
-    handle_breakout_guards_status, handle_containment_ring_regenerate,
+    handle_breakout_guards_status, handle_cage_consume_seal, handle_cage_ingest_policy,
+    handle_cage_policy_version, handle_cage_proof_status, handle_cage_trace_conformance,
+    handle_cage_validate_action_with_version,
+    handle_containment_ring_regenerate,
     handle_containment_ring_sever, handle_containment_ring_stale_replay, handle_containment_rings,
     handle_dogwood_evaluate, handle_dogwood_presets, handle_dogwood_simulate_trace,
     handle_dogwood_trace, handle_dream_rsi_feed_trajectories, handle_dream_rsi_policy,
@@ -313,6 +316,18 @@ pub fn api_error_response(status_code: &str, code: &str, message: &str) -> Strin
         body.len(),
         body
     )
+}
+
+/// Extracts the trimmed value of a header from the raw HTTP request header block, case-insensitively.
+pub fn extract_header_value<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
+    headers.lines().find_map(|line| {
+        let (k, v) = line.split_once(':')?;
+        if k.trim().eq_ignore_ascii_case(name) {
+            Some(v.trim())
+        } else {
+            None
+        }
+    })
 }
 
 async fn handle_connection(
@@ -725,6 +740,91 @@ async fn handle_connection(
                 "HTTP/1.1 200 OK\r\nContent-Type: image/svg+xml\r\nCache-Control: public, max-age=86400\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 svg_icon.len(),
                 svg_icon
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        // ====================================================================
+        // CAGE Substrate Contract v1.0 Endpoints
+        // ====================================================================
+
+        ("POST", "/governance/ingest-policy") | ("POST", "/api/cage/ingest-policy") => {
+            let expected_hdr = extract_header_value(headers_str, "x-expected-policy-version");
+            let expected_query = query.split('&').find_map(|p| {
+                let (k, v) = p.split_once('=')?;
+                if k == "expected_version" {
+                    Some(v)
+                } else {
+                    None
+                }
+            });
+            let expected_hint = expected_hdr.or(expected_query);
+            let (status_code, json_body) =
+                handle_cage_ingest_policy(&state, body, expected_hint);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/governance/policy-version") | ("GET", "/api/cage/policy-version") => {
+            let (status_code, json_body) = handle_cage_policy_version(&state);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/governance/validate-action")
+        | ("POST", "/v1/governance/validate-action")
+        | ("POST", "/api/cage/validate-action") => {
+            let expected_hdr = extract_header_value(headers_str, "x-expected-policy-version");
+            let (status_code, json_body) =
+                handle_cage_validate_action_with_version(&state, body, expected_hdr);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/governance/consume-seal") | ("POST", "/api/cage/consume-seal") => {
+            let (status_code, json_body) = handle_cage_consume_seal(&state, body);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/cage/proof-status") | ("GET", "/governance/proof-status") => {
+            let (status_code, json_body) = handle_cage_proof_status(&state);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/cage/trace-conformance") | ("POST", "/governance/trace-conformance") => {
+            let (status_code, json_body) = handle_cage_trace_conformance(&state, body);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
             );
             stream.write_all(response.as_bytes()).await?;
         }
