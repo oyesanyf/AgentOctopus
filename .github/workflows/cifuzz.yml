@@ -28,6 +28,7 @@ jobs:
         mkdir -p ./build/out/artifacts
         cargo test --test research_and_atlas_tests test_continuous_oss_fuzz_arm -- --nocapture
         cargo test --test oshoosiclaw_adapted_containment_tests -- --nocapture
+        cargo test --test cage_governance_integration_tests -- --nocapture
 
     - name: Upload CIFuzz Crash Artifacts
       uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
