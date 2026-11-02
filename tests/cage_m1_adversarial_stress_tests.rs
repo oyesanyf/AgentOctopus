@@ -512,9 +512,16 @@ fn stress_test_routing_seal_tampered_expires_at_exploration() {
     // Check behavior: does validate_and_consume accept the tampered expires_at because expires_at is not in HMAC signature?
     let result = signer.validate_and_consume(&seal, &action_digest, record_hash, current_time);
     println!("Adversarial Tampered expires_at result: {:?}", result);
-    // If result is Ok(()), this proves that tampering expires_at bypasses TTL expiration!
     let vulnerability_present = result.is_ok();
     println!("VULNERABILITY VERDICT: Can expires_at be tampered to revive expired seals? {}", vulnerability_present);
+    assert!(
+        !vulnerability_present,
+        "VULN-CAGE-M1-01: Tampering expires_at must not revive expired seals"
+    );
+    assert!(matches!(
+        result,
+        Err(SealRejection::MalformedSeal(_)) | Err(SealRejection::InvalidSignature) | Err(SealRejection::Expired { .. })
+    ));
 }
 
 // ============================================================================

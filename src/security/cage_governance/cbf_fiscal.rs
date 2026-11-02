@@ -82,6 +82,7 @@ pub struct CommitReceipt {
 }
 
 /// Discrete-Time Control Barrier Function Safety Engine (Tier 3a).
+#[derive(Debug)]
 pub struct CbfSafetyEngine {
     gamma: f64,
     b_min: f64,
@@ -92,15 +93,15 @@ pub struct CbfSafetyEngine {
 impl CbfSafetyEngine {
     /// Creates a new CBF safety engine with specified decay rate $\gamma$ and floor $B_{\min}$.
     pub fn new(gamma: f64, b_min: f64) -> Result<Self, CbfViolation> {
-        if gamma <= 0.0 || gamma > 1.0 {
+        if !gamma.is_finite() || gamma <= 0.0 || gamma > 1.0 {
             return Err(CbfViolation::InvalidParameters(format!(
-                "Decay rate gamma must be in (0, 1], got {}",
+                "Decay rate gamma must be a finite number in (0, 1], got {}",
                 gamma
             )));
         }
-        if b_min < 0.0 {
+        if !b_min.is_finite() || b_min < 0.0 {
             return Err(CbfViolation::InvalidParameters(format!(
-                "Minimum reserve floor b_min must be non-negative, got {}",
+                "Minimum reserve floor b_min must be a finite non-negative number, got {}",
                 b_min
             )));
         }
@@ -121,10 +122,24 @@ impl CbfSafetyEngine {
         cost: f64,
         current_h: f64,
     ) -> Result<f64, CbfViolation> {
-        if cost < 0.0 {
+        if cost.is_nan() || cost < 0.0 {
             return Err(CbfViolation::InvalidParameters(format!(
-                "Cost cannot be negative: {}",
+                "Cost cannot be negative or NaN: {}",
                 cost
+            )));
+        }
+
+        if current_budget.is_nan() || !current_budget.is_finite() {
+            return Err(CbfViolation::InvalidParameters(format!(
+                "Current budget must be a finite number: {}",
+                current_budget
+            )));
+        }
+
+        if current_h.is_nan() || !current_h.is_finite() {
+            return Err(CbfViolation::InvalidParameters(format!(
+                "Current safety margin current_h must be a finite number: {}",
+                current_h
             )));
         }
 
@@ -138,6 +153,13 @@ impl CbfSafetyEngine {
 
         let projected_budget = current_budget - cost;
         let h_next = projected_budget - self.b_min;
+
+        // Guard against any arithmetic producing NaN
+        if h_next.is_nan() {
+            return Err(CbfViolation::InvalidParameters(
+                "Projected safety barrier h_next evaluated to NaN".to_string(),
+            ));
+        }
 
         // Condition 1: Non-negativity floor h_{t+1} >= 0
         if h_next < -CBF_EPSILON {
@@ -232,6 +254,7 @@ struct LedgerState {
 }
 
 /// Tier 4 Two-Phase Debit Ledger governing resource pre-reservation and LIFO rollback.
+#[derive(Debug)]
 pub struct DebitLedger {
     cbf: CbfSafetyEngine,
     state: RwLock<LedgerState>,
@@ -241,6 +264,12 @@ impl DebitLedger {
     /// Creates a new debit ledger initialized with a starting budget and CBF parameters.
     pub fn new(initial_budget: f64, gamma: f64, b_min: f64) -> Result<Self, CbfViolation> {
         let cbf = CbfSafetyEngine::new(gamma, b_min)?;
+        if initial_budget.is_nan() || !initial_budget.is_finite() {
+            return Err(CbfViolation::InvalidParameters(format!(
+                "Initial budget must be a finite number, got {}",
+                initial_budget
+            )));
+        }
         if initial_budget < b_min {
             return Err(CbfViolation::CurrentStateUnsafe {
                 current_budget: initial_budget,
@@ -281,6 +310,12 @@ impl DebitLedger {
 
     /// Previews whether a fuel expenditure would pass the CBF barrier without mutating state.
     pub fn preview(&self, cost: f64) -> Result<(f64, f64), CbfViolation> {
+        if cost.is_nan() {
+            return Err(CbfViolation::InvalidParameters(format!(
+                "Cost cannot be NaN: {}",
+                cost
+            )));
+        }
         let state = self.state.read().unwrap();
         let current_budget = state.available_budget;
         let current_h = current_budget - self.cbf.b_min;
@@ -292,6 +327,12 @@ impl DebitLedger {
     /// Pre-reserves fuel expenditure atomically. Deducts cost only if CBF barrier passes.
     /// Emits a `CommitReceipt`. On barrier failure, budget is untouched ($B_{t+1} = B_t$).
     pub fn pre_reserve(&self, cost: f64, debit_id: &str) -> Result<CommitReceipt, CbfViolation> {
+        if cost.is_nan() {
+            return Err(CbfViolation::InvalidParameters(format!(
+                "Cost cannot be NaN: {}",
+                cost
+            )));
+        }
         let mut state = self.state.write().unwrap();
         let current_budget = state.available_budget;
         let current_h = current_budget - self.cbf.b_min;
@@ -469,5 +510,83 @@ mod tests {
         ledger.confirm("debit-1").unwrap();
         let commit_err = ledger.rollback("debit-1").unwrap_err();
         assert!(matches!(commit_err, CbfViolation::AlreadyCommitted(_)));
+    }
+
+    #[test]
+    fn test_cbf_nan_and_infinity_defense() {
+        let cbf = CbfSafetyEngine::new(0.5, 10.0).unwrap();
+
+        // 1. evaluate_step rejects NaN cost
+        let nan_cost_err = cbf.evaluate_step(100.0, f64::NAN, 90.0).unwrap_err();
+        assert!(matches!(nan_cost_err, CbfViolation::InvalidParameters(_)));
+
+        // 2. evaluate_step rejects NaN current_budget
+        let nan_budget_err = cbf.evaluate_step(f64::NAN, 10.0, 90.0).unwrap_err();
+        assert!(matches!(nan_budget_err, CbfViolation::InvalidParameters(_)));
+
+        // 3. evaluate_step rejects NaN current_h
+        let nan_h_err = cbf.evaluate_step(100.0, 10.0, f64::NAN).unwrap_err();
+        assert!(matches!(nan_h_err, CbfViolation::InvalidParameters(_)));
+
+        // 4. evaluate_step rejects non-finite current_budget
+        let inf_budget_err = cbf.evaluate_step(f64::INFINITY, 10.0, 90.0).unwrap_err();
+        assert!(matches!(inf_budget_err, CbfViolation::InvalidParameters(_)));
+
+        // 5. evaluate_step rejects non-finite current_h
+        let inf_h_err = cbf.evaluate_step(100.0, 10.0, f64::INFINITY).unwrap_err();
+        assert!(matches!(inf_h_err, CbfViolation::InvalidParameters(_)));
+
+        // 6. CbfSafetyEngine::new rejects NaN and infinite parameters
+        assert!(matches!(
+            CbfSafetyEngine::new(f64::NAN, 10.0).unwrap_err(),
+            CbfViolation::InvalidParameters(_)
+        ));
+        assert!(matches!(
+            CbfSafetyEngine::new(0.5, f64::NAN).unwrap_err(),
+            CbfViolation::InvalidParameters(_)
+        ));
+        assert!(matches!(
+            CbfSafetyEngine::new(f64::INFINITY, 10.0).unwrap_err(),
+            CbfViolation::InvalidParameters(_)
+        ));
+        assert!(matches!(
+            CbfSafetyEngine::new(0.5, f64::INFINITY).unwrap_err(),
+            CbfViolation::InvalidParameters(_)
+        ));
+
+        // 7. DebitLedger::new rejects NaN and infinite initial budget
+        assert!(matches!(
+            DebitLedger::new(f64::NAN, 0.5, 10.0).unwrap_err(),
+            CbfViolation::InvalidParameters(_)
+        ));
+        assert!(matches!(
+            DebitLedger::new(f64::INFINITY, 0.5, 10.0).unwrap_err(),
+            CbfViolation::InvalidParameters(_)
+        ));
+        assert!(matches!(
+            DebitLedger::new(5.0, 0.5, 10.0).unwrap_err(),
+            CbfViolation::CurrentStateUnsafe { .. }
+        ));
+
+        // 8. DebitLedger preview rejects NaN cost
+        let ledger = DebitLedger::new(100.0, 0.5, 10.0).unwrap();
+        assert!(matches!(
+            ledger.preview(f64::NAN).unwrap_err(),
+            CbfViolation::InvalidParameters(_)
+        ));
+
+        // 9. DebitLedger pre_reserve rejects NaN cost without mutating budget
+        assert!(matches!(
+            ledger.pre_reserve(f64::NAN, "debit-nan").unwrap_err(),
+            CbfViolation::InvalidParameters(_)
+        ));
+        assert_eq!(ledger.available_budget(), 100.0);
+        assert_eq!(ledger.active_reservation_count(), 0);
+
+        // 10. Subsequent valid transaction succeeds and is unaffected
+        let r = ledger.pre_reserve(20.0, "debit-valid").unwrap();
+        assert_eq!(r.remaining_budget, 80.0);
+        assert_eq!(ledger.available_budget(), 80.0);
+        assert_eq!(ledger.active_reservation_count(), 1);
     }
 }

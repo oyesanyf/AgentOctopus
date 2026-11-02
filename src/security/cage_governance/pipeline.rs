@@ -321,7 +321,7 @@ impl CagePipeline {
         // Tier 2: Cedar Policy Rules
         for rule in &policy.cedar_rules {
             let trimmed = rule.trim();
-            if trimmed.starts_with("forbid") && Self::matches_cedar_forbid(trimmed, req) {
+            if Self::is_forbid_rule(trimmed) && Self::matches_cedar_forbid(trimmed, req) {
                 let reason = format!(
                     "CEDAR_FORBID_VIOLATION: Action '{}' forbidden by Cedar policy: {}",
                     req.action_name, trimmed
@@ -614,45 +614,223 @@ impl CagePipeline {
         primary_result
     }
 
+    /// Checks whether a Cedar rule is a `forbid` statement, skipping leading comments and empty lines.
+    fn is_forbid_rule(rule: &str) -> bool {
+        for line in rule.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with("//") {
+                continue;
+            }
+            return trimmed.starts_with("forbid");
+        }
+        false
+    }
+
+    /// Evaluates whether a Cedar `forbid` rule applies to the given request.
+    ///
+    /// 1. Verifies that the rule targets the request's action name (or wildcard action).
+    /// 2. If the rule has no `when {` clause (unconditional forbid), returns `true`.
+    /// 3. If the rule has a `when {` clause, evaluates all context conditions against `req.parameters`.
     fn matches_cedar_forbid(rule: &str, req: &GovernanceRequest) -> bool {
         let rule_lower = rule.to_ascii_lowercase();
         let action_lower = req.action_name.to_ascii_lowercase();
 
-        if !rule_lower.contains(&action_lower) && !rule_lower.contains("action") {
+        // 1. Determine if the rule targets this action
+        if !Self::cedar_rule_targets_action(&rule_lower, &action_lower) {
             return false;
         }
 
-        if let Some(idx) = rule_lower.find("when {") {
-            let condition = &rule_lower[idx + 6..];
-            if let Some(end_idx) = condition.find('}') {
-                let clause = condition[..end_idx].trim();
-                if clause.contains("context.") {
-                    let param_check = clause.replace("context.", "");
-                    if param_check.contains("==") {
-                        let parts: Vec<&str> = param_check.split("==").collect();
-                        if parts.len() == 2 {
-                            let key = parts[0].trim();
-                            let expected = parts[1].trim().trim_matches('"').trim_matches('\'');
-                            if let Some(actual) = req.parameters.get(key).and_then(|v| v.as_str()) {
-                                return actual == expected;
-                            }
-                        }
-                    }
-                    if param_check.contains('>') {
-                        let parts: Vec<&str> = param_check.split('>').collect();
-                        if parts.len() == 2 {
-                            let key = parts[0].trim();
-                            let threshold: f64 = parts[1].trim().parse().unwrap_or(f64::MAX);
-                            if let Some(val) = req.parameters.get(key).and_then(|v| v.as_f64()) {
-                                return val > threshold;
-                            }
-                        }
+        // 2. If unconditional forbid, it matches immediately
+        let when_idx = match rule_lower.find("when {") {
+            Some(idx) => idx,
+            None => return true, // No `when {` clause -> unconditional forbid
+        };
+
+        // 3. Evaluate conditional `when { ... }` clause
+        let condition = &rule_lower[when_idx + 6..];
+        if let Some(end_idx) = condition.find('}') {
+            let clause = condition[..end_idx].trim();
+            if clause.is_empty() || clause == "unconditional" || clause == "true" {
+                return true;
+            }
+            Self::evaluate_cedar_conditions(clause, &req.parameters)
+        } else {
+            // Malformed `when {` block without closing `}`: fail-closed forbid
+            true
+        }
+    }
+
+    /// Checks if a Cedar rule targets a specific action or all actions (wildcard).
+    fn cedar_rule_targets_action(rule_lower: &str, action_lower: &str) -> bool {
+        // Cedar scope syntax: forbid ( principal, action, resource ) [when { ... }];
+        if let Some(forbid_idx) = rule_lower.find("forbid") {
+            let after_forbid = &rule_lower[forbid_idx + 6..];
+            if let (Some(open_paren), Some(close_paren)) = (after_forbid.find('('), after_forbid.find(')')) {
+                if open_paren < close_paren {
+                    let scope = &after_forbid[open_paren + 1..close_paren];
+                    let parts: Vec<&str> = scope.split(',').collect();
+                    if parts.len() >= 2 {
+                        let action_clause = parts[1].trim();
+                        return Self::action_clause_matches(action_clause, action_lower);
                     }
                 }
             }
         }
 
+        // Fallback scope check if parentheses parsing was non-standard
+        Self::fallback_action_matches(rule_lower, action_lower)
+    }
+
+    /// Evaluates whether the action clause from a Cedar scope matches `action_lower`.
+    fn action_clause_matches(action_clause: &str, action_lower: &str) -> bool {
+        let trimmed = action_clause.trim();
+        // Wildcard action matches all actions
+        if trimmed == "action" || trimmed.contains("\"*\"") || trimmed == "action == *" {
+            return true;
+        }
+        // Quoted action name, e.g. action == Action::"delete"
+        let quoted = format!("\"{}\"", action_lower);
+        if trimmed.contains(&quoted) {
+            return true;
+        }
+        // Namespace-qualified action, e.g. Action::"ns::delete"
+        let ns_suffix = format!("::{}\"", action_lower);
+        if trimmed.contains(&ns_suffix) {
+            return true;
+        }
         false
+    }
+
+    /// Fallback check when scope parentheses are absent or non-standard.
+    fn fallback_action_matches(rule_lower: &str, action_lower: &str) -> bool {
+        let quoted = format!("\"{}\"", action_lower);
+        let ns_suffix = format!("::{}\"", action_lower);
+        rule_lower.contains(&quoted)
+            || rule_lower.contains(&ns_suffix)
+            || rule_lower.contains("action::\"*\"")
+            || rule_lower.contains("action,")
+    }
+
+    /// Evaluates condition expressions in a Cedar `when { ... }` clause.
+    /// Supports: `==`, `!=`, `>`, `>=`, `<`, `<=`, `context.hasAttr("...")`, `!context.hasAttr("...")`.
+    /// Multiple conditions joined by `&&` are conjoined (all must hold).
+    fn evaluate_cedar_conditions(clause: &str, parameters: &serde_json::Value) -> bool {
+        let subclauses: Vec<&str> = clause.split("&&").collect();
+        for sub in subclauses {
+            let trimmed = sub.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Check attribute presence: !context.hasAttr("key")
+            if trimmed.contains("!context.hasattr") {
+                if let Some(key) = Self::extract_attr_key(trimmed) {
+                    if parameters.get(key).is_some() {
+                        return false;
+                    }
+                    continue;
+                }
+            }
+
+            // Check attribute presence: context.hasAttr("key")
+            if trimmed.contains("context.hasattr") {
+                if let Some(key) = Self::extract_attr_key(trimmed) {
+                    if parameters.get(key).is_none() {
+                        return false;
+                    }
+                    continue;
+                }
+            }
+
+            // Standard comparison clauses
+            let clean = trimmed.replace("context.", "");
+            if clean.contains("==") {
+                let parts: Vec<&str> = clean.split("==").collect();
+                if parts.len() == 2 {
+                    let key = parts[0].trim();
+                    let expected = parts[1].trim().trim_matches('"').trim_matches('\'');
+                    if !Self::check_param_equality(parameters.get(key), expected) {
+                        return false;
+                    }
+                }
+            } else if clean.contains("!=") {
+                let parts: Vec<&str> = clean.split("!=").collect();
+                if parts.len() == 2 {
+                    let key = parts[0].trim();
+                    let expected = parts[1].trim().trim_matches('"').trim_matches('\'');
+                    if Self::check_param_equality(parameters.get(key), expected) {
+                        return false;
+                    }
+                }
+            } else if clean.contains(">=") {
+                let parts: Vec<&str> = clean.split(">=").collect();
+                if parts.len() == 2 {
+                    let key = parts[0].trim();
+                    let threshold: f64 = parts[1].trim().parse().unwrap_or(f64::MAX);
+                    let actual = parameters.get(key).and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+                    if actual.is_nan() || actual < threshold {
+                        return false;
+                    }
+                }
+            } else if clean.contains("<=") {
+                let parts: Vec<&str> = clean.split("<=").collect();
+                if parts.len() == 2 {
+                    let key = parts[0].trim();
+                    let threshold: f64 = parts[1].trim().parse().unwrap_or(f64::MIN);
+                    let actual = parameters.get(key).and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+                    if actual.is_nan() || actual > threshold {
+                        return false;
+                    }
+                }
+            } else if clean.contains('>') {
+                let parts: Vec<&str> = clean.split('>').collect();
+                if parts.len() == 2 {
+                    let key = parts[0].trim();
+                    let threshold: f64 = parts[1].trim().parse().unwrap_or(f64::MAX);
+                    let actual = parameters.get(key).and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+                    if actual.is_nan() || actual <= threshold {
+                        return false;
+                    }
+                }
+            } else if clean.contains('<') {
+                let parts: Vec<&str> = clean.split('<').collect();
+                if parts.len() == 2 {
+                    let key = parts[0].trim();
+                    let threshold: f64 = parts[1].trim().parse().unwrap_or(f64::MIN);
+                    let actual = parameters.get(key).and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+                    if actual.is_nan() || actual >= threshold {
+                        return false;
+                    }
+                }
+            } else {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Extracts parameter key from `hasAttr("key")`.
+    fn extract_attr_key(s: &str) -> Option<&str> {
+        let open = s.find("(\"")?;
+        let close = s[open + 2..].find("\")")?;
+        Some(&s[open + 2..open + 2 + close])
+    }
+
+    /// Compares a JSON parameter value against an expected string literal.
+    fn check_param_equality(val: Option<&serde_json::Value>, expected: &str) -> bool {
+        match val {
+            Some(serde_json::Value::String(s)) => s.eq_ignore_ascii_case(expected),
+            Some(serde_json::Value::Bool(b)) => b.to_string().eq_ignore_ascii_case(expected),
+            Some(serde_json::Value::Number(n)) => {
+                if let (Some(actual_f), Ok(exp_f)) = (n.as_f64(), expected.parse::<f64>()) {
+                    (actual_f - exp_f).abs() < 1e-9
+                } else {
+                    n.to_string() == expected
+                }
+            }
+            _ => false,
+        }
     }
 }
 
@@ -729,5 +907,109 @@ mod tests {
         };
         let res_med = pipeline.run_pipeline(&req_med);
         assert!(matches!(res_med.verdict, GovernanceVerdict::RequireApproval { .. }));
+    }
+
+    #[test]
+    fn test_cedar_forbid_unconditional_denies_target_action() {
+        let policy_yaml = r#"{
+            "behaviorDeclarations": [
+                {
+                    "id": "ACS-FORBID-DROP",
+                    "action": "drop_table",
+                    "description": "Unconditionally forbid dropping tables",
+                    "constraints": []
+                }
+            ],
+            "cbf_gamma": 0.5,
+            "cbf_b_min": 10.0
+        }"#;
+        let policy = SubstrateTranslator::compile_policy(policy_yaml, None).unwrap();
+        let ledger = Arc::new(DebitLedger::new(100.0, 0.5, 10.0).unwrap());
+        let audit_log = Arc::new(SecurityAuditLog::new());
+        let secret = b"secret_key_for_pipeline_testing_32";
+        let pipeline = CagePipeline::new(policy, ledger, secret, audit_log);
+
+        // Forbidden action -> Deny
+        let req_drop = GovernanceRequest {
+            action_name: "drop_table".to_string(),
+            principal: "arm-1".to_string(),
+            resource: "db/users".to_string(),
+            parameters: serde_json::json!({}),
+            caller_authority: 1,
+            confidence_score: 0.99,
+            consensus_score: 0.99,
+            fuel_cost: 1.0,
+            expected_policy_version: None,
+            execution_profile: Some(Profile::Full),
+        };
+        let res_drop = pipeline.run_pipeline(&req_drop);
+        assert!(matches!(res_drop.verdict, GovernanceVerdict::Deny { .. }));
+
+        // Non-targeted action -> Allow
+        let req_select = GovernanceRequest {
+            action_name: "select_table".to_string(),
+            ..req_drop
+        };
+        let res_select = pipeline.run_pipeline(&req_select);
+        assert_eq!(res_select.verdict, GovernanceVerdict::Allow);
+    }
+
+    #[test]
+    fn test_cedar_forbid_action_specific_conditional_matching() {
+        let policy_yaml = r#"{
+            "behaviorDeclarations": [
+                {
+                    "id": "ACS-FORBID-TRANSFER",
+                    "action": "wire_transfer",
+                    "constraints": [
+                        {
+                            "type": "max_value",
+                            "parameter": "amount",
+                            "value": 100
+                        }
+                    ]
+                }
+            ],
+            "cbf_gamma": 0.5,
+            "cbf_b_min": 10.0
+        }"#;
+        let policy = SubstrateTranslator::compile_policy(policy_yaml, None).unwrap();
+        let ledger = Arc::new(DebitLedger::new(100.0, 0.5, 10.0).unwrap());
+        let audit_log = Arc::new(SecurityAuditLog::new());
+        let secret = b"secret_key_for_pipeline_testing_32";
+        let pipeline = CagePipeline::new(policy, ledger, secret, audit_log);
+
+        // Action A (wire_transfer) with amount > 100 -> Denied
+        let req_transfer_high = GovernanceRequest {
+            action_name: "wire_transfer".to_string(),
+            principal: "arm-1".to_string(),
+            resource: "bank".to_string(),
+            parameters: serde_json::json!({"amount": 500.0}),
+            caller_authority: 1,
+            confidence_score: 0.99,
+            consensus_score: 0.99,
+            fuel_cost: 1.0,
+            expected_policy_version: None,
+            execution_profile: Some(Profile::Full),
+        };
+        let res1 = pipeline.run_pipeline(&req_transfer_high);
+        assert!(matches!(res1.verdict, GovernanceVerdict::Deny { .. }));
+
+        // Action A (wire_transfer) with amount <= 100 -> Allowed
+        let req_transfer_low = GovernanceRequest {
+            parameters: serde_json::json!({"amount": 50.0}),
+            ..req_transfer_high.clone()
+        };
+        let res2 = pipeline.run_pipeline(&req_transfer_low);
+        assert_eq!(res2.verdict, GovernanceVerdict::Allow);
+
+        // Action B (purchase_compute) with amount 500.0 -> Must NOT be denied by wire_transfer rule!
+        let req_compute = GovernanceRequest {
+            action_name: "purchase_compute".to_string(),
+            parameters: serde_json::json!({"amount": 500.0}),
+            ..req_transfer_high
+        };
+        let res3 = pipeline.run_pipeline(&req_compute);
+        assert_eq!(res3.verdict, GovernanceVerdict::Allow);
     }
 }

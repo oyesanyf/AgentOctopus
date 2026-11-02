@@ -230,6 +230,19 @@ impl FormalBfsModel {
         "fiscal",
     ];
 
+    /// Checks whether an evaluated stage name matches a required canonical tier name,
+    /// recognizing "cedar" and "opa" as synonyms for Tier 2.
+    #[inline]
+    pub fn stage_matches_required(required_stage: &str, evaluated_stage: &str) -> bool {
+        if required_stage == evaluated_stage {
+            return true;
+        }
+        match required_stage {
+            "opa" | "cedar" => evaluated_stage == "opa" || evaluated_stage == "cedar",
+            _ => false,
+        }
+    }
+
     /// Explores the full gated CAGE governance state machine using Breadth-First Search (BFS).
     ///
     /// Verifies that:
@@ -807,7 +820,12 @@ impl FormalBfsModel {
                 let label = rec.get("label").and_then(|v| v.as_str()).unwrap_or("");
                 let tier = rec.get("tier").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 let state_key = format!("{}:{}:{}", phase, label, tier);
-                if !valid_state_keys.contains(&state_key) {
+                let normalized_state_key = if label == "cedar" && tier == 2 {
+                    format!("{}:opa:{}", phase, tier)
+                } else {
+                    state_key.clone()
+                };
+                if !valid_state_keys.contains(&normalized_state_key) {
                     findings.push(StreamFinding {
                         record_index: idx,
                         rule: "reachable".to_string(),
@@ -853,7 +871,10 @@ impl FormalBfsModel {
                         .filter_map(|s| s.get("stage_name").and_then(|n| n.as_str()))
                         .collect();
                     for req_stage in &Self::TIER_NAMES {
-                        if !evaluated_names.contains(req_stage) {
+                        let present = evaluated_names
+                            .iter()
+                            .any(|&eval_name| Self::stage_matches_required(req_stage, eval_name));
+                        if !present {
                             findings.push(StreamFinding {
                                 record_index: idx,
                                 rule: "coverage".to_string(),
@@ -1105,5 +1126,35 @@ mod tests {
         let report = FormalBfsModel::verify_jsonl_str(&stream).unwrap();
         assert!(!report.status.is_conformant());
         assert!(report.findings.iter().any(|f| f.rule == "no_direct_bind"));
+    }
+
+    #[test]
+    fn test_stream_verifier_coverage_with_cedar_alias() {
+        let hash1 = "a".repeat(64);
+        let stages = serde_json::json!([
+            {"stage_name": "ftra"},
+            {"stage_name": "stpa"},
+            {"stage_name": "cedar"},
+            {"stage_name": "confidence"},
+            {"stage_name": "consensus"},
+            {"stage_name": "cbf"},
+            {"stage_name": "fiscal"},
+        ]);
+        let stream = format!(
+            "{{\"event_type\":\"GOVERNANCE_DECISION\",\"verdict\":\"ALLOW\",\"seal_present\":true,\"record_hash\":\"{hash1}\",\"stages_evaluated\":{stages}}}"
+        );
+        let report = FormalBfsModel::verify_jsonl_str(&stream).unwrap();
+        assert!(report.status.is_conformant());
+        assert_eq!(report.findings_count, 0);
+    }
+
+    #[test]
+    fn test_stage_name_alias_normalization() {
+        assert!(FormalBfsModel::stage_matches_required("opa", "opa"));
+        assert!(FormalBfsModel::stage_matches_required("opa", "cedar"));
+        assert!(FormalBfsModel::stage_matches_required("cedar", "opa"));
+        assert!(FormalBfsModel::stage_matches_required("cedar", "cedar"));
+        assert!(!FormalBfsModel::stage_matches_required("opa", "ftra"));
+        assert!(!FormalBfsModel::stage_matches_required("cbf", "fiscal"));
     }
 }
