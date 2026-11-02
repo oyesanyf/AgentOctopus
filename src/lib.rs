@@ -132,3 +132,12 @@ pub use security::{
     SilkRegime, ToolCallTraceStep, WindowsConfinementPolicy, ZeroMiProjectionResult,
     ZeroMutualInformationProjector,
 };
+
+pub use security::{
+    CageGovernanceEngine, CageRoutingSeal, CbfSafetyEngine, CbfViolation,
+    CommitReceipt, CompiledCagePolicy, DebitLedger, FormalBfsModel, FtraVerdict,
+    GovernanceEvaluationResult, GovernanceRequest, GovernanceVerdict, PlanGraphAnalyzer,
+    PlanStep, PolicyFormat, RoutingSealSigner, SealRejection, StreamVerificationReport,
+    SubstrateTranslator, TheoremProofResult,
+};
+

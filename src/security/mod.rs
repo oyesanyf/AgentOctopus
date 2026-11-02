@@ -3,7 +3,20 @@ pub mod anomaly_arms;
 pub mod atlas_arm;
 pub mod audit;
 pub mod breakouts;
+pub mod cage_governance;
 pub mod capabilities;
+
+pub use cage_governance::{
+    ActionReversibility, BfsModelResult, BfsPhase, BfsState, BfsViolation, CageApiError,
+    CageGovernanceEngine, CageRoutingSeal, CbfSafetyEngine, CbfViolation, CommitReceipt,
+    CompiledCagePolicy, ConsumeSealResponse, DebitLedger, FormalBfsModel, FtraVerdict,
+    GovernanceEvaluationResult, GovernanceRequest, GovernanceVerdict, IngestPolicyResponse,
+    Phase2Mode, PlanGraphAnalyzer, PlanStep, PolicyFormat, PolicyIngestError, PolicyVersionConflict,
+    Profile, ProofStatusResponse, RoutingSealSigner, SealRejection, StageOutcome,
+    StreamConformanceStatus, StreamFinding, StreamVerificationReport, StpaValidator,
+    SubstrateTranslator, TheoremProofResult, UnsafeControlAction,
+};
+
 pub mod cedar_arm;
 pub mod continuous_eval;
 pub mod delegation;
