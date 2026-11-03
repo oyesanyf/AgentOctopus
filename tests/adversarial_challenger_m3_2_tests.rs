@@ -31,13 +31,11 @@
 //! ==============================================================================
 
 use agent_octopus::security::cage_governance::{
-    GovernanceEvaluationResult, GovernanceVerdict, ProofStatusResponse,
-    StreamVerificationReport,
+    GovernanceEvaluationResult, GovernanceVerdict, ProofStatusResponse, StreamVerificationReport,
 };
 use agent_octopus::web::api::{
     handle_cage_consume_seal, handle_cage_ingest_policy, handle_cage_policy_version,
-    handle_cage_proof_status, handle_cage_trace_conformance, handle_cage_validate_action,
-    WebState,
+    handle_cage_proof_status, handle_cage_trace_conformance, handle_cage_validate_action, WebState,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -113,12 +111,16 @@ const CAGE_YAML_FIXTURE: &str = "stpa_control_structure:\n  system_name: AgentOc
 
 // Helper validator for 16-hex lowercase string
 fn is_16_hex_lowercase(s: &str) -> bool {
-    s.len() == 16 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    s.len() == 16
+        && s.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 // Helper validator for 64-hex lowercase string
 fn is_64_hex_lowercase(s: &str) -> bool {
-    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    s.len() == 64
+        && s.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 // ==============================================================================
@@ -134,8 +136,13 @@ fn test_adversarial_m3_policy_ingestion_5_formats_deterministic_hashing() {
     assert_eq!(s_acs, "200 OK", "ACS ingestion must return 200 OK");
     let val_acs: Value = serde_json::from_str(&b_acs).expect("parse ACS response");
     assert_eq!(val_acs["format"], "MicrosoftAcs");
-    let ver_acs = val_acs["policy_version_id"].as_str().expect("version string");
-    assert!(is_16_hex_lowercase(ver_acs), "ACS version ID must be 16-hex lowercase");
+    let ver_acs = val_acs["policy_version_id"]
+        .as_str()
+        .expect("version string");
+    assert!(
+        is_16_hex_lowercase(ver_acs),
+        "ACS version ID must be 16-hex lowercase"
+    );
 
     // Verify active engine reflects ACS version
     let (s_ver, b_ver) = handle_cage_policy_version(&state);
@@ -148,9 +155,17 @@ fn test_adversarial_m3_policy_ingestion_5_formats_deterministic_hashing() {
     assert_eq!(s_aaif, "200 OK", "AAIF ingestion must return 200 OK");
     let val_aaif: Value = serde_json::from_str(&b_aaif).expect("parse AAIF response");
     assert_eq!(val_aaif["format"], "LinuxFoundationAaif");
-    let ver_aaif = val_aaif["policy_version_id"].as_str().expect("version string");
-    assert!(is_16_hex_lowercase(ver_aaif), "AAIF version ID must be 16-hex lowercase");
-    assert_ne!(ver_aaif, ver_acs, "Different formats must produce distinct versions");
+    let ver_aaif = val_aaif["policy_version_id"]
+        .as_str()
+        .expect("version string");
+    assert!(
+        is_16_hex_lowercase(ver_aaif),
+        "AAIF version ID must be 16-hex lowercase"
+    );
+    assert_ne!(
+        ver_aaif, ver_acs,
+        "Different formats must produce distinct versions"
+    );
 
     // Verify active engine reflects AAIF version
     let (_, b_ver) = handle_cage_policy_version(&state);
@@ -162,8 +177,13 @@ fn test_adversarial_m3_policy_ingestion_5_formats_deterministic_hashing() {
     assert_eq!(s_oscal, "200 OK", "OSCAL ingestion must return 200 OK");
     let val_oscal: Value = serde_json::from_str(&b_oscal).expect("parse OSCAL response");
     assert_eq!(val_oscal["format"], "NistOscal");
-    let ver_oscal = val_oscal["policy_version_id"].as_str().expect("version string");
-    assert!(is_16_hex_lowercase(ver_oscal), "OSCAL version ID must be 16-hex lowercase");
+    let ver_oscal = val_oscal["policy_version_id"]
+        .as_str()
+        .expect("version string");
+    assert!(
+        is_16_hex_lowercase(ver_oscal),
+        "OSCAL version ID must be 16-hex lowercase"
+    );
 
     // Verify active engine reflects OSCAL version
     let (_, b_ver) = handle_cage_policy_version(&state);
@@ -175,8 +195,13 @@ fn test_adversarial_m3_policy_ingestion_5_formats_deterministic_hashing() {
     assert_eq!(s_lula, "200 OK", "Lula ingestion must return 200 OK");
     let val_lula: Value = serde_json::from_str(&b_lula).expect("parse Lula response");
     assert_eq!(val_lula["format"], "LulaValidation");
-    let ver_lula = val_lula["policy_version_id"].as_str().expect("version string");
-    assert!(is_16_hex_lowercase(ver_lula), "Lula version ID must be 16-hex lowercase");
+    let ver_lula = val_lula["policy_version_id"]
+        .as_str()
+        .expect("version string");
+    assert!(
+        is_16_hex_lowercase(ver_lula),
+        "Lula version ID must be 16-hex lowercase"
+    );
 
     // Verify active engine reflects Lula version
     let (_, b_ver) = handle_cage_policy_version(&state);
@@ -188,8 +213,13 @@ fn test_adversarial_m3_policy_ingestion_5_formats_deterministic_hashing() {
     assert_eq!(s_cage, "200 OK", "CAGE YAML ingestion must return 200 OK");
     let val_cage: Value = serde_json::from_str(&b_cage).expect("parse CAGE response");
     assert_eq!(val_cage["format"], "CageStpa");
-    let ver_cage = val_cage["policy_version_id"].as_str().expect("version string");
-    assert!(is_16_hex_lowercase(ver_cage), "CAGE YAML version ID must be 16-hex lowercase");
+    let ver_cage = val_cage["policy_version_id"]
+        .as_str()
+        .expect("version string");
+    assert!(
+        is_16_hex_lowercase(ver_cage),
+        "CAGE YAML version ID must be 16-hex lowercase"
+    );
 
     // Verify active engine reflects CAGE YAML version
     let (_, b_ver) = handle_cage_policy_version(&state);
@@ -253,7 +283,10 @@ fn test_adversarial_m3_policy_envelope_and_version_drift_rejection() {
     })
     .to_string();
     let (s_env, b_env) = handle_cage_ingest_policy(&state, &envelope, None);
-    assert_eq!(s_env, "200 OK", "Matching expected_version in envelope must succeed");
+    assert_eq!(
+        s_env, "200 OK",
+        "Matching expected_version in envelope must succeed"
+    );
     let val_env: Value = serde_json::from_str(&b_env).unwrap();
     let new_version = val_env["policy_version_id"].as_str().unwrap().to_string();
     assert_ne!(new_version, initial_version);
@@ -265,20 +298,29 @@ fn test_adversarial_m3_policy_envelope_and_version_drift_rejection() {
     })
     .to_string();
     let (s_stale, b_stale) = handle_cage_ingest_policy(&state, &stale_envelope, None);
-    assert_eq!(s_stale, "409 Conflict", "Stale expected_version must trigger 409 Conflict");
+    assert_eq!(
+        s_stale, "409 Conflict",
+        "Stale expected_version must trigger 409 Conflict"
+    );
     assert!(b_stale.contains("POLICY_VERSION_MISMATCH"));
 
     // 3. Ingest with header hint mismatch -> 409 Conflict
     let (s_hint, b_hint) =
         handle_cage_ingest_policy(&state, LULA_FIXTURE, Some("0000deadbeef1111"));
-    assert_eq!(s_hint, "409 Conflict", "Mismatched header hint must trigger 409 Conflict");
+    assert_eq!(
+        s_hint, "409 Conflict",
+        "Mismatched header hint must trigger 409 Conflict"
+    );
     assert!(b_hint.contains("POLICY_VERSION_MISMATCH"));
 
     // 4. Ingest fallback behavior: unclassified text documents fall back to CageStpa
     // and synthesize root system default UCA CAGE-ROOT-001 (ExecuteChildProcess)
     let fallback_policy = "unrecognized_custom_key: some_value\n";
     let (s_fb, b_fb) = handle_cage_ingest_policy(&state, fallback_policy, None);
-    assert_eq!(s_fb, "200 OK", "Fallback document compiles as CageStpa default");
+    assert_eq!(
+        s_fb, "200 OK",
+        "Fallback document compiles as CageStpa default"
+    );
     let val_fb: Value = serde_json::from_str(&b_fb).unwrap();
     assert_eq!(val_fb["format"], "CageStpa");
     assert!(val_fb["stpa_ucas_count"].as_u64().unwrap() >= 1);
@@ -390,7 +432,10 @@ fn test_adversarial_m3_trace_conformance_input_formats() {
     let (s_arr, b_arr) = handle_cage_trace_conformance(&state, &body_array);
     assert_eq!(s_arr, "200 OK");
     let rep_arr: StreamVerificationReport = serde_json::from_str(&b_arr).unwrap();
-    assert!(rep_arr.is_conformant(), "Conforming array must pass all rules");
+    assert!(
+        rep_arr.is_conformant(),
+        "Conforming array must pass all rules"
+    );
     assert_eq!(rep_arr.findings_count, 0);
 
     // Format B: Wrapper Object `{"traces": [...]}`
@@ -398,7 +443,10 @@ fn test_adversarial_m3_trace_conformance_input_formats() {
     let (s_wrap, b_wrap) = handle_cage_trace_conformance(&state, &body_wrapper);
     assert_eq!(s_wrap, "200 OK");
     let rep_wrap: StreamVerificationReport = serde_json::from_str(&b_wrap).unwrap();
-    assert!(rep_wrap.is_conformant(), "Conforming wrapper must pass all rules");
+    assert!(
+        rep_wrap.is_conformant(),
+        "Conforming wrapper must pass all rules"
+    );
     assert_eq!(rep_wrap.findings_count, 0);
 
     // Format C: JSONL Stream (newline-delimited)
@@ -412,7 +460,10 @@ fn test_adversarial_m3_trace_conformance_input_formats() {
     let (s_jsonl, b_jsonl) = handle_cage_trace_conformance(&state, &body_jsonl);
     assert_eq!(s_jsonl, "200 OK");
     let rep_jsonl: StreamVerificationReport = serde_json::from_str(&b_jsonl).unwrap();
-    assert!(rep_jsonl.is_conformant(), "Conforming JSONL stream must pass all rules");
+    assert!(
+        rep_jsonl.is_conformant(),
+        "Conforming JSONL stream must pass all rules"
+    );
     assert_eq!(rep_jsonl.findings_count, 0);
 
     // Format D: Empty or unparseable payload -> 400 Bad Request
@@ -575,7 +626,10 @@ fn test_adversarial_m3_trace_conformance_7_rules_stress() {
     .to_string();
     let (_, b_r7) = handle_cage_trace_conformance(&state, &r7_payload);
     let rep_r7: StreamVerificationReport = serde_json::from_str(&b_r7).unwrap();
-    assert!(!rep_r7.is_conformant(), "Replay trace must be non-compliant");
+    assert!(
+        !rep_r7.is_conformant(),
+        "Replay trace must be non-compliant"
+    );
     let single_use_finding = rep_r7
         .findings
         .iter()
@@ -673,7 +727,13 @@ fn test_adversarial_m3_concurrency_race_resistance() {
     }
 
     // 3. Ingester threads (concurrent policy updates cycling through formats)
-    let policies = vec![ACS_FIXTURE, AAIF_FIXTURE, OSCAL_FIXTURE, LULA_FIXTURE, CAGE_YAML_FIXTURE];
+    let policies = vec![
+        ACS_FIXTURE,
+        AAIF_FIXTURE,
+        OSCAL_FIXTURE,
+        LULA_FIXTURE,
+        CAGE_YAML_FIXTURE,
+    ];
     for t_id in 0..NUM_INGESTER_THREADS {
         let state_clone = Arc::clone(&state);
         let policies_clone = policies.clone();
@@ -697,7 +757,8 @@ fn test_adversarial_m3_concurrency_race_resistance() {
 
     // Wait for all threads to terminate and check for panics
     for h in handles {
-        h.join().expect("Thread joined cleanly with zero panics or deadlocks");
+        h.join()
+            .expect("Thread joined cleanly with zero panics or deadlocks");
     }
 
     // Final consistency check

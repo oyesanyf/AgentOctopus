@@ -553,7 +553,9 @@ fn test_m5_2_ftra_dag_complex_topologies_and_priority_verdicts() {
     ];
     let cyclic_res = PlanGraphAnalyzer::analyze_execution_graph(&cyclic_steps);
     assert!(cyclic_res.is_err());
-    assert!(cyclic_res.unwrap_err().contains("Execution graph contains cycles"));
+    assert!(cyclic_res
+        .unwrap_err()
+        .contains("Execution graph contains cycles"));
 
     // 7.3 Missing dependency detection
     let missing_dep_steps = vec![PlanStep {
@@ -581,14 +583,16 @@ fn test_m5_2_request_guard_dns_rebinding_and_host_evasion() {
     let port = 5005;
 
     // 8.1 Rebinding hostname suffix attacks
-    let h_suffix = "POST /api/test HTTP/1.1\r\nHost: 127.0.0.1.attacker.com:5005\r\nX-Octopus-Token: tok";
+    let h_suffix =
+        "POST /api/test HTTP/1.1\r\nHost: 127.0.0.1.attacker.com:5005\r\nX-Octopus-Token: tok";
     assert!(matches!(
         authorize_request(&make_guard_req("POST", "/api/test", h_suffix, port), "tok"),
         Err(GuardRejection::BadHost(_))
     ));
 
     // 8.2 Localhost subdomain attack
-    let h_sub = "POST /api/test HTTP/1.1\r\nHost: localhost.attacker.com:5005\r\nX-Octopus-Token: tok";
+    let h_sub =
+        "POST /api/test HTTP/1.1\r\nHost: localhost.attacker.com:5005\r\nX-Octopus-Token: tok";
     assert!(matches!(
         authorize_request(&make_guard_req("POST", "/api/test", h_sub, port), "tok"),
         Err(GuardRejection::BadHost(_))
@@ -611,7 +615,9 @@ fn test_m5_2_request_guard_dns_rebinding_and_host_evasion() {
             "POST /api/test HTTP/1.1\r\nHost: {}\r\nX-Octopus-Token: tok\r\nOrigin: http://{}",
             auth, auth
         );
-        assert!(authorize_request(&make_guard_req("POST", "/api/test", &h_ok, port), "tok").is_ok());
+        assert!(
+            authorize_request(&make_guard_req("POST", "/api/test", &h_ok, port), "tok").is_ok()
+        );
     }
 }
 
@@ -630,7 +636,8 @@ fn test_m5_2_request_guard_csrf_origin_and_fetch_metadata() {
     ));
 
     // 9.2 Null origin rejected
-    let h_null = "POST /governance/validate-action HTTP/1.1\r\nHost: 127.0.0.1:5005\r\nOrigin: null";
+    let h_null =
+        "POST /governance/validate-action HTTP/1.1\r\nHost: 127.0.0.1:5005\r\nOrigin: null";
     assert!(matches!(
         authorize_request(
             &make_guard_req("POST", "/governance/validate-action", h_null, port),
@@ -665,13 +672,12 @@ fn test_m5_2_request_guard_route_matching_and_key_gating() {
     assert!(!is_token_exempt_path("/api/run-rust-tests"));
 
     // 10.2 Bearer token extraction
-    let h_bearer = "POST /cage HTTP/1.1\r\nAuthorization: Bearer secret-cage-key-999\r\nHost: 127.0.0.1";
-    assert_eq!(
-        extract_bearer_token(h_bearer),
-        Some("secret-cage-key-999")
-    );
+    let h_bearer =
+        "POST /cage HTTP/1.1\r\nAuthorization: Bearer secret-cage-key-999\r\nHost: 127.0.0.1";
+    assert_eq!(extract_bearer_token(h_bearer), Some("secret-cage-key-999"));
 
-    let h_bearer_lc = "POST /cage HTTP/1.1\r\nauthorization: bearer secret-cage-key-888\r\nHost: 127.0.0.1";
+    let h_bearer_lc =
+        "POST /cage HTTP/1.1\r\nauthorization: bearer secret-cage-key-888\r\nHost: 127.0.0.1";
     assert_eq!(
         extract_bearer_token(h_bearer_lc),
         Some("secret-cage-key-888")
@@ -706,7 +712,11 @@ fn test_m5_2_consumed_seals_memory_reclamation_and_pruning() {
     // Entries expire at base_time + 30; with 5s drift, exp + 5 = base_time + 35 < base_time + 36
     let pruned = signer.prune_expired(base_time + 36);
     assert_eq!(pruned, 20, "All 20 expired seals should be pruned");
-    assert_eq!(signer.consumed_count(), 0, "Table should be empty after pruning");
+    assert_eq!(
+        signer.consumed_count(),
+        0,
+        "Table should be empty after pruning"
+    );
 }
 
 #[test]
@@ -772,7 +782,8 @@ fn test_m5_2_pipeline_atomic_two_phase_integrity_and_zero_leakage() {
     let ledger = Arc::new(DebitLedger::new(100.0, 0.2, 10.0).unwrap());
     let audit_log = Arc::new(SecurityAuditLog::new());
     let policy = CompiledCagePolicy {
-        format: agent_octopus::security::cage_governance::substrate_translator::PolicyFormat::CageStpa,
+        format:
+            agent_octopus::security::cage_governance::substrate_translator::PolicyFormat::CageStpa,
         policy_version_id: M5_TEST_POLICY_VERSION.to_string(),
         raw_content: String::new(),
         cedar_rules: vec![],

@@ -40,9 +40,7 @@ use agent_octopus::containment_ring::{
     ArmContainmentRing, ArmExecutionError, TieredExecutionDispatcher, TieredToolRequest,
 };
 use agent_octopus::core::types::ArmRole;
-use agent_octopus::security::cage_governance::cbf_fiscal::{
-    CbfSafetyEngine, CbfViolation,
-};
+use agent_octopus::security::cage_governance::cbf_fiscal::{CbfSafetyEngine, CbfViolation};
 use agent_octopus::security::cage_governance::no_direct_bind_proof::{
     FormalBfsModel, StreamConformanceStatus,
 };
@@ -128,7 +126,10 @@ fn test_challenge1_severe_policy_corruption_and_malformed_syntax() {
         compile_err
     );
     let (status1, body1) = handle_cage_ingest_policy(&state, malformed_yaml, None);
-    assert_eq!(status1, "400 Bad Request", "Malformed YAML must return 400 Bad Request");
+    assert_eq!(
+        status1, "400 Bad Request",
+        "Malformed YAML must return 400 Bad Request"
+    );
     assert!(body1.contains("INVALID_POLICY_FORMAT"));
 
     // 2. Malformed ACS schema: missing mandatory 'behaviorDeclarations' array
@@ -143,18 +144,21 @@ fn test_challenge1_severe_policy_corruption_and_malformed_syntax() {
 
     // 3. Malformed AAIF schema: missing mandatory 'governedRunLoop'
     let broken_aaif = "title: \"AAIF policy without governedRunLoop\"\n";
-    let aaif_err = SubstrateTranslator::compile_policy(broken_aaif, Some(PolicyFormat::LinuxFoundationAaif))
-        .expect_err("AAIF missing governedRunLoop must fail");
+    let aaif_err =
+        SubstrateTranslator::compile_policy(broken_aaif, Some(PolicyFormat::LinuxFoundationAaif))
+            .expect_err("AAIF missing governedRunLoop must fail");
     assert!(matches!(aaif_err, PolicyIngestError::MalformedSchema(_)));
 
     // 4. Malformed OSCAL schema: missing controls / component-definition
     let broken_oscal = "oscal-version: \"1.1.0\"\n";
-    let oscal_err = SubstrateTranslator::compile_policy(broken_oscal, Some(PolicyFormat::NistOscal))
-        .expect_err("OSCAL missing component-definition must fail");
+    let oscal_err =
+        SubstrateTranslator::compile_policy(broken_oscal, Some(PolicyFormat::NistOscal))
+            .expect_err("OSCAL missing component-definition must fail");
     assert!(matches!(oscal_err, PolicyIngestError::MalformedSchema(_)));
 
     // 5. Ingest malformed YAML payload via HTTP endpoint -> strict 400 Bad Request
-    let malformed_ingest_yaml = "behaviorDeclarations:\n  - name: test\n    syntax_error_no_colon\n";
+    let malformed_ingest_yaml =
+        "behaviorDeclarations:\n  - name: test\n    syntax_error_no_colon\n";
     let (status5, body5) = handle_cage_ingest_policy(&state, malformed_ingest_yaml, None);
     assert_eq!(status5, "400 Bad Request");
     assert!(body5.contains("INVALID_POLICY_FORMAT"));
@@ -230,7 +234,8 @@ cbf_gamma: 0.10
 cbf_b_min: 10.0
 "#;
 
-    let base_compiled = SubstrateTranslator::compile_policy(base_policy, None).expect("base compile");
+    let base_compiled =
+        SubstrateTranslator::compile_policy(base_policy, None).expect("base compile");
     assert_eq!(base_compiled.policy_version_id.len(), 16);
 
     // Mutation A: Change a single character in action name ("doc_extractor" -> "doc_extractos")
@@ -263,18 +268,18 @@ cbf_b_min: 10.0
             Some(&base_compiled.policy_version_id),
             &mutated_comp.policy_version_id,
         )
-        .expect_err(&format!("{}: verify_version_pinning must fail on drifted version", name));
+        .expect_err(&format!(
+            "{}: verify_version_pinning must fail on drifted version",
+            name
+        ));
         assert_eq!(pin_err.pinned_version, base_compiled.policy_version_id);
         assert_eq!(pin_err.incoming_version, mutated_comp.policy_version_id);
     }
 
     // 2. Active version pinning on policy ingest via HTTP:
     // Pinned to initial_ver; caller provides mismatched drifted expected_version -> 409 Conflict
-    let (s_conf1, b_conf1) = handle_cage_ingest_policy(
-        &state,
-        base_policy,
-        Some("drift_hash_0000"),
-    );
+    let (s_conf1, b_conf1) =
+        handle_cage_ingest_policy(&state, base_policy, Some("drift_hash_0000"));
     assert_eq!(s_conf1, "409 Conflict");
     assert!(b_conf1.contains("POLICY_VERSION_MISMATCH"));
 
@@ -305,13 +310,11 @@ cbf_b_min: 10.0
     assert_eq!(s_conf3, "409 Conflict");
     assert!(b_conf3.contains("POLICY_VERSION_MISMATCH"));
 
-
     // 5. Ingest with matching expected_version -> succeeds 200 OK
     let (s_ok, b_ok) = handle_cage_ingest_policy(&state, base_policy, Some(&initial_ver));
     assert_eq!(s_ok, "200 OK");
     assert!(b_ok.contains(&base_compiled.policy_version_id));
 }
-
 
 // ==============================================================================
 // CHALLENGE 2: ADVERSARIAL DISCRETE-TIME CBF BARRIER STEP & ENVELOPE ATTACKS
@@ -437,7 +440,10 @@ fn test_challenge2_floor_breach_vs_decay_and_malformed_numerics() {
         .evaluate_step(12.0, 2.5, 2.0)
         .expect_err("Floor breach must be detected");
     match floor_err {
-        CbfViolation::FloorBreach { projected_budget, b_min } => {
+        CbfViolation::FloorBreach {
+            projected_budget,
+            b_min,
+        } => {
             assert_eq!(projected_budget, 9.5);
             assert_eq!(b_min, 10.0);
         }
@@ -448,7 +454,10 @@ fn test_challenge2_floor_breach_vs_decay_and_malformed_numerics() {
     let unsafe_err = engine
         .evaluate_step(9.0, 1.0, -1.0)
         .expect_err("Current state below floor must fail");
-    assert!(matches!(unsafe_err, CbfViolation::CurrentStateUnsafe { .. }));
+    assert!(matches!(
+        unsafe_err,
+        CbfViolation::CurrentStateUnsafe { .. }
+    ));
 
     // 3. Malformed numerics: NaN, +/-Infinity, negative cost
     assert!(matches!(
@@ -524,15 +533,22 @@ fn test_challenge3_tampered_hmac_signature_and_chain_anchor_attacks() {
 
     let action_digest = "11112222333344445555666677778888aaaabbbbccccddddeeeeffff00001111";
     let record_hash = "999988887777666655554444333322220000ffff1111eeee2222dddd3333cccc";
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
-    let valid_seal = signer.issue_seal(action_digest, record_hash, now).expect("Seal issuance");
+    let valid_seal = signer
+        .issue_seal(action_digest, record_hash, now)
+        .expect("Seal issuance");
     assert!(valid_seal.validate_format());
 
     // 1. Attack: Single-bit flip in HMAC signature
     let mut bit_flipped_seal = valid_seal.clone();
     let last_byte = bit_flipped_seal.signature.pop().unwrap();
-    bit_flipped_seal.signature.push(if last_byte == 'a' { 'b' } else { 'a' });
+    bit_flipped_seal
+        .signature
+        .push(if last_byte == 'a' { 'b' } else { 'a' });
     let sig_err = signer
         .validate_and_consume(&bit_flipped_seal, action_digest, record_hash, now)
         .expect_err("Bit-flipped signature must be rejected");
@@ -544,7 +560,10 @@ fn test_challenge3_tampered_hmac_signature_and_chain_anchor_attacks() {
     let trunc_err = signer
         .validate_and_consume(&trunc_sig_seal, action_digest, record_hash, now)
         .expect_err("Truncated signature must be rejected");
-    assert!(matches!(trunc_err, SealRejection::InvalidSignature | SealRejection::MalformedSeal(_)));
+    assert!(matches!(
+        trunc_err,
+        SealRejection::InvalidSignature | SealRejection::MalformedSeal(_)
+    ));
 
     // 3. Attack: Single-nibble mutation in record_hash (audit anchor tampering)
     let mut tampered_anchor_seal = valid_seal.clone();
@@ -552,16 +571,25 @@ fn test_challenge3_tampered_hmac_signature_and_chain_anchor_attacks() {
     let anchor_err = signer
         .validate_and_consume(&tampered_anchor_seal, action_digest, record_hash, now)
         .expect_err("Tampered record_hash must be rejected");
-    assert!(matches!(anchor_err, SealRejection::RecordHashMismatch { .. }));
+    assert!(matches!(
+        anchor_err,
+        SealRejection::RecordHashMismatch { .. }
+    ));
 
     // 4. Attack: Issuing seal against unanchored / genesis audit hash (Tallam 2026 Evidence Sufficiency)
     let zeros_hash = "0".repeat(64);
     let unanchored_err1 = signer.issue_seal(action_digest, &zeros_hash, now);
-    assert!(matches!(unanchored_err1, Err(SealRejection::UnanchoredEvidence(_))));
+    assert!(matches!(
+        unanchored_err1,
+        Err(SealRejection::UnanchoredEvidence(_))
+    ));
 
     let genesis_hash = format!("GENESIS_AUDIT_ROOT_{}", "0".repeat(45));
     let unanchored_err2 = signer.issue_seal(action_digest, &genesis_hash, now);
-    assert!(matches!(unanchored_err2, Err(SealRejection::UnanchoredEvidence(_))));
+    assert!(matches!(
+        unanchored_err2,
+        Err(SealRejection::UnanchoredEvidence(_))
+    ));
 }
 
 #[test]
@@ -572,9 +600,14 @@ fn test_challenge3_temporal_ttl_skew_and_tampered_expires_at() {
 
     let action_digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let record_hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
-    let seal = signer.issue_seal(action_digest, record_hash, now).expect("Seal issuance");
+    let seal = signer
+        .issue_seal(action_digest, record_hash, now)
+        .expect("Seal issuance");
 
     // 1. TTL Expiration: evaluation at now + 31s (> 30s TTL)
     let exp_err = signer
@@ -583,15 +616,21 @@ fn test_challenge3_temporal_ttl_skew_and_tampered_expires_at() {
     assert!(matches!(exp_err, SealRejection::Expired { .. }));
 
     // 2. Clock drift: seal issued in future > 5s (now + 6s)
-    let future_seal = signer.issue_seal(action_digest, record_hash, now + 6).expect("future seal");
+    let future_seal = signer
+        .issue_seal(action_digest, record_hash, now + 6)
+        .expect("future seal");
     let future_err = signer
         .validate_and_consume(&future_seal, action_digest, record_hash, now)
         .expect_err("Future seal with > 5s skew must be rejected");
     assert!(matches!(future_err, SealRejection::FutureTimestamp { .. }));
 
     // 3. Clock drift within tolerance: seal issued at now + 4s -> accepted
-    let tol_seal = signer.issue_seal(action_digest, record_hash, now + 4).expect("tol seal");
-    assert!(signer.validate_and_consume(&tol_seal, action_digest, record_hash, now).is_ok());
+    let tol_seal = signer
+        .issue_seal(action_digest, record_hash, now + 4)
+        .expect("tol seal");
+    assert!(signer
+        .validate_and_consume(&tol_seal, action_digest, record_hash, now)
+        .is_ok());
 
     // 4. Adversary tampers `expires_at` in seal struct (sets expires_at = now + 3600 to defeat TTL)
     let mut tampered_exp_seal = seal.clone();
@@ -610,9 +649,14 @@ fn test_challenge3_concurrent_multithreaded_race_replay_single_winner() {
 
     let action_digest = "ccccddddccccddddccccddddccccddddccccddddccccddddccccddddccccdddd";
     let record_hash = "eeeeffffeeeeffffeeeeffffeeeeffffeeeeffffeeeeffffeeeeffffeeeeffff";
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
-    let seal = signer.issue_seal(action_digest, record_hash, now).expect("Seal issuance");
+    let seal = signer
+        .issue_seal(action_digest, record_hash, now)
+        .expect("Seal issuance");
 
     // Launch 32 OS threads all racing to consume the exact same seal simultaneously
     let thread_count = 32;
@@ -673,7 +717,10 @@ async fn test_challenge3_arm_containment_ring_async_race_single_actuation() {
     let dispatcher = Arc::new(test_dispatcher());
     let scratch_root = std::env::temp_dir().join(format!("challenger_race_{}", std::process::id()));
     let payload = b"{\"action\": \"read_contract\"}".to_vec();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     let seal = Arc::new(create_test_seal_anchored(
         &engine,
@@ -769,16 +816,14 @@ async fn test_challenge3_arm_containment_ring_async_race_single_actuation() {
 fn test_challenge4_trace_injection_actuation_without_seal_consumed_rule6() {
     // Attack 4.1: Inject ACTUATION_RECEIPT referencing a rogue seal that has no preceding
     // GOVERNANCE_SEAL_CONSUMED record in the trace stream.
-    let injection_stream = vec![
-        serde_json::json!({
-            "event_type": "ACTUATION_RECEIPT",
-            "agent_id": "arm_01",
-            "record_hash": "a".repeat(64),
-            "seal_id": "unconsumed_forged_seal_666",
-            "action": "doc_extractor",
-            "status": "SUCCESS"
-        })
-    ];
+    let injection_stream = vec![serde_json::json!({
+        "event_type": "ACTUATION_RECEIPT",
+        "agent_id": "arm_01",
+        "record_hash": "a".repeat(64),
+        "seal_id": "unconsumed_forged_seal_666",
+        "action": "doc_extractor",
+        "status": "SUCCESS"
+    })];
 
     let report = FormalBfsModel::check_trace_conformance(&injection_stream);
     assert_eq!(report.status, StreamConformanceStatus::NonConformant);
@@ -788,31 +833,27 @@ fn test_challenge4_trace_injection_actuation_without_seal_consumed_rule6() {
     );
 
     // Attack 4.2: Inject ACTUATION_EXECUTED event type without consumed seal
-    let exec_stream = vec![
-        serde_json::json!({
-            "event_type": "ACTUATION_EXECUTED",
-            "agent_id": "arm_01",
-            "record_hash": "b".repeat(64),
-            "seal_id": "forged_exec_seal_777",
-            "action": "doc_extractor",
-            "status": "SUCCESS"
-        })
-    ];
+    let exec_stream = vec![serde_json::json!({
+        "event_type": "ACTUATION_EXECUTED",
+        "agent_id": "arm_01",
+        "record_hash": "b".repeat(64),
+        "seal_id": "forged_exec_seal_777",
+        "action": "doc_extractor",
+        "status": "SUCCESS"
+    })];
     let report_exec = FormalBfsModel::check_trace_conformance(&exec_stream);
     assert_eq!(report_exec.status, StreamConformanceStatus::NonConformant);
     assert!(report_exec.has_rule_violation("no_direct_bind"));
 
     // Attack 4.3: Inject GOVERNANCE_EXECUTION event type with empty seal_id
-    let empty_seal_stream = vec![
-        serde_json::json!({
-            "event_type": "GOVERNANCE_EXECUTION",
-            "agent_id": "arm_01",
-            "record_hash": "c".repeat(64),
-            "seal_id": "",
-            "action": "unauthorized_tool",
-            "status": "SUCCESS"
-        })
-    ];
+    let empty_seal_stream = vec![serde_json::json!({
+        "event_type": "GOVERNANCE_EXECUTION",
+        "agent_id": "arm_01",
+        "record_hash": "c".repeat(64),
+        "seal_id": "",
+        "action": "unauthorized_tool",
+        "status": "SUCCESS"
+    })];
     let report_empty = FormalBfsModel::check_trace_conformance(&empty_seal_stream);
     assert_eq!(report_empty.status, StreamConformanceStatus::NonConformant);
     assert!(report_empty.has_rule_violation("no_direct_bind"));
@@ -821,39 +862,35 @@ fn test_challenge4_trace_injection_actuation_without_seal_consumed_rule6() {
 #[test]
 fn test_challenge4_trace_injection_missing_decision_and_unsealed_verdict() {
     // Attack 4.4: Inject GOVERNANCE_SEAL_CONSUMED referencing an unknown decision hash
-    let orphan_seal_consumed = vec![
-        serde_json::json!({
-            "event_type": "GOVERNANCE_SEAL_CONSUMED",
-            "agent_id": "arm_01",
-            "record_hash": "1".repeat(64),
-            "decision_record_hash": "9".repeat(64), // Missing decision hash!
-            "seal_id": "orphan_seal_101",
-            "action": "doc_extractor"
-        })
-    ];
+    let orphan_seal_consumed = vec![serde_json::json!({
+        "event_type": "GOVERNANCE_SEAL_CONSUMED",
+        "agent_id": "arm_01",
+        "record_hash": "1".repeat(64),
+        "decision_record_hash": "9".repeat(64), // Missing decision hash!
+        "seal_id": "orphan_seal_101",
+        "action": "doc_extractor"
+    })];
     let report_orphan = FormalBfsModel::check_trace_conformance(&orphan_seal_consumed);
     assert_eq!(report_orphan.status, StreamConformanceStatus::NonConformant);
     assert!(report_orphan.has_rule_violation("no_direct_bind"));
 
     // Attack 4.5: Inject GOVERNANCE_DECISION with ALLOW verdict but seal_present = false (Rule 4: seal)
-    let unsealed_decision = vec![
-        serde_json::json!({
-            "event_type": "GOVERNANCE_DECISION",
-            "agent_id": "arm_01",
-            "record_hash": "2".repeat(64),
-            "verdict": "ALLOW",
-            "seal_present": false, // VIOLATION: ALLOW requires seal_present = true
-            "stages_evaluated": [
-                {"stage_name": "ftra"},
-                {"stage_name": "stpa"},
-                {"stage_name": "opa"},
-                {"stage_name": "confidence"},
-                {"stage_name": "consensus"},
-                {"stage_name": "cbf"},
-                {"stage_name": "fiscal"},
-            ]
-        })
-    ];
+    let unsealed_decision = vec![serde_json::json!({
+        "event_type": "GOVERNANCE_DECISION",
+        "agent_id": "arm_01",
+        "record_hash": "2".repeat(64),
+        "verdict": "ALLOW",
+        "seal_present": false, // VIOLATION: ALLOW requires seal_present = true
+        "stages_evaluated": [
+            {"stage_name": "ftra"},
+            {"stage_name": "stpa"},
+            {"stage_name": "opa"},
+            {"stage_name": "confidence"},
+            {"stage_name": "consensus"},
+            {"stage_name": "cbf"},
+            {"stage_name": "fiscal"},
+        ]
+    })];
     let report_seal = FormalBfsModel::check_trace_conformance(&unsealed_decision);
     assert_eq!(report_seal.status, StreamConformanceStatus::NonConformant);
     assert!(
@@ -911,21 +948,19 @@ fn test_challenge4_trace_injection_replay_coverage_and_illegal_state_transition(
     );
 
     // Attack 4.7: Incomplete stage coverage (Rule 3: coverage)
-    let incomplete_coverage = vec![
-        serde_json::json!({
-            "event_type": "GOVERNANCE_DECISION",
-            "agent_id": "arm_01",
-            "record_hash": "6".repeat(64),
-            "verdict": "ALLOW",
-            "seal_present": true,
-            "stages_evaluated": [
-                {"stage_name": "ftra"},
-                {"stage_name": "stpa"},
-                {"stage_name": "opa"},
-                // Omitted confidence, consensus, cbf, fiscal
-            ]
-        })
-    ];
+    let incomplete_coverage = vec![serde_json::json!({
+        "event_type": "GOVERNANCE_DECISION",
+        "agent_id": "arm_01",
+        "record_hash": "6".repeat(64),
+        "verdict": "ALLOW",
+        "seal_present": true,
+        "stages_evaluated": [
+            {"stage_name": "ftra"},
+            {"stage_name": "stpa"},
+            {"stage_name": "opa"},
+            // Omitted confidence, consensus, cbf, fiscal
+        ]
+    })];
     let report_cov = FormalBfsModel::check_trace_conformance(&incomplete_coverage);
     assert_eq!(report_cov.status, StreamConformanceStatus::NonConformant);
     assert!(
@@ -934,14 +969,12 @@ fn test_challenge4_trace_injection_replay_coverage_and_illegal_state_transition(
     );
 
     // Attack 4.8: Illegal state machine transition skipping all checking tiers (Rule 5: reachable)
-    let illegal_transition = vec![
-        serde_json::json!({
-            "event_type": "STATE_TRANSITION",
-            "phase": "EXECUTED",
-            "label": "unauthorized_jump",
-            "tier": 0
-        })
-    ];
+    let illegal_transition = vec![serde_json::json!({
+        "event_type": "STATE_TRANSITION",
+        "phase": "EXECUTED",
+        "label": "unauthorized_jump",
+        "tier": 0
+    })];
     let report_reach = FormalBfsModel::check_trace_conformance(&illegal_transition);
     assert_eq!(report_reach.status, StreamConformanceStatus::NonConformant);
     assert!(
@@ -972,16 +1005,17 @@ fn test_challenge4_trace_injection_cbf_budget_leakage_and_schema_violations() {
     ];
     let report_leak = FormalBfsModel::check_trace_conformance(&leakage_trace);
     assert_eq!(report_leak.status, StreamConformanceStatus::NonConformant);
-    assert!(report_leak.findings.iter().any(|f| f.rule == "cbf_rollback"));
+    assert!(report_leak
+        .findings
+        .iter()
+        .any(|f| f.rule == "cbf_rollback"));
 
     // Attack 4.10: Schema violation with uppercase hex characters in record_hash (Rule 1: schema)
-    let bad_schema_trace = vec![
-        serde_json::json!({
-            "event_type": "GOVERNANCE_DECISION",
-            "record_hash": "A".repeat(64), // Uppercase hex violates ^[0-9a-f]{64}$
-            "verdict": "DENY",
-        })
-    ];
+    let bad_schema_trace = vec![serde_json::json!({
+        "event_type": "GOVERNANCE_DECISION",
+        "record_hash": "A".repeat(64), // Uppercase hex violates ^[0-9a-f]{64}$
+        "verdict": "DENY",
+    })];
     let report_schema = FormalBfsModel::check_trace_conformance(&bad_schema_trace);
     assert_eq!(report_schema.status, StreamConformanceStatus::NonConformant);
     assert!(report_schema.has_rule_violation("schema"));

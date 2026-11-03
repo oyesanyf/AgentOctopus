@@ -89,6 +89,7 @@ pub struct WebState {
     pub dream_rsi_arm: Arc<crate::security::dream_rsi::DreamRsiOptimizerArm>,
     pub harness2_arm: Arc<crate::security::harness2::RecursiveHarnessOptimizerArm>,
     pub cage_engine: Arc<CageGovernanceEngine>,
+    pub cage_substrate: Arc<crate::security::cage_substrate::CageSubstrateState>,
 }
 
 fn load_or_init_egress_domains() -> Vec<String> {
@@ -278,6 +279,8 @@ impl Default for WebState {
             Arc::clone(&audit_log),
             &secret_seed,
         ));
+        let cage_substrate =
+            Arc::new(crate::security::cage_substrate::CageSubstrateState::default());
 
         Self {
             gateway,
@@ -307,6 +310,7 @@ impl Default for WebState {
             dream_rsi_arm,
             harness2_arm,
             cage_engine,
+            cage_substrate,
         }
     }
 }
@@ -3915,6 +3919,8 @@ struct KillSwitchActionBody {
     pub operator: Option<String>,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub caller_pid: Option<u32>,
 }
 
 /// Returns live host KillSwitch status reconciled with kernel BFE filters and 16-domain protocol metrics.
@@ -3991,6 +3997,16 @@ pub fn handle_killswitch_engage(state: &WebState, body: &str) -> (&'static str, 
 
 /// Disarms host kernel network quarantine and restores normal endpoint connectivity.
 pub fn handle_killswitch_disarm(state: &WebState, body: &str) -> (&'static str, String) {
+    handle_killswitch_disarm_with_peer(state, body, None, 0)
+}
+
+/// Disarms host kernel network quarantine with OS kernel TCP socket table peer-PID anti-spoofing.
+pub fn handle_killswitch_disarm_with_peer(
+    state: &WebState,
+    body: &str,
+    peer_addr: Option<std::net::SocketAddr>,
+    local_port: u16,
+) -> (&'static str, String) {
     let parsed: KillSwitchActionBody = if body.trim().is_empty() {
         KillSwitchActionBody::default()
     } else {
@@ -4007,6 +4023,42 @@ pub fn handle_killswitch_disarm(state: &WebState, body: &str) -> (&'static str, 
             }
         }
     };
+
+    if let (Some(claimed_pid), Some(addr)) = (parsed.caller_pid, peer_addr) {
+        match crate::security::resolve_loopback_peer_pid(addr, local_port) {
+            Ok(actual_pid) if actual_pid != claimed_pid => {
+                state.audit_log.record_event(
+                    "KILLSWITCH_DISARM_SPOOF_BLOCKED",
+                    parsed.operator.as_deref().unwrap_or("unknown"),
+                    &format!(
+                        "Rejected spoofed caller_pid {} (kernel TCP socket table owner is PID {})",
+                        claimed_pid, actual_pid
+                    ),
+                    "REJECTED",
+                );
+                return (
+                    "401 Unauthorized",
+                    json_error_payload(
+                        "CALLER_PID_SPOOF_DETECTED",
+                        &format!(
+                            "Claimed caller_pid {} does not match authenticated kernel socket owner PID {}",
+                            claimed_pid, actual_pid
+                        ),
+                    ),
+                );
+            }
+            Err(e) => {
+                return (
+                    "401 Unauthorized",
+                    json_error_payload(
+                        "PEER_PID_VERIFICATION_FAILED",
+                        &format!("Failed to authenticate loopback peer PID: {}", e),
+                    ),
+                );
+            }
+            Ok(_) => {}
+        }
+    }
 
     let operator = parsed
         .operator

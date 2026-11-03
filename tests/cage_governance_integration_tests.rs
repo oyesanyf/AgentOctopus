@@ -181,7 +181,10 @@ fn test_fixture_microsoft_acs_ingestion_and_compilation() {
         SubstrateTranslator::compile_policy(acs_fixture, None).expect("ACS compilation");
     assert_eq!(compiled.format, PolicyFormat::MicrosoftAcs);
     assert_eq!(compiled.policy_version_id.len(), 16);
-    assert!(compiled.policy_version_id.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(compiled
+        .policy_version_id
+        .chars()
+        .all(|c| c.is_ascii_hexdigit()));
     assert_eq!(compiled.cbf_gamma, 0.25);
     assert_eq!(compiled.cbf_b_min, 150.0);
 
@@ -195,8 +198,14 @@ fn test_fixture_microsoft_acs_ingestion_and_compilation() {
     // 4. STPA UCA extraction
     assert_eq!(compiled.unsafe_control_actions.len(), 1);
     assert_eq!(compiled.unsafe_control_actions[0].uca_id, "ACS-LEDGER-001");
-    assert_eq!(compiled.unsafe_control_actions[0].hazard_ref, "H-FIN-UNAUTHORIZED");
-    assert_eq!(compiled.unsafe_control_actions[0].control_action, "LedgerWrite");
+    assert_eq!(
+        compiled.unsafe_control_actions[0].hazard_ref,
+        "H-FIN-UNAUTHORIZED"
+    );
+    assert_eq!(
+        compiled.unsafe_control_actions[0].control_action,
+        "LedgerWrite"
+    );
 }
 
 #[test]
@@ -237,7 +246,8 @@ fn test_fixture_linux_foundation_aaif_ingestion_and_compilation() {
     assert_eq!(format, PolicyFormat::LinuxFoundationAaif);
 
     // 2. Compilation
-    let compiled = SubstrateTranslator::compile_policy(aaif_fixture, None).expect("AAIF compilation");
+    let compiled =
+        SubstrateTranslator::compile_policy(aaif_fixture, None).expect("AAIF compilation");
     assert_eq!(compiled.format, PolicyFormat::LinuxFoundationAaif);
     assert_eq!(compiled.policy_version_id.len(), 16);
     assert_eq!(compiled.cbf_gamma, 0.15);
@@ -257,7 +267,10 @@ fn test_fixture_linux_foundation_aaif_ingestion_and_compilation() {
     // 4. STPA UCAs
     assert_eq!(compiled.unsafe_control_actions.len(), 2);
     assert_eq!(compiled.unsafe_control_actions[0].uca_id, "AAIF-HOOK-AUTH");
-    assert_eq!(compiled.unsafe_control_actions[1].uca_id, "AAIF-HOOK-EGRESS");
+    assert_eq!(
+        compiled.unsafe_control_actions[1].uca_id,
+        "AAIF-HOOK-EGRESS"
+    );
 }
 
 #[test]
@@ -291,7 +304,8 @@ fn test_fixture_nist_oscal_ingestion_and_compilation() {
     assert_eq!(format, PolicyFormat::NistOscal);
 
     // 2. Compilation
-    let compiled = SubstrateTranslator::compile_policy(oscal_fixture, None).expect("OSCAL compilation");
+    let compiled =
+        SubstrateTranslator::compile_policy(oscal_fixture, None).expect("OSCAL compilation");
     assert_eq!(compiled.format, PolicyFormat::NistOscal);
     assert_eq!(compiled.policy_version_id.len(), 16);
     assert_eq!(compiled.cbf_gamma, 0.3);
@@ -335,7 +349,8 @@ fn test_fixture_lula_validation_ingestion_and_compilation() {
     assert_eq!(format, PolicyFormat::LulaValidation);
 
     // 2. Compilation
-    let compiled = SubstrateTranslator::compile_policy(lula_fixture, None).expect("Lula compilation");
+    let compiled =
+        SubstrateTranslator::compile_policy(lula_fixture, None).expect("Lula compilation");
     assert_eq!(compiled.format, PolicyFormat::LulaValidation);
     assert_eq!(compiled.policy_version_id.len(), 16);
     assert_eq!(compiled.cbf_gamma, 0.05);
@@ -349,8 +364,14 @@ fn test_fixture_lula_validation_ingestion_and_compilation() {
 
     // 4. STPA UCA
     assert_eq!(compiled.unsafe_control_actions.len(), 1);
-    assert_eq!(compiled.unsafe_control_actions[0].uca_id, "LULA-critical-system-binary-guard");
-    assert_eq!(compiled.unsafe_control_actions[0].control_action, "ModifySystemBinary");
+    assert_eq!(
+        compiled.unsafe_control_actions[0].uca_id,
+        "LULA-critical-system-binary-guard"
+    );
+    assert_eq!(
+        compiled.unsafe_control_actions[0].control_action,
+        "ModifySystemBinary"
+    );
 }
 
 #[test]
@@ -376,7 +397,8 @@ stpa_control_structure:
     assert_eq!(format, PolicyFormat::CageStpa);
 
     // 2. Compilation
-    let compiled = SubstrateTranslator::compile_policy(yaml_fixture, None).expect("YAML compilation");
+    let compiled =
+        SubstrateTranslator::compile_policy(yaml_fixture, None).expect("YAML compilation");
     assert_eq!(compiled.format, PolicyFormat::CageStpa);
     assert_eq!(compiled.policy_version_id.len(), 16);
     assert_eq!(compiled.cbf_gamma, 0.12);
@@ -390,7 +412,10 @@ stpa_control_structure:
     // 4. STPA UCA
     assert_eq!(compiled.unsafe_control_actions.len(), 1);
     assert_eq!(compiled.unsafe_control_actions[0].uca_id, "UCA-CAGE-001");
-    assert_eq!(compiled.unsafe_control_actions[0].control_action, "PurgeAuditLogs");
+    assert_eq!(
+        compiled.unsafe_control_actions[0].control_action,
+        "PurgeAuditLogs"
+    );
 }
 
 #[test]
@@ -409,8 +434,14 @@ fn test_rfc8785_jcs_canonicalization_and_version_drift_rejection() {
 
     let jcs1 = SubstrateTranslator::canonicalize_jcs(&obj1).expect("JCS 1");
     let jcs2 = SubstrateTranslator::canonicalize_jcs(&obj2).expect("JCS 2");
-    assert_eq!(jcs1, jcs2, "JCS must be strictly invariant to object key ordering");
-    assert_eq!(jcs1, r#"{"alpha":"first","nested":{"a":null,"z":true},"zebra":100}"#);
+    assert_eq!(
+        jcs1, jcs2,
+        "JCS must be strictly invariant to object key ordering"
+    );
+    assert_eq!(
+        jcs1,
+        r#"{"alpha":"first","nested":{"a":null,"z":true},"zebra":100}"#
+    );
 
     // 2. Single-byte policy mutation produces distinct version ID
     let raw_v1 = r#"{"stpa_control_structure": {"cbf": {"gamma": 0.1, "b_min": 10.0}}}"#;
@@ -421,10 +452,17 @@ fn test_rfc8785_jcs_canonicalization_and_version_drift_rejection() {
     assert_ne!(p1.policy_version_id, p2.policy_version_id);
 
     // 3. Version pinning verification
-    assert!(SubstrateTranslator::verify_version_pinning(Some(&p1.policy_version_id), &p1.policy_version_id).is_ok());
+    assert!(SubstrateTranslator::verify_version_pinning(
+        Some(&p1.policy_version_id),
+        &p1.policy_version_id
+    )
+    .is_ok());
 
-    let err = SubstrateTranslator::verify_version_pinning(Some(&p1.policy_version_id), &p2.policy_version_id)
-        .expect_err("Must reject mismatched pinned version with conflict");
+    let err = SubstrateTranslator::verify_version_pinning(
+        Some(&p1.policy_version_id),
+        &p2.policy_version_id,
+    )
+    .expect_err("Must reject mismatched pinned version with conflict");
     assert_eq!(err.pinned_version, p1.policy_version_id);
     assert_eq!(err.incoming_version, p2.policy_version_id);
 }
@@ -491,7 +529,9 @@ fn test_pipeline_dynamic_profiles_and_direct_verdicts() {
         execution_profile: Some(Profile::Full),
     };
 
-    let full_res = engine.validate_action(&req_full).expect("Full profile validation");
+    let full_res = engine
+        .validate_action(&req_full)
+        .expect("Full profile validation");
     assert_eq!(full_res.verdict, GovernanceVerdict::Allow);
     assert!(full_res.seal.is_some());
     let seal = full_res.seal.unwrap();
@@ -511,7 +551,10 @@ fn test_pipeline_dynamic_profiles_and_direct_verdicts() {
     };
     let dry_res = engine.validate_action(&req_dry).expect("DryRun validation");
     assert_eq!(dry_res.verdict, GovernanceVerdict::Allow);
-    assert!(dry_res.seal.is_none(), "DryRun profile must not issue executable seal");
+    assert!(
+        dry_res.seal.is_none(),
+        "DryRun profile must not issue executable seal"
+    );
 
     // 3. PostHitl Profile -> Clears holds
     let req_post = GovernanceRequest {
@@ -520,7 +563,9 @@ fn test_pipeline_dynamic_profiles_and_direct_verdicts() {
         }),
         ..req_full.clone()
     };
-    let post_res = engine.validate_action(&req_post).expect("PostHitl validation");
+    let post_res = engine
+        .validate_action(&req_post)
+        .expect("PostHitl validation");
     assert_eq!(post_res.verdict, GovernanceVerdict::Allow);
     assert!(post_res.seal.is_some());
 
@@ -539,23 +584,62 @@ fn test_pipeline_dynamic_profiles_and_direct_verdicts() {
 #[test]
 fn test_ftra_semantic_reversibility_classification_and_authority_ranks() {
     // 1. Classification
-    assert_eq!(ActionReversibility::classify("inspect_filesystem"), ActionReversibility::ReadOnly);
-    assert_eq!(ActionReversibility::classify("query_metrics"), ActionReversibility::ReadOnly);
-    assert_eq!(ActionReversibility::classify("write_record"), ActionReversibility::Reversible);
-    assert_eq!(ActionReversibility::classify("trade_order"), ActionReversibility::Reversible);
-    assert_eq!(ActionReversibility::classify("escrow_funds"), ActionReversibility::Compensatable);
-    assert_eq!(ActionReversibility::classify("reserve_quota"), ActionReversibility::Compensatable);
-    assert_eq!(ActionReversibility::classify("auto_rebalance"), ActionReversibility::ConditionalAutonomous);
-    assert_eq!(ActionReversibility::classify("spawn_process"), ActionReversibility::IrreversibleTerminal);
-    assert_eq!(ActionReversibility::classify("execute_childprocess"), ActionReversibility::IrreversibleTerminal);
-    assert_eq!(ActionReversibility::classify("modifysystembinary"), ActionReversibility::IrreversibleTerminal);
+    assert_eq!(
+        ActionReversibility::classify("inspect_filesystem"),
+        ActionReversibility::ReadOnly
+    );
+    assert_eq!(
+        ActionReversibility::classify("query_metrics"),
+        ActionReversibility::ReadOnly
+    );
+    assert_eq!(
+        ActionReversibility::classify("write_record"),
+        ActionReversibility::Reversible
+    );
+    assert_eq!(
+        ActionReversibility::classify("trade_order"),
+        ActionReversibility::Reversible
+    );
+    assert_eq!(
+        ActionReversibility::classify("escrow_funds"),
+        ActionReversibility::Compensatable
+    );
+    assert_eq!(
+        ActionReversibility::classify("reserve_quota"),
+        ActionReversibility::Compensatable
+    );
+    assert_eq!(
+        ActionReversibility::classify("auto_rebalance"),
+        ActionReversibility::ConditionalAutonomous
+    );
+    assert_eq!(
+        ActionReversibility::classify("spawn_process"),
+        ActionReversibility::IrreversibleTerminal
+    );
+    assert_eq!(
+        ActionReversibility::classify("execute_childprocess"),
+        ActionReversibility::IrreversibleTerminal
+    );
+    assert_eq!(
+        ActionReversibility::classify("modifysystembinary"),
+        ActionReversibility::IrreversibleTerminal
+    );
 
     // 2. Authority ranks
     assert_eq!(ActionReversibility::ReadOnly.required_authority_rank(), 5);
     assert_eq!(ActionReversibility::Reversible.required_authority_rank(), 3);
-    assert_eq!(ActionReversibility::Compensatable.required_authority_rank(), 3);
-    assert_eq!(ActionReversibility::ConditionalAutonomous.required_authority_rank(), 3);
-    assert_eq!(ActionReversibility::IrreversibleTerminal.required_authority_rank(), 2);
+    assert_eq!(
+        ActionReversibility::Compensatable.required_authority_rank(),
+        3
+    );
+    assert_eq!(
+        ActionReversibility::ConditionalAutonomous.required_authority_rank(),
+        3
+    );
+    assert_eq!(
+        ActionReversibility::IrreversibleTerminal.required_authority_rank(),
+        2
+    );
 
     // 3. Authority evaluation on individual step
     let step_low_priv = PlanStep {
@@ -576,7 +660,10 @@ fn test_ftra_fail_closed_confidence_normalization() {
     // Non-finite and negative confidences must normalize strictly to 0.0
     assert_eq!(PlanGraphAnalyzer::normalize_confidence(f64::NAN), 0.0);
     assert_eq!(PlanGraphAnalyzer::normalize_confidence(f64::INFINITY), 0.0);
-    assert_eq!(PlanGraphAnalyzer::normalize_confidence(f64::NEG_INFINITY), 0.0);
+    assert_eq!(
+        PlanGraphAnalyzer::normalize_confidence(f64::NEG_INFINITY),
+        0.0
+    );
     assert_eq!(PlanGraphAnalyzer::normalize_confidence(-0.5), 0.0);
     assert_eq!(PlanGraphAnalyzer::normalize_confidence(-1e-8), 0.0);
 
@@ -615,7 +702,10 @@ fn test_ftra_sr_26_2_model_confidence_thresholds() {
         fuel_cost: 1.0,
         caller_authority: 2,
     };
-    assert_eq!(PlanGraphAnalyzer::evaluate_step_reversibility(&clear_step), FtraVerdict::Clear);
+    assert_eq!(
+        PlanGraphAnalyzer::evaluate_step_reversibility(&clear_step),
+        FtraVerdict::Clear
+    );
 
     // 2. Medium confidence (0.85 in [0.70, 0.95)) -> HitlRequired
     let hitl_step = PlanStep {
@@ -783,30 +873,40 @@ fn test_cbf_barrier_inequality_and_boundary_conditions() {
     let cbf = CbfSafetyEngine::new(0.20, 100.0).expect("CBF init");
 
     // 1. Allowable step within barrier (cost = 100.0 < 180.0)
-    let h_next = cbf.evaluate_step(1000.0, 100.0, 900.0).expect("Allowable step");
+    let h_next = cbf
+        .evaluate_step(1000.0, 100.0, 900.0)
+        .expect("Allowable step");
     assert_eq!(h_next, 800.0);
 
     // 2. Exact boundary step (cost = 180.0)
-    let h_boundary = cbf.evaluate_step(1000.0, 180.0, 900.0).expect("Exact boundary step");
+    let h_boundary = cbf
+        .evaluate_step(1000.0, 180.0, 900.0)
+        .expect("Exact boundary step");
     assert!((h_boundary - 720.0).abs() < 1e-9);
 
     // 3. Decay rate breach (cost = 180.01 > 180.0) -> DecayRateExceeded
-    let decay_err = cbf.evaluate_step(1000.0, 180.01, 900.0).expect_err("Decay rate breach");
+    let decay_err = cbf
+        .evaluate_step(1000.0, 180.01, 900.0)
+        .expect_err("Decay rate breach");
     assert!(matches!(decay_err, CbfViolation::DecayRateExceeded { .. }));
 
     // 4. Floor breach (projected budget < B_min)
     // gamma = 1.0 (all decay permitted down to floor), cost = 950.0 > 900.0 available above floor
     let cbf_floor = CbfSafetyEngine::new(1.0, 100.0).expect("CBF floor init");
-    let floor_err = cbf_floor.evaluate_step(1000.0, 950.0, 900.0).expect_err("Floor breach");
+    let floor_err = cbf_floor
+        .evaluate_step(1000.0, 950.0, 900.0)
+        .expect_err("Floor breach");
     assert!(matches!(floor_err, CbfViolation::FloorBreach { .. }));
 
     // 5. Invalid parameters: negative cost and NaN cost
     assert!(matches!(
-        cbf.evaluate_step(1000.0, -10.0, 900.0).expect_err("Negative cost"),
+        cbf.evaluate_step(1000.0, -10.0, 900.0)
+            .expect_err("Negative cost"),
         CbfViolation::InvalidParameters(_)
     ));
     assert!(matches!(
-        cbf.evaluate_step(1000.0, f64::NAN, 900.0).expect_err("NaN cost"),
+        cbf.evaluate_step(1000.0, f64::NAN, 900.0)
+            .expect_err("NaN cost"),
         CbfViolation::InvalidParameters(_)
     ));
 }
@@ -825,11 +925,25 @@ fn test_cbf_replay_sequence_and_monotonic_fence_epochs() {
     assert!(cbf.verify_sequence_and_epoch(5, 1).is_ok());
 
     // 3. Replay of earlier or duplicate sequence fails
-    let replay_err = cbf.verify_sequence_and_epoch(5, 1).expect_err("Duplicate seq");
-    assert!(matches!(replay_err, CbfViolation::SequenceReplay { incoming: 5, last_accepted: 5 }));
+    let replay_err = cbf
+        .verify_sequence_and_epoch(5, 1)
+        .expect_err("Duplicate seq");
+    assert!(matches!(
+        replay_err,
+        CbfViolation::SequenceReplay {
+            incoming: 5,
+            last_accepted: 5
+        }
+    ));
 
     let stale_seq_err = cbf.verify_sequence_and_epoch(3, 1).expect_err("Stale seq");
-    assert!(matches!(stale_seq_err, CbfViolation::SequenceReplay { incoming: 3, last_accepted: 5 }));
+    assert!(matches!(
+        stale_seq_err,
+        CbfViolation::SequenceReplay {
+            incoming: 3,
+            last_accepted: 5
+        }
+    ));
 
     // 4. Monotonic epoch advancement
     let new_epoch = cbf.advance_epoch();
@@ -837,8 +951,16 @@ fn test_cbf_replay_sequence_and_monotonic_fence_epochs() {
     assert_eq!(cbf.current_epoch(), 2);
 
     // 5. Stale fence epoch rejection
-    let stale_epoch_err = cbf.verify_sequence_and_epoch(10, 1).expect_err("Stale epoch");
-    assert!(matches!(stale_epoch_err, CbfViolation::StaleFenceEpoch { incoming: 1, fence_epoch: 2 }));
+    let stale_epoch_err = cbf
+        .verify_sequence_and_epoch(10, 1)
+        .expect_err("Stale epoch");
+    assert!(matches!(
+        stale_epoch_err,
+        CbfViolation::StaleFenceEpoch {
+            incoming: 1,
+            fence_epoch: 2
+        }
+    ));
 
     // 6. Up-to-date epoch and advancing sequence succeeds
     assert!(cbf.verify_sequence_and_epoch(10, 2).is_ok());
@@ -863,7 +985,9 @@ fn test_fiscal_two_phase_pre_reservation_and_zero_balance_leakage() {
     assert_eq!(ledger.active_reservation_count(), 0);
 
     // 2. Pre-reserve reservation 1: cost 50.0
-    let receipt1 = ledger.pre_reserve(50.0, "debit_001").expect("Pre-reserve 1");
+    let receipt1 = ledger
+        .pre_reserve(50.0, "debit_001")
+        .expect("Pre-reserve 1");
     assert_eq!(receipt1.debit_id, "debit_001");
     assert_eq!(receipt1.reserved_fuel, 50.0);
     assert_eq!(receipt1.remaining_budget, 950.0);
@@ -871,7 +995,9 @@ fn test_fiscal_two_phase_pre_reservation_and_zero_balance_leakage() {
     assert_eq!(ledger.active_reservation_count(), 1);
 
     // 3. Pre-reserve reservation 2: cost 100.0
-    let receipt2 = ledger.pre_reserve(100.0, "debit_002").expect("Pre-reserve 2");
+    let receipt2 = ledger
+        .pre_reserve(100.0, "debit_002")
+        .expect("Pre-reserve 2");
     assert_eq!(receipt2.reserved_fuel, 100.0);
     assert_eq!(ledger.available_budget(), 850.0);
     assert_eq!(ledger.active_reservation_count(), 2);
@@ -881,8 +1007,13 @@ fn test_fiscal_two_phase_pre_reservation_and_zero_balance_leakage() {
     assert_eq!(ledger.active_reservation_count(), 1);
 
     // Rollback after confirm is strictly forbidden
-    let post_confirm_err = ledger.rollback("debit_001").expect_err("Cannot rollback confirmed debit");
-    assert!(matches!(post_confirm_err, CbfViolation::AlreadyCommitted(_)));
+    let post_confirm_err = ledger
+        .rollback("debit_001")
+        .expect_err("Cannot rollback confirmed debit");
+    assert!(matches!(
+        post_confirm_err,
+        CbfViolation::AlreadyCommitted(_)
+    ));
 
     // 5. Rollback reservation 2 (compensating undo)
     let restored = ledger.rollback("debit_002").expect("Rollback debit_002");
@@ -891,11 +1022,18 @@ fn test_fiscal_two_phase_pre_reservation_and_zero_balance_leakage() {
     assert_eq!(ledger.active_reservation_count(), 0);
 
     // Second rollback on same debit fails (no double refund)
-    let double_rollback_err = ledger.rollback("debit_002").expect_err("Double rollback must fail");
-    assert!(matches!(double_rollback_err, CbfViolation::ReservationNotFound(_)));
+    let double_rollback_err = ledger
+        .rollback("debit_002")
+        .expect_err("Double rollback must fail");
+    assert!(matches!(
+        double_rollback_err,
+        CbfViolation::ReservationNotFound(_)
+    ));
 
     // 6. Pre-reserve reservation 3 and test LIFO rollback
-    ledger.pre_reserve(75.0, "debit_003").expect("Pre-reserve 3");
+    ledger
+        .pre_reserve(75.0, "debit_003")
+        .expect("Pre-reserve 3");
     assert_eq!(ledger.available_budget(), 875.0);
 
     let (lifo_id, lifo_budget) = ledger.rollback_lifo().expect("Rollback LIFO");
@@ -920,10 +1058,15 @@ async fn test_evidence_bound_routing_seal_issuance_and_ttl_validation() {
 
     let action_digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     let record_hash = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     // 1. Valid seal issuance
-    let seal = signer.issue_seal(action_digest, record_hash, now).expect("Seal issuance");
+    let seal = signer
+        .issue_seal(action_digest, record_hash, now)
+        .expect("Seal issuance");
     assert_eq!(seal.policy_version_id, policy_ver);
     assert_eq!(seal.action_digest, action_digest);
     assert_eq!(seal.record_hash, record_hash);
@@ -939,10 +1082,14 @@ async fn test_evidence_bound_routing_seal_issuance_and_ttl_validation() {
     assert!(matches!(expired_err, SealRejection::Expired { .. }));
 
     // 3. Clock drift tolerance: <= 5s future is tolerated, > 5s future is rejected
-    assert!(signer.validate_and_consume(&seal, action_digest, record_hash, now - 4).is_ok());
+    assert!(signer
+        .validate_and_consume(&seal, action_digest, record_hash, now - 4)
+        .is_ok());
 
     // Issue a seal with future timestamp (> 5s ahead of evaluation time)
-    let future_seal = signer.issue_seal(action_digest, record_hash, now + 10).expect("Future seal");
+    let future_seal = signer
+        .issue_seal(action_digest, record_hash, now + 10)
+        .expect("Future seal");
     let future_err = signer
         .validate_and_consume(&future_seal, action_digest, record_hash, now)
         .expect_err("Future timestamp > 5s drift must be rejected");
@@ -970,7 +1117,10 @@ async fn test_arm_containment_actuation_with_cage_seal_and_replay_rejection() {
         allow_scratch_write: false,
     };
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let seal = create_anchored_test_seal(
         &engine,
         &ring.agent_name,
@@ -982,7 +1132,10 @@ async fn test_arm_containment_actuation_with_cage_seal_and_replay_rejection() {
 
     // Pre-reserve fiscal debit
     let debit_id = "debit_actuation_001";
-    engine.ledger().pre_reserve(10.0, debit_id).expect("Pre-reserve fuel");
+    engine
+        .ledger()
+        .pre_reserve(10.0, debit_id)
+        .expect("Pre-reserve fuel");
     assert_eq!(engine.ledger().active_reservation_count(), 1);
 
     // Actuation 1: First presentation must succeed and confirm the debit
@@ -1011,7 +1164,9 @@ async fn test_arm_containment_actuation_with_cage_seal_and_replay_rejection() {
     // Verify GOVERNANCE_SEAL_CONSUMED was recorded in the audit log
     let audit_events = engine.audit_log().get_entries();
     assert!(
-        audit_events.iter().any(|e| e.event_type == "GOVERNANCE_SEAL_CONSUMED"),
+        audit_events
+            .iter()
+            .any(|e| e.event_type == "GOVERNANCE_SEAL_CONSUMED"),
         "Audit log must contain GOVERNANCE_SEAL_CONSUMED event"
     );
 
@@ -1034,7 +1189,10 @@ async fn test_arm_containment_actuation_with_cage_seal_and_replay_rejection() {
         .await
         .expect_err("Replayed seal must be rejected");
 
-    assert!(matches!(replay_err, ArmExecutionError::SealAlreadyConsumed { .. }));
+    assert!(matches!(
+        replay_err,
+        ArmExecutionError::SealAlreadyConsumed { .. }
+    ));
 }
 
 #[tokio::test]
@@ -1047,7 +1205,10 @@ async fn test_seal_parameter_tampering_and_signature_corruption_rejection() {
     let dispatcher = new_test_dispatcher();
 
     let valid_payload = b"{\"param\": \"safe_data\"}".to_vec();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let seal = create_anchored_test_seal(
         &engine,
         &ring.agent_name,
@@ -1088,12 +1249,17 @@ async fn test_seal_parameter_tampering_and_signature_corruption_rejection() {
         .await
         .expect_err("Tampered payload must be rejected");
 
-    assert!(matches!(tamper_err, ArmExecutionError::ActionDigestMismatch { .. }));
+    assert!(matches!(
+        tamper_err,
+        ArmExecutionError::ActionDigestMismatch { .. }
+    ));
 
     // 2. Cryptographic signature corruption: Attacker mutates single character in signature
     let mut corrupted_seal = seal.clone();
     let last_char = corrupted_seal.signature.pop().unwrap();
-    corrupted_seal.signature.push(if last_char == '0' { '1' } else { '0' });
+    corrupted_seal
+        .signature
+        .push(if last_char == '0' { '1' } else { '0' });
 
     let valid_req = TieredToolRequest {
         agent_id: ring.agent_name.clone(),
@@ -1141,7 +1307,11 @@ fn test_formal_bfs_gated_model_strictly_34_reachable_states() {
 
     // 2. Terminal Executed State & Violations
     assert_eq!(result.executed_count, 1);
-    assert!(result.violations.is_empty(), "Violations: {:?}", result.violations);
+    assert!(
+        result.violations.is_empty(),
+        "Violations: {:?}",
+        result.violations
+    );
     assert!(result.no_direct_bind_proven);
 
     // 3. Structural breakdown across phases
@@ -1150,13 +1320,43 @@ fn test_formal_bfs_gated_model_strictly_34_reachable_states() {
         *phase_counts.entry(state.phase).or_insert(0) += 1;
     }
 
-    assert_eq!(phase_counts.get(&BfsPhase::Initial).copied().unwrap_or(0), 1);
-    assert_eq!(phase_counts.get(&BfsPhase::Checking).copied().unwrap_or(0), 8);
-    assert_eq!(phase_counts.get(&BfsPhase::NarrowEval).copied().unwrap_or(0), 7);
-    assert_eq!(phase_counts.get(&BfsPhase::NarrowPassed).copied().unwrap_or(0), 1);
-    assert_eq!(phase_counts.get(&BfsPhase::SealIssued).copied().unwrap_or(0), 1);
-    assert_eq!(phase_counts.get(&BfsPhase::Executed).copied().unwrap_or(0), 1);
-    assert_eq!(phase_counts.get(&BfsPhase::Denied).copied().unwrap_or(0), 15);
+    assert_eq!(
+        phase_counts.get(&BfsPhase::Initial).copied().unwrap_or(0),
+        1
+    );
+    assert_eq!(
+        phase_counts.get(&BfsPhase::Checking).copied().unwrap_or(0),
+        8
+    );
+    assert_eq!(
+        phase_counts
+            .get(&BfsPhase::NarrowEval)
+            .copied()
+            .unwrap_or(0),
+        7
+    );
+    assert_eq!(
+        phase_counts
+            .get(&BfsPhase::NarrowPassed)
+            .copied()
+            .unwrap_or(0),
+        1
+    );
+    assert_eq!(
+        phase_counts
+            .get(&BfsPhase::SealIssued)
+            .copied()
+            .unwrap_or(0),
+        1
+    );
+    assert_eq!(
+        phase_counts.get(&BfsPhase::Executed).copied().unwrap_or(0),
+        1
+    );
+    assert_eq!(
+        phase_counts.get(&BfsPhase::Denied).copied().unwrap_or(0),
+        15
+    );
 
     // 4. Executed state invariant verification
     let executed_states = result.executed_states();
@@ -1176,7 +1376,10 @@ fn test_formal_bfs_gated_model_strictly_34_reachable_states() {
     assert_eq!(proof_receipt.executed_states, 1);
     assert_eq!(proof_receipt.violations_count, 0);
     assert_eq!(proof_receipt.proof_receipt.len(), 64);
-    assert!(proof_receipt.proof_receipt.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(proof_receipt
+        .proof_receipt
+        .chars()
+        .all(|c| c.is_ascii_hexdigit()));
 }
 
 #[test]
@@ -1269,18 +1472,19 @@ fn test_governance_trace_stream_conformance_and_adversarial_rule_violations() {
     assert!(replay_report.has_rule_violation("single_use"));
 
     // 3. Rule 6 Violation: Injected unsealed execution (No-Direct-Bind breach)
-    let unsealed_stream = vec![
-        serde_json::json!({
-            "event_type": "ACTUATION_RECEIPT",
-            "agent_id": "arm_01",
-            "record_hash": "1".repeat(64),
-            "seal_id": "",
-            "action": "unsealed_tool",
-            "status": "SUCCESS"
-        })
-    ];
+    let unsealed_stream = vec![serde_json::json!({
+        "event_type": "ACTUATION_RECEIPT",
+        "agent_id": "arm_01",
+        "record_hash": "1".repeat(64),
+        "seal_id": "",
+        "action": "unsealed_tool",
+        "status": "SUCCESS"
+    })];
     let unsealed_report = FormalBfsModel::check_trace_conformance(&unsealed_stream);
-    assert_eq!(unsealed_report.status, StreamConformanceStatus::NonConformant);
+    assert_eq!(
+        unsealed_report.status,
+        StreamConformanceStatus::NonConformant
+    );
     assert!(unsealed_report.has_rule_violation("no_direct_bind"));
 }
 
@@ -1302,10 +1506,14 @@ fn test_http_endpoint_cage_policy_ingest_and_version() {
 
     // 2. POST /governance/ingest-policy with matching expected version -> 200 OK
     let new_policy_yaml = "stpa_control_structure:\n  unsafe_control_actions: []\n";
-    let (s_ingest, b_ingest) = handle_cage_ingest_policy(&state, new_policy_yaml, Some(&initial_ver));
+    let (s_ingest, b_ingest) =
+        handle_cage_ingest_policy(&state, new_policy_yaml, Some(&initial_ver));
     assert_eq!(s_ingest, "200 OK");
     let val_ingest: serde_json::Value = serde_json::from_str(&b_ingest).unwrap();
-    let new_ver = val_ingest["policy_version_id"].as_str().unwrap().to_string();
+    let new_ver = val_ingest["policy_version_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(new_ver.len(), 16);
 
     // 3. POST /governance/ingest-policy with mismatched expected version -> 409 Conflict

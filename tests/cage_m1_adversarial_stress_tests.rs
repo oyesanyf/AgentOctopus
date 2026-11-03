@@ -50,11 +50,14 @@ fn stress_test_cbf_barrier_exact_boundary_precision() {
     let cbf = CbfSafetyEngine::new(0.25, 100.0).expect("Valid CBF engine");
 
     // Exact boundary cost: c = 225.0 -> h_{t+1} = (1000 - 225) - 100 = 675.0 == 675.0
-    let h_next = cbf.evaluate_step(1000.0, 225.0, 900.0).expect("Exact boundary should pass");
+    let h_next = cbf
+        .evaluate_step(1000.0, 225.0, 900.0)
+        .expect("Exact boundary should pass");
     assert!((h_next - 675.0).abs() < 1e-12);
 
     // Epsilon-boundary test: cost = 225.0 + 1e-10 (within CBF_EPSILON = 1e-9)
-    let h_eps = cbf.evaluate_step(1000.0, 225.0 + 1e-10, 900.0)
+    let h_eps = cbf
+        .evaluate_step(1000.0, 225.0 + 1e-10, 900.0)
         .expect("Within epsilon buffer should pass");
     assert!((h_eps - (675.0 - 1e-10)).abs() < 1e-12);
 
@@ -68,7 +71,9 @@ fn stress_test_cbf_barrier_exact_boundary_precision() {
     // Non-negative floor boundary: gamma = 1.0 (all decay allowed down to B_min)
     // h_min_allowed = (1 - 1.0) * 900.0 = 0.0
     let cbf_full = CbfSafetyEngine::new(1.0, 100.0).expect("Valid gamma=1.0 engine");
-    let h_floor = cbf_full.evaluate_step(1000.0, 900.0, 900.0).expect("Exact floor should pass");
+    let h_floor = cbf_full
+        .evaluate_step(1000.0, 900.0, 900.0)
+        .expect("Exact floor should pass");
     assert_eq!(h_floor, 0.0);
 
     // Breach floor by 1e-6: cost = 900.0 + 1e-6
@@ -168,7 +173,10 @@ fn stress_test_cbf_extreme_floats_and_edge_inputs() {
         Err(e) => e,
         Ok(v) => panic!("Expected unsafe state error, got {}", v),
     };
-    assert!(matches!(err_unsafe_state, CbfViolation::CurrentStateUnsafe { .. }));
+    assert!(matches!(
+        err_unsafe_state,
+        CbfViolation::CurrentStateUnsafe { .. }
+    ));
 
     // Zero cost: should pass without modifying safety margin
     let h_zero_cost = cbf.evaluate_step(500.0, 0.0, 400.0).unwrap();
@@ -210,10 +218,15 @@ fn stress_test_two_phase_debit_ledger_concurrent_zero_leakage() {
                     Ok(_) => {
                         // 50% commit, 50% rollback
                         if (thread_idx + op_idx) % 2 == 0 {
-                            ledger_clone.confirm(&debit_id).expect("Confirm must succeed");
-                            confirmed_acc.fetch_add((cost * 100.0).round() as u64, Ordering::SeqCst);
+                            ledger_clone
+                                .confirm(&debit_id)
+                                .expect("Confirm must succeed");
+                            confirmed_acc
+                                .fetch_add((cost * 100.0).round() as u64, Ordering::SeqCst);
                         } else {
-                            ledger_clone.rollback(&debit_id).expect("Rollback must succeed");
+                            ledger_clone
+                                .rollback(&debit_id)
+                                .expect("Rollback must succeed");
                         }
                     }
                     Err(CbfViolation::FloorBreach { .. }) => {
@@ -283,7 +296,10 @@ fn stress_test_debit_ledger_rapid_lifo_rollbacks() {
     // Once empty, rollback_lifo must fail cleanly
     let empty_err = match ledger.rollback_lifo() {
         Err(e) => e,
-        Ok((id, b)) => panic!("Expected error on empty ledger, got {} with budget {}", id, b),
+        Ok((id, b)) => panic!(
+            "Expected error on empty ledger, got {} with budget {}",
+            id, b
+        ),
     };
     assert!(matches!(empty_err, CbfViolation::ReservationNotFound(_)));
 
@@ -328,7 +344,10 @@ fn stress_test_debit_ledger_double_rollback_and_settlement_invariants() {
         Err(e) => e,
         Ok(b) => panic!("Expected ReservationNotFound, got {}", b),
     };
-    assert!(matches!(err_non_existent, CbfViolation::ReservationNotFound(_)));
+    assert!(matches!(
+        err_non_existent,
+        CbfViolation::ReservationNotFound(_)
+    ));
 }
 
 // ============================================================================
@@ -341,7 +360,8 @@ fn stress_test_routing_seal_single_use_concurrency_race() {
     let policy_version = "abcdef0123456789";
     let signer = Arc::new(RoutingSealSigner::new(secret, policy_version));
 
-    let action_digest = compute_action_digest("critical_actuation", &serde_json::json!({"target": "db"}));
+    let action_digest =
+        compute_action_digest("critical_actuation", &serde_json::json!({"target": "db"}));
     let record_hash = "9999888877776666555544443333222211110000aaaabbbbccccddddeeeeffff";
     let now = 1_000_000;
 
@@ -361,7 +381,12 @@ fn stress_test_routing_seal_single_use_concurrency_race() {
         let replay_acc = Arc::clone(&replay_rejected_count);
 
         handles.push(thread::spawn(move || {
-            match signer_clone.validate_and_consume(&seal_clone, &action_clone, &record_clone, now + 10) {
+            match signer_clone.validate_and_consume(
+                &seal_clone,
+                &action_clone,
+                &record_clone,
+                now + 10,
+            ) {
                 Ok(_) => {
                     succ_acc.fetch_add(1, Ordering::SeqCst);
                 }
@@ -402,7 +427,9 @@ fn stress_test_routing_seal_ttl_and_clock_skew_boundaries() {
     let issued_at = 1_000_000;
 
     // 1. Expiration exact boundaries: TTL is 30s
-    let seal = signer.issue_seal(&action_digest, record_hash, issued_at).unwrap();
+    let seal = signer
+        .issue_seal(&action_digest, record_hash, issued_at)
+        .unwrap();
     assert_eq!(seal.expires_at, issued_at + 30);
 
     // At issued_at + 30: Valid
@@ -411,25 +438,37 @@ fn stress_test_routing_seal_ttl_and_clock_skew_boundaries() {
         .is_ok());
 
     // Issue second seal to test +31s expiry
-    let seal2 = signer.issue_seal(&action_digest, record_hash, issued_at).unwrap();
-    let err_expired = match signer.validate_and_consume(&seal2, &action_digest, record_hash, issued_at + 31) {
-        Err(e) => e,
-        Ok(_) => panic!("Expected Expired error at +31s"),
-    };
+    let seal2 = signer
+        .issue_seal(&action_digest, record_hash, issued_at)
+        .unwrap();
+    let err_expired =
+        match signer.validate_and_consume(&seal2, &action_digest, record_hash, issued_at + 31) {
+            Err(e) => e,
+            Ok(_) => panic!("Expected Expired error at +31s"),
+        };
     assert!(matches!(err_expired, SealRejection::Expired { .. }));
 
     // 2. Future timestamp / clock skew boundaries (tolerance = 5s)
     let current_time = 1_000_000;
 
     // Skew +5s: Valid
-    let seal_future_ok = signer.issue_seal(&action_digest, record_hash, current_time + 5).unwrap();
+    let seal_future_ok = signer
+        .issue_seal(&action_digest, record_hash, current_time + 5)
+        .unwrap();
     assert!(signer
         .validate_and_consume(&seal_future_ok, &action_digest, record_hash, current_time)
         .is_ok());
 
     // Skew +6s: Rejected with FutureTimestamp
-    let seal_future_bad = signer.issue_seal(&action_digest, record_hash, current_time + 6).unwrap();
-    let err_future = match signer.validate_and_consume(&seal_future_bad, &action_digest, record_hash, current_time) {
+    let seal_future_bad = signer
+        .issue_seal(&action_digest, record_hash, current_time + 6)
+        .unwrap();
+    let err_future = match signer.validate_and_consume(
+        &seal_future_bad,
+        &action_digest,
+        record_hash,
+        current_time,
+    ) {
         Err(e) => e,
         Ok(_) => panic!("Expected FutureTimestamp at +6s skew"),
     };
@@ -450,38 +489,55 @@ fn stress_test_routing_seal_tamper_resistance_and_mismatches() {
 
     // 1. Signature bit-flip tampering
     let mut tampered_sig_seal = valid_seal.clone();
-    let last_char = if tampered_sig_seal.signature.ends_with('0') { '1' } else { '0' };
+    let last_char = if tampered_sig_seal.signature.ends_with('0') {
+        '1'
+    } else {
+        '0'
+    };
     tampered_sig_seal.signature.pop();
     tampered_sig_seal.signature.push(last_char);
-    let err_sig = match signer.validate_and_consume(&tampered_sig_seal, &action_digest, record_hash, now) {
-        Err(e) => e,
-        Ok(_) => panic!("Expected InvalidSignature on bit-flip"),
-    };
+    let err_sig =
+        match signer.validate_and_consume(&tampered_sig_seal, &action_digest, record_hash, now) {
+            Err(e) => e,
+            Ok(_) => panic!("Expected InvalidSignature on bit-flip"),
+        };
     assert!(matches!(err_sig, SealRejection::InvalidSignature));
 
     // 2. Action digest mismatch
     let wrong_action_digest = compute_action_digest("tool_call", &serde_json::json!({"cmd": "rm"}));
-    let err_action = match signer.validate_and_consume(&valid_seal, &wrong_action_digest, record_hash, now) {
-        Err(e) => e,
-        Ok(_) => panic!("Expected ActionDigestMismatch"),
-    };
-    assert!(matches!(err_action, SealRejection::ActionDigestMismatch { .. }));
+    let err_action =
+        match signer.validate_and_consume(&valid_seal, &wrong_action_digest, record_hash, now) {
+            Err(e) => e,
+            Ok(_) => panic!("Expected ActionDigestMismatch"),
+        };
+    assert!(matches!(
+        err_action,
+        SealRejection::ActionDigestMismatch { .. }
+    ));
 
     // 3. Record hash chain mismatch
     let wrong_record_hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-    let err_record = match signer.validate_and_consume(&valid_seal, &action_digest, wrong_record_hash, now) {
-        Err(e) => e,
-        Ok(_) => panic!("Expected RecordHashMismatch"),
-    };
-    assert!(matches!(err_record, SealRejection::RecordHashMismatch { .. }));
+    let err_record =
+        match signer.validate_and_consume(&valid_seal, &action_digest, wrong_record_hash, now) {
+            Err(e) => e,
+            Ok(_) => panic!("Expected RecordHashMismatch"),
+        };
+    assert!(matches!(
+        err_record,
+        SealRejection::RecordHashMismatch { .. }
+    ));
 
     // 4. Policy version drift
     signer.set_policy_version("0000000000000000");
-    let err_policy = match signer.validate_and_consume(&valid_seal, &action_digest, record_hash, now) {
-        Err(e) => e,
-        Ok(_) => panic!("Expected PolicyVersionMismatch"),
-    };
-    assert!(matches!(err_policy, SealRejection::PolicyVersionMismatch { .. }));
+    let err_policy =
+        match signer.validate_and_consume(&valid_seal, &action_digest, record_hash, now) {
+            Err(e) => e,
+            Ok(_) => panic!("Expected PolicyVersionMismatch"),
+        };
+    assert!(matches!(
+        err_policy,
+        SealRejection::PolicyVersionMismatch { .. }
+    ));
 }
 
 #[test]
@@ -493,17 +549,20 @@ fn stress_test_routing_seal_tampered_expires_at_exploration() {
     let record_hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
     let issued_at = 1_000_000;
 
-    let mut seal: CageRoutingSeal = signer.issue_seal(&action_digest, record_hash, issued_at).unwrap();
+    let mut seal: CageRoutingSeal = signer
+        .issue_seal(&action_digest, record_hash, issued_at)
+        .unwrap();
     assert_eq!(seal.expires_at, issued_at + 30);
 
     // Current time is 2 hours later: t = 1,007,200 (well past 30s TTL)
     let current_time = 1_007_200;
 
     // Normal check: rejected as Expired
-    let expired_err = match signer.validate_and_consume(&seal, &action_digest, record_hash, current_time) {
-        Err(e) => e,
-        Ok(_) => panic!("Expected Expired"),
-    };
+    let expired_err =
+        match signer.validate_and_consume(&seal, &action_digest, record_hash, current_time) {
+            Err(e) => e,
+            Ok(_) => panic!("Expected Expired"),
+        };
     assert!(matches!(expired_err, SealRejection::Expired { .. }));
 
     // Adversary tampers with expires_at field (e.g. in deserialized JSON payload)
@@ -513,14 +572,19 @@ fn stress_test_routing_seal_tampered_expires_at_exploration() {
     let result = signer.validate_and_consume(&seal, &action_digest, record_hash, current_time);
     println!("Adversarial Tampered expires_at result: {:?}", result);
     let vulnerability_present = result.is_ok();
-    println!("VULNERABILITY VERDICT: Can expires_at be tampered to revive expired seals? {}", vulnerability_present);
+    println!(
+        "VULNERABILITY VERDICT: Can expires_at be tampered to revive expired seals? {}",
+        vulnerability_present
+    );
     assert!(
         !vulnerability_present,
         "VULN-CAGE-M1-01: Tampering expires_at must not revive expired seals"
     );
     assert!(matches!(
         result,
-        Err(SealRejection::MalformedSeal(_)) | Err(SealRejection::InvalidSignature) | Err(SealRejection::Expired { .. })
+        Err(SealRejection::MalformedSeal(_))
+            | Err(SealRejection::InvalidSignature)
+            | Err(SealRejection::Expired { .. })
     ));
 }
 
@@ -541,7 +605,10 @@ fn stress_test_ftra_dag_self_loops_and_cycles() {
         caller_authority: 1,
     }];
     let err_self = PlanGraphAnalyzer::analyze_execution_graph(&self_loop).unwrap_err();
-    assert!(err_self.contains("cycles"), "Self loop must be detected as a cycle");
+    assert!(
+        err_self.contains("cycles"),
+        "Self loop must be detected as a cycle"
+    );
 
     // 2. Three-node cycle: A -> B -> C -> A
     let three_cycle = vec![
@@ -615,7 +682,10 @@ fn stress_test_ftra_dag_self_loops_and_cycles() {
         });
     }
     let err_ring = PlanGraphAnalyzer::analyze_execution_graph(&ring_graph).unwrap_err();
-    assert!(err_ring.contains("cycles"), "50-node ring cycle must be detected");
+    assert!(
+        err_ring.contains("cycles"),
+        "50-node ring cycle must be detected"
+    );
 }
 
 #[test]
@@ -721,7 +791,8 @@ fn stress_test_ftra_dag_missing_dependencies_and_duplicate_edges() {
             caller_authority: 1,
         },
     ];
-    let verdict = PlanGraphAnalyzer::analyze_execution_graph(&duplicate_edge).expect("Should handle duplicate edges");
+    let verdict = PlanGraphAnalyzer::analyze_execution_graph(&duplicate_edge)
+        .expect("Should handle duplicate edges");
     assert_eq!(verdict, FtraVerdict::Clear);
 }
 
@@ -746,6 +817,7 @@ fn stress_test_ftra_dag_deep_linear_chain() {
         });
     }
 
-    let verdict = PlanGraphAnalyzer::analyze_execution_graph(&chain).expect("Deep linear DAG must not panic or cycle");
+    let verdict = PlanGraphAnalyzer::analyze_execution_graph(&chain)
+        .expect("Deep linear DAG must not panic or cycle");
     assert_eq!(verdict, FtraVerdict::Clear);
 }

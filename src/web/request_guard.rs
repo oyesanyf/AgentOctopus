@@ -54,6 +54,7 @@ pub const CAGE_SUBSTRATE_PATHS: &[&str] = &[
 pub const TOKEN_EXEMPT_PATHS: &[&str] = &[
     "/health",
     "/api/health",
+    "/.well-known/jwks.json",
     "/governance/ingest-policy",
     "/governance/policy-version",
     "/governance/validate-action",
@@ -78,6 +79,10 @@ pub fn is_cage_substrate_path(path: &str) -> bool {
         || trimmed == "/v1/governance"
         || trimmed.starts_with("/api/cage/")
         || trimmed == "/api/cage"
+        || trimmed.starts_with("/v1/cage/")
+        || trimmed == "/v1/cage"
+        || trimmed.starts_with("/api/v1/cage/")
+        || trimmed == "/api/v1/cage"
         || CAGE_SUBSTRATE_PATHS.contains(&trimmed)
 }
 

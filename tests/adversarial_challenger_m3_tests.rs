@@ -358,7 +358,8 @@ fn test_tampered_seal_audit_anchor_rejection() {
     let mut seal: CageRoutingSeal = eval_res.seal.unwrap();
 
     // Adversarial vector: mutate record_hash (audit anchor)
-    seal.record_hash = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string();
+    seal.record_hash =
+        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string();
 
     let tampered_json = serde_json::to_string(&seal).unwrap();
     let (status, body) = handle_cage_consume_seal(&state, &tampered_json);
@@ -526,10 +527,7 @@ fn test_host_rebinding_probes_on_cage_endpoints() {
 
     for (method, path) in endpoints {
         // Rebinding Probe 1: Arbitrary domain resolving to 127.0.0.1
-        let h_evil = format!(
-            "{} {} HTTP/1.1\r\nHost: evil.com:5005\r\n",
-            method, path
-        );
+        let h_evil = format!("{} {} HTTP/1.1\r\nHost: evil.com:5005\r\n", method, path);
         let req1 = make_guard_req(method, path, &h_evil, 5005);
         let res1 = authorize_request(&req1, "token123");
         assert!(
@@ -553,10 +551,7 @@ fn test_host_rebinding_probes_on_cage_endpoints() {
         ));
 
         // Rebinding Probe 3: Port mismatch (Host header specifies 9999, socket bound to 5005)
-        let h_port_mismatch = format!(
-            "{} {} HTTP/1.1\r\nHost: 127.0.0.1:9999\r\n",
-            method, path
-        );
+        let h_port_mismatch = format!("{} {} HTTP/1.1\r\nHost: 127.0.0.1:9999\r\n", method, path);
         let req3 = make_guard_req(method, path, &h_port_mismatch, 5005);
         assert!(matches!(
             authorize_request(&req3, "token123"),
@@ -565,10 +560,7 @@ fn test_host_rebinding_probes_on_cage_endpoints() {
 
         // Legitimate authorities: 127.0.0.1:5005, localhost:5005, [::1]:5005 must pass
         for auth in &["127.0.0.1:5005", "localhost:5005", "[::1]:5005"] {
-            let h_good = format!(
-                "{} {} HTTP/1.1\r\nHost: {}\r\n",
-                method, path, auth
-            );
+            let h_good = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", method, path, auth);
             let req_good = make_guard_req(method, path, &h_good, 5005);
             assert!(
                 authorize_request(&req_good, "token123").is_ok(),
@@ -681,10 +673,7 @@ fn test_extract_header_value_case_insensitivity() {
         extract_header_value(headers, "X-EXPECTED-POLICY-VERSION"),
         Some("hex_version_1234")
     );
-    assert_eq!(
-        extract_header_value(headers, "non-existent-header"),
-        None
-    );
+    assert_eq!(extract_header_value(headers, "non-existent-header"), None);
 }
 
 #[test]

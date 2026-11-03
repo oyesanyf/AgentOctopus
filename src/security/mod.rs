@@ -204,9 +204,20 @@ pub use rate_limit_backoff::{
     ReaBinaryFact, ReteEngine, VoterConsensus, VoterVerdict,
 };
 
+pub mod cage_substrate;
 pub mod host_network_isolation;
 pub mod universal_protocols;
 
+pub use cage_substrate::{
+    base64url_decode_no_pad, base64url_encode_no_pad, canonicalize_jcs, canonicalize_jcs_string,
+    freeze_process_by_pid, resolve_loopback_peer_pid, resume_process_by_pid,
+    CageAttestationResponse, CageConformalBaselineResponse, CageConformalValidateRequest,
+    CageConformalValidateResponse, CageKeyManifestResolver, CageQuarantineReceiptResponse,
+    CageQuarantineReleaseReceiptResponse, CageQuarantineReleaseRequest, CageQuarantineRequest,
+    CageSubstrateState, Cumulative24hTracker, JcsError, JournalData, JournalRecord, JwkKeyDto,
+    JwksResponse, KeyedCumulative24hTracker, NonceReplayCache, QuarantineJournal, QuarantineLease,
+    SealedJournalEnvelope,
+};
 pub use host_network_isolation::{
     build_linux_blackhole_route_msg, discover_active_octopus_ports,
     generate_macos_pf_quarantine_rules, global_host_killswitch, handle_wfp_kernel_apply_cli,

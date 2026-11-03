@@ -663,7 +663,8 @@ async fn test_execute_tool_with_valid_cage_seal_succeeds_and_emits_trace() {
     let ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED)
         .with_cage_engine(Arc::clone(&engine));
 
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_cage_test_{}", std::process::id()));
+    let scratch_dir =
+        std::env::temp_dir().join(format!("octopus_cage_test_{}", std::process::id()));
     let dispatcher = new_test_dispatcher();
 
     let mut ticket = ring
@@ -707,19 +708,29 @@ async fn test_execute_tool_with_valid_cage_seal_succeeds_and_emits_trace() {
         .expect("Execution with authentic seal must succeed");
 
     assert_eq!(receipt.selected_tier, ExecutionTier::Tier1InProcessWasm);
-    assert!(receipt.exit_code >= 0, "Tier 1 Wasm execution should return non-negative exit code, got {}", receipt.exit_code);
+    assert!(
+        receipt.exit_code >= 0,
+        "Tier 1 Wasm execution should return non-negative exit code, got {}",
+        receipt.exit_code
+    );
 
     // Verify audit log has GOVERNANCE_SEAL_CONSUMED and ACTUATION_RECEIPT
     let entries = engine.audit_log().get_entries();
-    let has_consumed = entries.iter().any(|e| {
-        e.event_type == "GOVERNANCE_SEAL_CONSUMED" && e.details.contains(&seal.seal_id)
-    });
-    assert!(has_consumed, "GOVERNANCE_SEAL_CONSUMED must be present in audit ledger");
+    let has_consumed = entries
+        .iter()
+        .any(|e| e.event_type == "GOVERNANCE_SEAL_CONSUMED" && e.details.contains(&seal.seal_id));
+    assert!(
+        has_consumed,
+        "GOVERNANCE_SEAL_CONSUMED must be present in audit ledger"
+    );
 
-    let has_receipt = entries.iter().any(|e| {
-        e.event_type == "ACTUATION_RECEIPT" && e.details.contains(&seal.seal_id)
-    });
-    assert!(has_receipt, "ACTUATION_RECEIPT must be present in audit ledger");
+    let has_receipt = entries
+        .iter()
+        .any(|e| e.event_type == "ACTUATION_RECEIPT" && e.details.contains(&seal.seal_id));
+    assert!(
+        has_receipt,
+        "ACTUATION_RECEIPT must be present in audit ledger"
+    );
 
     // Verify full trace stream conformance against all 7 rules
     let traces: Vec<serde_json::Value> = entries
@@ -743,7 +754,8 @@ async fn test_execute_tool_with_replayed_cage_seal_fails_closed() {
     let ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED)
         .with_cage_engine(Arc::clone(&engine));
 
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_cage_replay_{}", std::process::id()));
+    let scratch_dir =
+        std::env::temp_dir().join(format!("octopus_cage_replay_{}", std::process::id()));
     let dispatcher = new_test_dispatcher();
 
     let mut ticket1 = ring
@@ -825,7 +837,8 @@ async fn test_execute_tool_with_expired_cage_seal_fails_closed() {
     let ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED)
         .with_cage_engine(Arc::clone(&engine));
 
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_cage_expired_{}", std::process::id()));
+    let scratch_dir =
+        std::env::temp_dir().join(format!("octopus_cage_expired_{}", std::process::id()));
     let dispatcher = new_test_dispatcher();
 
     let mut ticket = ring
@@ -884,7 +897,8 @@ async fn test_execute_tool_with_action_digest_mismatch_fails_closed() {
     let ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED)
         .with_cage_engine(Arc::clone(&engine));
 
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_cage_mismatch_{}", std::process::id()));
+    let scratch_dir =
+        std::env::temp_dir().join(format!("octopus_cage_mismatch_{}", std::process::id()));
     let dispatcher = new_test_dispatcher();
 
     let mut ticket = ring
@@ -947,7 +961,8 @@ async fn test_execute_tool_without_configured_engine_fails_closed() {
     let ring = ArmContainmentRing::new(17, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED);
     assert!(ring.cage_engine().is_none());
 
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_cage_no_engine_{}", std::process::id()));
+    let scratch_dir =
+        std::env::temp_dir().join(format!("octopus_cage_no_engine_{}", std::process::id()));
     let dispatcher = new_test_dispatcher();
 
     let mut ticket = ring
@@ -1005,7 +1020,8 @@ async fn test_execute_tool_fiscal_debit_confirm_and_rollback() {
     let ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED)
         .with_cage_engine(Arc::clone(&engine));
 
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_cage_fiscal_{}", std::process::id()));
+    let scratch_dir =
+        std::env::temp_dir().join(format!("octopus_cage_fiscal_{}", std::process::id()));
     let dispatcher = new_test_dispatcher();
 
     // Part A: Successful actuation confirms fiscal pre-reservation
@@ -1056,7 +1072,11 @@ async fn test_execute_tool_fiscal_debit_confirm_and_rollback() {
         .await
         .expect("Successful actuation with fiscal debit");
 
-    assert!(receipt.exit_code >= 0, "Tier 1 Wasm execution should return non-negative exit code, got {}", receipt.exit_code);
+    assert!(
+        receipt.exit_code >= 0,
+        "Tier 1 Wasm execution should return non-negative exit code, got {}",
+        receipt.exit_code
+    );
     // Confirm is settled: rollback attempt now returns error
     assert!(engine.ledger().rollback(&debit_id).is_err());
     assert_eq!(engine.ledger().available_budget(), 950.0);
@@ -1136,15 +1156,28 @@ async fn test_arm_ring_registry_fleet_cage_engine_propagation() {
     // Verify all 50 worker rings and 12 security rings inherited the engine
     for arm_id in 0..50 {
         let ring = registry.get_ring(arm_id).await.expect("worker ring");
-        assert!(ring.cage_engine().is_some(), "Ring {} must have cage engine attached", arm_id);
+        assert!(
+            ring.cage_engine().is_some(),
+            "Ring {} must have cage engine attached",
+            arm_id
+        );
     }
     for sec_id in 100..=111 {
         let ring = registry.get_ring(sec_id).await.expect("security ring");
-        assert!(ring.cage_engine().is_some(), "Security ring {} must have cage engine attached", sec_id);
+        assert!(
+            ring.cage_engine().is_some(),
+            "Security ring {} must have cage engine attached",
+            sec_id
+        );
     }
 
     // Register a new custom ring into the registry; fleet engine must auto-propagate to it
-    let custom_ring = Arc::new(ArmContainmentRing::new(200, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED));
+    let custom_ring = Arc::new(ArmContainmentRing::new(
+        200,
+        ArmRole::UntrustedDocIngest,
+        1,
+        TEST_MASTER_SEED,
+    ));
     assert!(custom_ring.cage_engine().is_none());
 
     registry.register_ring(Arc::clone(&custom_ring)).await;
@@ -1154,7 +1187,8 @@ async fn test_arm_ring_registry_fleet_cage_engine_propagation() {
     );
 
     // Verify builder pattern with_cage_engine on registry
-    let registry_builder = ArmRingRegistry::new(10, TEST_MASTER_SEED).with_cage_engine(Arc::clone(&engine));
+    let registry_builder =
+        ArmRingRegistry::new(10, TEST_MASTER_SEED).with_cage_engine(Arc::clone(&engine));
     assert!(registry_builder.cage_engine().is_some());
     let builder_ring = registry_builder.get_ring(5).await.expect("builder ring");
     assert!(builder_ring.cage_engine().is_some());
@@ -1173,11 +1207,22 @@ async fn test_challenger_fleet_scale_engine_propagation_and_autotomy_resilience(
     // 1. Initial State: Verify all 50 worker arms and 12 security arms have NO engine
     for arm_id in 0..50 {
         let ring = registry.get_ring(arm_id).await.expect("worker ring exists");
-        assert!(ring.cage_engine().is_none(), "Worker ring {} must initially have no engine", arm_id);
+        assert!(
+            ring.cage_engine().is_none(),
+            "Worker ring {} must initially have no engine",
+            arm_id
+        );
     }
     for sec_id in 100..=111 {
-        let ring = registry.get_ring(sec_id).await.expect("security ring exists");
-        assert!(ring.cage_engine().is_none(), "Security ring {} must initially have no engine", sec_id);
+        let ring = registry
+            .get_ring(sec_id)
+            .await
+            .expect("security ring exists");
+        assert!(
+            ring.cage_engine().is_none(),
+            "Security ring {} must initially have no engine",
+            sec_id
+        );
     }
 
     // 2. Attach fleet engine dynamically
@@ -1188,11 +1233,22 @@ async fn test_challenger_fleet_scale_engine_propagation_and_autotomy_resilience(
     // 3. Verify engine propagation across all 50 worker arms and 12 security arms
     for arm_id in 0..50 {
         let ring = registry.get_ring(arm_id).await.expect("worker ring exists");
-        assert!(ring.cage_engine().is_some(), "Worker ring {} must inherit fleet engine", arm_id);
+        assert!(
+            ring.cage_engine().is_some(),
+            "Worker ring {} must inherit fleet engine",
+            arm_id
+        );
     }
     for sec_id in 100..=111 {
-        let ring = registry.get_ring(sec_id).await.expect("security ring exists");
-        assert!(ring.cage_engine().is_some(), "Security ring {} must inherit fleet engine", sec_id);
+        let ring = registry
+            .get_ring(sec_id)
+            .await
+            .expect("security ring exists");
+        assert!(
+            ring.cage_engine().is_some(),
+            "Security ring {} must inherit fleet engine",
+            sec_id
+        );
     }
 
     // 4. Verify synchronous fleet propagation on fresh registry
@@ -1201,11 +1257,22 @@ async fn test_challenger_fleet_scale_engine_propagation_and_autotomy_resilience(
     assert!(reg_sync.cage_engine().is_some());
     for arm_id in 0..50 {
         let ring = reg_sync.get_ring(arm_id).await.expect("worker ring exists");
-        assert!(ring.cage_engine().is_some(), "Sync attached arm {} must have engine", arm_id);
+        assert!(
+            ring.cage_engine().is_some(),
+            "Sync attached arm {} must have engine",
+            arm_id
+        );
     }
     for sec_id in 100..=111 {
-        let ring = reg_sync.get_ring(sec_id).await.expect("security ring exists");
-        assert!(ring.cage_engine().is_some(), "Sync attached sec arm {} must have engine", sec_id);
+        let ring = reg_sync
+            .get_ring(sec_id)
+            .await
+            .expect("security ring exists");
+        assert!(
+            ring.cage_engine().is_some(),
+            "Sync attached sec arm {} must have engine",
+            sec_id
+        );
     }
 
     // 5. Autotomy Regeneration & Engine Persistence (Worker Arm 6, UntrustedDocIngest)
@@ -1219,18 +1286,30 @@ async fn test_challenger_fleet_scale_engine_propagation_and_autotomy_resilience(
         .expect("issue dirac ticket");
 
     // Sever and regenerate arm 6 via registry
-    let next_gen = registry.sever_and_regenerate(6).await.expect("sever and regenerate");
+    let next_gen = registry
+        .sever_and_regenerate(6)
+        .await
+        .expect("sever and regenerate");
     assert_eq!(next_gen, 2);
     assert_eq!(arm6.current_generation(), 2);
 
     // Assert engine is retained across autotomy epoch bump
-    assert!(arm6.cage_engine().is_some(), "Engine must persist after autotomy regeneration");
+    assert!(
+        arm6.cage_engine().is_some(),
+        "Engine must persist after autotomy regeneration"
+    );
 
     // Old ticket carried Gen 1 epoch; validate_epoch(1) must fail closed
-    assert!(arm6.validate_epoch(1).await.is_err(), "Revoked Gen 1 epoch must fail validation");
+    assert!(
+        arm6.validate_epoch(1).await.is_err(),
+        "Revoked Gen 1 epoch must fail validation"
+    );
 
     let dispatcher = new_test_dispatcher();
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_challenger_autotomy_{}", std::process::id()));
+    let scratch_dir = std::env::temp_dir().join(format!(
+        "octopus_challenger_autotomy_{}",
+        std::process::id()
+    ));
     let payload = b"AUTOTOMY STALE TICKET".to_vec();
     let tiered_req = TieredToolRequest {
         agent_id: arm6.agent_name.clone(),
@@ -1263,7 +1342,10 @@ async fn test_challenger_fleet_scale_engine_propagation_and_autotomy_resilience(
             None,
         )
         .await;
-    assert!(stale_err.is_err(), "Execution with stale Gen 1 ticket must fail closed on regenerated arm");
+    assert!(
+        stale_err.is_err(),
+        "Execution with stale Gen 1 ticket must fail closed on regenerated arm"
+    );
 
     // Fresh ticket issued for Gen 2 succeeds
     let mut ticket_gen2 = arm6
@@ -1321,7 +1403,11 @@ async fn test_challenger_concurrent_tool_execution_with_distinct_seals() {
 
         let handle = tokio::spawn(async move {
             let dispatcher = new_test_dispatcher();
-            let scratch_dir = std::env::temp_dir().join(format!("octopus_challenger_concurrency_{}_{}", std::process::id(), i));
+            let scratch_dir = std::env::temp_dir().join(format!(
+                "octopus_challenger_concurrency_{}_{}",
+                std::process::id(),
+                i
+            ));
             let payload = format!("CONCURRENT_INVOICE_DATA_TASK_{}", i).into_bytes();
 
             let mut ticket = ring
@@ -1372,7 +1458,13 @@ async fn test_challenger_concurrent_tool_execution_with_distinct_seals() {
     for handle in handles {
         let (task_idx, arm_id, seal, receipt) = handle.await.expect("task must join");
         assert_eq!(receipt.selected_tier, ExecutionTier::Tier1InProcessWasm);
-        assert!(receipt.exit_code >= 0, "Task {} on Arm {} failed with exit_code {}", task_idx, arm_id, receipt.exit_code);
+        assert!(
+            receipt.exit_code >= 0,
+            "Task {} on Arm {} failed with exit_code {}",
+            task_idx,
+            arm_id,
+            receipt.exit_code
+        );
         completed_seals.push(seal);
     }
 
@@ -1381,7 +1473,10 @@ async fn test_challenger_concurrent_tool_execution_with_distinct_seals() {
     // Verify all 15 seals are marked consumed and authentic replay attempts fail closed with SealAlreadyConsumed
     let arm0 = registry.get_ring(0).await.expect("arm 0 exists");
     let dispatcher = new_test_dispatcher();
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_challenger_replay_check_{}", std::process::id()));
+    let scratch_dir = std::env::temp_dir().join(format!(
+        "octopus_challenger_replay_check_{}",
+        std::process::id()
+    ));
 
     for seal in &completed_seals {
         let mut ticket = arm0
@@ -1413,7 +1508,11 @@ async fn test_challenger_concurrent_tool_execution_with_distinct_seals() {
             )
             .await;
 
-        assert!(replay_res.is_err(), "Replaying seal {} must fail closed", seal.seal_id);
+        assert!(
+            replay_res.is_err(),
+            "Replaying seal {} must fail closed",
+            seal.seal_id
+        );
     }
 }
 
@@ -1445,7 +1544,11 @@ async fn test_challenger_concurrent_race_condition_on_single_seal() {
 
         let handle = tokio::spawn(async move {
             let dispatcher = new_test_dispatcher();
-            let scratch_dir = std::env::temp_dir().join(format!("octopus_challenger_race_{}_{}", std::process::id(), i));
+            let scratch_dir = std::env::temp_dir().join(format!(
+                "octopus_challenger_race_{}_{}",
+                std::process::id(),
+                i
+            ));
 
             let mut ticket = ring_clone
                 .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_01.pdf", 50_000, None)
@@ -1501,8 +1604,15 @@ async fn test_challenger_concurrent_race_condition_on_single_seal() {
     }
 
     // Invariant: Exactly 1 wins the race; exactly N-1 are rejected
-    assert_eq!(success_count, 1, "Exactly one concurrent execution must succeed with a single-use seal");
-    assert_eq!(failure_count, num_competing_tasks - 1, "All other concurrent executions must fail closed");
+    assert_eq!(
+        success_count, 1,
+        "Exactly one concurrent execution must succeed with a single-use seal"
+    );
+    assert_eq!(
+        failure_count,
+        num_competing_tasks - 1,
+        "All other concurrent executions must fail closed"
+    );
 
     // Audit log must contain exactly 1 GOVERNANCE_SEAL_CONSUMED and exactly 1 ACTUATION_RECEIPT for this seal
     let entries = engine.audit_log().get_entries();
@@ -1515,16 +1625,37 @@ async fn test_challenger_concurrent_race_condition_on_single_seal() {
         .filter(|e| e.event_type == "ACTUATION_RECEIPT" && e.details.contains(&seal.seal_id))
         .count();
 
-    assert_eq!(consumed_events, 1, "Audit log must contain exactly 1 seal consumption event");
-    assert_eq!(receipt_events, 1, "Audit log must contain exactly 1 actuation receipt event");
+    assert_eq!(
+        consumed_events, 1,
+        "Audit log must contain exactly 1 seal consumption event"
+    );
+    assert_eq!(
+        receipt_events, 1,
+        "Audit log must contain exactly 1 actuation receipt event"
+    );
 }
 
 #[tokio::test]
 async fn test_challenger_unconfigured_engine_strict_fail_closed() {
     let test_roles = [
-        (10, ArmRole::UntrustedDocIngest, "doc_extractor", "s3://invoices/inv_01.pdf"),
-        (11, ArmRole::AccountingLedgerWrite, "ledger_writer", "s3://accounting/ledger.json"),
-        (12, ArmRole::NetworkEgress, "http_egress", "https://api.example.com/v1"),
+        (
+            10,
+            ArmRole::UntrustedDocIngest,
+            "doc_extractor",
+            "s3://invoices/inv_01.pdf",
+        ),
+        (
+            11,
+            ArmRole::AccountingLedgerWrite,
+            "ledger_writer",
+            "s3://accounting/ledger.json",
+        ),
+        (
+            12,
+            ArmRole::NetworkEgress,
+            "http_egress",
+            "https://api.example.com/v1",
+        ),
     ];
 
     let dispatcher = new_test_dispatcher();
@@ -1532,7 +1663,10 @@ async fn test_challenger_unconfigured_engine_strict_fail_closed() {
 
     for (arm_id, role, tool, resource) in test_roles {
         let ring = ArmContainmentRing::new(arm_id, role.clone(), 1, TEST_MASTER_SEED);
-        assert!(ring.cage_engine().is_none(), "Unconfigured ring must report cage_engine() == None");
+        assert!(
+            ring.cage_engine().is_none(),
+            "Unconfigured ring must report cage_engine() == None"
+        );
 
         let mut ticket = ring
             .issue_dirac_ticket(tool, resource, 50_000, None)
@@ -1540,7 +1674,11 @@ async fn test_challenger_unconfigured_engine_strict_fail_closed() {
             .expect("issue dirac ticket");
 
         let payload = format!("UNCONFIGURED_ENGINE_TEST_ARM_{}", arm_id).into_bytes();
-        let scratch_dir = std::env::temp_dir().join(format!("octopus_challenger_unconfig_{}_{}", std::process::id(), arm_id));
+        let scratch_dir = std::env::temp_dir().join(format!(
+            "octopus_challenger_unconfig_{}_{}",
+            std::process::id(),
+            arm_id
+        ));
 
         let tiered_req = TieredToolRequest {
             agent_id: ring.agent_name.clone(),
@@ -1579,7 +1717,10 @@ async fn test_challenger_unconfigured_engine_strict_fail_closed() {
         let sec_err = OctopusSecurityError::from(err);
         assert_eq!(
             sec_err,
-            OctopusSecurityError::IsolationViolation(format!("CAGE_ENGINE_NOT_CONFIGURED: Arm {}", arm_id))
+            OctopusSecurityError::IsolationViolation(format!(
+                "CAGE_ENGINE_NOT_CONFIGURED: Arm {}",
+                arm_id
+            ))
         );
     }
 }
@@ -1601,7 +1742,11 @@ async fn test_challenger_conformance_verification_on_concurrent_trace_stream() {
 
         let handle = tokio::spawn(async move {
             let dispatcher = new_test_dispatcher();
-            let scratch_dir = std::env::temp_dir().join(format!("octopus_challenger_stream_{}_{}", std::process::id(), i));
+            let scratch_dir = std::env::temp_dir().join(format!(
+                "octopus_challenger_stream_{}_{}",
+                std::process::id(),
+                i
+            ));
             let payload = format!("STREAM_CONFORMANCE_DATA_{}", i).into_bytes();
 
             let mut ticket = ring
@@ -1651,7 +1796,10 @@ async fn test_challenger_conformance_verification_on_concurrent_trace_stream() {
 
     // Extract all interleaved audit log entries
     let entries = engine.audit_log().get_entries();
-    assert!(entries.len() >= num_tasks * 3, "Expected at least 3 records per task (decision, consumed, receipt)");
+    assert!(
+        entries.len() >= num_tasks * 3,
+        "Expected at least 3 records per task (decision, consumed, receipt)"
+    );
 
     let traces: Vec<serde_json::Value> = entries
         .iter()
@@ -1730,7 +1878,11 @@ async fn test_challenger_formal_bfs_trace_conformance_adversarial_oracle() {
 
     // Baseline must pass conformance
     let base_report = FormalBfsModel::check_trace_conformance(&baseline_traces);
-    assert!(base_report.status.is_conformant(), "Baseline traces must be conformant: {:?}", base_report.findings);
+    assert!(
+        base_report.status.is_conformant(),
+        "Baseline traces must be conformant: {:?}",
+        base_report.findings
+    );
 
     // 1. Adversarial Test: Rule 1 - Schema Violation (record missing event_type)
     let mut bad_schema_traces = baseline_traces.clone();
@@ -1739,7 +1891,10 @@ async fn test_challenger_formal_bfs_trace_conformance_adversarial_oracle() {
     }));
     let rep1 = FormalBfsModel::check_trace_conformance(&bad_schema_traces);
     assert!(!rep1.status.is_conformant());
-    assert!(rep1.has_rule_violation("schema"), "Must flag schema violation on missing event_type");
+    assert!(
+        rep1.has_rule_violation("schema"),
+        "Must flag schema violation on missing event_type"
+    );
 
     // 2. Adversarial Test: Rule 1 - Non-hex or uppercase hash in record_hash
     let mut bad_hash_traces = baseline_traces.clone();
@@ -1749,7 +1904,10 @@ async fn test_challenger_formal_bfs_trace_conformance_adversarial_oracle() {
     }));
     let rep2 = FormalBfsModel::check_trace_conformance(&bad_hash_traces);
     assert!(!rep2.status.is_conformant());
-    assert!(rep2.has_rule_violation("schema"), "Must flag schema violation on uppercase hash");
+    assert!(
+        rep2.has_rule_violation("schema"),
+        "Must flag schema violation on uppercase hash"
+    );
 
     // 3. Adversarial Test: Rule 4 - Seal Violation (ALLOW verdict but seal_present = false)
     let mut unsealed_traces = baseline_traces.clone();
@@ -1770,7 +1928,10 @@ async fn test_challenger_formal_bfs_trace_conformance_adversarial_oracle() {
     }));
     let rep3 = FormalBfsModel::check_trace_conformance(&unsealed_traces);
     assert!(!rep3.status.is_conformant());
-    assert!(rep3.has_rule_violation("seal"), "Must flag seal violation when ALLOW lacks seal_present");
+    assert!(
+        rep3.has_rule_violation("seal"),
+        "Must flag seal violation when ALLOW lacks seal_present"
+    );
 
     // 4. Adversarial Test: Rule 3 - Coverage Violation (missing required tier, e.g. cbf)
     let mut incomplete_coverage_traces = baseline_traces.clone();
@@ -1790,7 +1951,10 @@ async fn test_challenger_formal_bfs_trace_conformance_adversarial_oracle() {
     }));
     let rep4 = FormalBfsModel::check_trace_conformance(&incomplete_coverage_traces);
     assert!(!rep4.status.is_conformant());
-    assert!(rep4.has_rule_violation("coverage"), "Must flag coverage violation when tier is missing");
+    assert!(
+        rep4.has_rule_violation("coverage"),
+        "Must flag coverage violation when tier is missing"
+    );
 
     // 5. Adversarial Test: Rule 5 - Reachable State Violation (illegal state transition)
     let mut unreachable_state_traces = baseline_traces.clone();
@@ -1803,7 +1967,10 @@ async fn test_challenger_formal_bfs_trace_conformance_adversarial_oracle() {
     }));
     let rep5 = FormalBfsModel::check_trace_conformance(&unreachable_state_traces);
     assert!(!rep5.status.is_conformant());
-    assert!(rep5.has_rule_violation("reachable"), "Must flag reachable violation on invalid state transition");
+    assert!(
+        rep5.has_rule_violation("reachable"),
+        "Must flag reachable violation on invalid state transition"
+    );
 
     // 6. Adversarial Test: Rule 6 - No-Direct-Bind Violation (ACTUATION_RECEIPT without prior GOVERNANCE_SEAL_CONSUMED)
     let mut direct_bind_traces = baseline_traces.clone();
@@ -1815,7 +1982,10 @@ async fn test_challenger_formal_bfs_trace_conformance_adversarial_oracle() {
     }));
     let rep6 = FormalBfsModel::check_trace_conformance(&direct_bind_traces);
     assert!(!rep6.status.is_conformant());
-    assert!(rep6.has_rule_violation("no_direct_bind"), "Must flag no_direct_bind when actuation lacks prior seal consumed");
+    assert!(
+        rep6.has_rule_violation("no_direct_bind"),
+        "Must flag no_direct_bind when actuation lacks prior seal consumed"
+    );
 
     // 7. Adversarial Test: Rule 7 - Single-Use Violation (duplicate seal consumption in audit log)
     let mut replay_trace = baseline_traces.clone();
@@ -1831,6 +2001,8 @@ async fn test_challenger_formal_bfs_trace_conformance_adversarial_oracle() {
     }));
     let rep7 = FormalBfsModel::check_trace_conformance(&replay_trace);
     assert!(!rep7.status.is_conformant());
-    assert!(rep7.has_rule_violation("single_use"), "Must flag single_use violation when seal is consumed twice");
+    assert!(
+        rep7.has_rule_violation("single_use"),
+        "Must flag single_use violation when seal is consumed twice"
+    );
 }
-

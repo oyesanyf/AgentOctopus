@@ -45,3 +45,5 @@ data/*.db-wal
 *.db-shm
 .witness/
 .pytest_cache/
+
+quarantine_journal.json

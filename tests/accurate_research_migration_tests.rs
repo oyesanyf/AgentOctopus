@@ -41,7 +41,11 @@ fn test_canonical_2025_2026_seeded_rules_and_four_gate_validator() {
         assert!(is_valid_verified_repo_url(&rule.code_repo_url));
 
         let (domain_ok, domain_msg) = check_paper_to_code_semantic_domain_alignment(rule);
-        assert!(domain_ok, "Domain alignment failed for {}: {}", expected, domain_msg);
+        assert!(
+            domain_ok,
+            "Domain alignment failed for {}: {}",
+            expected, domain_msg
+        );
 
         let (ast_ok, ast_msg) = verify_generated_guard_code_accuracy(rule);
         assert!(ast_ok, "AST accuracy failed for {}: {}", expected, ast_msg);
@@ -58,8 +62,7 @@ fn test_canonical_2025_2026_seeded_rules_and_four_gate_validator() {
         assert!(
             verdict.accepted,
             "4-Gate Validator rejected canonical rule {}: {}",
-            expected,
-            verdict.reason
+            expected, verdict.reason
         );
     }
 
@@ -99,12 +102,8 @@ fn test_breakout_coordinator_enforces_research_rules_and_deobfuscation() {
     ];
 
     for probe in attack_probes {
-        let eval = coordinator.evaluate_action(
-            "untrusted_agent",
-            "ExecuteTool",
-            "/sandbox/work",
-            probe,
-        );
+        let eval =
+            coordinator.evaluate_action("untrusted_agent", "ExecuteTool", "/sandbox/work", probe);
         assert!(
             !eval.is_clean && eval.technical.sandbox_quarantine_required,
             "Probe should have been blocked and quarantined: {}",
@@ -196,10 +195,9 @@ fn test_paper2agent_accuracy_suite_and_seven_ring_live_probe() {
     assert_eq!(novelty_res.total_checked, 2);
     assert!(novelty_res.evaluations[0].already_enrolled_in_active_registry);
     assert!(!novelty_res.evaluations[1].is_current_2025_2026_window);
-    let novelty_api = handle_research_novelty_check(
-        r#"{"arxiv_ids":["2603.02277v3","2501.18492v2"]}"#,
-    )
-    .expect("Novelty check API must succeed");
+    let novelty_api =
+        handle_research_novelty_check(r#"{"arxiv_ids":["2603.02277v3","2501.18492v2"]}"#)
+            .expect("Novelty check API must succeed");
     assert!(novelty_api.contains("already_covered_count"));
     let _ = get_research_status();
     let _ = get_research_schedule();

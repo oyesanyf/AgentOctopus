@@ -13,7 +13,7 @@ use super::api::{
     handle_evolution_stop, handle_get_egress_domains, handle_glm_fusion_calibration,
     handle_governor_inject_sample, handle_governor_reset, handle_governor_status,
     handle_harness2_library, handle_harness2_run, handle_harness2_status,
-    handle_harness2_validate_tree, handle_kernel_stats, handle_killswitch_disarm,
+    handle_harness2_validate_tree, handle_kernel_stats, handle_killswitch_disarm_with_peer,
     handle_killswitch_engage, handle_killswitch_protocols, handle_killswitch_status,
     handle_live_tests, handle_oshoosiclaw_containment_evaluate,
     handle_oshoosiclaw_containment_status, handle_oss_fuzz_burst, handle_oss_fuzz_sarif,
@@ -92,6 +92,7 @@ pub fn select_available_loopback_port(preferred_port: u16) -> u16 {
 /// automatically tries the next available port. Never touches or binds port 5000.
 pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state = Arc::new(WebState::default());
+    let _ = state.cage_substrate.journal.recover_and_re_enforce();
 
     let requested_port: u16 = addr
         .rsplit(':')
@@ -821,6 +822,98 @@ async fn handle_connection(
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/.well-known/jwks.json") => {
+            let (status_code, json_body) = state.cage_substrate.handle_jwks();
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", p)
+            if p.starts_with("/v1/cage/normative-baseline/")
+                || p.starts_with("/api/v1/cage/normative-baseline/") =>
+        {
+            let region = p
+                .strip_prefix("/v1/cage/normative-baseline/")
+                .or_else(|| p.strip_prefix("/api/v1/cage/normative-baseline/"))
+                .unwrap_or("global");
+            let (status_code, json_body) = state.cage_substrate.handle_conformal_baseline(region);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/v1/cage/attest") | ("GET", "/api/v1/cage/attest") => {
+            let (status_code, json_body) = state.cage_substrate.handle_attest();
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/v1/cage/conformal/validate") | ("POST", "/api/v1/cage/conformal/validate") => {
+            let (status_code, json_body) = state
+                .cage_substrate
+                .handle_conformal_validate(body.as_bytes(), &state.breakout_coordinator);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/v1/cage/quarantine") | ("POST", "/api/v1/cage/quarantine") => {
+            let assertion_hdr = extract_header_value(headers_str, "x-cage-quarantine-assertion");
+            let signer_kid_hdr = extract_header_value(headers_str, "x-cage-signer-kid");
+            let (status_code, json_body) = state.cage_substrate.handle_quarantine(
+                assertion_hdr,
+                signer_kid_hdr,
+                body.as_bytes(),
+            );
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/v1/cage/release") | ("POST", "/api/v1/cage/release") => {
+            let release_hdr = extract_header_value(headers_str, "x-cage-quarantine-release");
+            let signer_kid_hdr = extract_header_value(headers_str, "x-cage-signer-kid");
+            let (status_code, json_body) =
+                state
+                    .cage_substrate
+                    .handle_release(release_hdr, signer_kid_hdr, body.as_bytes());
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
                 json_body.len(),
                 json_body
             );
@@ -2685,7 +2778,7 @@ async fn handle_connection(
         ("POST", "/api/killswitch/disarm") | ("POST", "/api/killswitch/restore") => {
             let (status_code, json_body) =
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    handle_killswitch_disarm(&state, body)
+                    handle_killswitch_disarm_with_peer(&state, body, Some(peer_addr), local_port)
                 })) {
                     Ok(pair) => pair,
                     Err(_) => (

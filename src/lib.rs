@@ -142,9 +142,17 @@ pub use security::{
 };
 
 pub use security::{
-    build_linux_blackhole_route_msg, discover_active_octopus_ports,
-    generate_macos_pf_quarantine_rules, global_host_killswitch, handle_wfp_kernel_apply_cli,
-    has_live_active_wfp_filters, HostIsolationError, HostIsolationReceipt, HostKillSwitchManager,
-    HostKillSwitchStatus, KernelIsolationBackend, OsiLayer, ProtocolDefinition, ProtocolDomain,
-    ProtocolVectorType, UniversalProtocolCatalog,
+    base64url_decode_no_pad, base64url_encode_no_pad, build_linux_blackhole_route_msg,
+    canonicalize_jcs, canonicalize_jcs_string, discover_active_octopus_ports,
+    freeze_process_by_pid, generate_macos_pf_quarantine_rules, global_host_killswitch,
+    handle_wfp_kernel_apply_cli, has_live_active_wfp_filters, resolve_loopback_peer_pid,
+    resume_process_by_pid, CageAttestationResponse, CageConformalBaselineResponse,
+    CageConformalValidateRequest, CageConformalValidateResponse, CageKeyManifestResolver,
+    CageQuarantineReceiptResponse, CageQuarantineReleaseReceiptResponse,
+    CageQuarantineReleaseRequest, CageQuarantineRequest, CageSubstrateState, Cumulative24hTracker,
+    HostIsolationError, HostIsolationReceipt, HostKillSwitchManager, HostKillSwitchStatus,
+    JcsError, JournalData, JournalRecord, JwkKeyDto, JwksResponse, KernelIsolationBackend,
+    KeyedCumulative24hTracker, NonceReplayCache, OsiLayer, ProtocolDefinition, ProtocolDomain,
+    ProtocolVectorType, QuarantineJournal, QuarantineLease, SealedJournalEnvelope,
+    UniversalProtocolCatalog,
 };

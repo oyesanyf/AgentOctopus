@@ -17,14 +17,12 @@
 //!    - Multi-trial stability verification (RFC 7230 / protocol reproducibility)
 //! ==============================================================================
 
+use agent_octopus::security::audit::SecurityAuditLog;
 use agent_octopus::security::cage_governance::no_direct_bind_proof::{
     BfsPhase, BfsState, FormalBfsModel,
 };
 use agent_octopus::security::cage_governance::substrate_translator::SubstrateTranslator;
-use agent_octopus::security::cage_governance::{
-    CageApiError, CageGovernanceEngine,
-};
-use agent_octopus::security::audit::SecurityAuditLog;
+use agent_octopus::security::cage_governance::{CageApiError, CageGovernanceEngine};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -86,13 +84,43 @@ fn test_stress_gated_bfs_strictly_34_states() {
         // - SealIssued: 1 (valid)
         // - Executed: 1 (executed)
         // - Denied: 15 (7 direct_tier_X + 7 narrow_rerun_tier_X + 1 seal_expired)
-        assert_eq!(phase_counts.get(&BfsPhase::Initial).copied().unwrap_or(0), 1);
-        assert_eq!(phase_counts.get(&BfsPhase::Checking).copied().unwrap_or(0), 8);
-        assert_eq!(phase_counts.get(&BfsPhase::NarrowEval).copied().unwrap_or(0), 7);
-        assert_eq!(phase_counts.get(&BfsPhase::NarrowPassed).copied().unwrap_or(0), 1);
-        assert_eq!(phase_counts.get(&BfsPhase::SealIssued).copied().unwrap_or(0), 1);
-        assert_eq!(phase_counts.get(&BfsPhase::Executed).copied().unwrap_or(0), 1);
-        assert_eq!(phase_counts.get(&BfsPhase::Denied).copied().unwrap_or(0), 15);
+        assert_eq!(
+            phase_counts.get(&BfsPhase::Initial).copied().unwrap_or(0),
+            1
+        );
+        assert_eq!(
+            phase_counts.get(&BfsPhase::Checking).copied().unwrap_or(0),
+            8
+        );
+        assert_eq!(
+            phase_counts
+                .get(&BfsPhase::NarrowEval)
+                .copied()
+                .unwrap_or(0),
+            7
+        );
+        assert_eq!(
+            phase_counts
+                .get(&BfsPhase::NarrowPassed)
+                .copied()
+                .unwrap_or(0),
+            1
+        );
+        assert_eq!(
+            phase_counts
+                .get(&BfsPhase::SealIssued)
+                .copied()
+                .unwrap_or(0),
+            1
+        );
+        assert_eq!(
+            phase_counts.get(&BfsPhase::Executed).copied().unwrap_or(0),
+            1
+        );
+        assert_eq!(
+            phase_counts.get(&BfsPhase::Denied).copied().unwrap_or(0),
+            15
+        );
 
         // 4. Verify terminal executed state invariant
         let executed_states: Vec<&BfsState> = result
@@ -104,9 +132,18 @@ fn test_stress_gated_bfs_strictly_34_states() {
         let exec = executed_states[0];
         assert_eq!(exec.label, "executed");
         assert_eq!(exec.tier, 7);
-        assert!(exec.seal_present, "Executed state must strictly have seal_present == true");
-        assert!(exec.resolved_allow, "Executed state must strictly have resolved_allow == true");
-        assert!(exec.executed_or_narrow, "Executed state must have executed_or_narrow == true");
+        assert!(
+            exec.seal_present,
+            "Executed state must strictly have seal_present == true"
+        );
+        assert!(
+            exec.resolved_allow,
+            "Executed state must strictly have resolved_allow == true"
+        );
+        assert!(
+            exec.executed_or_narrow,
+            "Executed state must have executed_or_narrow == true"
+        );
 
         // 5. Verify every single state adheres to safety invariant
         for state in &result.visited_states {
@@ -146,7 +183,8 @@ fn test_stress_ungated_bfs_counterexample_strictly_17_states() {
             "Trial {trial}: NoDirectBind must FAIL in ungated counterexample"
         );
         assert_eq!(
-            result.violations.len(), 1,
+            result.violations.len(),
+            1,
             "Trial {trial}: Ungated counterexample must find strictly 1 violation"
         );
 
@@ -158,7 +196,8 @@ fn test_stress_ungated_bfs_counterexample_strictly_17_states() {
             "Violation state must demonstrate execution without seal"
         );
         assert!(
-            violation.error.contains("Direct-bind violation") || violation.error.contains("without seal"),
+            violation.error.contains("Direct-bind violation")
+                || violation.error.contains("without seal"),
             "Error message must describe direct-bind bypass: {}",
             violation.error
         );
@@ -169,9 +208,18 @@ fn test_stress_ungated_bfs_counterexample_strictly_17_states() {
             *phase_counts.entry(state.phase).or_insert(0) += 1;
         }
         // Breakdown: Initial: 1, Checking: 7, Executed: 1, Denied: 8 (7 tier_X + 1 terminal_failure)
-        assert_eq!(phase_counts.get(&BfsPhase::Initial).copied().unwrap_or(0), 1);
-        assert_eq!(phase_counts.get(&BfsPhase::Checking).copied().unwrap_or(0), 7);
-        assert_eq!(phase_counts.get(&BfsPhase::Executed).copied().unwrap_or(0), 1);
+        assert_eq!(
+            phase_counts.get(&BfsPhase::Initial).copied().unwrap_or(0),
+            1
+        );
+        assert_eq!(
+            phase_counts.get(&BfsPhase::Checking).copied().unwrap_or(0),
+            7
+        );
+        assert_eq!(
+            phase_counts.get(&BfsPhase::Executed).copied().unwrap_or(0),
+            1
+        );
         assert_eq!(phase_counts.get(&BfsPhase::Denied).copied().unwrap_or(0), 8);
     }
 }
@@ -203,7 +251,10 @@ fn test_stress_skipped_tier_models_strictly_31_states() {
 
             // Confirm no visited state has phase == Executed
             assert!(
-                !result.visited_states.iter().any(|s| s.phase == BfsPhase::Executed),
+                !result
+                    .visited_states
+                    .iter()
+                    .any(|s| s.phase == BfsPhase::Executed),
                 "Tier {skip_tier} Trial {trial}: No executed states may exist in visited states"
             );
 
@@ -213,7 +264,10 @@ fn test_stress_skipped_tier_models_strictly_31_states() {
                 "Tier {skip_tier} Trial {trial}: SealIssued state should still be reached before expiry"
             );
             assert!(
-                result.visited_states.iter().any(|s| s.phase == BfsPhase::Denied && s.label == "seal_expired"),
+                result
+                    .visited_states
+                    .iter()
+                    .any(|s| s.phase == BfsPhase::Denied && s.label == "seal_expired"),
                 "Tier {skip_tier} Trial {trial}: seal_expired denial must be reached"
             );
         }
@@ -235,9 +289,15 @@ fn test_stress_theorem_receipt_deterministic_64_hex() {
     assert_eq!(first_proof.violations_count, 0);
 
     let receipt = &first_proof.proof_receipt;
-    assert_eq!(receipt.len(), 64, "Proof receipt must be strictly 64 hex characters");
+    assert_eq!(
+        receipt.len(),
+        64,
+        "Proof receipt must be strictly 64 hex characters"
+    );
     assert!(
-        receipt.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        receipt
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
         "Proof receipt must be lowercase hexadecimal: {}",
         receipt
     );
@@ -370,11 +430,31 @@ fn test_stress_jcs_adversarial_keys_and_utf16_ordering() {
         "large_int": 9007199254740991.0 // 2^53 - 1
     });
     let jcs_num = SubstrateTranslator::canonicalize_jcs(&num_obj).unwrap();
-    assert!(jcs_num.contains("\"neg_zero\":0"), "Negative zero must format as '0', got: {}", jcs_num);
-    assert!(jcs_num.contains("\"pos_zero\":0"), "Positive zero must format as '0', got: {}", jcs_num);
-    assert!(jcs_num.contains("\"int_float\":100"), "Integer float must format as '100', got: {}", jcs_num);
-    assert!(jcs_num.contains("\"frac_float\":100.25"), "Frac float must format as '100.25', got: {}", jcs_num);
-    assert!(jcs_num.contains("\"large_int\":9007199254740991"), "Safe max int must format without decimal, got: {}", jcs_num);
+    assert!(
+        jcs_num.contains("\"neg_zero\":0"),
+        "Negative zero must format as '0', got: {}",
+        jcs_num
+    );
+    assert!(
+        jcs_num.contains("\"pos_zero\":0"),
+        "Positive zero must format as '0', got: {}",
+        jcs_num
+    );
+    assert!(
+        jcs_num.contains("\"int_float\":100"),
+        "Integer float must format as '100', got: {}",
+        jcs_num
+    );
+    assert!(
+        jcs_num.contains("\"frac_float\":100.25"),
+        "Frac float must format as '100.25', got: {}",
+        jcs_num
+    );
+    assert!(
+        jcs_num.contains("\"large_int\":9007199254740991"),
+        "Safe max int must format without decimal, got: {}",
+        jcs_num
+    );
 }
 
 /// Stress-test JCS key-permutation invariance:
@@ -405,8 +485,8 @@ fn test_stress_jcs_permutation_invariance() {
     let ref_hash = hex::encode(hasher.finalize());
 
     // Generate 50 permutations of insertion order
-    use rand::seq::SliceRandom;
     use rand::rngs::StdRng;
+    use rand::seq::SliceRandom;
     use rand::SeedableRng;
 
     let mut rng = StdRng::seed_from_u64(0xCAFE_BABE);
@@ -619,14 +699,16 @@ fn test_stress_version_drift_rejection_http_409() {
     // Multi-trial verification (minimum 3 repeated trials per Protocol Reproducibility Rule)
     for trial in 1..=5 {
         // 1. Direct Translator Pinning Verification
-        let valid_pinning = SubstrateTranslator::verify_version_pinning(Some(active_version), active_version);
+        let valid_pinning =
+            SubstrateTranslator::verify_version_pinning(Some(active_version), active_version);
         assert!(
             valid_pinning.is_ok(),
             "Trial {trial}: Matching version must succeed"
         );
 
-        let conflict_err = SubstrateTranslator::verify_version_pinning(Some(active_version), mutated_version)
-            .unwrap_err();
+        let conflict_err =
+            SubstrateTranslator::verify_version_pinning(Some(active_version), mutated_version)
+                .unwrap_err();
         assert_eq!(
             conflict_err.pinned_version, *active_version,
             "Trial {trial}: Pinned version in conflict must match active version"
@@ -661,7 +743,10 @@ fn test_stress_version_drift_rejection_http_409() {
 
         // Adversary attempts to ingest a policy claiming expected version is "wrong_version_123"
         let mismatch_result = engine.ingest_policy(&mutated_policy_str, Some("wrong_version_123"));
-        assert!(mismatch_result.is_err(), "Trial {trial}: Engine must reject mismatched expected version");
+        assert!(
+            mismatch_result.is_err(),
+            "Trial {trial}: Engine must reject mismatched expected version"
+        );
 
         let api_err = mismatch_result.unwrap_err();
         assert_eq!(

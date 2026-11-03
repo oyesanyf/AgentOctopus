@@ -188,12 +188,19 @@ pub fn discover_active_octopus_ports() -> Vec<u16> {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join("logs").join("active_port.txt"));
             candidates.push(dir.join("active_port.txt"));
-            if let Some(parent) = dir.parent() {
-                if let Some(root) = parent.parent() {
-                    candidates.push(root.join("logs").join("active_port.txt"));
-                }
-            }
         }
+    }
+    #[cfg(windows)]
+    if let Ok(prog_data) = std::env::var("ProgramData") {
+        candidates.push(
+            PathBuf::from(prog_data)
+                .join("AgentOctopus")
+                .join("active_port.txt"),
+        );
+    }
+    #[cfg(target_os = "linux")]
+    {
+        candidates.push(PathBuf::from("/var/run/agent-octopus/active_port.txt"));
     }
     for path in candidates {
         if path.is_symlink() {

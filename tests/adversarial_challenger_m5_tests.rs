@@ -179,7 +179,10 @@ fn test_challenge_evaluate_with_narrowing_successful_clamp() {
         other => panic!("Expected GovernanceVerdict::Narrow, got {:?}", other),
     }
 
-    assert!(narrowed_res.seal.is_some(), "Narrowed verdict must include routing seal");
+    assert!(
+        narrowed_res.seal.is_some(),
+        "Narrowed verdict must include routing seal"
+    );
     let seal = narrowed_res.seal.unwrap();
 
     // 3. Digest must match clamped parameters, NOT original 500.0
@@ -238,7 +241,10 @@ fn test_challenge_evaluate_with_narrowing_none_fallback_and_passthrough() {
 
     // Narrower returns None -> original Deny verdict preserved
     let fallback_res = pipeline.evaluate_with_narrowing(&req_denied, |_| None);
-    assert!(matches!(fallback_res.verdict, GovernanceVerdict::Deny { .. }));
+    assert!(matches!(
+        fallback_res.verdict,
+        GovernanceVerdict::Deny { .. }
+    ));
     assert!(fallback_res.seal.is_none());
 
     // Request is already Allowed -> narrower closure is NEVER called
@@ -252,7 +258,10 @@ fn test_challenge_evaluate_with_narrowing_none_fallback_and_passthrough() {
         Some(json!({"modified": true}))
     });
     assert_eq!(allowed_res.verdict, GovernanceVerdict::Allow);
-    assert!(!narrower_called.load(Ordering::SeqCst), "Narrower closure must not be called when primary verdict is Allow");
+    assert!(
+        !narrower_called.load(Ordering::SeqCst),
+        "Narrower closure must not be called when primary verdict is Allow"
+    );
     assert!(allowed_res.seal.is_some());
 }
 
@@ -307,7 +316,10 @@ fn test_challenge_evaluate_with_narrowing_secondary_failure_defense() {
         "Clamped request breaching CBF must result in Deny, got: {:?}",
         res.verdict
     );
-    assert!(res.seal.is_none(), "No seal may be issued when secondary tier fails");
+    assert!(
+        res.seal.is_none(),
+        "No seal may be issued when secondary tier fails"
+    );
 }
 
 // ==============================================================================
@@ -344,7 +356,10 @@ fn test_challenge_post_hitl_real_hold_redemption_and_anti_spoofing() {
     // 1. Initial evaluation must yield RequireApproval with random token
     let initial_res = pipeline.run_pipeline(&base_req);
     let approval_token = match &initial_res.verdict {
-        GovernanceVerdict::RequireApproval { approval_token, reason } => {
+        GovernanceVerdict::RequireApproval {
+            approval_token,
+            reason,
+        } => {
             assert!(reason.contains("SR 26-2 confidence"));
             assert!(approval_token.starts_with("token_"));
             approval_token.clone()
@@ -376,7 +391,10 @@ fn test_challenge_post_hitl_real_hold_redemption_and_anti_spoofing() {
     };
     let action_res = pipeline.run_pipeline(&valid_action_req);
     assert_eq!(action_res.verdict, GovernanceVerdict::Allow);
-    assert!(action_res.seal.is_some(), "Redemption by action name must clear hold and issue seal");
+    assert!(
+        action_res.seal.is_some(),
+        "Redemption by action name must clear hold and issue seal"
+    );
     assert!(action_res.commit_receipt.is_some());
 
     // 4. Empirical Vulnerability Finding: Token non-determinism in pipeline.rs:360
@@ -504,8 +522,14 @@ fn test_challenge_cedar_has_attr_and_not_has_attr_conditions() {
 
     let policy = SubstrateTranslator::compile_policy(policy_yaml, None).unwrap();
     // Verify compilation produced expected Cedar rules with hasAttr
-    assert!(policy.cedar_rules.iter().any(|r| r.contains("!context.hasAttr(\"audit_id\")")));
-    assert!(policy.cedar_rules.iter().any(|r| r.contains("context.hasAttr(\"is_quarantine\")")));
+    assert!(policy
+        .cedar_rules
+        .iter()
+        .any(|r| r.contains("!context.hasAttr(\"audit_id\")")));
+    assert!(policy
+        .cedar_rules
+        .iter()
+        .any(|r| r.contains("context.hasAttr(\"is_quarantine\")")));
 
     let ledger = Arc::new(DebitLedger::new(100.0, 0.5, 10.0).unwrap());
     let audit_log = Arc::new(SecurityAuditLog::new());
@@ -524,14 +548,20 @@ fn test_challenge_cedar_has_attr_and_not_has_attr_conditions() {
         expected_policy_version: None,
         execution_profile: Some(Profile::Full),
     };
-    assert!(matches!(pipeline.run_pipeline(&req1_denied).verdict, GovernanceVerdict::Deny { .. }));
+    assert!(matches!(
+        pipeline.run_pipeline(&req1_denied).verdict,
+        GovernanceVerdict::Deny { .. }
+    ));
 
     // modify_record with audit_id -> Allowed
     let req1_allowed = GovernanceRequest {
         parameters: json!({"data": "new_val", "audit_id": "AUDIT-999"}),
         ..req1_denied
     };
-    assert_eq!(pipeline.run_pipeline(&req1_allowed).verdict, GovernanceVerdict::Allow);
+    assert_eq!(
+        pipeline.run_pipeline(&req1_allowed).verdict,
+        GovernanceVerdict::Allow
+    );
 
     // 2. export_dataset with is_quarantine -> Denied by hasAttr("is_quarantine")
     let req2_denied = GovernanceRequest {
@@ -546,14 +576,20 @@ fn test_challenge_cedar_has_attr_and_not_has_attr_conditions() {
         expected_policy_version: None,
         execution_profile: Some(Profile::Full),
     };
-    assert!(matches!(pipeline.run_pipeline(&req2_denied).verdict, GovernanceVerdict::Deny { .. }));
+    assert!(matches!(
+        pipeline.run_pipeline(&req2_denied).verdict,
+        GovernanceVerdict::Deny { .. }
+    ));
 
     // export_dataset without is_quarantine -> Allowed
     let req2_allowed = GovernanceRequest {
         parameters: json!({"size_mb": 50}),
         ..req2_denied
     };
-    assert_eq!(pipeline.run_pipeline(&req2_allowed).verdict, GovernanceVerdict::Allow);
+    assert_eq!(
+        pipeline.run_pipeline(&req2_allowed).verdict,
+        GovernanceVerdict::Allow
+    );
 }
 
 /// Adversarial Challenge: Verify Cedar relational operators (`>=`, `<=`, `!=`) and boundary values.
@@ -594,31 +630,43 @@ fn test_challenge_cedar_relational_operators_and_boundary_inequalities() {
 
     // Test >= 10: 10 -> Deny, 9.999 -> Allow
     assert!(matches!(
-        pipeline.run_pipeline(&make_req("step_action", json!({"step_count": 10.0}))).verdict,
+        pipeline
+            .run_pipeline(&make_req("step_action", json!({"step_count": 10.0})))
+            .verdict,
         GovernanceVerdict::Deny { .. }
     ));
     assert_eq!(
-        pipeline.run_pipeline(&make_req("step_action", json!({"step_count": 9.999}))).verdict,
+        pipeline
+            .run_pipeline(&make_req("step_action", json!({"step_count": 9.999})))
+            .verdict,
         GovernanceVerdict::Allow
     );
 
     // Test <= 2: 2.0 -> Deny, 2.001 -> Allow
     assert!(matches!(
-        pipeline.run_pipeline(&make_req("priority_action", json!({"priority": 2.0}))).verdict,
+        pipeline
+            .run_pipeline(&make_req("priority_action", json!({"priority": 2.0})))
+            .verdict,
         GovernanceVerdict::Deny { .. }
     ));
     assert_eq!(
-        pipeline.run_pipeline(&make_req("priority_action", json!({"priority": 2.001}))).verdict,
+        pipeline
+            .run_pipeline(&make_req("priority_action", json!({"priority": 2.001})))
+            .verdict,
         GovernanceVerdict::Allow
     );
 
     // Test != "production": "staging" -> Deny, "production" -> Allow
     assert!(matches!(
-        pipeline.run_pipeline(&make_req("env_action", json!({"env": "staging"}))).verdict,
+        pipeline
+            .run_pipeline(&make_req("env_action", json!({"env": "staging"})))
+            .verdict,
         GovernanceVerdict::Deny { .. }
     ));
     assert_eq!(
-        pipeline.run_pipeline(&make_req("env_action", json!({"env": "production"}))).verdict,
+        pipeline
+            .run_pipeline(&make_req("env_action", json!({"env": "production"})))
+            .verdict,
         GovernanceVerdict::Allow
     );
 }
@@ -645,7 +693,10 @@ fn test_challenge_stpa_wildcard_action_and_caller_identity_scrubbing() {
         &ucas,
         "arm-0",
     );
-    assert!(check_action1.is_err(), "Wildcard UCA must match arbitrary_tool_a on risk_score 0.9");
+    assert!(
+        check_action1.is_err(),
+        "Wildcard UCA must match arbitrary_tool_a on risk_score 0.9"
+    );
 
     let check_action2 = StpaValidator::validate_action(
         "arbitrary_tool_b",
@@ -653,7 +704,10 @@ fn test_challenge_stpa_wildcard_action_and_caller_identity_scrubbing() {
         &ucas,
         "arm-0",
     );
-    assert!(check_action2.is_ok(), "Risk score 0.5 below 0.8 must be cleared");
+    assert!(
+        check_action2.is_ok(),
+        "Risk score 0.5 below 0.8 must be cleared"
+    );
 
     // 2. Caller Identity Parameter Scrubbing
     let hostile_params = json!({
@@ -665,9 +719,14 @@ fn test_challenge_stpa_wildcard_action_and_caller_identity_scrubbing() {
     });
 
     let sanitized = StpaValidator::sanitize_parameters(&hostile_params, "arm-authenticated-42");
-    let map = sanitized.as_object().expect("sanitized parameters must be object");
+    let map = sanitized
+        .as_object()
+        .expect("sanitized parameters must be object");
 
-    assert!(!map.contains_key("trader_role"), "trader_role must be scrubbed");
+    assert!(
+        !map.contains_key("trader_role"),
+        "trader_role must be scrubbed"
+    );
     assert!(!map.contains_key("trader_id"), "trader_id must be scrubbed");
     assert!(!map.contains_key("role"), "role must be scrubbed");
     assert!(!map.contains_key("agent_id"), "agent_id must be scrubbed");
@@ -778,7 +837,10 @@ async fn test_challenge_actuator_execution_failure_compensating_fiscal_rollback(
 
     // Pre-reserve 25.0 fuel
     let debit_id = "debit_actuator_fail_test_01";
-    let _receipt = engine.ledger().pre_reserve(25.0, debit_id).expect("pre-reserve");
+    let _receipt = engine
+        .ledger()
+        .pre_reserve(25.0, debit_id)
+        .expect("pre-reserve");
     assert_eq!(engine.ledger().available_budget(), initial_budget - 25.0);
 
     // Issue seal
@@ -792,14 +854,22 @@ async fn test_challenge_actuator_execution_failure_compensating_fiscal_rollback(
         &json!({"action_digest": action_digest, "verdict": "ALLOW"}).to_string(),
         "ALLOW",
     );
-    let seal = engine.seal_signer().issue_seal(&action_digest, &record_hash, now).unwrap();
+    let seal = engine
+        .seal_signer()
+        .issue_seal(&action_digest, &record_hash, now)
+        .unwrap();
 
     let scratch_dir = std::env::temp_dir().join(format!("m5_fail_{}", std::process::id()));
     let dispatcher = new_test_dispatcher();
 
     // Create a ticket for inv_primary.pdf, but actuation will request inv_mismatched.pdf
     let mut invalid_ticket = ring
-        .issue_dirac_ticket("doc_extractor", "s3://invoices/inv_primary.pdf", 50_000, None)
+        .issue_dirac_ticket(
+            "doc_extractor",
+            "s3://invoices/inv_primary.pdf",
+            50_000,
+            None,
+        )
         .await
         .expect("issue ticket");
 
@@ -828,10 +898,7 @@ async fn test_challenge_actuator_execution_failure_compensating_fiscal_rollback(
         .await
         .expect_err("execution must fail on resource mismatch");
 
-    assert!(matches!(
-        exec_err,
-        ArmExecutionError::SecurityViolation(_)
-    ));
+    assert!(matches!(exec_err, ArmExecutionError::SecurityViolation(_)));
 
     // Verify compensating rollback restored exact initial budget!
     assert_eq!(
@@ -939,7 +1006,8 @@ fn test_challenge_web_substrate_consume_seal_wrapped_and_tamper_rejections() {
     // 3. Tampered signature -> 403 Forbidden with SEAL_SIGNATURE_INVALID
     let mut tampered_seal = seal.clone();
     tampered_seal.seal_id = "seal_new_unconsumed_id".to_string();
-    tampered_seal.signature = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string();
+    tampered_seal.signature =
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string();
     let tampered_body = json!({ "seal": tampered_seal }).to_string();
     let (s3, b3) = handle_cage_consume_seal(&state, &tampered_body);
     assert_eq!(s3, "403 Forbidden");
@@ -1040,7 +1108,10 @@ fn test_challenge_cbf_epoch_advance_and_cross_epoch_invalidation() {
     // Any operation referencing stale epoch 1 must fail closed with StaleFenceEpoch
     let stale_err = cbf.verify_sequence_and_epoch(3, 1).unwrap_err();
     match stale_err {
-        CbfViolation::StaleFenceEpoch { incoming, fence_epoch } => {
+        CbfViolation::StaleFenceEpoch {
+            incoming,
+            fence_epoch,
+        } => {
             assert_eq!(incoming, 1);
             assert_eq!(fence_epoch, 2);
         }

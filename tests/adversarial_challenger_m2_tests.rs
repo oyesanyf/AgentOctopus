@@ -35,15 +35,12 @@
 //! ==============================================================================
 
 use agent_octopus::containment_ring::{
-    ArmContainmentRing, ArmExecutionError,
-    TieredExecutionDispatcher, TieredToolRequest,
+    ArmContainmentRing, ArmExecutionError, TieredExecutionDispatcher, TieredToolRequest,
 };
 use agent_octopus::core::types::{ArmRole, OctopusSecurityError};
 use agent_octopus::security::cage_governance::cbf_fiscal::CbfViolation;
 use agent_octopus::security::cage_governance::no_direct_bind_proof::FormalBfsModel;
-use agent_octopus::security::cage_governance::routing_seal::{
-    CageRoutingSeal, SealRejection,
-};
+use agent_octopus::security::cage_governance::routing_seal::{CageRoutingSeal, SealRejection};
 use agent_octopus::security::cage_governance::CageGovernanceEngine;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -109,7 +106,8 @@ async fn test_adversarial_sequential_and_concurrent_seal_replay() {
     let ring = ArmContainmentRing::new(0, ArmRole::UntrustedDocIngest, 1, TEST_MASTER_SEED)
         .with_cage_engine(Arc::clone(&engine));
 
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_replay_adv_{}", std::process::id()));
+    let scratch_dir =
+        std::env::temp_dir().join(format!("octopus_replay_adv_{}", std::process::id()));
     let dispatcher = new_test_dispatcher();
 
     let payload = b"INVOICE #2001: Sequential and Concurrent Replay".to_vec();
@@ -124,7 +122,10 @@ async fn test_adversarial_sequential_and_concurrent_seal_replay() {
         allow_scratch_write: false,
     };
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
     let seal = create_test_seal_with_time(
         &engine,
         &ring.agent_name,
@@ -173,7 +174,10 @@ async fn test_adversarial_sequential_and_concurrent_seal_replay() {
         .await
         .expect_err("Replayed seal must be rejected");
 
-    assert!(matches!(replay_err, ArmExecutionError::SealAlreadyConsumed { .. }));
+    assert!(matches!(
+        replay_err,
+        ArmExecutionError::SealAlreadyConsumed { .. }
+    ));
 
     // Part B: Fleet-wide cross-arm replay rejection
     // Ring 1 on same fleet engine presents the already-consumed seal
@@ -224,7 +228,10 @@ async fn test_adversarial_multithreaded_concurrent_seal_race() {
 
     let scratch_dir = std::env::temp_dir().join(format!("octopus_race_{}", std::process::id()));
     let payload = b"INVOICE #2002: Concurrent Race Condition".to_vec();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     let seal = Arc::new(create_test_seal_with_time(
         &engine,
@@ -328,7 +335,10 @@ async fn test_adversarial_clock_skew_and_ttl_boundary() {
         allow_scratch_write: false,
     };
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     // 1. Expired by 1 second past TTL (issued 31s ago: expires_at = now - 1)
     let expired_seal_1 = create_test_seal_with_time(
@@ -344,7 +354,15 @@ async fn test_adversarial_clock_skew_and_ttl_boundary() {
         .await
         .unwrap();
     let err1 = ring
-        .execute_tool_with_cage_seal(&mut t1, &expired_seal_1, TEST_RESOURCE, &tiered_req, &dispatcher, None, None)
+        .execute_tool_with_cage_seal(
+            &mut t1,
+            &expired_seal_1,
+            TEST_RESOURCE,
+            &tiered_req,
+            &dispatcher,
+            None,
+            None,
+        )
         .await
         .unwrap_err();
     assert!(matches!(err1, ArmExecutionError::SealExpired { .. }));
@@ -363,7 +381,15 @@ async fn test_adversarial_clock_skew_and_ttl_boundary() {
         .await
         .unwrap();
     let err2 = ring
-        .execute_tool_with_cage_seal(&mut t2, &expired_seal_100, TEST_RESOURCE, &tiered_req, &dispatcher, None, None)
+        .execute_tool_with_cage_seal(
+            &mut t2,
+            &expired_seal_100,
+            TEST_RESOURCE,
+            &tiered_req,
+            &dispatcher,
+            None,
+            None,
+        )
         .await
         .unwrap_err();
     assert!(matches!(err2, ArmExecutionError::SealExpired { .. }));
@@ -382,7 +408,15 @@ async fn test_adversarial_clock_skew_and_ttl_boundary() {
         .await
         .unwrap();
     let err3 = ring
-        .execute_tool_with_cage_seal(&mut t3, &future_seal_6, TEST_RESOURCE, &tiered_req, &dispatcher, None, None)
+        .execute_tool_with_cage_seal(
+            &mut t3,
+            &future_seal_6,
+            TEST_RESOURCE,
+            &tiered_req,
+            &dispatcher,
+            None,
+            None,
+        )
         .await
         .unwrap_err();
     assert!(matches!(err3, ArmExecutionError::InvalidCageSeal { .. }));
@@ -401,7 +435,15 @@ async fn test_adversarial_clock_skew_and_ttl_boundary() {
         .await
         .unwrap();
     let res4 = ring
-        .execute_tool_with_cage_seal(&mut t4, &valid_drift_seal, TEST_RESOURCE, &tiered_req, &dispatcher, None, None)
+        .execute_tool_with_cage_seal(
+            &mut t4,
+            &valid_drift_seal,
+            TEST_RESOURCE,
+            &tiered_req,
+            &dispatcher,
+            None,
+            None,
+        )
         .await;
     assert!(res4.is_ok(), "Drift of 3s within 5s tolerance must succeed");
 
@@ -414,7 +456,15 @@ async fn test_adversarial_clock_skew_and_ttl_boundary() {
         .await
         .unwrap();
     let err5 = ring
-        .execute_tool_with_cage_seal(&mut t5, &tampered_seal, TEST_RESOURCE, &tiered_req, &dispatcher, None, None)
+        .execute_tool_with_cage_seal(
+            &mut t5,
+            &tampered_seal,
+            TEST_RESOURCE,
+            &tiered_req,
+            &dispatcher,
+            None,
+            None,
+        )
         .await
         .unwrap_err();
     assert!(matches!(err5, ArmExecutionError::InvalidCageSeal { .. }));
@@ -434,7 +484,10 @@ async fn test_adversarial_action_digest_and_payload_tampering() {
     let dispatcher = new_test_dispatcher();
 
     let genuine_payload = b"INVOICE #3001: Genuine Invoice Payload $1000.00".to_vec();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     let genuine_req = TieredToolRequest {
         agent_id: ring.agent_name.clone(),
@@ -477,13 +530,26 @@ async fn test_adversarial_action_digest_and_payload_tampering() {
         .await
         .unwrap();
     let err1 = ring
-        .execute_tool_with_cage_seal(&mut t1, &seal, TEST_RESOURCE, &bit_flipped_req, &dispatcher, None, None)
+        .execute_tool_with_cage_seal(
+            &mut t1,
+            &seal,
+            TEST_RESOURCE,
+            &bit_flipped_req,
+            &dispatcher,
+            None,
+            None,
+        )
         .await
         .unwrap_err();
 
-    assert!(matches!(err1, ArmExecutionError::ActionDigestMismatch { .. }));
+    assert!(matches!(
+        err1,
+        ArmExecutionError::ActionDigestMismatch { .. }
+    ));
     let sec_err1 = OctopusSecurityError::from(err1);
-    assert!(matches!(sec_err1, OctopusSecurityError::MerkleTamperDetected(ref msg) if msg.contains("CAGE_ACTION_DIGEST_MISMATCH")));
+    assert!(
+        matches!(sec_err1, OctopusSecurityError::MerkleTamperDetected(ref msg) if msg.contains("CAGE_ACTION_DIGEST_MISMATCH"))
+    );
 
     // Attack 2: Seal issued for a different tool ("privileged_tool"), presented for doc_extractor
     let mismatched_tool_seal = create_test_seal_with_time(
@@ -500,11 +566,22 @@ async fn test_adversarial_action_digest_and_payload_tampering() {
         .await
         .unwrap();
     let err2 = ring
-        .execute_tool_with_cage_seal(&mut t2, &mismatched_tool_seal, TEST_RESOURCE, &genuine_req, &dispatcher, None, None)
+        .execute_tool_with_cage_seal(
+            &mut t2,
+            &mismatched_tool_seal,
+            TEST_RESOURCE,
+            &genuine_req,
+            &dispatcher,
+            None,
+            None,
+        )
         .await
         .unwrap_err();
 
-    assert!(matches!(err2, ArmExecutionError::ActionDigestMismatch { .. }));
+    assert!(matches!(
+        err2,
+        ArmExecutionError::ActionDigestMismatch { .. }
+    ));
 
     // Attack 3: Empty payload substitution
     let empty_payload_req = TieredToolRequest {
@@ -523,11 +600,22 @@ async fn test_adversarial_action_digest_and_payload_tampering() {
         .await
         .unwrap();
     let err3 = ring
-        .execute_tool_with_cage_seal(&mut t3, &seal, TEST_RESOURCE, &empty_payload_req, &dispatcher, None, None)
+        .execute_tool_with_cage_seal(
+            &mut t3,
+            &seal,
+            TEST_RESOURCE,
+            &empty_payload_req,
+            &dispatcher,
+            None,
+            None,
+        )
         .await
         .unwrap_err();
 
-    assert!(matches!(err3, ArmExecutionError::ActionDigestMismatch { .. }));
+    assert!(matches!(
+        err3,
+        ArmExecutionError::ActionDigestMismatch { .. }
+    ));
 }
 
 // ==============================================================================
@@ -546,7 +634,10 @@ async fn test_adversarial_cross_arm_theft_and_ticket_spoofing() {
     let dispatcher = new_test_dispatcher();
 
     let payload = b"INVOICE #4001: Cross-Arm Isolation Test".to_vec();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     // Seal issued for Arm A
     let seal_a = create_test_seal_with_time(
@@ -592,7 +683,11 @@ async fn test_adversarial_cross_arm_theft_and_ticket_spoofing() {
     // ticket.verify_and_consume asserts self.arm_id == ticket.arm_id via HMAC tag
     let sec_err = OctopusSecurityError::from(cross_ticket_err);
     assert!(
-        matches!(sec_err, OctopusSecurityError::IdentitySpoofingDetected(..) | OctopusSecurityError::CapabilityDenied(..)),
+        matches!(
+            sec_err,
+            OctopusSecurityError::IdentitySpoofingDetected(..)
+                | OctopusSecurityError::CapabilityDenied(..)
+        ),
         "Expected IdentitySpoofingDetected or CapabilityDenied for ticket theft, got: {:?}",
         sec_err
     );
@@ -686,7 +781,9 @@ async fn test_adversarial_fiscal_debit_manipulation() {
     assert_eq!(ledger.available_budget(), 1000.0);
 
     // Second rollback must fail and NOT refund budget again!
-    let double_rollback_err = ledger.rollback(debit_id).expect_err("double rollback must fail");
+    let double_rollback_err = ledger
+        .rollback(debit_id)
+        .expect_err("double rollback must fail");
     assert!(matches!(
         double_rollback_err,
         CbfViolation::ReservationNotFound(ref msg) if msg.contains("already rolled back")
@@ -698,7 +795,9 @@ async fn test_adversarial_fiscal_debit_manipulation() {
     );
 
     // 3. Confirm After Rollback Prevention
-    let confirm_after_rollback_err = ledger.confirm(debit_id).expect_err("confirm after rollback must fail");
+    let confirm_after_rollback_err = ledger
+        .confirm(debit_id)
+        .expect_err("confirm after rollback must fail");
     assert!(matches!(
         confirm_after_rollback_err,
         CbfViolation::ReservationNotFound(ref msg) if msg.contains("already rolled back")
@@ -706,14 +805,18 @@ async fn test_adversarial_fiscal_debit_manipulation() {
 
     // 4. Rollback After Confirm Prevention:
     let debit_id_2 = "debit_adv_002";
-    ledger.pre_reserve(50.0, debit_id_2).expect("pre-reserve debit 2");
+    ledger
+        .pre_reserve(50.0, debit_id_2)
+        .expect("pre-reserve debit 2");
     assert_eq!(ledger.available_budget(), 950.0);
 
     ledger.confirm(debit_id_2).expect("confirm debit 2");
     assert_eq!(ledger.available_budget(), 950.0);
 
     // Attempt rollback on settled/confirmed debit
-    let rollback_after_confirm_err = ledger.rollback(debit_id_2).expect_err("rollback on confirmed debit must fail");
+    let rollback_after_confirm_err = ledger
+        .rollback(debit_id_2)
+        .expect_err("rollback on confirmed debit must fail");
     assert!(matches!(
         rollback_after_confirm_err,
         CbfViolation::AlreadyCommitted(ref id) if id == debit_id_2
@@ -725,12 +828,22 @@ async fn test_adversarial_fiscal_debit_manipulation() {
     );
 
     // 5. Bogus Debit ID Rejection
-    let bogus_rollback_err = ledger.rollback("nonexistent_debit_xyz").expect_err("bogus rollback");
-    assert!(matches!(bogus_rollback_err, CbfViolation::ReservationNotFound(..)));
+    let bogus_rollback_err = ledger
+        .rollback("nonexistent_debit_xyz")
+        .expect_err("bogus rollback");
+    assert!(matches!(
+        bogus_rollback_err,
+        CbfViolation::ReservationNotFound(..)
+    ));
     assert_eq!(ledger.available_budget(), 950.0);
 
-    let bogus_confirm_err = ledger.confirm("nonexistent_debit_xyz").expect_err("bogus confirm");
-    assert!(matches!(bogus_confirm_err, CbfViolation::ReservationNotFound(..)));
+    let bogus_confirm_err = ledger
+        .confirm("nonexistent_debit_xyz")
+        .expect_err("bogus confirm");
+    assert!(matches!(
+        bogus_confirm_err,
+        CbfViolation::ReservationNotFound(..)
+    ));
     assert_eq!(ledger.available_budget(), 950.0);
 }
 
@@ -742,26 +855,37 @@ async fn test_adversarial_fiscal_debit_manipulation() {
 fn test_adversarial_seal_tampering_and_unanchored_evidence() {
     let engine = CageGovernanceEngine::default();
     let signer = engine.seal_signer();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     // 1. Tallam 2026 Evidence Sufficiency: Unanchored record hashes must fail closed
     let genesis_hash = "GENESIS_AUDIT_ROOT_000000000000000000000000000000000000000000000000";
     let valid_digest = hex::encode(Sha256::digest(b"action_digest_xyz"));
 
-    let err_genesis = signer.issue_seal(&valid_digest, genesis_hash, now).unwrap_err();
+    let err_genesis = signer
+        .issue_seal(&valid_digest, genesis_hash, now)
+        .unwrap_err();
     assert!(matches!(err_genesis, SealRejection::UnanchoredEvidence(..)));
 
     let all_zeros_hash = "0000000000000000000000000000000000000000000000000000000000000000";
-    let err_zeros = signer.issue_seal(&valid_digest, all_zeros_hash, now).unwrap_err();
+    let err_zeros = signer
+        .issue_seal(&valid_digest, all_zeros_hash, now)
+        .unwrap_err();
     assert!(matches!(err_zeros, SealRejection::UnanchoredEvidence(..)));
 
     let short_hash = "1234567890abcdef";
-    let err_short = signer.issue_seal(&valid_digest, short_hash, now).unwrap_err();
+    let err_short = signer
+        .issue_seal(&valid_digest, short_hash, now)
+        .unwrap_err();
     assert!(matches!(err_short, SealRejection::UnanchoredEvidence(..)));
 
     // 2. Valid issuance
     let valid_hash = hex::encode(Sha256::digest(b"evidence_anchor_12345"));
-    let seal = signer.issue_seal(&valid_digest, &valid_hash, now).expect("valid seal");
+    let seal = signer
+        .issue_seal(&valid_digest, &valid_hash, now)
+        .expect("valid seal");
 
     // 3. Signature bit-flip tampering
     let mut tampered_sig_seal = seal.clone();
@@ -780,7 +904,10 @@ fn test_adversarial_seal_tampering_and_unanchored_evidence() {
     let err_ver = signer
         .validate_and_consume(&tampered_ver_seal, &valid_digest, &valid_hash, now)
         .unwrap_err();
-    assert!(matches!(err_ver, SealRejection::PolicyVersionMismatch { .. }));
+    assert!(matches!(
+        err_ver,
+        SealRejection::PolicyVersionMismatch { .. }
+    ));
 
     // 5. Record hash tampering
     let mut tampered_rec_seal = seal.clone();
@@ -851,7 +978,10 @@ fn test_adversarial_trace_conformance_detection() {
         "Replay in trace stream must trigger Rule 7 finding"
     );
     assert!(
-        report_replay.findings.iter().any(|f| f.rule == "single_use"),
+        report_replay
+            .findings
+            .iter()
+            .any(|f| f.rule == "single_use"),
         "Expected single_use finding, got: {:?}",
         report_replay.findings
     );
@@ -868,29 +998,30 @@ fn test_adversarial_trace_conformance_detection() {
         "Execution without seal consumption must trigger Rule 6 finding"
     );
     assert!(
-        report_unsealed.findings.iter().any(|f| f.rule == "no_direct_bind"),
+        report_unsealed
+            .findings
+            .iter()
+            .any(|f| f.rule == "no_direct_bind"),
         "Expected no_direct_bind finding, got: {:?}",
         report_unsealed.findings
     );
 
     // 4. Non-64-hex lowercase hash (Rule 1: schema violation)
-    let invalid_schema_records = vec![
-        serde_json::json!({
-            "event_type": "CAGE_GOVERNANCE_DECISION",
-            "verdict": "ALLOW",
-            "seal_present": true,
-            "record_hash": "UPPERCASE_HASH_INVALID_12345678901234567890123456789012345678901234",
-            "stages_evaluated": [
-                {"stage_name": "ftra"},
-                {"stage_name": "stpa"},
-                {"stage_name": "cedar"},
-                {"stage_name": "confidence"},
-                {"stage_name": "consensus"},
-                {"stage_name": "cbf"},
-                {"stage_name": "fiscal"},
-            ]
-        }),
-    ];
+    let invalid_schema_records = vec![serde_json::json!({
+        "event_type": "CAGE_GOVERNANCE_DECISION",
+        "verdict": "ALLOW",
+        "seal_present": true,
+        "record_hash": "UPPERCASE_HASH_INVALID_12345678901234567890123456789012345678901234",
+        "stages_evaluated": [
+            {"stage_name": "ftra"},
+            {"stage_name": "stpa"},
+            {"stage_name": "cedar"},
+            {"stage_name": "confidence"},
+            {"stage_name": "consensus"},
+            {"stage_name": "cbf"},
+            {"stage_name": "fiscal"},
+        ]
+    })];
     let report_schema = FormalBfsModel::check_trace_conformance(&invalid_schema_records);
     assert!(
         !report_schema.status.is_conformant(),

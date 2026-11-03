@@ -128,9 +128,13 @@ async fn test_adversarial_actuator_single_use_high_concurrency_race() {
             .with_cage_engine(Arc::clone(&engine)),
     );
 
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_actuator_race_{}", std::process::id()));
+    let scratch_dir =
+        std::env::temp_dir().join(format!("octopus_actuator_race_{}", std::process::id()));
     let payload = b"INVOICE #9001: Adversarial Multi-Threaded Actuator Contention".to_vec();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     let seal = Arc::new(create_test_seal_with_time(
         &engine,
@@ -196,7 +200,10 @@ async fn test_adversarial_actuator_single_use_high_concurrency_race() {
                 already_consumed_count += 1;
             }
             Err(other) => {
-                panic!("Unexpected execution error in single-use concurrency race: {:?}", other);
+                panic!(
+                    "Unexpected execution error in single-use concurrency race: {:?}",
+                    other
+                );
             }
         }
     }
@@ -220,13 +227,17 @@ async fn test_adversarial_actuator_multi_trial_concurrency_stability() {
             .with_cage_engine(Arc::clone(&engine)),
     );
 
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_multi_trial_{}", std::process::id()));
+    let scratch_dir =
+        std::env::temp_dir().join(format!("octopus_multi_trial_{}", std::process::id()));
     const TRIALS: usize = 10;
     const TASKS_PER_TRIAL: usize = 16;
 
     for trial in 1..=TRIALS {
         let payload = format!("INVOICE #9002.{trial}: Trial Stability Run").into_bytes();
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         let seal = Arc::new(create_test_seal_with_time(
             &engine,
@@ -286,7 +297,11 @@ async fn test_adversarial_actuator_multi_trial_concurrency_stability() {
         }
 
         assert_eq!(success, 1, "Trial {trial}: Exactly 1 task must succeed");
-        assert_eq!(consumed, TASKS_PER_TRIAL - 1, "Trial {trial}: Exactly 15 tasks must be rejected");
+        assert_eq!(
+            consumed,
+            TASKS_PER_TRIAL - 1,
+            "Trial {trial}: Exactly 15 tasks must be rejected"
+        );
     }
 }
 
@@ -303,9 +318,13 @@ async fn test_adversarial_actuator_cross_arm_fleet_concurrency_race() {
         ));
     }
 
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_cross_arm_{}", std::process::id()));
+    let scratch_dir =
+        std::env::temp_dir().join(format!("octopus_cross_arm_{}", std::process::id()));
     let payload = b"INVOICE #9003: Cross Arm Fleet Concurrency Race".to_vec();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     // Seal issued for Arm 0
     let seal = Arc::new(create_test_seal_with_time(
@@ -366,7 +385,10 @@ async fn test_adversarial_actuator_cross_arm_fleet_concurrency_race() {
         }
     }
 
-    assert_eq!(success_count, 1, "Fleet-wide single-use invariant violated: exactly 1 arm succeeds");
+    assert_eq!(
+        success_count, 1,
+        "Fleet-wide single-use invariant violated: exactly 1 arm succeeds"
+    );
     assert_eq!(
         rejected_consumed_count,
         arms_count - 1,
@@ -389,9 +411,13 @@ async fn test_adversarial_actuator_concurrency_with_fiscal_settlement() {
         .expect("pre-reserve must succeed");
     assert_eq!(engine.ledger().available_budget(), initial_balance - 50.0);
 
-    let scratch_dir = std::env::temp_dir().join(format!("octopus_fiscal_race_{}", std::process::id()));
+    let scratch_dir =
+        std::env::temp_dir().join(format!("octopus_fiscal_race_{}", std::process::id()));
     let payload = b"INVOICE #9004: Fiscal Settlement Concurrency".to_vec();
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     let seal = Arc::new(create_test_seal_with_time(
         &engine,
@@ -777,7 +803,11 @@ fn test_adversarial_formal_bfs_1000_random_seeds_exploration_invariance() {
 
         // Gated exploration under randomized child permutation
         let (visited_gated, exec_count_gated, violations_gated) =
-            explore_randomized_transition_order(&gated_transitions, initial_gated.clone(), &mut rng);
+            explore_randomized_transition_order(
+                &gated_transitions,
+                initial_gated.clone(),
+                &mut rng,
+            );
 
         assert_eq!(
             visited_gated.len(),
@@ -795,7 +825,11 @@ fn test_adversarial_formal_bfs_1000_random_seeds_exploration_invariance() {
 
         // Ungated exploration under randomized child permutation
         let (visited_ungated, exec_count_ungated, violations_ungated) =
-            explore_randomized_transition_order(&ungated_transitions, initial_ungated.clone(), &mut rng);
+            explore_randomized_transition_order(
+                &ungated_transitions,
+                initial_ungated.clone(),
+                &mut rng,
+            );
 
         assert_eq!(
             visited_ungated.len(),
@@ -990,7 +1024,10 @@ fn test_adversarial_fiscal_cbf_barrier_boundary_stress() {
     // At c = 2000.01, step must fail with DecayRateExceeded.
 
     let preview_exact = ledger.preview(2000.0);
-    assert!(preview_exact.is_ok(), "Step exactly at gamma limit must pass");
+    assert!(
+        preview_exact.is_ok(),
+        "Step exactly at gamma limit must pass"
+    );
 
     let preview_breach = ledger.preview(2000.01);
     assert!(
