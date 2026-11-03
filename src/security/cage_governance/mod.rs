@@ -26,19 +26,19 @@
 //! - 34-State BFS Formal Model & 7-Rule Trace Conformance Verifier
 //! - Unified `CageGovernanceEngine` public runtime facade
 
-pub mod substrate_translator;
-pub mod ftra_stpa;
 pub mod cbf_fiscal;
-pub mod routing_seal;
-pub mod pipeline;
+pub mod ftra_stpa;
 pub mod no_direct_bind_proof;
+pub mod pipeline;
+pub mod routing_seal;
+pub mod substrate_translator;
 
-pub use substrate_translator::*;
-pub use ftra_stpa::*;
 pub use cbf_fiscal::*;
-pub use routing_seal::*;
-pub use pipeline::*;
+pub use ftra_stpa::*;
 pub use no_direct_bind_proof::*;
+pub use pipeline::*;
+pub use routing_seal::*;
+pub use substrate_translator::*;
 
 use crate::containment_ring::tiered_executor::TieredExecutionReceipt;
 use crate::security::audit::SecurityAuditLog;
@@ -199,15 +199,17 @@ impl Default for CageGovernanceEngine {
 }
 
 impl CageGovernanceEngine {
-
     /// Ingests and compiles a new policy specification, validating against optional expected version.
     pub fn ingest_policy(
         &self,
         raw_policy: &str,
         expected_version: Option<&str>,
     ) -> Result<IngestPolicyResponse, CageApiError> {
-        let compiled = SubstrateTranslator::compile_policy(raw_policy, None)
-            .map_err(|e| CageApiError::InvalidPolicyFormat { reason: e.to_string() })?;
+        let compiled = SubstrateTranslator::compile_policy(raw_policy, None).map_err(|e| {
+            CageApiError::InvalidPolicyFormat {
+                reason: e.to_string(),
+            }
+        })?;
 
         // Version pinning check
         let active_ver = self.active_policy_version();
@@ -230,7 +232,8 @@ impl CageGovernanceEngine {
 
         // Update active policy and pipeline
         self.pipeline.update_policy(compiled.clone());
-        self.seal_signer.set_policy_version(&compiled.policy_version_id);
+        self.seal_signer
+            .set_policy_version(&compiled.policy_version_id);
         *self.policy.write().unwrap() = compiled;
 
         Ok(resp)
@@ -283,15 +286,23 @@ impl CageGovernanceEngine {
         &self,
         seal_json: &str,
     ) -> Result<ConsumeSealResponse, CageApiError> {
-        let seal: CageRoutingSeal = serde_json::from_str(seal_json)
-            .map_err(|e| CageApiError::InvalidRequestPayload { message: e.to_string() })?;
+        let seal: CageRoutingSeal =
+            serde_json::from_str(seal_json).map_err(|e| CageApiError::InvalidRequestPayload {
+                message: e.to_string(),
+            })?;
 
         self.verify_and_consume_seal(&seal, "", &seal.action_digest)
             .map_err(|e| match e {
-                SealRejection::AlreadyConsumed(id) => CageApiError::SealAlreadyConsumed { seal_id: id },
-                SealRejection::Expired { current_time, expires_at } => {
-                    CageApiError::SealExpired { current_time, expires_at }
+                SealRejection::AlreadyConsumed(id) => {
+                    CageApiError::SealAlreadyConsumed { seal_id: id }
                 }
+                SealRejection::Expired {
+                    current_time,
+                    expires_at,
+                } => CageApiError::SealExpired {
+                    current_time,
+                    expires_at,
+                },
                 SealRejection::InvalidSignature => CageApiError::SealInvalidSignature,
                 SealRejection::ActionDigestMismatch { expected, actual } => {
                     CageApiError::ActionDigestMismatch { expected, actual }
@@ -299,7 +310,9 @@ impl CageGovernanceEngine {
                 SealRejection::PolicyVersionMismatch { expected, actual } => {
                     CageApiError::PolicyVersionMismatch { expected, actual }
                 }
-                other => CageApiError::InvalidRequestPayload { message: other.to_string() },
+                other => CageApiError::InvalidRequestPayload {
+                    message: other.to_string(),
+                },
             })?;
 
         let now = std::time::SystemTime::now()
@@ -340,7 +353,9 @@ impl CageGovernanceEngine {
 
         let is_success = match receipt.selected_tier {
             crate::containment_ring::ExecutionTier::Tier1InProcessWasm => receipt.exit_code >= 0,
-            crate::containment_ring::ExecutionTier::Tier2NativeWin32Confinement => receipt.exit_code == 0,
+            crate::containment_ring::ExecutionTier::Tier2NativeWin32Confinement => {
+                receipt.exit_code == 0
+            }
         };
 
         let record_hash = self.audit_log.record_event(
@@ -426,10 +441,14 @@ mod tests {
         let digest = engine.compute_action_digest(&req.action_name, &req.parameters);
 
         // Verify and consume seal
-        assert!(engine.verify_and_consume_seal(&seal, &req.action_name, &digest).is_ok());
+        assert!(engine
+            .verify_and_consume_seal(&seal, &req.action_name, &digest)
+            .is_ok());
 
         // Replay rejection
-        let replay_err = engine.verify_and_consume_seal(&seal, &req.action_name, &digest).unwrap_err();
+        let replay_err = engine
+            .verify_and_consume_seal(&seal, &req.action_name, &digest)
+            .unwrap_err();
         assert!(matches!(replay_err, SealRejection::AlreadyConsumed(_)));
 
         // Proof status

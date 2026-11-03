@@ -125,7 +125,9 @@ impl SubstrateTranslator {
 
         // Priority 2: LulaValidation or rego
         if let Some(kind) = parsed.get("kind").and_then(|k| k.as_str()) {
-            if kind.eq_ignore_ascii_case("LulaValidation") || kind.eq_ignore_ascii_case("Validation") {
+            if kind.eq_ignore_ascii_case("LulaValidation")
+                || kind.eq_ignore_ascii_case("Validation")
+            {
                 return Ok(PolicyFormat::LulaValidation);
             }
         }
@@ -141,7 +143,8 @@ impl SubstrateTranslator {
         }
 
         // Priority 4: governedRunLoop
-        if parsed.get("governedRunLoop").is_some() || has_key_recursive(&parsed, "governedRunLoop") {
+        if parsed.get("governedRunLoop").is_some() || has_key_recursive(&parsed, "governedRunLoop")
+        {
             return Ok(PolicyFormat::LinuxFoundationAaif);
         }
 
@@ -423,7 +426,8 @@ fn parse_yaml_block(
                         }
                         let (nk, nv) = parse_key_value(next_line)?;
                         *cursor += 1;
-                        if nv.is_null() && *cursor < lines.len() && lines[*cursor].0 > *next_indent {
+                        if nv.is_null() && *cursor < lines.len() && lines[*cursor].0 > *next_indent
+                        {
                             let nested = parse_yaml_block(lines, cursor, lines[*cursor].0)?;
                             map.insert(nk, nested);
                         } else {
@@ -470,7 +474,11 @@ fn parse_yaml_block(
 
 fn parse_key_value(line: &str) -> Result<(String, serde_json::Value), PolicyIngestError> {
     if let Some(colon_idx) = line.find(':') {
-        let key = line[..colon_idx].trim().trim_matches('"').trim_matches('\'').to_string();
+        let key = line[..colon_idx]
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_string();
         let val_str = line[colon_idx + 1..].trim();
         if val_str.is_empty() {
             Ok((key, serde_json::Value::Null))
@@ -478,7 +486,10 @@ fn parse_key_value(line: &str) -> Result<(String, serde_json::Value), PolicyInge
             Ok((key, parse_scalar(val_str)))
         }
     } else {
-        Err(PolicyIngestError::ParseError(format!("Missing colon in YAML line: {}", line)))
+        Err(PolicyIngestError::ParseError(format!(
+            "Missing colon in YAML line: {}",
+            line
+        )))
     }
 }
 
@@ -540,7 +551,15 @@ fn has_key_recursive(val: &serde_json::Value, target_key: &str) -> bool {
 
 fn compile_acs(
     doc: &serde_json::Value,
-) -> Result<(Vec<String>, Vec<UnsafeControlAction>, Option<f64>, Option<f64>), PolicyIngestError> {
+) -> Result<
+    (
+        Vec<String>,
+        Vec<UnsafeControlAction>,
+        Option<f64>,
+        Option<f64>,
+    ),
+    PolicyIngestError,
+> {
     let mut cedar_rules = Vec::new();
     let mut ucas = Vec::new();
 
@@ -548,7 +567,9 @@ fn compile_acs(
         .get("behaviorDeclarations")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
-            PolicyIngestError::MalformedSchema("Missing 'behaviorDeclarations' array in ACS policy".into())
+            PolicyIngestError::MalformedSchema(
+                "Missing 'behaviorDeclarations' array in ACS policy".into(),
+            )
         })?;
 
     for decl in decls {
@@ -579,7 +600,10 @@ fn compile_acs(
         if let Some(constraints) = decl.get("constraints").and_then(|v| v.as_array()) {
             for c in constraints {
                 let c_type = c.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                let param = c.get("parameter").and_then(|v| v.as_str()).unwrap_or("param");
+                let param = c
+                    .get("parameter")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("param");
                 let val_str = c
                     .get("value")
                     .map(|v| match v {
@@ -653,7 +677,15 @@ fn compile_acs(
 
 fn compile_aaif(
     doc: &serde_json::Value,
-) -> Result<(Vec<String>, Vec<UnsafeControlAction>, Option<f64>, Option<f64>), PolicyIngestError> {
+) -> Result<
+    (
+        Vec<String>,
+        Vec<UnsafeControlAction>,
+        Option<f64>,
+        Option<f64>,
+    ),
+    PolicyIngestError,
+> {
     let mut cedar_rules = Vec::new();
     let mut ucas = Vec::new();
 
@@ -665,7 +697,9 @@ fn compile_aaif(
         .get("stages")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
-            PolicyIngestError::MalformedSchema("Missing 'stages' array in AAIF governedRunLoop".into())
+            PolicyIngestError::MalformedSchema(
+                "Missing 'stages' array in AAIF governedRunLoop".into(),
+            )
         })?;
 
     for stage in stages {
@@ -691,7 +725,10 @@ fn compile_aaif(
                 if let Some(constraints) = hook.get("constraints").and_then(|v| v.as_array()) {
                     for c in constraints {
                         let c_type = c.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                        let param = c.get("parameter").and_then(|v| v.as_str()).unwrap_or("param");
+                        let param = c
+                            .get("parameter")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("param");
                         if c_type == "forbidden" {
                             conditions.push(format!("context.{} == true", param));
                         } else if c_type == "max" {
@@ -702,7 +739,10 @@ fn compile_aaif(
                 }
 
                 let (cedar_rule, context_condition) = if stage_name == "access_control" {
-                    let role = hook.get("role").and_then(|v| v.as_str()).unwrap_or("AgentArm");
+                    let role = hook
+                        .get("role")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("AgentArm");
                     (
                         format!(
                             "// @stage(\"{}\") @hook(\"{}\")\npermit (\n    principal in Role::\"{}\",\n    action == Action::\"{}\",\n    resource\n);",
@@ -751,7 +791,15 @@ fn compile_aaif(
 
 fn compile_oscal(
     doc: &serde_json::Value,
-) -> Result<(Vec<String>, Vec<UnsafeControlAction>, Option<f64>, Option<f64>), PolicyIngestError> {
+) -> Result<
+    (
+        Vec<String>,
+        Vec<UnsafeControlAction>,
+        Option<f64>,
+        Option<f64>,
+    ),
+    PolicyIngestError,
+> {
     let mut cedar_rules = Vec::new();
     let mut ucas = Vec::new();
 
@@ -766,9 +814,15 @@ fn compile_oscal(
         })?;
 
     for comp in components {
-        if let Some(impls) = comp.get("control-implementations").and_then(|v| v.as_array()) {
+        if let Some(impls) = comp
+            .get("control-implementations")
+            .and_then(|v| v.as_array())
+        {
             for imp in impls {
-                if let Some(reqs) = imp.get("implemented-requirements").and_then(|v| v.as_array()) {
+                if let Some(reqs) = imp
+                    .get("implemented-requirements")
+                    .and_then(|v| v.as_array())
+                {
                     for req in reqs {
                         let control_id = req
                             .get("control-id")
@@ -820,7 +874,15 @@ fn compile_oscal(
 
 fn compile_lula(
     doc: &serde_json::Value,
-) -> Result<(Vec<String>, Vec<UnsafeControlAction>, Option<f64>, Option<f64>), PolicyIngestError> {
+) -> Result<
+    (
+        Vec<String>,
+        Vec<UnsafeControlAction>,
+        Option<f64>,
+        Option<f64>,
+    ),
+    PolicyIngestError,
+> {
     let mut cedar_rules = Vec::new();
     let mut ucas = Vec::new();
 
@@ -870,7 +932,15 @@ fn compile_lula(
 
 fn compile_stpa(
     doc: &serde_json::Value,
-) -> Result<(Vec<String>, Vec<UnsafeControlAction>, Option<f64>, Option<f64>), PolicyIngestError> {
+) -> Result<
+    (
+        Vec<String>,
+        Vec<UnsafeControlAction>,
+        Option<f64>,
+        Option<f64>,
+    ),
+    PolicyIngestError,
+> {
     let mut cedar_rules = Vec::new();
     let mut ucas = Vec::new();
 
@@ -904,8 +974,14 @@ fn compile_stpa(
                 .to_string();
 
             let condition_str = if let Some(cond) = uca.get("condition") {
-                let param = cond.get("param").and_then(|v| v.as_str()).unwrap_or("param");
-                let op = cond.get("operator").and_then(|v| v.as_str()).unwrap_or("is_null");
+                let param = cond
+                    .get("param")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("param");
+                let op = cond
+                    .get("operator")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("is_null");
                 format!("{}:{}", param, op)
             } else {
                 "unsafe_condition".to_string()
@@ -1127,10 +1203,19 @@ mod tests {
 
     #[test]
     fn test_version_pinning_verification() {
-        let p1 = SubstrateTranslator::compile_policy(r#"{"stpa_control_structure": {}}"#, None).unwrap();
-        assert!(SubstrateTranslator::verify_version_pinning(Some(&p1.policy_version_id), &p1.policy_version_id).is_ok());
+        let p1 =
+            SubstrateTranslator::compile_policy(r#"{"stpa_control_structure": {}}"#, None).unwrap();
+        assert!(SubstrateTranslator::verify_version_pinning(
+            Some(&p1.policy_version_id),
+            &p1.policy_version_id
+        )
+        .is_ok());
 
-        let err = SubstrateTranslator::verify_version_pinning(Some("different1234567"), &p1.policy_version_id).unwrap_err();
+        let err = SubstrateTranslator::verify_version_pinning(
+            Some("different1234567"),
+            &p1.policy_version_id,
+        )
+        .unwrap_err();
         assert_eq!(err.pinned_version, "different1234567");
         assert_eq!(err.incoming_version, p1.policy_version_id);
     }

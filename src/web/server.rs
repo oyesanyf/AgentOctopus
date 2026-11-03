@@ -2,8 +2,7 @@ use super::api::{
     handle_atlas_dynamic_tests, handle_atlas_status, handle_atlas_sync, handle_audit_log,
     handle_breakout_guards_status, handle_cage_consume_seal, handle_cage_ingest_policy,
     handle_cage_policy_version, handle_cage_proof_status, handle_cage_trace_conformance,
-    handle_cage_validate_action_with_version,
-    handle_containment_ring_regenerate,
+    handle_cage_validate_action_with_version, handle_containment_ring_regenerate,
     handle_containment_ring_sever, handle_containment_ring_stale_replay, handle_containment_rings,
     handle_dogwood_evaluate, handle_dogwood_presets, handle_dogwood_simulate_trace,
     handle_dogwood_trace, handle_dream_rsi_feed_trajectories, handle_dream_rsi_policy,
@@ -12,29 +11,30 @@ use super::api::{
     handle_evolution_auto_fix, handle_evolution_candidates, handle_evolution_evaluate,
     handle_evolution_rollback, handle_evolution_start, handle_evolution_status,
     handle_evolution_stop, handle_get_egress_domains, handle_glm_fusion_calibration,
-    handle_governor_inject_sample,
-    handle_governor_reset, handle_governor_status, handle_harness2_library, handle_harness2_run,
-    handle_harness2_status, handle_harness2_validate_tree, handle_kernel_stats, handle_live_tests,
-    handle_oshoosiclaw_containment_evaluate, handle_oshoosiclaw_containment_status,
-    handle_oss_fuzz_burst, handle_oss_fuzz_sarif, handle_oss_fuzz_status, handle_osv_scanner_sarif,
-    handle_osv_scanner_scan_now, handle_osv_scanner_status, handle_otel_sessions,
-    handle_otel_spans, handle_pqc_audit_cbom, handle_pqc_decapsulate, handle_pqc_encapsulate,
-    handle_pqc_generate_keypair, handle_pqc_sign, handle_pqc_status, handle_pqc_verify,
-    handle_protocol_analyzer_analyze, handle_protocol_analyzer_events,
-    handle_protocol_analyzer_status, handle_protocol_research_evaluate,
-    handle_protocol_research_hypotheses, handle_protocol_research_knowledge_base,
-    handle_protocol_research_status, handle_protocol_research_swarm_status,
-    handle_protocol_research_sync_rfc, handle_protocol_research_validate_arm106,
-    handle_rasp_create_canary, handle_rasp_intercept_memory, handle_rasp_intercept_prompt,
-    handle_rasp_intercept_tool, handle_rasp_set_mitigation_tier, handle_rasp_status,
-    handle_rasp_telemetry, handle_research_active_rules, handle_research_approve,
-    handle_research_clear, handle_research_ingest, handle_research_langgraph_swarm,
-    handle_research_novelty_check, handle_research_pending, handle_research_reject,
-    handle_research_schedule_get, handle_research_schedule_update, handle_research_search,
-    handle_research_status, handle_research_validate, handle_research_verify_accuracy,
-    handle_resilience_metrics, handle_rl_defense_latest_cycle,
-    handle_rl_defense_status, handle_rl_defense_train_cycle, handle_rl_evaluate_action,
-    handle_runtime_activity_stream, handle_sentinel_reset_lockdown,
+    handle_governor_inject_sample, handle_governor_reset, handle_governor_status,
+    handle_harness2_library, handle_harness2_run, handle_harness2_status,
+    handle_harness2_validate_tree, handle_kernel_stats, handle_killswitch_disarm,
+    handle_killswitch_engage, handle_killswitch_protocols, handle_killswitch_status,
+    handle_live_tests, handle_oshoosiclaw_containment_evaluate,
+    handle_oshoosiclaw_containment_status, handle_oss_fuzz_burst, handle_oss_fuzz_sarif,
+    handle_oss_fuzz_status, handle_osv_scanner_sarif, handle_osv_scanner_scan_now,
+    handle_osv_scanner_status, handle_otel_sessions, handle_otel_spans, handle_pqc_audit_cbom,
+    handle_pqc_decapsulate, handle_pqc_encapsulate, handle_pqc_generate_keypair, handle_pqc_sign,
+    handle_pqc_status, handle_pqc_verify, handle_protocol_analyzer_analyze,
+    handle_protocol_analyzer_events, handle_protocol_analyzer_status,
+    handle_protocol_research_evaluate, handle_protocol_research_hypotheses,
+    handle_protocol_research_knowledge_base, handle_protocol_research_status,
+    handle_protocol_research_swarm_status, handle_protocol_research_sync_rfc,
+    handle_protocol_research_validate_arm106, handle_rasp_create_canary,
+    handle_rasp_intercept_memory, handle_rasp_intercept_prompt, handle_rasp_intercept_tool,
+    handle_rasp_set_mitigation_tier, handle_rasp_status, handle_rasp_telemetry,
+    handle_research_active_rules, handle_research_approve, handle_research_clear,
+    handle_research_ingest, handle_research_langgraph_swarm, handle_research_novelty_check,
+    handle_research_pending, handle_research_reject, handle_research_schedule_get,
+    handle_research_schedule_update, handle_research_search, handle_research_status,
+    handle_research_validate, handle_research_verify_accuracy, handle_resilience_metrics,
+    handle_rl_defense_latest_cycle, handle_rl_defense_status, handle_rl_defense_train_cycle,
+    handle_rl_evaluate_action, handle_runtime_activity_stream, handle_sentinel_reset_lockdown,
     handle_sentinel_simulate_breach, handle_status, handle_update_egress_domains,
     handle_validate_sisyphean, handle_vassilev_proof, WebState,
 };
@@ -747,7 +747,6 @@ async fn handle_connection(
         // ====================================================================
         // CAGE Substrate Contract v1.0 Endpoints
         // ====================================================================
-
         ("POST", "/governance/ingest-policy") | ("POST", "/api/cage/ingest-policy") => {
             let expected_hdr = extract_header_value(headers_str, "x-expected-policy-version");
             let expected_query = query.split('&').find_map(|p| {
@@ -759,8 +758,7 @@ async fn handle_connection(
                 }
             });
             let expected_hint = expected_hdr.or(expected_query);
-            let (status_code, json_body) =
-                handle_cage_ingest_policy(&state, body, expected_hint);
+            let (status_code, json_body) = handle_cage_ingest_policy(&state, body, expected_hint);
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -2634,6 +2632,101 @@ async fn handle_connection(
             }
 
             handle_sse_test_stream(&mut stream, suite_name, &state).await?;
+        }
+
+        ("GET", "/api/killswitch/status") => {
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_killswitch_status(&state)
+                })) {
+                    Ok(pair) => pair,
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/killswitch/status",
+                        ),
+                    ),
+                };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/killswitch/engage") | ("POST", "/api/killswitch/isolate") => {
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_killswitch_engage(&state, body)
+                })) {
+                    Ok(pair) => pair,
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/killswitch/engage",
+                        ),
+                    ),
+                };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/killswitch/disarm") | ("POST", "/api/killswitch/restore") => {
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    handle_killswitch_disarm(&state, body)
+                })) {
+                    Ok(pair) => pair,
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/killswitch/disarm",
+                        ),
+                    ),
+                };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/killswitch/protocols") | ("GET", "/api/protocol-catalog") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(handle_killswitch_protocols),
+            ) {
+                Ok(pair) => pair,
+                Err(_) => (
+                    "500 Internal Server Error",
+                    api_error_payload(
+                        "INTERNAL_SERVER_ERROR",
+                        "Internal fault in /api/killswitch/protocols",
+                    ),
+                ),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
         }
 
         ("GET", "/api/hidden-processes") => {

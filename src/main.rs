@@ -8,6 +8,88 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() {
+    let cli_args: Vec<String> = std::env::args().collect();
+
+    // 1. One-shot elevated WFP kernel helper delegation (`--wfp-kernel-apply engage|disarm`)
+    for i in 1..cli_args.len() {
+        if cli_args[i] == "--wfp-kernel-apply" {
+            let action = cli_args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
+            match agent_octopus::security::handle_wfp_kernel_apply_cli(action) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("[WFP-HELPER-ERROR] {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // 2. Direct Host KillSwitch CLI commands (`isolate`, `restore`, `disarm`, `status`, `protocols`, `killswitch ...`)
+    if cli_args.len() >= 2 {
+        let sub = if cli_args[1] == "killswitch" {
+            cli_args.get(2).map(|s| s.as_str()).unwrap_or("status")
+        } else {
+            cli_args[1].as_str()
+        };
+        match sub {
+            "isolate" | "engage" => {
+                println!("🚨 Initiating AgentOctopus Host Containment Isolation...");
+                match agent_octopus::security::global_host_killswitch()
+                    .engage("cli_operator", "Manual CLI host isolation")
+                {
+                    Ok(st) => {
+                        println!(
+                            "✅ Containment Engaged: {} ({} active WFP filters, {} protocols across {} domains)",
+                            st.backend_engine,
+                            st.active_wfp_filter_count,
+                            st.universal_protocols_count,
+                            st.universal_domains_count
+                        );
+                        println!("   Level:      {}", st.containment_level);
+                        println!("   State Hash: {}", st.state_hash);
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Containment Engagement Failed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            "restore" | "disarm" => {
+                println!("🛡️  Initiating Host Disarm & Endpoint Restoration...");
+                match agent_octopus::security::global_host_killswitch()
+                    .disarm("cli_operator", "Manual CLI host restoration")
+                {
+                    Ok(st) => {
+                        println!("✅ Disarm Successful: Native host network connectivity restored");
+                        println!("   Current Level: {}", st.containment_level);
+                        println!("   State Hash:    {}", st.state_hash);
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Disarm Failed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            "status" if cli_args[1] == "killswitch" || cli_args.len() == 2 => {
+                let st = agent_octopus::security::global_host_killswitch().status();
+                println!("{}", serde_json::to_string_pretty(&st).unwrap_or_default());
+                std::process::exit(0);
+            }
+            "protocols" => {
+                let summary =
+                    agent_octopus::security::UniversalProtocolCatalog::catalog_json_summary();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&summary).unwrap_or_default()
+                );
+                std::process::exit(0);
+            }
+            _ => {}
+        }
+    }
+
     // Finding 7 (FAIL-CLOSED): arms must never run under an elevated / Administrator token.
     if let Err(e) = agent_octopus::security::relaunch_deelevated_or_fail(false) {
         eprintln!("{}", e);

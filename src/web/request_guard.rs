@@ -118,7 +118,6 @@ pub fn configured_cage_api_key() -> Option<String> {
         })
 }
 
-
 /// Response headers applied to every dashboard response instead of wildcard CORS.
 pub const SECURITY_HEADERS: &str = "X-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Security-Policy: frame-ancestors 'none'\r\nReferrer-Policy: no-referrer\r\n";
 
@@ -389,8 +388,8 @@ pub fn authorize_request(req: &GuardRequest<'_>, token: &str) -> Result<(), Guar
                 .or_else(|| header_value(req.headers, TOKEN_HEADER));
             match presented {
                 Some(p)
-                    if constant_time_str_eq(p, &expected_key)
-                        || constant_time_str_eq(p, token) => {}
+                    if constant_time_str_eq(p, &expected_key) || constant_time_str_eq(p, token) => {
+                }
                 _ => return Err(GuardRejection::Unauthorized),
             }
         } else if let Some(presented) = header_value(req.headers, TOKEN_HEADER) {
@@ -549,7 +548,8 @@ mod tests {
 
     #[test]
     fn rejects_cage_substrate_rebinding_host() {
-        let h = "POST /governance/validate-action HTTP/1.1\r\nHost: attacker-rebinding.example:5005";
+        let h =
+            "POST /governance/validate-action HTTP/1.1\r\nHost: attacker-rebinding.example:5005";
         assert!(matches!(
             authorize_request(&req("POST", "/governance/validate-action", h), "mock_token"),
             Err(GuardRejection::BadHost(_))

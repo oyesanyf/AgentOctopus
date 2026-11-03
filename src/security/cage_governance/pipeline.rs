@@ -87,10 +87,20 @@ pub enum Phase2Mode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GovernanceVerdict {
     Allow,
-    Narrow { clamped_params: serde_json::Value },
-    RequireApproval { reason: String, approval_token: String },
-    Defer { backoff_ms: u64 },
-    Deny { reason: String, proof_hash: String },
+    Narrow {
+        clamped_params: serde_json::Value,
+    },
+    RequireApproval {
+        reason: String,
+        approval_token: String,
+    },
+    Defer {
+        backoff_ms: u64,
+    },
+    Deny {
+        reason: String,
+        proof_hash: String,
+    },
 }
 
 impl GovernanceVerdict {
@@ -179,12 +189,14 @@ impl CagePipeline {
     }
 
     /// Dynamically selects Phase 2 execution mode.
-    pub fn select_phase2_mode(profile: &Profile, phase1_verdict: &Option<GovernanceVerdict>) -> Phase2Mode {
+    pub fn select_phase2_mode(
+        profile: &Profile,
+        phase1_verdict: &Option<GovernanceVerdict>,
+    ) -> Phase2Mode {
         match phase1_verdict {
             Some(GovernanceVerdict::Deny { .. }) => Phase2Mode::Skip,
-            Some(GovernanceVerdict::RequireApproval { .. }) | Some(GovernanceVerdict::Defer { .. }) => {
-                Phase2Mode::Preview
-            }
+            Some(GovernanceVerdict::RequireApproval { .. })
+            | Some(GovernanceVerdict::Defer { .. }) => Phase2Mode::Preview,
             _ => {
                 if matches!(profile, Profile::DryRun) {
                     Phase2Mode::Preview
@@ -209,7 +221,12 @@ impl CagePipeline {
     }
 
     /// Generates a deterministic 64-hex SHA-256 cryptographic refusal proof receipt.
-    pub fn compute_refusal_proof(action: &str, stage: &str, reason: &str, timestamp: u64) -> String {
+    pub fn compute_refusal_proof(
+        action: &str,
+        stage: &str,
+        reason: &str,
+        timestamp: u64,
+    ) -> String {
         let mut hasher = Sha256::new();
         hasher.update(action.as_bytes());
         hasher.update(b":");
@@ -239,7 +256,8 @@ impl CagePipeline {
                     "Policy version drift detected: active pinned version is '{}', requested was '{}'",
                     policy.policy_version_id, expected_ver
                 );
-                let proof_hash = Self::compute_refusal_proof(&req.action_name, "version_pinning", &reason, now);
+                let proof_hash =
+                    Self::compute_refusal_proof(&req.action_name, "version_pinning", &reason, now);
                 return GovernanceEvaluationResult {
                     verdict: GovernanceVerdict::Deny { reason, proof_hash },
                     seal: None,
@@ -287,7 +305,10 @@ impl CagePipeline {
         stage_outcomes.push(StageOutcome {
             stage_name: "ftra".to_string(),
             passed: true,
-            details: Some(format!("Action classified as {:?}; authority cleared", reversibility)),
+            details: Some(format!(
+                "Action classified as {:?}; authority cleared",
+                reversibility
+            )),
         });
 
         // Tier 1: STPA Validation
@@ -315,7 +336,10 @@ impl CagePipeline {
         stage_outcomes.push(StageOutcome {
             stage_name: "stpa".to_string(),
             passed: true,
-            details: Some(format!("Passed {} STPA rules", policy.unsafe_control_actions.len())),
+            details: Some(format!(
+                "Passed {} STPA rules",
+                policy.unsafe_control_actions.len()
+            )),
         });
 
         // Tier 2: Cedar Policy Rules
@@ -326,7 +350,8 @@ impl CagePipeline {
                     "CEDAR_FORBID_VIOLATION: Action '{}' forbidden by Cedar policy: {}",
                     req.action_name, trimmed
                 );
-                let proof_hash = Self::compute_refusal_proof(&req.action_name, "cedar", &reason, now);
+                let proof_hash =
+                    Self::compute_refusal_proof(&req.action_name, "cedar", &reason, now);
                 stage_outcomes.push(StageOutcome {
                     stage_name: "cedar".to_string(),
                     passed: false,
@@ -361,9 +386,14 @@ impl CagePipeline {
             let approval_token = format!("token_{}", hex::encode(nonce));
             let reason = format!(
                 "SR 26-2 confidence {:.4} in [{:.2}, {:.2}); requires operator approval",
-                normalized_conf, SR_26_2_CONFIDENCE_APPROVAL_THRESHOLD, SR_26_2_CONFIDENCE_ALLOW_THRESHOLD
+                normalized_conf,
+                SR_26_2_CONFIDENCE_APPROVAL_THRESHOLD,
+                SR_26_2_CONFIDENCE_ALLOW_THRESHOLD
             );
-            phase1_hold = Some(GovernanceVerdict::RequireApproval { reason, approval_token });
+            phase1_hold = Some(GovernanceVerdict::RequireApproval {
+                reason,
+                approval_token,
+            });
         }
 
         // Check if PostHitl profile redeems hold
@@ -413,7 +443,8 @@ impl CagePipeline {
                 "BAYESIAN_CONSENSUS_DEFICIT: Consensus score {:.4} < threshold {:.2}",
                 req.consensus_score, self.consensus_threshold
             );
-            let proof_hash = Self::compute_refusal_proof(&req.action_name, "consensus", &reason, now);
+            let proof_hash =
+                Self::compute_refusal_proof(&req.action_name, "consensus", &reason, now);
             stage_outcomes.push(StageOutcome {
                 stage_name: "consensus".to_string(),
                 passed: false,
@@ -442,7 +473,8 @@ impl CagePipeline {
         match phase2_mode {
             Phase2Mode::Skip => {
                 let reason = "Phase 2 execution skipped".to_string();
-                let proof_hash = Self::compute_refusal_proof(&req.action_name, "pipeline", &reason, now);
+                let proof_hash =
+                    Self::compute_refusal_proof(&req.action_name, "pipeline", &reason, now);
                 GovernanceEvaluationResult {
                     verdict: GovernanceVerdict::Deny { reason, proof_hash },
                     seal: None,
@@ -452,47 +484,49 @@ impl CagePipeline {
                     action_digest,
                 }
             }
-            Phase2Mode::Preview => {
-                match self.ledger.preview(req.fuel_cost) {
-                    Ok((projected, barrier_val)) => {
-                        stage_outcomes.push(StageOutcome {
-                            stage_name: "cbf".to_string(),
-                            passed: true,
-                            details: Some(format!("Preview CBF barrier satisfied: h={:.4}", barrier_val)),
-                        });
-                        stage_outcomes.push(StageOutcome {
-                            stage_name: "fiscal".to_string(),
-                            passed: true,
-                            details: Some(format!("Preview projected budget: {:.2}", projected)),
-                        });
-                        GovernanceEvaluationResult {
-                            verdict: GovernanceVerdict::Allow,
-                            seal: None,
-                            stage_outcomes,
-                            commit_receipt: None,
-                            policy_version_id: policy.policy_version_id,
-                            action_digest,
-                        }
-                    }
-                    Err(violation) => {
-                        let reason = format!("CBF_BARRIER_VIOLATION: {}", violation);
-                        let proof_hash = Self::compute_refusal_proof(&req.action_name, "cbf", &reason, now);
-                        stage_outcomes.push(StageOutcome {
-                            stage_name: "cbf".to_string(),
-                            passed: false,
-                            details: Some(reason.clone()),
-                        });
-                        GovernanceEvaluationResult {
-                            verdict: GovernanceVerdict::Deny { reason, proof_hash },
-                            seal: None,
-                            stage_outcomes,
-                            commit_receipt: None,
-                            policy_version_id: policy.policy_version_id,
-                            action_digest,
-                        }
+            Phase2Mode::Preview => match self.ledger.preview(req.fuel_cost) {
+                Ok((projected, barrier_val)) => {
+                    stage_outcomes.push(StageOutcome {
+                        stage_name: "cbf".to_string(),
+                        passed: true,
+                        details: Some(format!(
+                            "Preview CBF barrier satisfied: h={:.4}",
+                            barrier_val
+                        )),
+                    });
+                    stage_outcomes.push(StageOutcome {
+                        stage_name: "fiscal".to_string(),
+                        passed: true,
+                        details: Some(format!("Preview projected budget: {:.2}", projected)),
+                    });
+                    GovernanceEvaluationResult {
+                        verdict: GovernanceVerdict::Allow,
+                        seal: None,
+                        stage_outcomes,
+                        commit_receipt: None,
+                        policy_version_id: policy.policy_version_id,
+                        action_digest,
                     }
                 }
-            }
+                Err(violation) => {
+                    let reason = format!("CBF_BARRIER_VIOLATION: {}", violation);
+                    let proof_hash =
+                        Self::compute_refusal_proof(&req.action_name, "cbf", &reason, now);
+                    stage_outcomes.push(StageOutcome {
+                        stage_name: "cbf".to_string(),
+                        passed: false,
+                        details: Some(reason.clone()),
+                    });
+                    GovernanceEvaluationResult {
+                        verdict: GovernanceVerdict::Deny { reason, proof_hash },
+                        seal: None,
+                        stage_outcomes,
+                        commit_receipt: None,
+                        policy_version_id: policy.policy_version_id,
+                        action_digest,
+                    }
+                }
+            },
             Phase2Mode::Commit => {
                 let nonce: [u8; 8] = rand::random();
                 let debit_id = format!("debit_{}", hex::encode(nonce));
@@ -502,7 +536,10 @@ impl CagePipeline {
                         stage_outcomes.push(StageOutcome {
                             stage_name: "cbf".to_string(),
                             passed: true,
-                            details: Some(format!("CBF satisfied: h={:.4}", commit_receipt.barrier_val)),
+                            details: Some(format!(
+                                "CBF satisfied: h={:.4}",
+                                commit_receipt.barrier_val
+                            )),
                         });
                         stage_outcomes.push(StageOutcome {
                             stage_name: "fiscal".to_string(),
@@ -530,7 +567,10 @@ impl CagePipeline {
                         );
 
                         // Issue evidence-bound routing seal
-                        match self.seal_signer.issue_seal(&action_digest, &record_hash, now) {
+                        match self
+                            .seal_signer
+                            .issue_seal(&action_digest, &record_hash, now)
+                        {
                             Ok(seal) => GovernanceEvaluationResult {
                                 verdict: GovernanceVerdict::Allow,
                                 seal: Some(seal),
@@ -543,7 +583,12 @@ impl CagePipeline {
                                 // Compensating rollback on seal failure
                                 let _ = self.ledger.rollback(&debit_id);
                                 let reason = format!("SEAL_ISSUANCE_FAILED: {}", e);
-                                let proof_hash = Self::compute_refusal_proof(&req.action_name, "seal", &reason, now);
+                                let proof_hash = Self::compute_refusal_proof(
+                                    &req.action_name,
+                                    "seal",
+                                    &reason,
+                                    now,
+                                );
                                 GovernanceEvaluationResult {
                                     verdict: GovernanceVerdict::Deny { reason, proof_hash },
                                     seal: None,
@@ -557,7 +602,8 @@ impl CagePipeline {
                     }
                     Err(violation) => {
                         let reason = format!("CBF_BARRIER_VIOLATION: {}", violation);
-                        let proof_hash = Self::compute_refusal_proof(&req.action_name, "cbf", &reason, now);
+                        let proof_hash =
+                            Self::compute_refusal_proof(&req.action_name, "cbf", &reason, now);
                         stage_outcomes.push(StageOutcome {
                             stage_name: "cbf".to_string(),
                             passed: false,
@@ -589,7 +635,10 @@ impl CagePipeline {
         let primary_result = self.run_pipeline(request);
 
         if primary_result.verdict.is_allowed_or_narrowed()
-            || matches!(primary_result.verdict, GovernanceVerdict::RequireApproval { .. })
+            || matches!(
+                primary_result.verdict,
+                GovernanceVerdict::RequireApproval { .. }
+            )
         {
             return primary_result;
         }
@@ -665,7 +714,9 @@ impl CagePipeline {
         // Cedar scope syntax: forbid ( principal, action, resource ) [when { ... }];
         if let Some(forbid_idx) = rule_lower.find("forbid") {
             let after_forbid = &rule_lower[forbid_idx + 6..];
-            if let (Some(open_paren), Some(close_paren)) = (after_forbid.find('('), after_forbid.find(')')) {
+            if let (Some(open_paren), Some(close_paren)) =
+                (after_forbid.find('('), after_forbid.find(')'))
+            {
                 if open_paren < close_paren {
                     let scope = &after_forbid[open_paren + 1..close_paren];
                     let parts: Vec<&str> = scope.split(',').collect();
@@ -767,7 +818,10 @@ impl CagePipeline {
                 if parts.len() == 2 {
                     let key = parts[0].trim();
                     let threshold: f64 = parts[1].trim().parse().unwrap_or(f64::MAX);
-                    let actual = parameters.get(key).and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+                    let actual = parameters
+                        .get(key)
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(f64::NAN);
                     if actual.is_nan() || actual < threshold {
                         return false;
                     }
@@ -777,7 +831,10 @@ impl CagePipeline {
                 if parts.len() == 2 {
                     let key = parts[0].trim();
                     let threshold: f64 = parts[1].trim().parse().unwrap_or(f64::MIN);
-                    let actual = parameters.get(key).and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+                    let actual = parameters
+                        .get(key)
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(f64::NAN);
                     if actual.is_nan() || actual > threshold {
                         return false;
                     }
@@ -787,7 +844,10 @@ impl CagePipeline {
                 if parts.len() == 2 {
                     let key = parts[0].trim();
                     let threshold: f64 = parts[1].trim().parse().unwrap_or(f64::MAX);
-                    let actual = parameters.get(key).and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+                    let actual = parameters
+                        .get(key)
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(f64::NAN);
                     if actual.is_nan() || actual <= threshold {
                         return false;
                     }
@@ -797,7 +857,10 @@ impl CagePipeline {
                 if parts.len() == 2 {
                     let key = parts[0].trim();
                     let threshold: f64 = parts[1].trim().parse().unwrap_or(f64::MIN);
-                    let actual = parameters.get(key).and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+                    let actual = parameters
+                        .get(key)
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(f64::NAN);
                     if actual.is_nan() || actual >= threshold {
                         return false;
                     }
@@ -906,7 +969,10 @@ mod tests {
             ..req_low
         };
         let res_med = pipeline.run_pipeline(&req_med);
-        assert!(matches!(res_med.verdict, GovernanceVerdict::RequireApproval { .. }));
+        assert!(matches!(
+            res_med.verdict,
+            GovernanceVerdict::RequireApproval { .. }
+        ));
     }
 
     #[test]

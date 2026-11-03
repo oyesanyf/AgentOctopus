@@ -459,10 +459,7 @@ fn detect_system_memory_gb() -> (f64, f64) {
                 }
             }
             if total_kb > 0 {
-                return (
-                    total_kb as f64 / 1_048_576.0,
-                    avail_kb as f64 / 1_048_576.0,
-                );
+                return (total_kb as f64 / 1_048_576.0, avail_kb as f64 / 1_048_576.0);
             }
         }
     }
@@ -495,7 +492,11 @@ fn detect_cpu_topology() -> (String, usize, usize) {
             }
         }
     }
-    ("x86_64 Processor".to_string(), (logical / 2).max(1), logical)
+    (
+        "x86_64 Processor".to_string(),
+        (logical / 2).max(1),
+        logical,
+    )
 }
 
 fn detect_gpu_vram() -> (Option<String>, f64, f64, u64) {
@@ -557,7 +558,11 @@ pub fn probe_ollama_installed_tags_fast() -> Vec<String> {
         if let Some(models) = val.get("models").and_then(|m| m.as_array()) {
             return models
                 .iter()
-                .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                .filter_map(|m| {
+                    m.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect();
         }
     }
@@ -672,9 +677,7 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .contains("GLM-4.7"));
-        assert!(report
-            .fusion_panel_models
-            .contains(&"glm4:9b".to_string()));
+        assert!(report.fusion_panel_models.contains(&"glm4:9b".to_string()));
     }
 
     #[test]

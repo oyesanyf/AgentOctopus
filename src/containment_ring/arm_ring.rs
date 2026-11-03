@@ -22,8 +22,8 @@ use crate::containment_ring::mesh_guard::{
 };
 use crate::core::types::{ArmRole, OctopusSecurityError};
 use crate::neural_mesh::MessageKind;
-use crate::security::CapabilityToken;
 use crate::security::cage_governance::{CageGovernanceEngine, CageRoutingSeal, SealRejection};
+use crate::security::CapabilityToken;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -366,9 +366,8 @@ pub struct ArmContainmentRing {
     /// Sticky information-flow taint for the current epoch: (lowest accepted trust tier, provenance).
     taint_state: Arc<RwLock<(TrustTier, Vec<ProvenanceHop>)>>,
     /// Optional attached CAGE governance engine for seal validation and actuation trace emission.
-    pub(crate) cage_engine: Arc<
-        std::sync::RwLock<Option<Arc<crate::security::cage_governance::CageGovernanceEngine>>>,
-    >,
+    pub(crate) cage_engine:
+        Arc<std::sync::RwLock<Option<Arc<crate::security::cage_governance::CageGovernanceEngine>>>>,
 }
 
 impl ArmContainmentRing {
@@ -1554,9 +1553,11 @@ impl ArmContainmentRing {
         observed_canary_hash: Option<&str>,
         debit_id: Option<&str>,
     ) -> Result<super::tiered_executor::TieredExecutionReceipt, ArmExecutionError> {
-        let engine = self.cage_engine().ok_or(ArmExecutionError::EngineNotConfigured {
-            arm_id: self.arm_id,
-        })?;
+        let engine = self
+            .cage_engine()
+            .ok_or(ArmExecutionError::EngineNotConfigured {
+                arm_id: self.arm_id,
+            })?;
 
         self.execute_tool_with_cage_seal_and_engine(
             &engine,
@@ -1584,8 +1585,8 @@ impl ArmContainmentRing {
         debit_id: Option<&str>,
     ) -> Result<super::tiered_executor::TieredExecutionReceipt, ArmExecutionError> {
         // Step 2: Compute expected action digest from req.tool_name and req.payload
-        let params_val: serde_json::Value = serde_json::from_slice(&req.payload)
-            .unwrap_or_else(|_| {
+        let params_val: serde_json::Value =
+            serde_json::from_slice(&req.payload).unwrap_or_else(|_| {
                 serde_json::json!({
                     "raw_sha256": hex::encode(sha2::Sha256::digest(&req.payload)),
                     "byte_len": req.payload.len(),
@@ -1687,9 +1688,8 @@ pub struct ArmRingRegistry {
     master_seed: [u8; 32],
     watchout_signals: Arc<RwLock<Vec<super::primitives::MeshWatchOutSignal>>>,
     /// Fleet-wide CAGE governance engine attached to all arm rings.
-    pub(crate) cage_engine: Arc<
-        std::sync::RwLock<Option<Arc<crate::security::cage_governance::CageGovernanceEngine>>>,
-    >,
+    pub(crate) cage_engine:
+        Arc<std::sync::RwLock<Option<Arc<crate::security::cage_governance::CageGovernanceEngine>>>>,
 }
 
 impl ArmRingRegistry {
@@ -1934,10 +1934,14 @@ pub enum ArmExecutionError {
     #[error("Invalid CAGE routing seal '{seal_id}': {reason}")]
     InvalidCageSeal { seal_id: String, reason: String },
 
-    #[error("Policy version mismatch: expected active version '{expected}', seal specifies '{actual}'")]
+    #[error(
+        "Policy version mismatch: expected active version '{expected}', seal specifies '{actual}'"
+    )]
     PolicyVersionMismatch { expected: String, actual: String },
 
-    #[error("CAGE governance pipeline rejected action '{action}': verdict={verdict}, reason={reason}")]
+    #[error(
+        "CAGE governance pipeline rejected action '{action}': verdict={verdict}, reason={reason}"
+    )]
     CageRejected {
         action: String,
         verdict: String,
@@ -2091,7 +2095,9 @@ impl From<ArmExecutionError> for OctopusSecurityError {
                     err
                 ))
             }
-            ArmExecutionError::SecurityViolation(msg) => OctopusSecurityError::CapabilityDenied(msg),
+            ArmExecutionError::SecurityViolation(msg) => {
+                OctopusSecurityError::CapabilityDenied(msg)
+            }
         }
     }
 }

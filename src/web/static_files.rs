@@ -678,7 +678,17 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
       </div>
     </div>
   </div>
-  <div style="display: flex; gap: 0.6rem; align-items: center;">
+  <div style="display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;">
+    <span class="badge" id="global-killswitch-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #10b981; font-weight: 800; font-size: 0.72rem; padding: 0.25rem 0.6rem;">🟢 INTERNET CONNECTED</span>
+    <button class="btn btn-danger" id="btn-global-disconnect" onclick="engageHostKillSwitch()" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; font-weight: 800;">
+      🚨 Disconnect Internet
+    </button>
+    <button class="btn btn-success" id="btn-global-reconnect" onclick="disarmHostKillSwitch()" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; font-weight: 800;">
+      🟢 Reconnect Internet
+    </button>
+    <button class="btn btn-secondary" onclick="switchTab('universal-killswitch')" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; border: 1px solid #38bdf8; color: #7dd3fc; background: rgba(15, 23, 42, 0.85);">
+      🌐 218 Protocols &rarr;
+    </button>
     <button class="btn btn-secondary" onclick="switchTab('rasp-shield')" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; border: 1px solid #10b981; color: #6ee7b7; background: rgba(6, 78, 59, 0.6);">
       ⚡ Open RT-ASP Shield &rarr;
     </button>
@@ -687,6 +697,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
 
 <nav>
   <div class="nav-tab active" onclick="switchTab('test-runner')">🧪 Test Runner &amp; Progression</div>
+  <div class="nav-tab" onclick="switchTab('universal-killswitch')">🚨 Host KillSwitch (218 Protocols)</div>
   <div class="nav-tab" onclick="switchTab('runtime-feed')">⚡ Unified Runtime Activity</div>
   <div class="nav-tab" onclick="switchTab('cedar-sandbox')">🛡️ Cedar Policy Sandbox</div>
   <div class="nav-tab" onclick="switchTab('audit-viewer')">📜 Cryptographic Audit Log</div>
@@ -3891,6 +3902,95 @@ with urllib.request.urlopen(req) as resp:
     </div>
   </div>
 
+  <!-- TAB: UNIVERSAL HOST KILLSWITCH & 16-DOMAIN PROTOCOL SHIELD -->
+  <div id="universal-killswitch" class="tab-content">
+    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+      <div class="breadcrumb-trail">
+        <a class="breadcrumb-link" href="javascript:void(0)" onclick="switchTab('test-runner')"><span>🏠</span> Dashboard</a>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-link" style="cursor: default; pointer-events: none;">Kernel Network Isolation</span>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-current"><span>🚨</span> Host KillSwitch &amp; Universal 16-Domain Protocol Shield</span>
+      </div>
+      <div class="breadcrumb-meta">
+        <span class="breadcrumb-badge green">🛡️ Zero Subprocesses</span>
+        <span class="breadcrumb-badge purple">🌐 16 Domains · 218 Protocols · 256 IP Numbers</span>
+        <span class="breadcrumb-badge">⚡ 22 WFP Kernel Layers</span>
+      </div>
+    </nav>
+
+    <div class="card" style="border: 2px solid #ef4444; background: linear-gradient(135deg, rgba(69, 10, 10, 0.35), rgba(15, 23, 42, 0.96));">
+      <div class="card-header">
+        <h2>🚨 Emergency Host Network KillSwitch (Zero-Subprocess OS Kernel Enforcement)</h2>
+        <span class="badge" id="ks-posture-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #10b981; font-weight: 800; padding: 0.3rem 0.75rem;">DISARMED · INTERNET CONNECTED</span>
+      </div>
+      <p style="font-size: 0.85rem; color: #cbd5e1; margin-bottom: 1rem; line-height: 1.5;">
+        Enforces hermetic host-level network isolation directly in the OS kernel (<code>fwpuclnt.dll</code> 22-layer WFP + BFE + <code>iphlpapi.dll</code> TCP reset on Windows, binary <code>AF_NETLINK</code> <code>RTN_BLACKHOLE</code> + <code>SOCK_DESTROY</code> on Linux, and <code>/dev/pf</code> <code>ioctl</code> on macOS) while preserving local WebUI loopback (<code>127.0.0.1</code> / <code>::1</code>) and keeping AgentOctopus arms strictly de-elevated (Finding 7).
+      </p>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0.85rem; margin-bottom: 1rem;">
+        <div style="background: #090d16; border: 1px solid #1e293b; border-radius: 6px; padding: 0.75rem;">
+          <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase;">Kernel Backend</div>
+          <div id="ks-engine-label" style="font-size: 0.85rem; font-weight: 700; color: #38bdf8; margin-top: 0.25rem;">Windows WFP 22-Layer</div>
+        </div>
+        <div style="background: #090d16; border: 1px solid #1e293b; border-radius: 6px; padding: 0.75rem;">
+          <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase;">Live BFE Filters</div>
+          <div id="ks-wfp-count" style="font-size: 0.95rem; font-weight: 800; color: #34d399; margin-top: 0.25rem;">0 Active</div>
+        </div>
+        <div style="background: #090d16; border: 1px solid #1e293b; border-radius: 6px; padding: 0.75rem;">
+          <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase;">Protocol Coverage</div>
+          <div id="ks-proto-coverage" style="font-size: 0.9rem; font-weight: 800; color: #c084fc; margin-top: 0.25rem;">16 Domains · 218 Protocols · 256 IP#</div>
+        </div>
+        <div style="background: #090d16; border: 1px solid #1e293b; border-radius: 6px; padding: 0.75rem;">
+          <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase;">Preserved Loopback Ports</div>
+          <div id="ks-preserved-ports" style="font-size: 0.8rem; font-family: monospace; color: #e2e8f0; margin-top: 0.25rem;">5005..5025</div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 0.85rem; align-items: center; flex-wrap: wrap;">
+        <button class="btn btn-danger" id="btn-ks-engage" onclick="engageHostKillSwitch()" style="font-weight: 800; padding: 0.7rem 1.35rem;">
+          🚨 Disconnect Internet (Engage 22-Layer Hermetic Quarantine)
+        </button>
+        <button class="btn btn-success" id="btn-ks-disarm" onclick="disarmHostKillSwitch()" style="font-weight: 800; padding: 0.7rem 1.35rem;">
+          🟢 Reconnect Internet (Disarm &amp; Restore Host)
+        </button>
+        <button class="btn btn-secondary" onclick="fetchKillSwitchStatus(true); loadUniversalProtocolCatalog();" style="padding: 0.7rem 1rem;">
+          🔄 Refresh Live BFE State
+        </button>
+      </div>
+      <div id="ks-action-feedback" style="margin-top: 0.85rem; font-family: monospace; font-size: 0.78rem; color: #94a3b8; background: #020617; border: 1px solid #1e293b; border-radius: 6px; padding: 0.6rem;">
+        State SHA-256: <span id="ks-state-hash">loading...</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header" style="flex-wrap: wrap; gap: 0.75rem;">
+        <h2>🌐 Universal 16-Domain Classical, Post-Quantum, Cryo &amp; Quantum Protocol Matrix</h2>
+        <div style="display: flex; gap: 0.6rem; flex-wrap: wrap; min-width: 340px;">
+          <select id="ks-domain-select" onchange="renderUniversalProtocolTable()" style="max-width: 260px; font-size: 0.82rem;">
+            <option value="ALL">All 16 Protocol Domains (218)</option>
+          </select>
+          <input type="text" id="ks-protocol-search" oninput="renderUniversalProtocolTable()" placeholder="Filter protocol (BB84, ML-KEM, White Rabbit, QUIC...)" style="max-width: 280px; font-size: 0.82rem;" />
+        </div>
+      </div>
+      <div style="max-height: 520px; overflow-y: auto;">
+        <table class="test-table" style="font-size: 0.8rem;">
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Protocol Name</th>
+              <th>Domain</th>
+              <th>OSI Layer</th>
+              <th>Ports / EtherType</th>
+              <th>Quarantine Enforcement</th>
+            </tr>
+          </thead>
+          <tbody id="ks-protocol-tbody">
+            <tr><td colspan="6" style="text-align: center; color: #94a3b8;">Loading 218 universal protocols...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
 </main>
 
 <script>
@@ -4081,6 +4181,9 @@ with urllib.request.urlopen(req) as resp:
         fetchDreamRsiData(true);
       } else if (tabId === 'harness2-view') {
         fetchHarness2Data(true);
+      } else if (tabId === 'universal-killswitch') {
+        fetchKillSwitchStatus(true);
+        loadUniversalProtocolCatalog();
       }
     } catch (err) {
       showDiagnosticToast({
@@ -7956,7 +8059,258 @@ def exfiltrate_credentials():
     }
   }
 
+  // Host KillSwitch & Universal 16-Domain Protocol Shield Client Logic
+  let cachedProtocolCatalog = null;
+
+  function applyKillSwitchUiState(st) {
+    if (!st) return;
+    const isolated = Boolean(st.isolated);
+    const gBadge = document.getElementById('global-killswitch-badge');
+    if (gBadge) {
+      gBadge.textContent = isolated ? '🚨 INTERNET QUARANTINED (HERMETIC)' : '🟢 INTERNET CONNECTED';
+      gBadge.style.background = isolated ? 'rgba(239, 68, 68, 0.25)' : 'rgba(16, 185, 129, 0.2)';
+      gBadge.style.color = isolated ? '#fca5a5' : '#34d399';
+      gBadge.style.borderColor = isolated ? '#ef4444' : '#10b981';
+    }
+    const pBadge = document.getElementById('ks-posture-badge');
+    if (pBadge) {
+      pBadge.textContent = isolated
+        ? `🚨 HERMETIC ISOLATION ACTIVE (${st.active_wfp_filter_count || 0} FILTERS)`
+        : '🟢 DISARMED · INTERNET CONNECTED';
+      pBadge.style.background = isolated ? 'rgba(239, 68, 68, 0.25)' : 'rgba(16, 185, 129, 0.2)';
+      pBadge.style.color = isolated ? '#fca5a5' : '#34d399';
+      pBadge.style.borderColor = isolated ? '#ef4444' : '#10b981';
+    }
+    const engEl = document.getElementById('ks-engine-label');
+    if (engEl && st.backend_engine) engEl.textContent = st.backend_engine;
+    const cntEl = document.getElementById('ks-wfp-count');
+    if (cntEl) {
+      cntEl.textContent = `${st.active_wfp_filter_count || 0} Active (Live BFE: ${st.live_kernel_filters_verified ? 'Verified' : 'Clear'})`;
+      cntEl.style.color = isolated ? '#f87171' : '#34d399';
+    }
+    const covEl = document.getElementById('ks-proto-coverage');
+    if (covEl) {
+      covEl.textContent = `${st.universal_domains_count || 16} Domains · ${st.universal_protocols_count || 218} Protocols · ${st.iana_ip_protocols_covered || 256} IP#`;
+    }
+    const portsEl = document.getElementById('ks-preserved-ports');
+    if (portsEl && Array.isArray(st.preserved_loopback_ports)) {
+      const pList = st.preserved_loopback_ports;
+      portsEl.textContent = pList.length > 6
+        ? `${pList[0]}..${pList[pList.length - 1]} (${pList.length} ports)`
+        : pList.join(', ');
+    }
+    const hashEl = document.getElementById('ks-state-hash');
+    if (hashEl && st.state_hash) hashEl.textContent = st.state_hash;
+  }
+
+  async function fetchKillSwitchStatus() {
+    try {
+      const res = await fetchWithTimeout('/api/killswitch/status', {}, 1200);
+      if (!res.ok) return;
+      const st = await res.json();
+      applyKillSwitchUiState(st);
+    } catch (_) {}
+  }
+
+  async function engageHostKillSwitch() {
+    const fb = document.getElementById('ks-action-feedback');
+    if (fb) {
+      fb.style.color = '#fbbf24';
+      fb.textContent = '🚨 Engaging 22-layer OS kernel quarantine (accept UAC prompt if requested)...';
+    }
+    try {
+      const res = await fetch('/api/killswitch/engage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operator: 'webui_operator',
+          reason: 'Dashboard Disconnect Internet button'
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        applyKillSwitchUiState(data);
+        if (fb) {
+          fb.style.color = '#fca5a5';
+          fb.textContent = `🚨 Host Internet Quarantined! Active WFP Filters: ${data.active_wfp_filter_count} | State SHA-256: ${data.state_hash}`;
+        }
+        renderUniversalProtocolTable();
+      } else {
+        const msg = data.message || 'Privilege elevation required or declined.';
+        if (fb) {
+          fb.style.color = '#ef4444';
+          fb.textContent = `❌ Quarantine failed: ${msg}`;
+        }
+        showDiagnosticToast({
+          status: data.code || `HTTP ${res.status}`,
+          message: msg,
+          retryFn: engageHostKillSwitch
+        });
+      }
+    } catch (e) {
+      if (fb) {
+        fb.style.color = '#ef4444';
+        fb.textContent = `❌ Request error: ${e.message}`;
+      }
+    }
+  }
+
+  async function disarmHostKillSwitch() {
+    const fb = document.getElementById('ks-action-feedback');
+    if (fb) {
+      fb.style.color = '#38bdf8';
+      fb.textContent = '🟢 Disarming OS kernel quarantine & restoring host internet (accept UAC prompt if requested)...';
+    }
+    try {
+      const res = await fetch('/api/killswitch/disarm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operator: 'webui_operator',
+          reason: 'Dashboard Reconnect Internet button'
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        applyKillSwitchUiState(data);
+        if (fb) {
+          fb.style.color = '#34d399';
+          fb.textContent = `✅ Host Internet Restored! State SHA-256: ${data.state_hash}`;
+        }
+        renderUniversalProtocolTable();
+      } else {
+        const msg = data.message || 'Privilege elevation required or declined.';
+        if (fb) {
+          fb.style.color = '#ef4444';
+          fb.textContent = `❌ Restore failed: ${msg}`;
+        }
+        showDiagnosticToast({
+          status: data.code || `HTTP ${res.status}`,
+          message: msg,
+          retryFn: disarmHostKillSwitch
+        });
+      }
+    } catch (e) {
+      if (fb) {
+        fb.style.color = '#ef4444';
+        fb.textContent = `❌ Request error: ${e.message}`;
+      }
+    }
+  }
+
+  async function loadUniversalProtocolCatalog() {
+    if (cachedProtocolCatalog) {
+      renderUniversalProtocolTable();
+      return;
+    }
+    try {
+      const res = await fetch('/api/killswitch/protocols');
+      if (!res.ok) return;
+      cachedProtocolCatalog = await res.json();
+      const sel = document.getElementById('ks-domain-select');
+      if (sel && Array.isArray(cachedProtocolCatalog.domains)) {
+        while (sel.options.length > 1) sel.remove(1);
+        cachedProtocolCatalog.domains.forEach(d => {
+          const opt = document.createElement('option');
+          const dId = d.domain_id || d.id || d.name || d.title;
+          const dLabel = d.name || d.title || dId;
+          opt.value = dId;
+          opt.textContent = `${d.domain_number ? d.domain_number + '. ' : ''}${dLabel} (${d.protocol_count})`;
+          sel.appendChild(opt);
+        });
+      }
+      renderUniversalProtocolTable();
+    } catch (_) {}
+  }
+
+  function renderUniversalProtocolTable() {
+    const tbody = document.getElementById('ks-protocol-tbody');
+    if (!tbody || !cachedProtocolCatalog || !Array.isArray(cachedProtocolCatalog.protocols)) return;
+    const domainFilter = document.getElementById('ks-domain-select')?.value || 'ALL';
+    const q = (document.getElementById('ks-protocol-search')?.value || '').trim().toLowerCase();
+    const gBadge = document.getElementById('global-killswitch-badge');
+    const isQuarantined = gBadge && gBadge.textContent.includes('QUARANTINED');
+    const domainMap = {};
+    if (Array.isArray(cachedProtocolCatalog.domains)) {
+      cachedProtocolCatalog.domains.forEach(d => {
+        if (d.domain_id) domainMap[d.domain_id] = d.name || d.domain_id;
+      });
+    }
+
+    const filtered = cachedProtocolCatalog.protocols.filter(p => {
+      if (domainFilter !== 'ALL' && p.domain !== domainFilter && p.domain_title !== domainFilter) {
+        return false;
+      }
+      if (!q) return true;
+      const pCode = p.id || p.code || '';
+      const domLabel = domainMap[p.domain] || p.domain_title || p.domain || '';
+      return (
+        String(pCode).toLowerCase().includes(q) ||
+        String(p.name || '').toLowerCase().includes(q) ||
+        String(domLabel).toLowerCase().includes(q) ||
+        String(p.description || '').toLowerCase().includes(q)
+      );
+    });
+
+    tbody.textContent = '';
+    filtered.forEach(p => {
+      const tr = document.createElement('tr');
+      const pCode = p.id || p.code || '';
+      const domLabel = domainMap[p.domain] || p.domain_title || p.domain || '';
+
+      const tdCode = document.createElement('td');
+      const codeEl = document.createElement('code');
+      codeEl.style.color = '#38bdf8';
+      codeEl.textContent = pCode;
+      tdCode.appendChild(codeEl);
+
+      const tdName = document.createElement('td');
+      const strong = document.createElement('strong');
+      strong.textContent = p.name || '';
+      tdName.appendChild(strong);
+
+      const tdDom = document.createElement('td');
+      tdDom.style.color = '#cbd5e1';
+      tdDom.textContent = domLabel;
+
+      const tdLayer = document.createElement('td');
+      tdLayer.style.fontFamily = 'monospace';
+      tdLayer.style.color = '#a78bfa';
+      tdLayer.textContent = p.osi_layer || '';
+
+      const tdPorts = document.createElement('td');
+      tdPorts.style.fontFamily = 'monospace';
+      tdPorts.style.fontSize = '0.74rem';
+      const parts = [];
+      if (p.iana_ip_protocol !== null && p.iana_ip_protocol !== undefined) parts.push('IP:' + p.iana_ip_protocol);
+      if (Array.isArray(p.default_ports) && p.default_ports.length) parts.push('Ports:' + p.default_ports.join(','));
+      if (Array.isArray(p.tcp_ports) && p.tcp_ports.length) parts.push('TCP:' + p.tcp_ports.join(','));
+      if (Array.isArray(p.udp_ports) && p.udp_ports.length) parts.push('UDP:' + p.udp_ports.join(','));
+      if (p.ethertype) parts.push('L2:0x' + Number(p.ethertype).toString(16).toUpperCase().padStart(4, '0'));
+      tdPorts.textContent = parts.length ? parts.join(' ') : 'L2-L7 Wildcard';
+
+      const tdStatus = document.createElement('td');
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.style.background = isQuarantined ? 'rgba(239,68,68,0.2)' : 'rgba(56,189,248,0.15)';
+      badge.style.color = isQuarantined ? '#fca5a5' : '#7dd3fc';
+      badge.style.border = isQuarantined ? '1px solid #ef4444' : '1px solid #0284c7';
+      badge.textContent = isQuarantined ? 'BLOCKED IN KERNEL' : 'ARMED (READY)';
+      tdStatus.appendChild(badge);
+
+      tr.appendChild(tdCode);
+      tr.appendChild(tdName);
+      tr.appendChild(tdDom);
+      tr.appendChild(tdLayer);
+      tr.appendChild(tdPorts);
+      tr.appendChild(tdStatus);
+      tbody.appendChild(tr);
+    });
+  }
+
   // Initial load
+  fetchKillSwitchStatus();
+  loadUniversalProtocolCatalog();
   fetchAuditLog();
   fetchUnifiedRuntimeActivity();
   loadEgressDomains();
@@ -7986,6 +8340,7 @@ def exfiltrate_credentials():
   setInterval(fetchEvolutionData, 5000);
   setInterval(fetchDreamRsiData, 5000);
   setInterval(fetchHarness2Data, 5000);
+  setInterval(fetchKillSwitchStatus, 3000);
 </script>
 </body>
 </html>

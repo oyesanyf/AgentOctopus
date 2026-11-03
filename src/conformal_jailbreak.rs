@@ -273,8 +273,8 @@ impl PersistDetector {
             self.consecutive_exceedances = 0;
         }
 
-        let d_t = t >= self.persistence_length
-            && self.consecutive_exceedances >= self.persistence_length;
+        let d_t =
+            t >= self.persistence_length && self.consecutive_exceedances >= self.persistence_length;
         if d_t && self.alarm_time.is_none() {
             self.alarm_time = Some(t);
         }

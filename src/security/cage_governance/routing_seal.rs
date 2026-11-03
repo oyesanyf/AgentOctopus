@@ -73,11 +73,20 @@ impl CageRoutingSeal {
     /// Verifies that all fields meet length, character set, format, and TTL invariants.
     pub fn validate_format(&self) -> bool {
         self.policy_version_id.len() == 16
-            && self.policy_version_id.chars().all(|c| c.is_ascii_hexdigit())
+            && self
+                .policy_version_id
+                .chars()
+                .all(|c| c.is_ascii_hexdigit())
             && self.action_digest.len() == 64
-            && self.action_digest.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+            && self
+                .action_digest
+                .chars()
+                .all(|c| matches!(c, '0'..='9' | 'a'..='f'))
             && self.record_hash.len() == 64
-            && self.record_hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+            && self
+                .record_hash
+                .chars()
+                .all(|c| matches!(c, '0'..='9' | 'a'..='f'))
             && !self.seal_id.is_empty()
             && !self.signature.is_empty()
             && self.expires_at == self.issued_at.saturating_add(ROUTING_SEAL_TTL_SECS)
@@ -99,7 +108,9 @@ pub enum SealRejection {
     #[error("Routing seal already consumed (single-use replay detected): {0}")]
     AlreadyConsumed(String),
 
-    #[error("Policy version mismatch: expected active version '{expected}', seal specifies '{actual}'")]
+    #[error(
+        "Policy version mismatch: expected active version '{expected}', seal specifies '{actual}'"
+    )]
     PolicyVersionMismatch { expected: String, actual: String },
 
     #[error("Action digest mismatch: expected '{expected}', seal contains '{actual}'")]
@@ -207,7 +218,9 @@ impl RoutingSealSigner {
     ) -> Result<CageRoutingSeal, SealRejection> {
         // Tallam 2026 Evidence Sufficiency verification
         if record_hash.len() != 64
-            || !record_hash.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+            || !record_hash
+                .chars()
+                .all(|c| matches!(c, '0'..='9' | 'a'..='f'))
             || record_hash == "0000000000000000000000000000000000000000000000000000000000000000"
             || record_hash.starts_with("GENESIS_AUDIT_ROOT")
         {
@@ -284,7 +297,8 @@ impl RoutingSealSigner {
         // 1. Format check (enforces hex length, charset, and TTL invariant)
         if !seal.validate_format() {
             return Err(SealRejection::MalformedSeal(
-                "Seal fields do not meet hex length, character requirements, or TTL invariant".to_string(),
+                "Seal fields do not meet hex length, character requirements, or TTL invariant"
+                    .to_string(),
             ));
         }
 
@@ -387,9 +401,8 @@ impl RoutingSealSigner {
     pub fn prune_expired(&self, current_time: u64) -> usize {
         let mut consumed = self.consumed_seals.write().unwrap();
         let initial_len = consumed.len();
-        consumed.retain(|_, &mut exp| {
-            exp.saturating_add(CLOCK_DRIFT_TOLERANCE_SECS) >= current_time
-        });
+        consumed
+            .retain(|_, &mut exp| exp.saturating_add(CLOCK_DRIFT_TOLERANCE_SECS) >= current_time);
         self.last_prune_time.store(current_time, Ordering::Relaxed);
         initial_len.saturating_sub(consumed.len())
     }
@@ -404,7 +417,8 @@ mod tests {
         let secret = b"super_secret_cage_key_12345678";
         let signer = RoutingSealSigner::new(secret, "0123456789abcdef");
 
-        let action_digest = compute_action_digest("execute_tool", &serde_json::json!({"command": "ls"}));
+        let action_digest =
+            compute_action_digest("execute_tool", &serde_json::json!({"command": "ls"}));
         let record_hash = "1111222233334444555566667777888899990000aaaabbbbccccddddeeeeffff";
 
         let now = 1_000_000;
@@ -413,7 +427,9 @@ mod tests {
         assert_eq!(seal.expires_at, now + 30);
 
         // First validation and consumption: Success
-        assert!(signer.validate_and_consume(&seal, &action_digest, record_hash, now + 5).is_ok());
+        assert!(signer
+            .validate_and_consume(&seal, &action_digest, record_hash, now + 5)
+            .is_ok());
 
         // Second validation and consumption: Replay rejected!
         let replay_err = signer
@@ -447,7 +463,9 @@ mod tests {
 
         let action_digest = compute_action_digest("execute_tool", &serde_json::json!({}));
         let empty_hash = "";
-        let err = signer.issue_seal(&action_digest, empty_hash, 1000).unwrap_err();
+        let err = signer
+            .issue_seal(&action_digest, empty_hash, 1000)
+            .unwrap_err();
         assert!(matches!(err, SealRejection::UnanchoredEvidence(_)));
     }
 
@@ -485,7 +503,9 @@ mod tests {
         let now = 1_000_000;
 
         let seal1 = signer.issue_seal(&action_digest, record_hash, now).unwrap();
-        assert!(signer.validate_and_consume(&seal1, &action_digest, record_hash, now + 5).is_ok());
+        assert!(signer
+            .validate_and_consume(&seal1, &action_digest, record_hash, now + 5)
+            .is_ok());
         assert_eq!(signer.consumed_count(), 1);
 
         // Before TTL + clock drift: entry preserved

@@ -191,7 +191,10 @@ impl PlanGraphAnalyzer {
             return FtraVerdict::HitlRequired {
                 reason: format!(
                     "Step '{}' confidence {:.4} in [{:.2}, {:.2}); requires approval",
-                    step.id, normalized_conf, SR_26_2_CONFIDENCE_APPROVAL_THRESHOLD, SR_26_2_CONFIDENCE_ALLOW_THRESHOLD
+                    step.id,
+                    normalized_conf,
+                    SR_26_2_CONFIDENCE_APPROVAL_THRESHOLD,
+                    SR_26_2_CONFIDENCE_ALLOW_THRESHOLD
                 ),
                 step_id: step.id.clone(),
             };
@@ -405,7 +408,10 @@ mod tests {
     fn test_ftra_confidence_normalization() {
         assert_eq!(PlanGraphAnalyzer::normalize_confidence(f64::NAN), 0.0);
         assert_eq!(PlanGraphAnalyzer::normalize_confidence(f64::INFINITY), 0.0);
-        assert_eq!(PlanGraphAnalyzer::normalize_confidence(f64::NEG_INFINITY), 0.0);
+        assert_eq!(
+            PlanGraphAnalyzer::normalize_confidence(f64::NEG_INFINITY),
+            0.0
+        );
         assert_eq!(PlanGraphAnalyzer::normalize_confidence(-0.5), 0.0);
         assert_eq!(PlanGraphAnalyzer::normalize_confidence(1.5), 1.0);
         assert_eq!(PlanGraphAnalyzer::normalize_confidence(0.85), 0.85);
@@ -486,7 +492,10 @@ mod tests {
         let sanitized = StpaValidator::sanitize_parameters(&spoofed_params, "arm-verified-42");
         assert!(sanitized.get("trader_role").is_none());
         assert!(sanitized.get("agent_id").is_none());
-        assert_eq!(sanitized.get("arm_id").unwrap().as_str().unwrap(), "arm-verified-42");
+        assert_eq!(
+            sanitized.get("arm_id").unwrap().as_str().unwrap(),
+            "arm-verified-42"
+        );
         assert_eq!(sanitized.get("amount").unwrap().as_i64().unwrap(), 500);
     }
 }

@@ -539,12 +539,8 @@ impl OsoAwsContainmentEngine {
                 "AWS_R4_ADVERSARIAL_AUDIT_ISOLATION_DENY: Agent '{}' attempted forbidden control-plane/monitoring action '{}' on '{}'",
                 agent_id, action, resource
             );
-            let ks = self.record_access_denied_and_check_alarm(
-                agent_id,
-                cluster_id,
-                &reason,
-                now_unix,
-            );
+            let ks =
+                self.record_access_denied_and_check_alarm(agent_id, cluster_id, &reason, now_unix);
             return OsoAuthzDecision::Deny {
                 code: "AWS_R4_EXPLICIT_DENY".to_string(),
                 reason,
@@ -557,12 +553,8 @@ impl OsoAwsContainmentEngine {
                 "OSO_INTERSECTION_USER_DENIED: Delegating user '{}' lacks permission '{}' for resource '{}'",
                 user.user_id, action, resource
             );
-            let ks = self.record_access_denied_and_check_alarm(
-                agent_id,
-                cluster_id,
-                &reason,
-                now_unix,
-            );
+            let ks =
+                self.record_access_denied_and_check_alarm(agent_id, cluster_id, &reason, now_unix);
             return OsoAuthzDecision::Deny {
                 code: "OSO_USER_PERMISSION_MISSING".to_string(),
                 reason,
@@ -579,12 +571,8 @@ impl OsoAwsContainmentEngine {
                 "OSO_INTERSECTION_USER_RESOURCE_DENIED: Delegating user '{}' has no ownership/ACL grant over resource '{}'",
                 user.user_id, resource
             );
-            let ks = self.record_access_denied_and_check_alarm(
-                agent_id,
-                cluster_id,
-                &reason,
-                now_unix,
-            );
+            let ks =
+                self.record_access_denied_and_check_alarm(agent_id, cluster_id, &reason, now_unix);
             return OsoAuthzDecision::Deny {
                 code: "OSO_USER_RESOURCE_UNAUTHORIZED".to_string(),
                 reason,
@@ -598,12 +586,8 @@ impl OsoAwsContainmentEngine {
                 "OSO_INTERSECTION_ROLE_DENIED: Agent '{}' with role {:?} lacks capability '{}' (even though user '{}' possesses it)",
                 agent_id, agent_role, action, user.user_id
             );
-            let ks = self.record_access_denied_and_check_alarm(
-                agent_id,
-                cluster_id,
-                &reason,
-                now_unix,
-            );
+            let ks =
+                self.record_access_denied_and_check_alarm(agent_id, cluster_id, &reason, now_unix);
             return OsoAuthzDecision::Deny {
                 code: "OSO_AGENT_ROLE_CAPABILITY_MISSING".to_string(),
                 reason,
@@ -616,12 +600,8 @@ impl OsoAwsContainmentEngine {
                 "OSO_INTERSECTION_TASK_SCOPE_DENIED: Task '{}' does not scope action '{}'",
                 task_scope.task_id, action
             );
-            let ks = self.record_access_denied_and_check_alarm(
-                agent_id,
-                cluster_id,
-                &reason,
-                now_unix,
-            );
+            let ks =
+                self.record_access_denied_and_check_alarm(agent_id, cluster_id, &reason, now_unix);
             return OsoAuthzDecision::Deny {
                 code: "OSO_TASK_SCOPE_ACTION_DENIED".to_string(),
                 reason,
@@ -638,12 +618,8 @@ impl OsoAwsContainmentEngine {
                 "OSO_INTERSECTION_TASK_RESOURCE_OUT_OF_SCOPE: Resource '{}' is outside task '{}' prefixes {:?}",
                 resource, task_scope.task_id, task_scope.allowed_resource_prefixes
             );
-            let ks = self.record_access_denied_and_check_alarm(
-                agent_id,
-                cluster_id,
-                &reason,
-                now_unix,
-            );
+            let ks =
+                self.record_access_denied_and_check_alarm(agent_id, cluster_id, &reason, now_unix);
             return OsoAuthzDecision::Deny {
                 code: "OSO_TASK_RESOURCE_OUT_OF_SCOPE".to_string(),
                 reason,
@@ -750,12 +726,8 @@ impl OsoAwsContainmentEngine {
                     "OSO_MCP_PARAM_LIMIT_EXCEEDED: Tool '{}' requested limit={} exceeding task max_query_limit={}",
                     tool_name, limit, task_scope.max_query_limit
                 );
-                let ks = self.record_access_denied_and_check_alarm(
-                    agent_id,
-                    cluster_id,
-                    &reason,
-                    now_unix,
-                );
+                let ks = self
+                    .record_access_denied_and_check_alarm(agent_id, cluster_id, &reason, now_unix);
                 return OsoAuthzDecision::Deny {
                     code: "OSO_MCP_PARAM_LIMIT_EXCEEDED".to_string(),
                     reason,
@@ -770,12 +742,8 @@ impl OsoAwsContainmentEngine {
                     "OSO_MCP_ROW_OWNERSHIP_VIOLATION: Tool '{}' targeted row owner '{}' != delegating user '{}'",
                     tool_name, row_owner, user.user_id
                 );
-                let ks = self.record_access_denied_and_check_alarm(
-                    agent_id,
-                    cluster_id,
-                    &reason,
-                    now_unix,
-                );
+                let ks = self
+                    .record_access_denied_and_check_alarm(agent_id, cluster_id, &reason, now_unix);
                 return OsoAuthzDecision::Deny {
                     code: "OSO_MCP_ROW_OWNERSHIP_VIOLATION".to_string(),
                     reason,
@@ -801,10 +769,7 @@ impl OsoAwsContainmentEngine {
                         tool_name
                     );
                     let ks = self.record_access_denied_and_check_alarm(
-                        agent_id,
-                        cluster_id,
-                        &reason,
-                        now_unix,
+                        agent_id, cluster_id, &reason, now_unix,
                     );
                     return OsoAuthzDecision::Deny {
                         code: "OSO_HITL_STEP_UP_REQUIRED".to_string(),
@@ -827,10 +792,7 @@ impl OsoAwsContainmentEngine {
                             tool_name, err
                         );
                         let ks = self.record_access_denied_and_check_alarm(
-                            agent_id,
-                            cluster_id,
-                            &reason,
-                            now_unix,
+                            agent_id, cluster_id, &reason, now_unix,
                         );
                         return OsoAuthzDecision::Deny {
                             code: "OSO_HITL_STEP_UP_INVALID".to_string(),
@@ -851,7 +813,9 @@ impl OsoAwsContainmentEngine {
         }
     }
 
-    pub fn check_security_group_invariants(snapshot: &ContainmentEnvironmentSnapshot) -> Vec<String> {
+    pub fn check_security_group_invariants(
+        snapshot: &ContainmentEnvironmentSnapshot,
+    ) -> Vec<String> {
         let mut violations = Vec::new();
         for rule in &snapshot.egress_rules {
             if let Some(ref cidr) = rule.cidr_ipv4 {
@@ -1038,16 +1002,16 @@ impl OsoAwsContainmentEngine {
 
         let (scaled_services, terminated_task_ids, new_generation_epoch) =
             if let Ok(mut map) = self.cluster_services.lock() {
-                let state = map
-                    .entry(cluster_id.to_string())
-                    .or_insert_with(|| AgentClusterServiceState {
-                        cluster_id: cluster_id.to_string(),
-                        service_name: "default-agent-service".to_string(),
-                        desired_count: 1,
-                        auto_respawn_disabled: false,
-                        running_task_ids: vec!["task-default-0".to_string()],
-                        generation_epoch: 1,
-                    });
+                let state =
+                    map.entry(cluster_id.to_string())
+                        .or_insert_with(|| AgentClusterServiceState {
+                            cluster_id: cluster_id.to_string(),
+                            service_name: "default-agent-service".to_string(),
+                            desired_count: 1,
+                            auto_respawn_disabled: false,
+                            running_task_ids: vec!["task-default-0".to_string()],
+                            generation_epoch: 1,
+                        });
                 state.desired_count = 0;
                 state.auto_respawn_disabled = true;
                 let scaled = vec![state.service_name.clone()];
@@ -1193,7 +1157,10 @@ mod tests {
             &chunks,
         );
         assert_eq!(filtered.authorized_doc_ids, vec!["doc-1-allowed"]);
-        assert_eq!(filtered.filtered_out_doc_ids, vec!["doc-2-too-secret-for-role"]);
+        assert_eq!(
+            filtered.filtered_out_doc_ids,
+            vec!["doc-2-too-secret-for-role"]
+        );
     }
 
     #[test]
@@ -1259,11 +1226,8 @@ mod tests {
             .actual_attached_policy_arns
             .insert("arn:aws:iam::aws:policy/AdministratorAccess".to_string());
 
-        let breach_report = engine.verify_four_containment_invariants(
-            "octopus-agent-cluster",
-            &breached_snap,
-            now,
-        );
+        let breach_report =
+            engine.verify_four_containment_invariants("octopus-agent-cluster", &breached_snap, now);
         assert_eq!(breach_report.status, "killed");
         assert_eq!(breach_report.iam_policy_violations.len(), 2);
     }

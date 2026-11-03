@@ -37,6 +37,7 @@ pub use arm_ring::{
 pub use attestation::{PolicyAttestationRecord, RingAttestation};
 pub use audit::{RingAuditEntry, RingAuditLedger};
 pub use auditor::{ContainmentAuditor, DefenseAuditReport};
+pub use bounded_agents_apc::*;
 pub use capability_gate::CapabilityGate;
 pub use cedar_gate::{
     AlgebraicTraceProof, CedarAuditControlToken, CedarGate, NegativeControlToken,
@@ -53,7 +54,6 @@ pub use mesh_guard::{
     role_trust_tier, HomologicalAuditReport, HomologicalBoundaryAuditor, MeshGuard, TrustTier,
     VerifiedMeshMessage, MAX_RELAY_HOPS,
 };
-pub use bounded_agents_apc::*;
 pub use oso_aws_containment::*;
 pub use primitives::{
     now_micros, DiracDeltaCapabilityTicket, IndependentTrustBoundaryVerifier, MeshWatchOutSignal,

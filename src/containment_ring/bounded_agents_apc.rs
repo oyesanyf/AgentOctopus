@@ -192,8 +192,7 @@ impl ApcScope {
         let mut narrowed_resources = BTreeSet::new();
         for c_res in &child.resources {
             if self.resources.iter().any(|p_res| {
-                resource_pattern_matches(p_res, c_res)
-                    || (c_res.ends_with('*') && p_res == c_res)
+                resource_pattern_matches(p_res, c_res) || (c_res.ends_with('*') && p_res == c_res)
             }) {
                 narrowed_resources.insert(c_res.clone());
             }
@@ -438,7 +437,10 @@ impl AuthorizationEnvelope {
     /// Attempt to mutate a sealed envelope in-place fails closed (`EnvelopeSealedError`).
     pub fn attempt_in_place_scope_mutation(&mut self, _new_scope: ApcScope) -> Result<(), String> {
         if self.sealed {
-            return Err("EnvelopeSealedError: Sealed AuthorizationEnvelope cannot be modified in place".to_string());
+            return Err(
+                "EnvelopeSealedError: Sealed AuthorizationEnvelope cannot be modified in place"
+                    .to_string(),
+            );
         }
         self.effective_scope = _new_scope;
         Ok(())
@@ -533,10 +535,8 @@ impl CompositionChecker {
         action: impl Into<String>,
         classes: impl IntoIterator<Item = impl Into<String>>,
     ) {
-        self.action_to_classes.insert(
-            action.into(),
-            classes.into_iter().map(Into::into).collect(),
-        );
+        self.action_to_classes
+            .insert(action.into(), classes.into_iter().map(Into::into).collect());
     }
 
     pub fn classes_for(&self, action: &str, resource: &str) -> BTreeSet<String> {
@@ -640,10 +640,7 @@ impl CompositionChecker {
             let a_in_cand = candidate.action_classes.contains(&rule.class_a);
             let b_in_cand = candidate.action_classes.contains(&rule.class_b);
 
-            if (a_in_prior && b_in_cand)
-                || (b_in_prior && a_in_cand)
-                || (a_in_cand && b_in_cand)
-            {
+            if (a_in_prior && b_in_cand) || (b_in_prior && a_in_cand) || (a_in_cand && b_in_cand) {
                 return Err(format!(
                     "C2_COMPOSITION_PAIRWISE_DENIED[{}]: rule '{}' prohibits combining {} and {}",
                     stream_label, rule.name, rule.class_a, rule.class_b

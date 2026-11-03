@@ -52,6 +52,23 @@ mod win_console {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args: Vec<String> = std::env::args().collect();
+
+    // One-shot elevated WFP kernel helper delegation (`ShellExecuteExW("runas")`):
+    // Must execute before `relaunch_deelevated_or_fail` and exit immediately without starting
+    // any agent arms or network listeners so Finding 7 remains strictly enforced for the runtime.
+    for i in 1..args.len() {
+        if args[i] == "--wfp-kernel-apply" {
+            let action = args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
+            match agent_octopus::security::handle_wfp_kernel_apply_cli(action) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("[WFP-HELPER-ERROR] {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     let console_requested = args.iter().any(|a| a == "--console" || a == "-c")
         || std::env::var("OCTOPUS_CONSOLE")
             .map(|v| v == "1" || v == "true")

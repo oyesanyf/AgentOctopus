@@ -477,7 +477,10 @@ mod tests {
         // Monotonic epoch advancement
         cbf.advance_epoch();
         let stale_epoch_err = cbf.verify_sequence_and_epoch(3, 1).unwrap_err();
-        assert!(matches!(stale_epoch_err, CbfViolation::StaleFenceEpoch { .. }));
+        assert!(matches!(
+            stale_epoch_err,
+            CbfViolation::StaleFenceEpoch { .. }
+        ));
         assert!(cbf.verify_sequence_and_epoch(3, 2).is_ok());
     }
 

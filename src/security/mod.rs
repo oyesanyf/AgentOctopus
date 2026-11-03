@@ -11,9 +11,9 @@ pub use cage_governance::{
     CageGovernanceEngine, CageRoutingSeal, CbfSafetyEngine, CbfViolation, CommitReceipt,
     CompiledCagePolicy, ConsumeSealResponse, DebitLedger, FormalBfsModel, FtraVerdict,
     GovernanceEvaluationResult, GovernanceRequest, GovernanceVerdict, IngestPolicyResponse,
-    Phase2Mode, PlanGraphAnalyzer, PlanStep, PolicyFormat, PolicyIngestError, PolicyVersionConflict,
-    Profile, ProofStatusResponse, RoutingSealSigner, SealRejection, StageOutcome,
-    StreamConformanceStatus, StreamFinding, StreamVerificationReport, StpaValidator,
+    Phase2Mode, PlanGraphAnalyzer, PlanStep, PolicyFormat, PolicyIngestError,
+    PolicyVersionConflict, Profile, ProofStatusResponse, RoutingSealSigner, SealRejection,
+    StageOutcome, StpaValidator, StreamConformanceStatus, StreamFinding, StreamVerificationReport,
     SubstrateTranslator, TheoremProofResult, UnsafeControlAction,
 };
 
@@ -124,10 +124,6 @@ pub use agent_classifier::{
 pub use alignment_scanner::{
     AlignmentScanVerdict, RuntimeAlignmentScanner, SessionIntentContract, ToolCallTraceStep,
 };
-pub use glm_fusion_calibration::{
-    calibrate_glm_for_hardware, probe_ollama_installed_tags_fast, GlmFusionCalibrationReport,
-    GlmHardwareSpec, GlmModelTier,
-};
 pub use breakouts::{
     open_confined, validate_agent_filesystem_access, validate_sandbox_relative_path,
     ZeroMiProjectionResult, ZeroMutualInformationProjector,
@@ -143,6 +139,10 @@ pub use dlp_lineage::{
 };
 pub use file_lineage::{
     FileLineageRecord, FileLineageTracker, LineageCheckVerdict, MAX_LINEAGE_RECORDS,
+};
+pub use glm_fusion_calibration::{
+    calibrate_glm_for_hardware, probe_ollama_installed_tags_fast, GlmFusionCalibrationReport,
+    GlmHardwareSpec, GlmModelTier,
 };
 pub use mercury_guard::{
     HostActuationPore, MercuryContainmentEngine, MercuryEvaluationResult, CRITICAL_WEBER_NUMBER,
@@ -202,4 +202,20 @@ pub use rate_limit_backoff::{
     GoogleApiBackoffAnalyzer, HarEntrySample, HarFlowFact, NetworkProtocol, OpenJevDecisionVoter,
     OsqueryProcessFact, RateLimitAllowlist, RateLimitReleaseEntry, RateLimitVoterEnsemble,
     ReaBinaryFact, ReteEngine, VoterConsensus, VoterVerdict,
+};
+
+pub mod host_network_isolation;
+pub mod universal_protocols;
+
+pub use host_network_isolation::{
+    build_linux_blackhole_route_msg, discover_active_octopus_ports,
+    generate_macos_pf_quarantine_rules, global_host_killswitch, handle_wfp_kernel_apply_cli,
+    has_live_active_wfp_filters, is_current_process_elevated, load_persisted_wfp_filter_ids,
+    terminate_non_loopback_tcp_sockets, FwpmFilter0, HostIsolationError, HostIsolationReceipt,
+    HostKillSwitchManager, HostKillSwitchStatus, KernelIsolationBackend, BLOCKED_L2_ETHERTYPES,
+    DEFAULT_OCTOPUS_PORT, FORBIDDEN_PORT_5000, WFP_RULE_PREFIX,
+};
+pub use universal_protocols::{
+    OsiLayer, ProtocolDefinition, ProtocolDomain, ProtocolVectorType, UniversalProtocolCatalog,
+    CATALOG_ENTRIES,
 };

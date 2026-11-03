@@ -510,7 +510,9 @@ impl FormalBfsModel {
                 if !state.seal_present {
                     violations.push(BfsViolation {
                         state: state.clone(),
-                        error: "Direct-bind violation counterexample observed (executed without seal)".to_string(),
+                        error:
+                            "Direct-bind violation counterexample observed (executed without seal)"
+                                .to_string(),
                     });
                 }
             }
@@ -841,22 +843,34 @@ impl FormalBfsModel {
                     findings.push(StreamFinding {
                         record_index: idx,
                         rule: "reachable".to_string(),
-                        detail: format!("Illegal state transition to unreachable state '{}'", state_key),
+                        detail: format!(
+                            "Illegal state transition to unreachable state '{}'",
+                            state_key
+                        ),
                     });
                 }
             }
 
             // Rule 2: plan
             if event_type == "PLAN_STEP" {
-                let action = rec.get("action_name").and_then(|v| v.as_str()).unwrap_or("");
-                let caller_auth = rec.get("caller_authority").and_then(|v| v.as_u64()).unwrap_or(5) as u8;
+                let action = rec
+                    .get("action_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let caller_auth = rec
+                    .get("caller_authority")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(5) as u8;
                 let reversibility = super::ftra_stpa::ActionReversibility::classify(action);
                 let req_rank = reversibility.required_authority_rank();
                 if caller_auth > req_rank {
                     findings.push(StreamFinding {
                         record_index: idx,
                         rule: "plan".to_string(),
-                        detail: format!("Action '{}' requires authority rank <= {}, got {}", action, req_rank, caller_auth),
+                        detail: format!(
+                            "Action '{}' requires authority rank <= {}, got {}",
+                            action, req_rank, caller_auth
+                        ),
                     });
                 }
             }
@@ -869,7 +883,10 @@ impl FormalBfsModel {
                     .or_else(|| details_obj.as_ref()?.get("verdict"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let rec_hash = rec.get("record_hash").and_then(|v| v.as_str()).unwrap_or("");
+                let rec_hash = rec
+                    .get("record_hash")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let seal_present = rec
                     .get("seal_present")
                     .or_else(|| details_obj.as_ref()?.get("seal_present"))
@@ -881,7 +898,10 @@ impl FormalBfsModel {
                     findings.push(StreamFinding {
                         record_index: idx,
                         rule: "seal".to_string(),
-                        detail: format!("Decision {} verdict {} missing seal_present", rec_hash, verdict),
+                        detail: format!(
+                            "Decision {} verdict {} missing seal_present",
+                            rec_hash, verdict
+                        ),
                     });
                 }
 
@@ -904,7 +924,10 @@ impl FormalBfsModel {
                             findings.push(StreamFinding {
                                 record_index: idx,
                                 rule: "coverage".to_string(),
-                                detail: format!("Decision {} missing evaluation stage '{}'", rec_hash, req_stage),
+                                detail: format!(
+                                    "Decision {} missing evaluation stage '{}'",
+                                    rec_hash, req_stage
+                                ),
                             });
                         }
                     }
@@ -944,7 +967,10 @@ impl FormalBfsModel {
                     findings.push(StreamFinding {
                         record_index: idx,
                         rule: "single_use".to_string(),
-                        detail: format!("Seal '{}' consumed multiple times (replay detected)", seal_id),
+                        detail: format!(
+                            "Seal '{}' consumed multiple times (replay detected)",
+                            seal_id
+                        ),
                     });
                 }
 
@@ -980,7 +1006,10 @@ impl FormalBfsModel {
             // CBF commit & rollback checks
             if event_type == "CBF_COMMIT" {
                 let debit_id = rec.get("debit_id").and_then(|v| v.as_str()).unwrap_or("");
-                let state_before = rec.get("state_before").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let state_before = rec
+                    .get("state_before")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
                 let cost = rec.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let b_min = rec.get("b_min").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let gamma = rec.get("gamma").and_then(|v| v.as_f64()).unwrap_or(0.5);
@@ -1011,8 +1040,14 @@ impl FormalBfsModel {
 
                 if status == "ROLLED_BACK" {
                     if let Some(commit_rec) = cbf_commits.get(debit_id) {
-                        let commit_cost = commit_rec.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        let restored_cost = rec.get("restored_amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        let commit_cost = commit_rec
+                            .get("cost")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0);
+                        let restored_cost = rec
+                            .get("restored_amount")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0);
 
                         if (commit_cost - restored_cost).abs() > 1e-6 {
                             findings.push(StreamFinding {
@@ -1028,7 +1063,10 @@ impl FormalBfsModel {
                         findings.push(StreamFinding {
                             record_index: idx,
                             rule: "cbf_rollback".to_string(),
-                            detail: format!("CBF_ROLLBACK references unledgered debit_id '{}'", debit_id),
+                            detail: format!(
+                                "CBF_ROLLBACK references unledgered debit_id '{}'",
+                                debit_id
+                            ),
                         });
                     }
                 }
@@ -1072,7 +1110,8 @@ impl FormalBfsModel {
             hasher.update(format!("rec[{i}]:{s}\n").as_bytes());
         }
         for f in &findings {
-            hasher.update(format!("finding:{}:{}:{}\n", f.record_index, f.rule, f.detail).as_bytes());
+            hasher
+                .update(format!("finding:{}:{}:{}\n", f.record_index, f.rule, f.detail).as_bytes());
         }
         let stream_proof_hash = hex::encode(hasher.finalize());
 
@@ -1103,7 +1142,9 @@ impl FormalBfsModel {
     /// Checks if a string exactly conforms to `^[0-9a-f]{64}$`.
     #[inline]
     pub fn is_64_hex_lowercase(s: &str) -> bool {
-        s.len() == 64 && s.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+        s.len() == 64
+            && s.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
     }
 }
 
@@ -1132,8 +1173,14 @@ mod tests {
     fn test_formal_bfs_skipped_tier_models() {
         for skip_tier in 0..7 {
             let result = FormalBfsModel::explore_skipped_tier_model(skip_tier);
-            assert_eq!(result.reachable_count, 31, "Failed for skipped tier {skip_tier}");
-            assert_eq!(result.executed_count, 0, "Execution was not blocked for skipped tier {skip_tier}");
+            assert_eq!(
+                result.reachable_count, 31,
+                "Failed for skipped tier {skip_tier}"
+            );
+            assert_eq!(
+                result.executed_count, 0,
+                "Execution was not blocked for skipped tier {skip_tier}"
+            );
         }
     }
 

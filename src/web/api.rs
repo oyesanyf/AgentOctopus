@@ -2,6 +2,11 @@ use crate::arm::{KernelSentinelArm, TarpitArm};
 use crate::core::types::ArmRole;
 use crate::security::audit::SecurityAuditLog;
 use crate::security::breakouts::BreakoutDefenseCoordinator;
+use crate::security::cage_governance::{CageApiError, CageGovernanceEngine, GovernanceRequest};
+#[cfg(test)]
+use crate::security::cage_governance::{
+    GovernanceEvaluationResult, GovernanceVerdict, ProofStatusResponse,
+};
 use crate::security::cedar_arm::*;
 use crate::security::continuous_eval::ContinuousEvaluationEngine;
 use crate::security::governor::{
@@ -18,13 +23,6 @@ use crate::telemetry::otel::{OtelSessionTelemetry, OtelSpanKind, OtelStatusCode}
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
-use crate::security::cage_governance::{
-    CageApiError, CageGovernanceEngine, GovernanceRequest,
-};
-#[cfg(test)]
-use crate::security::cage_governance::{
-    GovernanceEvaluationResult, GovernanceVerdict, ProofStatusResponse,
-};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiveTestEvent {
@@ -276,12 +274,10 @@ impl Default for WebState {
             crate::security::harness2::RecursiveHarnessOptimizerArm::with_registry(&arm_rings),
         );
 
-        let cage_engine = Arc::new(
-            CageGovernanceEngine::with_default_policy(
-                Arc::clone(&audit_log),
-                &secret_seed,
-            ),
-        );
+        let cage_engine = Arc::new(CageGovernanceEngine::with_default_policy(
+            Arc::clone(&audit_log),
+            &secret_seed,
+        ));
 
         Self {
             gateway,
@@ -322,10 +318,7 @@ impl WebState {
     }
 
     /// Builder method to supply a custom or pre-configured CAGE governance engine.
-    pub fn with_cage_engine(
-        mut self,
-        engine: Arc<CageGovernanceEngine>,
-    ) -> Self {
+    pub fn with_cage_engine(mut self, engine: Arc<CageGovernanceEngine>) -> Self {
         self.cage_engine = engine;
         self
     }
@@ -3744,7 +3737,8 @@ pub fn handle_cage_ingest_policy(
     body: &str,
     expected_version_hint: Option<&str>,
 ) -> (&'static str, String) {
-    let (raw_content, expected_ver_owned) = match serde_json::from_str::<IngestPolicyPayload>(body) {
+    let (raw_content, expected_ver_owned) = match serde_json::from_str::<IngestPolicyPayload>(body)
+    {
         Ok(payload) => {
             let extracted = payload.policy.or(payload.raw_policy);
             let raw_str = match extracted {
@@ -3757,7 +3751,10 @@ pub fn handle_cage_ingest_policy(
                 .or_else(|| expected_version_hint.map(|s| s.to_string()));
             (raw_str, exp)
         }
-        Err(_) => (body.to_string(), expected_version_hint.map(|s| s.to_string())),
+        Err(_) => (
+            body.to_string(),
+            expected_version_hint.map(|s| s.to_string()),
+        ),
     };
 
     match state
@@ -3866,7 +3863,8 @@ pub fn handle_cage_proof_status(state: &WebState) -> (&'static str, String) {
 
 /// Verifies audit log trace events against all 7 formal conformance rules.
 pub fn handle_cage_trace_conformance(state: &WebState, body: &str) -> (&'static str, String) {
-    let traces: Vec<serde_json::Value> = match serde_json::from_str::<Vec<serde_json::Value>>(body) {
+    let traces: Vec<serde_json::Value> = match serde_json::from_str::<Vec<serde_json::Value>>(body)
+    {
         Ok(list) => list,
         Err(_) => {
             #[derive(Deserialize)]
@@ -3909,6 +3907,151 @@ pub fn handle_cage_trace_conformance(state: &WebState, body: &str) -> (&'static 
         }
         Err(err) => cage_error_payload(&err),
     }
+}
+
+#[derive(Deserialize, Default)]
+struct KillSwitchActionBody {
+    #[serde(default)]
+    pub operator: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Returns live host KillSwitch status reconciled with kernel BFE filters and 16-domain protocol metrics.
+pub fn handle_killswitch_status(_state: &WebState) -> (&'static str, String) {
+    let status = crate::security::global_host_killswitch().status();
+    (
+        "200 OK",
+        serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string()),
+    )
+}
+
+/// Engages zero-subprocess host kernel network quarantine (Windows 22-layer WFP / Linux Netlink / macOS PF).
+pub fn handle_killswitch_engage(state: &WebState, body: &str) -> (&'static str, String) {
+    let parsed: KillSwitchActionBody = if body.trim().is_empty() {
+        KillSwitchActionBody::default()
+    } else {
+        match serde_json::from_str(body) {
+            Ok(p) => p,
+            Err(e) => {
+                return (
+                    "400 Bad Request",
+                    json_error_payload(
+                        "INVALID_JSON",
+                        &format!("Invalid JSON payload for /api/killswitch/engage: {}", e),
+                    ),
+                );
+            }
+        }
+    };
+
+    let operator = parsed
+        .operator
+        .unwrap_or_else(|| "webui_operator".to_string());
+    let reason = parsed
+        .reason
+        .unwrap_or_else(|| "Emergency Host Internet Disconnect via Dashboard".to_string());
+
+    match crate::security::global_host_killswitch().engage(&operator, &reason) {
+        Ok(st) => {
+            state.audit_log.record_event(
+                "HOST_KILLSWITCH_ENGAGED",
+                &operator,
+                &format!(
+                    "Engaged {} ({} WFP filters, {} protocols across {} domains): {}",
+                    st.backend_engine,
+                    st.active_wfp_filter_count,
+                    st.universal_protocols_count,
+                    st.universal_domains_count,
+                    reason
+                ),
+                "QUARANTINED",
+            );
+            (
+                "200 OK",
+                serde_json::to_string(&st).unwrap_or_else(|_| "{}".to_string()),
+            )
+        }
+        Err(crate::security::HostIsolationError::InsufficientPrivileges {
+            details,
+            remediation,
+        }) => (
+            "403 Forbidden",
+            json_error_payload(
+                "INSUFFICIENT_PRIVILEGES",
+                &format!("{} {}", details, remediation),
+            ),
+        ),
+        Err(e) => (
+            "500 Internal Server Error",
+            json_error_payload("HOST_ISOLATION_FAILED", &e.to_string()),
+        ),
+    }
+}
+
+/// Disarms host kernel network quarantine and restores normal endpoint connectivity.
+pub fn handle_killswitch_disarm(state: &WebState, body: &str) -> (&'static str, String) {
+    let parsed: KillSwitchActionBody = if body.trim().is_empty() {
+        KillSwitchActionBody::default()
+    } else {
+        match serde_json::from_str(body) {
+            Ok(p) => p,
+            Err(e) => {
+                return (
+                    "400 Bad Request",
+                    json_error_payload(
+                        "INVALID_JSON",
+                        &format!("Invalid JSON payload for /api/killswitch/disarm: {}", e),
+                    ),
+                );
+            }
+        }
+    };
+
+    let operator = parsed
+        .operator
+        .unwrap_or_else(|| "webui_operator".to_string());
+    let reason = parsed
+        .reason
+        .unwrap_or_else(|| "Host Internet Reconnect via Dashboard".to_string());
+
+    match crate::security::global_host_killswitch().disarm(&operator, &reason) {
+        Ok(st) => {
+            state.audit_log.record_event(
+                "HOST_KILLSWITCH_DISARMED",
+                &operator,
+                &format!("Restored host connectivity: {}", reason),
+                "RESTORED",
+            );
+            (
+                "200 OK",
+                serde_json::to_string(&st).unwrap_or_else(|_| "{}".to_string()),
+            )
+        }
+        Err(crate::security::HostIsolationError::InsufficientPrivileges {
+            details,
+            remediation,
+        }) => (
+            "403 Forbidden",
+            json_error_payload(
+                "INSUFFICIENT_PRIVILEGES",
+                &format!("{} {}", details, remediation),
+            ),
+        ),
+        Err(e) => (
+            "500 Internal Server Error",
+            json_error_payload("HOST_DISARM_FAILED", &e.to_string()),
+        ),
+    }
+}
+
+/// Returns the complete 16-domain, 218-protocol Universal Protocol Catalog JSON summary.
+pub fn handle_killswitch_protocols() -> (&'static str, String) {
+    let summary = crate::security::UniversalProtocolCatalog::catalog_json_summary();
+    (
+        "200 OK",
+        serde_json::to_string(&summary).unwrap_or_else(|_| "{}".to_string()),
+    )
 }
 
 #[cfg(test)]
@@ -4051,7 +4194,8 @@ mod tests {
             "fuel_cost": 1.0,
             "expected_policy_version": null,
             "execution_profile": "Full"
-        }).to_string();
+        })
+        .to_string();
         let (s4, b4) = handle_cage_validate_action(&state, &req);
         assert_eq!(s4, "200 OK");
         let eval_res: GovernanceEvaluationResult = serde_json::from_str(&b4).unwrap();
@@ -4059,7 +4203,8 @@ mod tests {
         assert!(eval_res.seal.is_some());
 
         // Validate action with version mismatch -> 409 Conflict
-        let (s4_mismatch, b4_mismatch) = handle_cage_validate_action_with_version(&state, &req, Some("mismatch_version_id"));
+        let (s4_mismatch, b4_mismatch) =
+            handle_cage_validate_action_with_version(&state, &req, Some("mismatch_version_id"));
         assert_eq!(s4_mismatch, "409 Conflict");
         assert!(b4_mismatch.contains("POLICY_VERSION_MISMATCH"));
 

@@ -2602,8 +2602,7 @@ pub fn validate_pending_research_item(req: &ResearchApprovalRequest) -> Research
         if let Some(item) = guard.iter().find(|i| {
             i.item_id == target_id
                 || i.arxiv_id == target_id
-                || (!target_base.is_empty()
-                    && normalize_base_arxiv_id(&i.arxiv_id) == target_base)
+                || (!target_base.is_empty() && normalize_base_arxiv_id(&i.arxiv_id) == target_base)
         }) {
             indicator_sample = item
                 .indicator_pattern
@@ -3327,7 +3326,8 @@ pub fn execute_langgraph_research_swarm(req: &LangGraphSwarmRequest) -> LangGrap
     nodes_executed.push(LangGraphNodeExecution {
         node_index: 1,
         node_id: "arxiv_discovery_node".to_string(),
-        node_role: "arXiv Security Feed & Query Ranking Agent (2025-2026 Recency Window)".to_string(),
+        node_role: "arXiv Security Feed & Query Ranking Agent (2025-2026 Recency Window)"
+            .to_string(),
         status: "COMPLETED".to_string(),
         latency_us: n1_start.elapsed().as_micros() as u64,
         state_transition: "START -> langextract_grounder_node".to_string(),
@@ -3517,7 +3517,9 @@ pub fn execute_langgraph_research_swarm(req: &LangGraphSwarmRequest) -> LangGrap
                 latency_us: n5_start.elapsed().as_micros() as u64,
                 state_transition: "reflexion_gap_healer_node -> cedar_policy_synthesizer_node"
                     .to_string(),
-                output_summary: "Remapped uncovered extraction boundaries to container_runtime_privilege".to_string(),
+                output_summary:
+                    "Remapped uncovered extraction boundaries to container_runtime_privilege"
+                        .to_string(),
             });
             graph_edges.push(LangGraphEdge {
                 from_node: "seven_ring_verifier_node".to_string(),
@@ -3548,12 +3550,8 @@ pub fn execute_langgraph_research_swarm(req: &LangGraphSwarmRequest) -> LangGrap
 }
 
 /// Canonical list of arXiv base IDs already implemented and enforced in AgentOctopus.
-pub const ALREADY_IMPLEMENTED_ARXIV_IDS: &[&str] = &[
-    "2603.02277",
-    "2501.18492",
-    "2503.00061",
-    "2511.10720",
-];
+pub const ALREADY_IMPLEMENTED_ARXIV_IDS: &[&str] =
+    &["2603.02277", "2501.18492", "2503.00061", "2511.10720"];
 
 /// Backward-compatible type aliases for external callers.
 pub type ResearchExtractionItem = GroundedBreakoutExtraction;
