@@ -974,3 +974,496 @@ fn test_challenge_vulnerability_ssrf_port_bypass_and_ipv6_omission() {
         "IPv6 literals must be blocked by validate_mesh_uri"
     );
 }
+
+// ============================================================================
+// 12. Root Key Binding & Delegation Tampering Adversarial Matrix
+// ============================================================================
+
+#[test]
+fn test_challenge_root_key_binding_and_delegation_tampering() {
+    let k0 = EdSigningKey::generate(&mut OsRng);
+    let k1 = EdSigningKey::generate(&mut OsRng);
+    let k2 = EdSigningKey::generate(&mut OsRng);
+    let attacker_key = EdSigningKey::generate(&mut OsRng);
+
+    let mut services = BTreeSet::new();
+    services.insert("mcp://calc".to_string());
+    services.insert("mcp://echo".to_string());
+
+    let mut publish = BTreeSet::new();
+    publish.insert("mcp://octopus/doc_extractor".to_string());
+
+    let root_mandate = AttenuatedMandate::create_root(
+        &k0,
+        "spiffe://agentoctopus.local/root",
+        "spiffe://agentoctopus.local/arm/child1",
+        k1.verifying_key().to_bytes(),
+        services.clone(),
+        publish.clone(),
+        1_000,
+        5_000,
+    )
+    .expect("Root mandate creation failed");
+
+    let child2_mandate = root_mandate
+        .attenuate(
+            &k1,
+            "spiffe://agentoctopus.local/arm/child2",
+            k2.verifying_key().to_bytes(),
+            services.clone(),
+            publish.clone(),
+            4_500,
+            1_500,
+        )
+        .expect("Hop 1 attenuation failed");
+
+    let root_vk = k0.verifying_key().to_bytes();
+    let attacker_vk = attacker_key.verifying_key().to_bytes();
+
+    // 12.1: Verify with mismatched root verifying key -> MUST FAIL
+    let res_mismatched_root = child2_mandate.verify_chain(&attacker_vk, 2_000);
+    assert!(
+        matches!(res_mismatched_root, Err(MandateError::SignatureFailure { depth: 0, ref reason }) if reason.contains("Root verifying key does not match trusted root anchor")),
+        "Verification against unanchored root key must fail: got {:?}",
+        res_mismatched_root
+    );
+
+    // 12.2: Tamper link 0 delegator verifying key -> MUST FAIL
+    let mut tampered_link0 = child2_mandate.clone();
+    tampered_link0.delegation_chain[0].delegator_verifying_key = attacker_vk;
+    let res_tampered_link0 = tampered_link0.verify_chain(&root_vk, 2_000);
+    assert!(
+        matches!(res_tampered_link0, Err(MandateError::SignatureFailure { depth: 0, ref reason }) if reason.contains("Link 0 delegator key does not match trusted root anchor")),
+        "Tampered link 0 delegator key must fail: got {:?}",
+        res_tampered_link0
+    );
+
+    // 12.3: Intermediate link key chaining mismatch (link[1].delegator != link[0].delegatee) -> MUST FAIL
+    let mut broken_chain = child2_mandate.clone();
+    broken_chain.delegation_chain[1].delegator_verifying_key = attacker_vk;
+    let res_broken_chain = broken_chain.verify_chain(&root_vk, 2_000);
+    assert!(
+        matches!(res_broken_chain, Err(MandateError::SignatureFailure { depth: 1, ref reason }) if reason.contains("Cryptographic delegation key chain broken at hop 1")),
+        "Broken key chain at hop 1 must fail: got {:?}",
+        res_broken_chain
+    );
+
+    // 12.4: Swap intermediate delegatee verifying key -> MUST FAIL
+    let mut swapped_delegatee = child2_mandate.clone();
+    swapped_delegatee.delegation_chain[0].delegatee_verifying_key = attacker_vk;
+    let res_swapped_delegatee = swapped_delegatee.verify_chain(&root_vk, 2_000);
+    assert!(
+        res_swapped_delegatee.is_err(),
+        "Swapped intermediate delegatee key must be rejected"
+    );
+
+    // 12.5: Intermediate caveat block tampering (modify attenuated_services) -> MUST FAIL
+    let mut tampered_services = child2_mandate.clone();
+    tampered_services.delegation_chain[1].attenuated_services.insert("mcp://payroll".to_string());
+    let res_tampered_services = tampered_services.verify_chain(&root_vk, 2_000);
+    assert!(
+        matches!(res_tampered_services, Err(MandateError::SignatureFailure { depth: 1, .. })),
+        "Tampered caveat block in intermediate link must fail signature verification: got {:?}",
+        res_tampered_services
+    );
+
+    // 12.6: Inter-hop SPIFFE ID mismatch attack -> MUST FAIL
+    let mut spiffe_mismatch = child2_mandate.clone();
+    spiffe_mismatch.delegation_chain[1].delegator_spiffe_id = "spiffe://agentoctopus.local/arm/attacker".to_string();
+    let res_spiffe = spiffe_mismatch.verify_chain(&root_vk, 2_000);
+    assert!(
+        matches!(res_spiffe, Err(MandateError::SignatureFailure { depth: 1, ref reason }) if reason.contains("SPIFFE ID continuity broken at hop 1")),
+        "Inter-hop SPIFFE mismatch must fail: got {:?}",
+        res_spiffe
+    );
+
+    // 12.7: Root link delegator SPIFFE ID mismatch -> MUST FAIL
+    let mut root_spiffe_mismatch = child2_mandate.clone();
+    root_spiffe_mismatch.delegation_chain[0].delegator_spiffe_id = "spiffe://agentoctopus.local/fake_root".to_string();
+    let res_root_spiffe = root_spiffe_mismatch.verify_chain(&root_vk, 2_000);
+    assert!(
+        matches!(res_root_spiffe, Err(MandateError::SignatureFailure { depth: 0, ref reason }) if reason.contains("Link 0 delegator SPIFFE ID does not match root issuer SPIFFE ID")),
+        "Root SPIFFE mismatch must fail: got {:?}",
+        res_root_spiffe
+    );
+
+    // 12.8: Leaf delegatee SPIFFE ID mismatch with declared current holder -> MUST FAIL
+    let mut leaf_spiffe_mismatch = child2_mandate.clone();
+    leaf_spiffe_mismatch.current_holder_spiffe_id = "spiffe://agentoctopus.local/arm/attacker".to_string();
+    let res_leaf_spiffe = leaf_spiffe_mismatch.verify_chain(&root_vk, 2_000);
+    assert!(
+        matches!(res_leaf_spiffe, Err(MandateError::SignatureFailure { depth: 1, ref reason }) if reason.contains("Current holder SPIFFE ID")),
+        "Leaf holder mismatch must fail: got {:?}",
+        res_leaf_spiffe
+    );
+
+    // Valid chain passes
+    assert!(child2_mandate.verify_chain(&root_vk, 2_000).is_ok());
+}
+
+// ============================================================================
+// 13. Inbound Token Verification Adversarial Matrix (execute_inbound_mesh_call)
+// ============================================================================
+
+#[tokio::test]
+async fn test_challenge_inbound_mesh_token_verification_adversarial_matrix() {
+    use agent_octopus::security::{AgentMeshConfig, AgentMeshEngine, CageRoutingSeal};
+
+    let killswitch = Arc::new(KillSwitch::new());
+    let config = AgentMeshConfig {
+        base_issuer_url: "http://127.0.0.1:5006".to_string(),
+        policy: AgentMeshPolicyConfig::default_serving_policy(),
+        external_mesh_node_url: None,
+        enable_loopback_node: true,
+        loopback_port: 0,
+    };
+
+    let engine = AgentMeshEngine::new(config, killswitch)
+        .await
+        .expect("Engine initialization failed");
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let valid_seal = CageRoutingSeal {
+        seal_id: "seal-inbound-test-01".to_string(),
+        policy_version_id: "0123456789abcdef".to_string(),
+        action_digest: "a".repeat(64),
+        record_hash: "b".repeat(64),
+        issued_at: now,
+        expires_at: now + 30,
+        signature: "c".repeat(64),
+    };
+
+    // Mint legitimate token
+    let genuine_token = engine
+        .issuer()
+        .mint_arm_token_with_time("arm_calc", 1, &ArmRole::UntrustedDocIngest, now)
+        .expect("Mint failed");
+
+    // Baseline: Valid call succeeds
+    let baseline_res = engine
+        .execute_inbound_mesh_call(
+            "mcp://octopus/doc_extractor",
+            Some(&format!("Bearer {}", genuine_token)),
+            &valid_seal,
+            b"hello data",
+        )
+        .await;
+    assert!(baseline_res.is_ok(), "Genuine inbound call must succeed: {:?}", baseline_res);
+
+    // Attack 13.1: Missing Auth Header (None) -> MUST FAIL
+    let res_none = engine
+        .execute_inbound_mesh_call(
+            "mcp://octopus/doc_extractor",
+            None,
+            &valid_seal,
+            b"hello data",
+        )
+        .await;
+    assert!(res_none.is_err(), "Missing auth header must be rejected");
+
+    // Attack 13.2: Empty Auth Header -> MUST FAIL
+    let res_empty = engine
+        .execute_inbound_mesh_call(
+            "mcp://octopus/doc_extractor",
+            Some(""),
+            &valid_seal,
+            b"hello data",
+        )
+        .await;
+    assert!(res_empty.is_err(), "Empty auth header must be rejected");
+
+    // Attack 13.3: Non-Bearer Scheme (Basic auth) -> MUST FAIL
+    let res_basic = engine
+        .execute_inbound_mesh_call(
+            "mcp://octopus/doc_extractor",
+            Some("Basic dXNlcjpwYXNz"),
+            &valid_seal,
+            b"hello data",
+        )
+        .await;
+    assert!(res_basic.is_err(), "Non-Bearer scheme must be rejected");
+
+    // Attack 13.4: Forged JWT Signature -> MUST FAIL
+    let parts: Vec<&str> = genuine_token.split('.').collect();
+    let forged_sig = URL_SAFE_NO_PAD.encode(&[0xBAu8; 64]);
+    let forged_token = format!("{}.{}.{}", parts[0], parts[1], forged_sig);
+    let res_forged = engine
+        .execute_inbound_mesh_call(
+            "mcp://octopus/doc_extractor",
+            Some(&format!("Bearer {}", forged_token)),
+            &valid_seal,
+            b"hello data",
+        )
+        .await;
+    assert!(res_forged.is_err(), "Forged JWT signature must be rejected");
+
+    // Attack 13.5: Truncated JWT (missing signature component) -> MUST FAIL
+    let truncated_token = format!("{}.{}", parts[0], parts[1]);
+    let res_truncated = engine
+        .execute_inbound_mesh_call(
+            "mcp://octopus/doc_extractor",
+            Some(&format!("Bearer {}", truncated_token)),
+            &valid_seal,
+            b"hello data",
+        )
+        .await;
+    assert!(res_truncated.is_err(), "Truncated JWT must be rejected");
+
+    // Attack 13.6: Tampered JWT Claims -> MUST FAIL
+    let tampered_claims = json!({
+        "iss": "http://127.0.0.1:5006",
+        "sub": "http://127.0.0.1:5006/arm/arm_admin/epoch/1",
+        "aud": "agentmesh.local",
+        "arm_id": "arm_admin",
+        "epoch": 1,
+        "role": "Supervisor",
+        "iat": now,
+        "nbf": now,
+        "exp": now + 300,
+        "jti": "jti_tampered_claims"
+    });
+    let tampered_payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&tampered_claims).unwrap());
+    let tampered_token = format!("{}.{}.{}", parts[0], tampered_payload_b64, parts[2]);
+    let res_tampered = engine
+        .execute_inbound_mesh_call(
+            "mcp://octopus/doc_extractor",
+            Some(&format!("Bearer {}", tampered_token)),
+            &valid_seal,
+            b"hello data",
+        )
+        .await;
+    assert!(res_tampered.is_err(), "Tampered JWT payload must be rejected");
+
+    // Attack 13.7: Expired JWT (exp < now) -> MUST FAIL
+    let expired_token = engine
+        .issuer()
+        .mint_arm_token_with_time("arm_calc", 1, &ArmRole::UntrustedDocIngest, now - 400)
+        .expect("Mint failed");
+    let res_expired = engine
+        .execute_inbound_mesh_call(
+            "mcp://octopus/doc_extractor",
+            Some(&format!("Bearer {}", expired_token)),
+            &valid_seal,
+            b"hello data",
+        )
+        .await;
+    assert!(res_expired.is_err(), "Expired JWT must be rejected");
+
+    // Attack 13.8: Future clock-skew JWT (> 5s in future) -> MUST FAIL
+    let future_token = engine
+        .issuer()
+        .mint_arm_token_with_time("arm_calc", 1, &ArmRole::UntrustedDocIngest, now + 10)
+        .expect("Mint failed");
+    let res_future = engine
+        .execute_inbound_mesh_call(
+            "mcp://octopus/doc_extractor",
+            Some(&format!("Bearer {}", future_token)),
+            &valid_seal,
+            b"hello data",
+        )
+        .await;
+    assert!(res_future.is_err(), "Future token (> 5s clock skew) must be rejected");
+
+    // Attack 13.9: Revoked Arm Workload -> MUST FAIL
+    let revoked_arm_token = engine
+        .issuer()
+        .mint_arm_token_with_time("arm_revoked_target", 1, &ArmRole::UntrustedDocIngest, now)
+        .expect("Mint failed");
+    engine.pep_bridge().trip_arm_killswitch("arm_revoked_target");
+    let res_revoked = engine
+        .execute_inbound_mesh_call(
+            "mcp://octopus/doc_extractor",
+            Some(&format!("Bearer {}", revoked_arm_token)),
+            &valid_seal,
+            b"hello data",
+        )
+        .await;
+    assert!(res_revoked.is_err(), "Revoked arm must be denied access to inbound mesh tool");
+
+    // Attack 13.10: Forged Exchanged Mesh Token (`mesh_tok_...`) -> MUST FAIL
+    let res_fake_mesh_tok = engine
+        .execute_inbound_mesh_call(
+            "mcp://octopus/doc_extractor",
+            Some("Bearer mesh_tok_attacker_forgery_1234567890"),
+            &valid_seal,
+            b"hello data",
+        )
+        .await;
+    assert!(res_fake_mesh_tok.is_err(), "Forged mesh token must be rejected");
+
+    // Attack 13.11: Expired CAGE Routing Seal -> MUST FAIL
+    let expired_seal = CageRoutingSeal {
+        seal_id: "seal-expired-01".to_string(),
+        policy_version_id: "0123456789abcdef".to_string(),
+        action_digest: "a".repeat(64),
+        record_hash: "b".repeat(64),
+        issued_at: now - 60,
+        expires_at: now - 30,
+        signature: "c".repeat(64),
+    };
+    let res_expired_seal = engine
+        .execute_inbound_mesh_call(
+            "mcp://octopus/doc_extractor",
+            Some(&format!("Bearer {}", genuine_token)),
+            &expired_seal,
+            b"hello data",
+        )
+        .await;
+    assert!(res_expired_seal.is_err(), "Expired CAGE Routing Seal must be rejected");
+
+    // Clean shutdown
+    engine.stop_serving_node().await.expect("Stop serving node failed");
+}
+
+// ============================================================================
+// 14. ASN.1 DER Header Fuzzing & Boundary Safety
+// ============================================================================
+
+#[test]
+fn test_challenge_asn1_der_header_fuzzing_and_boundary_safety() {
+    use agent_octopus::security::agentmesh::parse_ieee_p1363_signature;
+
+    // 14.1: Empty slice
+    let res_empty = parse_ieee_p1363_signature(&[]);
+    assert_eq!(res_empty, Err(OidcError::InvalidSignatureLength(0)));
+
+    // 14.2: Boundary lengths below 64 starting with non-0x30
+    for len in [1, 2, 8, 16, 32, 63] {
+        let buf = vec![0x02u8; len];
+        let res = parse_ieee_p1363_signature(&buf);
+        assert_eq!(res, Err(OidcError::InvalidSignatureLength(len)));
+    }
+
+    // 14.3: Boundary lengths above 64 starting with non-0x30
+    for len in [65, 70, 72, 128, 256] {
+        let buf = vec![0x02u8; len];
+        let res = parse_ieee_p1363_signature(&buf);
+        assert_eq!(res, Err(OidcError::InvalidSignatureLength(len)));
+    }
+
+    // 14.4: Boundary lengths above 64 starting with 0x30 (DER Sequence header)
+    for len in [65, 68, 70, 71, 72, 74, 128, 512] {
+        let mut buf = vec![0x30u8; len];
+        buf[1] = (len - 2) as u8;
+        let res = parse_ieee_p1363_signature(&buf);
+        assert_eq!(res, Err(OidcError::DerSignatureForbidden));
+    }
+
+    // 14.5: Exact length 64 starting with 0x30 DER Sequence headers
+    // Pattern 1: [0x30, 62, 0x02, ...] -> 64-byte truncated DER sequence
+    let mut der_64_exact = vec![0x42u8; 64];
+    der_64_exact[0] = 0x30;
+    der_64_exact[1] = 62;
+    der_64_exact[2] = 0x02;
+    assert_eq!(parse_ieee_p1363_signature(&der_64_exact), Err(OidcError::DerSignatureForbidden));
+
+    // Pattern 2: [0x30, 60, 0x02, ...] -> 64-byte padded DER sequence
+    let mut der_64_padded = vec![0x42u8; 64];
+    der_64_padded[0] = 0x30;
+    der_64_padded[1] = 60;
+    der_64_padded[2] = 0x02;
+    assert_eq!(parse_ieee_p1363_signature(&der_64_padded), Err(OidcError::DerSignatureForbidden));
+
+    // 14.6: Pseudo-random fuzzing (10,000 iterations: test zero panics)
+    let mut seed: u64 = 0xDEADBEEFCAFE;
+    for _ in 0..10_000 {
+        // LCG PRNG
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let len = ((seed >> 32) as usize) % 200;
+        let mut buf = Vec::with_capacity(len);
+        for _ in 0..len {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            buf.push((seed >> 24) as u8);
+        }
+
+        // Must never panic!
+        let _ = parse_ieee_p1363_signature(&buf);
+    }
+}
+
+// ============================================================================
+// 15. Comprehensive SSRF Port & IP Range Matrix
+// ============================================================================
+
+#[test]
+fn test_challenge_ssrf_port_and_comprehensive_ip_matrix() {
+    let prohibited_matrix = [
+        // Loopback IPv4 with diverse ports
+        "mcp://127.0.0.1:8080/calc",
+        "mcp://127.0.0.1:80/calc",
+        "mcp://127.0.0.1:443/calc",
+        "mcp://127.0.0.2:9000/calc",
+        "mcp://127.1.2.3:12345/calc",
+        "mcp://127.255.255.254:80/calc",
+        // Loopback IPv6 with diverse ports
+        "mcp://[::1]:8443/calc",
+        "mcp://[::1]:80/calc",
+        "mcp://[::1]:8080/calc",
+        "mcp://[::1]/calc",
+        // Link-Local IPv4 & IPv6
+        "mcp://169.254.169.254:80/metadata",
+        "mcp://169.254.1.1:8080/calc",
+        "mcp://[fe80::1]:8080/calc",
+        "mcp://[fe80::dead:beef]:443/calc",
+        // RFC 1918 Private
+        "mcp://10.0.0.1:8080/calc",
+        "mcp://10.255.255.254:3000/calc",
+        "mcp://172.16.0.1:8000/calc",
+        "mcp://172.31.255.255:5000/calc",
+        "mcp://192.168.0.1:8080/calc",
+        "mcp://192.168.1.1:9090/calc",
+        // CGNAT
+        "mcp://100.64.0.1:8080/calc",
+        "mcp://100.127.255.255:443/calc",
+        // Unspecified & Broadcast
+        "mcp://0.0.0.0:8080/calc",
+        "mcp://[::]:8080/calc",
+        "mcp://255.255.255.255:8080/calc",
+        // Unique Local IPv6 (ULA)
+        "mcp://[fc00::1]:8080/calc",
+        "mcp://[fd12:3456:789a::1]:443/calc",
+        // Decimal Integer IP literals
+        "mcp://2130706433:8080/calc",
+        "mcp://2130706433/calc",
+        // Malformed ports
+        "mcp://calc:abc",
+        "mcp://calc:999999999",
+        "mcp://[::1]:abc",
+        "mcp://[::1]:999999999",
+    ];
+
+    for uri in prohibited_matrix {
+        let res = validate_mesh_uri(uri);
+        assert!(
+            matches!(res, Err(MandateError::ProhibitedTarget { .. })),
+            "Adversarial URI '{}' must be rejected with ProhibitedTarget, got {:?}",
+            uri,
+            res
+        );
+    }
+
+    // Legitimate logical URIs must pass
+    let valid_logical_matrix = [
+        "mcp://calc",
+        "mcp://calc/add",
+        "mcp://echo",
+        "mcp://octopus/doc_extractor",
+        "mcp://octopus/ledger_validator",
+        "a2a://supervisor",
+        "inference://llama-3",
+        "egress://metrics",
+    ];
+
+    for uri in valid_logical_matrix {
+        assert!(
+            validate_mesh_uri(uri).is_ok(),
+            "Valid logical URI '{}' must pass validation",
+            uri
+        );
+    }
+}
+

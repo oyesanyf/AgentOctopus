@@ -41,7 +41,8 @@ use agent_octopus::security::agentmesh::oidc_actor_issuer::{
     parse_ieee_p1363_signature, OctopusOidcActorIssuer, OidcError,
 };
 use agent_octopus::security::agentmesh::pep_bridge::{
-    AgentMeshPepBridge, AsyncHttpWireClient, MeshCallError, PepBridgeConfig,
+    AgentMeshPepBridge, AsyncHttpWireClient, BoundedTokenVault, CachedMeshToken, MeshCallError,
+    PepBridgeConfig,
 };
 use agent_octopus::security::agentmesh::serving_node::{
     AgentMeshPolicyConfig, AgentMeshServingNode,
@@ -100,6 +101,7 @@ fn test_sub_millisecond_killswitch_benchmark_under_500_entry_load() {
     let max_us = latencies_micros[BENCHMARK_TRIALS - 1];
     let sum_us: u128 = latencies_micros.iter().sum();
     let avg_us = sum_us as f64 / BENCHMARK_TRIALS as f64;
+    let median_us = latencies_micros[BENCHMARK_TRIALS / 2];
     let p95_us = latencies_micros[(BENCHMARK_TRIALS as f64 * 0.95) as usize];
     let p99_us = latencies_micros[(BENCHMARK_TRIALS as f64 * 0.99) as usize];
 
@@ -108,10 +110,11 @@ fn test_sub_millisecond_killswitch_benchmark_under_500_entry_load() {
          - Min: {} us\n\
          - Max: {} us (SLA limit: 1,000 us)\n\
          - Avg: {:.2} us\n\
+         - Median: {} us\n\
          - P95: {} us\n\
          - P99: {} us\n\
          - SLA Status: 100% COMPLIANT (< 1ms)",
-        min_us, max_us, avg_us, p95_us, p99_us
+        min_us, max_us, avg_us, median_us, p95_us, p99_us
     );
 
     assert!(max_us < 1_000, "Maximum latency must be < 1,000 us");
@@ -1010,4 +1013,321 @@ fn test_privilege_separated_os_protected_key_broker() {
     assert_eq!(worker_broker.active_key_id(), kid2);
     let sig_worker = worker_broker.sign_es256(b"worker_message").unwrap();
     assert_eq!(sig_worker.len(), 64);
+}
+
+
+// ============================================================================
+// 12. CONCURRENT KILLSWITCH EVICTION STRESS BENCHMARK
+// ============================================================================
+
+#[tokio::test]
+async fn test_concurrent_killswitch_eviction_stress_benchmark() {
+    const NUM_CONCURRENT: usize = 100;
+    let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral("https://agentoctopus.local"));
+    let bridge = Arc::new(AgentMeshPepBridge::new(issuer, "http://127.0.0.1:8080".to_string()));
+
+    // Register 100 distinct arms
+    let mut killswitches = Vec::with_capacity(NUM_CONCURRENT);
+    for idx in 0..NUM_CONCURRENT {
+        let arm_id = format!("arm_concurrent_{:03}", idx);
+        let ks = KillSwitch::new();
+        bridge.register_arm_killswitch(&arm_id, ks.clone());
+        killswitches.push((arm_id, ks));
+    }
+
+    // Launch 100 concurrent tasks tripping their respective arm's killswitch simultaneously
+    let mut join_handles = Vec::with_capacity(NUM_CONCURRENT);
+    let barrier = Arc::new(tokio::sync::Barrier::new(NUM_CONCURRENT));
+
+    for (arm_id, _ks) in killswitches.clone() {
+        let bridge_clone = bridge.clone();
+        let barrier_clone = barrier.clone();
+        join_handles.push(tokio::spawn(async move {
+            barrier_clone.wait().await;
+            let duration = bridge_clone.trip_arm_killswitch(&arm_id);
+            duration.as_micros()
+        }));
+    }
+
+    let mut latencies_micros: Vec<u128> = Vec::with_capacity(NUM_CONCURRENT);
+    for handle in join_handles {
+        let latency = handle.await.expect("Concurrent eviction task panicked");
+        assert!(
+            latency < 1_000,
+            "Concurrent eviction exceeded 1ms SLA! Latency: {} us",
+            latency
+        );
+        latencies_micros.push(latency);
+    }
+
+    for (arm_id, ks) in &killswitches {
+        assert!(ks.is_tripped(), "Arm {} must be tripped", arm_id);
+        assert!(bridge.is_arm_tripped(arm_id), "Bridge must report {} tripped", arm_id);
+    }
+
+    latencies_micros.sort_unstable();
+    let min_us = latencies_micros[0];
+    let max_us = latencies_micros[NUM_CONCURRENT - 1];
+    let sum_us: u128 = latencies_micros.iter().sum();
+    let avg_us = sum_us as f64 / NUM_CONCURRENT as f64;
+    let median_us = latencies_micros[NUM_CONCURRENT / 2];
+    let p95_us = latencies_micros[(NUM_CONCURRENT as f64 * 0.95) as usize];
+
+    println!(
+        "CONCURRENT KILLSWITCH EVICTION BENCHMARK RESULTS (100 simultaneous tasks):\n\
+         - Min: {} us\n\
+         - Max: {} us (SLA limit: 1,000 us)\n\
+         - Avg: {:.2} us\n\
+         - Median: {} us\n\
+         - P95: {} us\n\
+         - SLA Status: 100% COMPLIANT (< 1ms)",
+        min_us, max_us, avg_us, median_us, p95_us
+    );
+
+    assert!(max_us < 1_000);
+}
+
+// ============================================================================
+// 13. WEAKNESS 1: ACTIVE IN-FLIGHT STREAM CANCELLATION VIA CANCELLATION_TOKEN
+// ============================================================================
+
+#[tokio::test]
+async fn test_active_in_flight_stream_cancellation_on_killswitch_trip() {
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Bind mock listener");
+    let local_addr = listener.local_addr().expect("Local addr");
+
+    // Spawn mock server that accepts connection and delays response by 3000ms
+    let server_task = tokio::spawn(async move {
+        if let Ok((mut stream, _)) = listener.accept().await {
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+        }
+    });
+
+    let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral("spiffe://agentoctopus.local"));
+    let jwks = issuer.get_jwks(0);
+    let policy = AgentMeshPolicyConfig::default_serving_policy();
+    let mut serving_node = AgentMeshServingNode::start(policy, Some(jwks), 0)
+        .await
+        .expect("Start serving node");
+
+    let bridge = Arc::new(AgentMeshPepBridge::new(issuer, serving_node.url()));
+
+    let arm_id = "arm_calc";
+    let ks = KillSwitch::new();
+    bridge.register_arm_killswitch(arm_id, ks.clone());
+
+    // 1. Pre-populate token vault by exchanging genuine token through serving node
+    let initial_tok = bridge
+        .get_or_exchange_token_async(arm_id, 1, &ArmRole::UntrustedDocIngest, "mcp://calc")
+        .await
+        .expect("Exchange initial token");
+    assert!(!initial_tok.is_empty());
+
+    // 2. Redirect bridge URL to our slow mock TCP listener
+    bridge.set_mesh_node_url(format!("http://{}", local_addr));
+
+    // 3. Dispatch mesh call asynchronously (will hit slow listener and hang waiting for response)
+    let bridge_clone = bridge.clone();
+    let call_start = std::time::Instant::now();
+    let dispatch_handle = tokio::spawn(async move {
+        bridge_clone
+            .dispatch_mesh_call_async(
+                arm_id,
+                1,
+                &ArmRole::UntrustedDocIngest,
+                "mcp://calc",
+                b"{\"op\":\"add\"}",
+            )
+            .await
+    });
+
+    // 4. Wait briefly (30ms) to ensure HTTP request is genuinely in-flight on the wire
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+    // 5. Trip arm KillSwitch: this must cancel the in-flight stream in < 1ms
+    let trip_duration = bridge.trip_arm_killswitch(arm_id);
+    assert!(
+        trip_duration.as_micros() < 1_000,
+        "trip_arm_killswitch took {} us (must be < 1,000 us)",
+        trip_duration.as_micros()
+    );
+
+    // 6. Assert dispatch call aborted immediately without waiting for the 3-second server delay
+    let call_result = dispatch_handle
+        .await
+        .expect("Dispatch task panicked");
+    let call_elapsed = call_start.elapsed();
+
+    assert!(
+        call_elapsed < std::time::Duration::from_millis(250),
+        "In-flight call took {:?} to abort, expected < 250ms (did not wait for 3000ms server delay)",
+        call_elapsed
+    );
+
+    assert_eq!(
+        call_result,
+        Err(MeshCallError::KillSwitchTripped(arm_id.to_string())),
+        "Aborted in-flight stream must return Err(KillSwitchTripped)"
+    );
+
+    serving_node.stop().await;
+    server_task.abort();
+}
+
+// ============================================================================
+// 14. BOUNDED TOKEN VAULT CAPACITY & PHANTOM KEY REMOVAL
+// ============================================================================
+
+#[test]
+fn test_bounded_token_vault_capacity_and_phantom_key_removal() {
+    let mut vault = BoundedTokenVault::new(4);
+    assert_eq!(vault.len(), 0);
+    assert!(vault.is_empty());
+
+    let make_token = |arm: &str, epoch: u64| CachedMeshToken {
+        arm_id: arm.to_string(),
+        epoch,
+        role: ArmRole::UntrustedDocIngest,
+        access_token: format!("token_{}_{}", arm, epoch),
+        token_type: "Bearer".to_string(),
+        issued_token_type: "urn:ietf:params:oauth:token-type:access_token".to_string(),
+        issued_at_unix_secs: 1000,
+        expires_at_unix_secs: 2000,
+    };
+
+    // 1. Insert 4 tokens (up to capacity)
+    vault.insert(("arm_0".to_string(), 1), make_token("arm_0", 1));
+    vault.insert(("arm_1".to_string(), 1), make_token("arm_1", 1));
+    vault.insert(("arm_2".to_string(), 1), make_token("arm_2", 1));
+    vault.insert(("arm_3".to_string(), 1), make_token("arm_3", 1));
+
+    assert_eq!(vault.len(), 4);
+    assert_eq!(
+        vault.get(&("arm_0".to_string(), 1)).unwrap().access_token,
+        "token_arm_0_1"
+    );
+
+    // 2. Insert 5th token -> oldest ("arm_0", 1) must be evicted (LRU / FIFO)
+    vault.insert(("arm_4".to_string(), 1), make_token("arm_4", 1));
+    assert_eq!(vault.len(), 4, "Capacity bound must be strictly maintained");
+    assert!(
+        vault.get(&("arm_0".to_string(), 1)).is_none(),
+        "Oldest key arm_0 must be evicted"
+    );
+    assert!(vault.get(&("arm_1".to_string(), 1)).is_some());
+    assert!(vault.get(&("arm_2".to_string(), 1)).is_some());
+    assert!(vault.get(&("arm_3".to_string(), 1)).is_some());
+    assert!(vault.get(&("arm_4".to_string(), 1)).is_some());
+
+    // 3. Phantom Key Removal Test:
+    // Remove an interior key ("arm_2", 1) directly
+    let removed = vault.remove(&("arm_2".to_string(), 1));
+    assert!(removed.is_some(), "Key arm_2 must be successfully removed");
+    assert_eq!(vault.len(), 3);
+    assert!(vault.get(&("arm_2".to_string(), 1)).is_none());
+
+    // Insert new key ("arm_5", 1) -> fills capacity back to 4
+    vault.insert(("arm_5".to_string(), 1), make_token("arm_5", 1));
+    assert_eq!(vault.len(), 4);
+
+    // Insert another key ("arm_6", 1) -> capacity exceeded.
+    // The oldest key is ("arm_1", 1).
+    // If phantom keys were retained in insertion_order, ("arm_2", 1) might cause
+    // a spurious pop or corrupt eviction order.
+    vault.insert(("arm_6".to_string(), 1), make_token("arm_6", 1));
+    assert_eq!(vault.len(), 4, "Capacity must remain bounded at 4");
+    assert!(
+        vault.get(&("arm_1".to_string(), 1)).is_none(),
+        "Oldest remaining key arm_1 must be evicted"
+    );
+    assert!(vault.get(&("arm_3".to_string(), 1)).is_some());
+    assert!(vault.get(&("arm_4".to_string(), 1)).is_some());
+    assert!(vault.get(&("arm_5".to_string(), 1)).is_some());
+    assert!(vault.get(&("arm_6".to_string(), 1)).is_some());
+
+    // 4. Test retain filter
+    vault.retain(|(arm, _epoch), _tok| arm != "arm_4");
+    assert_eq!(vault.len(), 3);
+    assert!(vault.get(&("arm_4".to_string(), 1)).is_none());
+
+    // 5. Test clear
+    vault.clear();
+    assert_eq!(vault.len(), 0);
+    assert!(vault.is_empty());
+}
+
+// ============================================================================
+// 15. NEURALMESH NONCE ANTI-REPLAY ACROSS MULTIPLE MESSAGES & BOUNDED ROLLOVER
+// ============================================================================
+
+#[tokio::test]
+async fn test_neural_mesh_multi_message_replay_and_bounded_capacity_rollover() {
+    let mesh = NeuralMesh::new([(String::from("sender_node"), String::from("receiver_node"))]);
+    let (sender, _) = mesh.enroll("sender_node", 500).await.expect("Enroll sender");
+    let (_, mut receiver_rx) = mesh.enroll("receiver_node", 500).await.expect("Enroll receiver");
+
+    // 1. Send 5 distinct messages and verify all are initially accepted
+    let mut messages = Vec::new();
+    for i in 1..=5 {
+        sender
+            .send_mesh(
+                "receiver_node",
+                MessageKind::Finding,
+                &format!("corr-{}", i),
+                &format!("Payload content {}", i),
+                Some("mcp://calc"),
+                None,
+            )
+            .await
+            .expect("Send message");
+        let msg = receiver_rx.recv().await.expect("Recv message");
+        assert!(
+            mesh.verify_message(&msg).await.is_ok(),
+            "Message #{} should be valid",
+            i
+        );
+        messages.push(msg);
+    }
+
+    // 2. Replay all 5 messages: every single one must be rejected with ReplayDetected
+    for (idx, msg) in messages.iter().enumerate() {
+        let replay_res = mesh.verify_message(msg).await;
+        assert_eq!(
+            replay_res,
+            Err(MeshError::ReplayDetected),
+            "Replayed message #{} with nonce {} must be rejected with ReplayDetected",
+            idx + 1,
+            msg.nonce
+        );
+    }
+
+    // 3. Multi-message high-throughput anti-replay verification
+    // Send 50 additional messages in rapid succession
+    for i in 6..=55 {
+        sender
+            .send_mesh(
+                "receiver_node",
+                MessageKind::Finding,
+                &format!("corr-{}", i),
+                &format!("Stream payload {}", i),
+                Some("mcp://calc"),
+                None,
+            )
+            .await
+            .expect("Send message");
+        let msg = receiver_rx.recv().await.expect("Recv message");
+        assert!(mesh.verify_message(&msg).await.is_ok());
+        // Immediate replay must be rejected
+        assert_eq!(
+            mesh.verify_message(&msg).await,
+            Err(MeshError::ReplayDetected)
+        );
+    }
 }
