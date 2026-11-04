@@ -38,12 +38,12 @@ Orchestrate and verify production-grade Google AgentMesh integration with AgentO
   7. Pin wasmtime v49.0.4; integration test suite named tests/agentmesh_integration_tests.rs; zero poc strings
 
 ## User Context
-- **Last user request**: Critical architectural hardening directive (6 validated weaknesses) acknowledged and incorporated into M1 Iteration 2 remediation
+- **Last user request**: Critical architectural hardening directive (6 validated weaknesses) acknowledged and incorporated across M1-M5
 - **Pending clarifications**: none
-- **Delivered results**: worker_m1_remediation_2 implementing M1-R2 fixes (PoC purge, delegation key binding, genuine inbound token auth, fail-closed signature verification, receiver anti-replay, DPAPI key broker, WAN P2P transport)
+- **Delivered results**: Milestone 1 Iteration 2 Gate PASSED (all 5 verifiers approved/clean, 77 tests pass, 0 PoC occurrences, commit f601d86 & 5dbca73); Milestone 2 initiated
 
 ## Project Status
-- **Phase**: in progress (Milestone 1 Iteration 2: Remediation & Hardening Implementation in progress)
+- **Phase**: in progress (Milestone 1 PASSED unanimously; Milestone 2: Tier 1 Wasm Sandbox Mesh Pore & Sub-ms KillSwitch under active implementation by worker_m2_core_1)
 
 ## Victory Audit Status
 - **Triggered**: no
@@ -57,5 +57,6 @@ Orchestrate and verify production-grade Google AgentMesh integration with AgentO
 - d:\harfile\AgentOctopus\.agents\teamwork\worker_m1_core_1\handoff.md — Milestone 1 Implementation Handoff
 - d:\harfile\AgentOctopus\.agents\teamwork\auditor_m1_1\handoff.md — Milestone 1 Forensic Audit Report
 - d:\harfile\AgentOctopus\.agents\teamwork\worker_m1_remediation_2\DISPATCH.md — Remediation Worker Dispatch
+- d:\harfile\AgentOctopus\.agents\teamwork\worker_m1_remediation_2\handoff.md — Milestone 1 Remediation 2 Handoff Report
 - d:\harfile\AgentOctopus\src\security\agentmesh\key_broker.rs — Privilege-Separated Key Broker (DPAPI / IPC)
 - d:\harfile\AgentOctopus\src\security\agentmesh\wan_transport.rs — Pure-Rust WAN P2P Transport (AutoNAT, Circuit Relay v2, DCUtR)

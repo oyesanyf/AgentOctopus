@@ -82,7 +82,7 @@ Every AgentMesh component—including OIDC `ES256` workload identity (`oidc_acto
 
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| M1 | AgentMesh Production Core Engine & Matured NeuralMesh | `Cargo.toml`, `src/security/agentmesh/` (`oidc_actor_issuer.rs`, `mandate_attenuation.rs`, `pep_bridge.rs`, `serving_node.rs`, `mod.rs`), `src/neural_mesh.rs`, `src/containment_ring/mesh_guard.rs`, registered in `src/security/mod.rs` (F01–F08) | none | IN_PROGRESS |
+| M1 | AgentMesh Production Core Engine & Matured NeuralMesh | `Cargo.toml`, `src/security/agentmesh/` (`oidc_actor_issuer.rs`, `mandate_attenuation.rs`, `pep_bridge.rs`, `serving_node.rs`, `key_broker.rs`, `wan_transport.rs`, `mod.rs`), `src/neural_mesh.rs`, `src/containment_ring/mesh_guard.rs`, registered in `src/security/mod.rs` (F01–F08, Weaknesses 1, 3, 4, 5) | none | DONE |
 | M2 | Tier 1 Wasm Sandbox Mesh Pore & Sub-ms KillSwitch | `src/security/wasm_tier1.rs`, `src/containment_ring/tiered_executor.rs`, `src/security/openshell.rs`, `src/containment_ring/arm_ring.rs` (F09–F17) | M1 | PLANNED |
 | M3 | Web API Endpoints & Zero-Mock Interactive Dashboard | `src/web/request_guard.rs`, `src/web/api.rs`, `src/web/server.rs`, `src/web/static_files.rs` Tab 17 (F18–F20) | M1, M2 | PLANNED |
 | M4 | Automated Submenu Verification & Headless Screen Capture | `scripts/test_all_submenus.py` Tab 17 expansion, `scripts/capture_dashboard_screens.py`, live execution against server (F21–F22) | M1, M2, M3 | PLANNED |
@@ -160,6 +160,19 @@ d:\harfile\AgentOctopus\
 ├── wix/
 │   └── AgentOctopus.wxs                               # [NEW] WiX v5 installer definition (ZERO PATH)
 ├── tests/
-│   └── agentmesh_production_integration_tests.rs      # [NEW] Comprehensive 8-scenario E2E test suite
+│   └── agentmesh_integration_tests.rs                 # [NEW] Comprehensive E2E production test suite
 └── PROJECT.md                                         # Global Project Index & Living Architecture
 ```
+
+---
+
+## Resume Checkpoint (`2026-11-04` — Paused on Hold)
+
+- **Completed & Pushed**:
+  - **Milestone 1 (`f601d86`, `5dbca73`)**: 100% passed `5/5` gate verification (`77/77` tests, `0` `PoC` tokens, Ubuntu & Windows CI green). Includes `oidc_actor_issuer.rs`, `mandate_attenuation.rs`, `pep_bridge.rs` (**W1** `CancellationToken` stream abort + **W4** mutual PEP-to-Node channel proofs), `serving_node.rs` (`POST /mesh/revoke`), `key_broker.rs` (**W5** Windows DPAPI + IPC broker), `wan_transport.rs` (**W3** pure-Rust `ML-KEM-768` + `ChaCha20-Poly1305` + AutoNAT + DCUtR), and matured `src/neural_mesh.rs`.
+  - **Milestone 2 Part 1**: Implemented `octopus_wasi::mesh_call`, **W6** virtual WASI stream descriptors (`mesh_stream_open`/`write`/`read`/`close`), and `WasmMeshBridgeContext` in `src/security/wasm_tier1.rs` (`wasmtime v49.0.4`), plus synchronous `KillSwitch::trip()` -> `wasmtime::Engine::increment_epoch()` callback in `src/core/circuit_breaker.rs`.
+- **Remaining Next Steps on Resume**:
+  1. **Milestone 2 Part 2**: Wire CAGE `RoutingSeal` + Mercury + `OpenShellRuntime` + **W6** Tier 1 -> Tier 2 fallback (`arm_ring.rs`, `tiered_executor.rs`, `openshell.rs`) and **W2** Linux Tier 2 kernel confinement (`src/security/linux_sandbox.rs` Landlock + seccomp + `rlimit` + `CLONE_NEWNET` wired into `windows_sandbox.rs`).
+  2. **Milestone 3**: Production WebUI AgentMesh controls (`src/web/`), `scripts/test_all_submenus.py` button verification, and live browser screenshots.
+  3. **Milestone 4**: `tests/agentmesh_integration_tests.rs` + `docs/AGENTMESH_PRODUCTION_GUIDE.md` (`wasmtime v49.0.4`, constructive complementary framing for `@aojea` on `google/agentmesh#734`).
+  4. **Milestone 5**: `cargo build --release`, zero-touch-`PATH` `AgentOctopus.msi` + `AgentOctopus-windows-x64.zip` + `SHA256SUMS.txt`, and GitHub release overwrite on `oyesanyf/AgentOctopus`.
