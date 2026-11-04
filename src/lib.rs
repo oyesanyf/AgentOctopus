@@ -63,7 +63,9 @@ pub use ledger::{
     PostQuantumAttestation, PqcAlgorithm, PqcKeypair, ProofDirection, ProofSibling,
     QuorumPolicyGuard, SignedExecutionReceipt, TransparencyLog,
 };
-pub use neural_mesh::{ArmEndpoint, MeshError, MessageKind, NeuralMesh, NeuralMessage};
+pub use neural_mesh::{
+    ArmEndpoint, MeshCapabilityGrant, MeshError, MessageKind, NeuralMesh, NeuralMessage,
+};
 pub use quantum::{
     AgentNode, AttackEdge, AttackGraph, ChannelType, Complex, ExperimentComparisonReport,
     QuantumAnnealerConfig, QuantumCircuit, QuantumGate, QuantumWalkSimulator, QuboModel,
@@ -155,4 +157,16 @@ pub use security::{
     KeyedCumulative24hTracker, NonceReplayCache, OsiLayer, ProtocolDefinition, ProtocolDomain,
     ProtocolVectorType, QuarantineJournal, QuarantineLease, SealedJournalEnvelope,
     UniversalProtocolCatalog,
+};
+
+pub use security::{
+    validate_mesh_uri, AgentMeshBindingDef, AgentMeshConfig, AgentMeshEngine,
+    AgentMeshKillSwitchPocEngine, AgentMeshPocConfig, AgentMeshPocStatus,
+    AgentMeshPolicyConfig, AgentMeshPolicyRoot, AgentMeshReferenceNode,
+    AgentMeshRoleDef, AgentMeshServingNode, AgentMeshStatus, AttenuatedMandate,
+    CachedMeshToken, ConformanceNodeStats, DelegationLink, EcJwk, ExchangedTokenMetadata,
+    JwsHeader, JwksDocument, MandateError, MeshCallError, MeshCallReceipt,
+    OctopusOidcActorIssuer, OidcError, OpenIdConfiguration, PepBridgeConfig,
+    PepVaultTelemetry, ServingNodeStats, SyncHttpWireClient, AsyncHttpWireClient,
+    WorkloadClaims,
 };

@@ -64,6 +64,8 @@ tracing = "0.1"
 libc = "0.2"
 ml-kem = { version = "0.3.2", features = ["getrandom"] }
 ml-dsa = "0.1.1"
+p256 = { version = "0.13", features = ["ecdsa"] }
+base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

@@ -1,10 +1,24 @@
 pub mod agentjacking_guard;
+pub mod agentmesh;
+pub use agentmesh as agentmesh_poc;
 pub mod anomaly_arms;
 pub mod atlas_arm;
 pub mod audit;
 pub mod breakouts;
 pub mod cage_governance;
 pub mod capabilities;
+
+pub use agentmesh::{
+    validate_mesh_uri, AgentMeshBindingDef, AgentMeshConfig, AgentMeshEngine,
+    AgentMeshKillSwitchPocEngine, AgentMeshPocConfig, AgentMeshPocStatus,
+    AgentMeshPolicyConfig, AgentMeshPolicyRoot, AgentMeshReferenceNode,
+    AgentMeshRoleDef, AgentMeshServingNode, AgentMeshStatus, AttenuatedMandate,
+    CachedMeshToken, ConformanceNodeStats, DelegationLink, EcJwk, ExchangedTokenMetadata,
+    JwsHeader, JwksDocument, MandateError, MeshCallError, MeshCallReceipt,
+    OctopusOidcActorIssuer, OidcError, OpenIdConfiguration, PepBridgeConfig,
+    PepVaultTelemetry, ServingNodeStats, SyncHttpWireClient, AsyncHttpWireClient,
+    WorkloadClaims, ALLOWED_SCHEMES, MAX_DELEGATION_DEPTH,
+};
 
 pub use cage_governance::{
     ActionReversibility, BfsModelResult, BfsPhase, BfsState, BfsViolation, CageApiError,

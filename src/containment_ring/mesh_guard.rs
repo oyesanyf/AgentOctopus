@@ -282,6 +282,8 @@ pub fn role_trust_tier(role: &ArmRole) -> TrustTier {
 #[derive(Clone)]
 pub struct MeshGuard {
     allowed_routes: Arc<RwLock<HashSet<(usize, usize, Option<MessageKind>)>>>,
+    allowed_calls: Arc<RwLock<std::collections::HashMap<usize, Vec<String>>>>,
+    allowed_publishes: Arc<RwLock<std::collections::HashMap<usize, Vec<String>>>>,
 }
 
 impl Default for MeshGuard {
@@ -294,6 +296,8 @@ impl MeshGuard {
     pub fn new() -> Self {
         Self {
             allowed_routes: Arc::new(RwLock::new(HashSet::new())),
+            allowed_calls: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            allowed_publishes: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -306,6 +310,48 @@ impl MeshGuard {
     ) {
         let mut routes = self.allowed_routes.write().await;
         routes.insert((sender_arm_id, recipient_arm_id, kind));
+    }
+
+    /// Authorizes an arm for outbound tool calls matching a URI pattern.
+    pub async fn allow_call_pattern(&self, arm_id: usize, pattern: &str) {
+        let mut calls = self.allowed_calls.write().await;
+        calls
+            .entry(arm_id)
+            .or_insert_with(Vec::new)
+            .push(pattern.to_string());
+    }
+
+    /// Authorizes an arm for inbound tool publishing matching a URI pattern.
+    pub async fn allow_publish_pattern(&self, arm_id: usize, pattern: &str) {
+        let mut pubs = self.allowed_publishes.write().await;
+        pubs
+            .entry(arm_id)
+            .or_insert_with(Vec::new)
+            .push(pattern.to_string());
+    }
+
+    /// Evaluates if an arm is authorized to call a specific AgentMesh URI.
+    pub async fn is_call_permitted(&self, arm_id: usize, uri: &str) -> bool {
+        let calls = self.allowed_calls.read().await;
+        if let Some(patterns) = calls.get(&arm_id) {
+            patterns
+                .iter()
+                .any(|p| p == "*" || p == uri || (p.ends_with('*') && uri.starts_with(&p[..p.len() - 1])))
+        } else {
+            false
+        }
+    }
+
+    /// Evaluates if an arm is authorized to publish a specific AgentMesh URI.
+    pub async fn is_publish_permitted(&self, arm_id: usize, uri: &str) -> bool {
+        let pubs = self.allowed_publishes.read().await;
+        if let Some(patterns) = pubs.get(&arm_id) {
+            patterns
+                .iter()
+                .any(|p| p == "*" || p == uri || (p.ends_with('*') && uri.starts_with(&p[..p.len() - 1])))
+        } else {
+            false
+        }
     }
 
     /// Validates an authenticated inter-agent message crossing the Inner Ring.
