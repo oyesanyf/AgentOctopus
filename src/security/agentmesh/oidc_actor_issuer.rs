@@ -194,18 +194,32 @@ pub fn key_entry_to_jwk(entry: &KeyEntry) -> EcJwk {
 }
 
 /// Converts a 64-byte raw IEEE P1363 signature into a p256::ecdsa::Signature.
-/// Fails closed if ASN.1 DER is detected (starts with 0x30).
+/// Fails closed if an ASN.1 DER sequence is detected.
+/// Accurately discriminates ASN.1 DER sequences from legitimate IEEE P1363 signatures
+/// whose scalar `r` begins with byte `0x30` (~0.39% of valid keys).
 pub fn parse_ieee_p1363_signature(raw_sig: &[u8]) -> Result<Signature, OidcError> {
     if raw_sig.is_empty() {
         return Err(OidcError::InvalidSignatureLength(0));
     }
-    // Check for ASN.1 DER signature tag (0x30 = SEQUENCE)
-    if raw_sig[0] == 0x30 {
-        return Err(OidcError::DerSignatureForbidden);
-    }
+
+    // 1. If length is not 64 bytes, check if it's an ASN.1 DER signature (typically 68..=74 bytes)
     if raw_sig.len() != 64 {
+        if raw_sig.len() >= 8 && raw_sig[0] == 0x30 {
+            return Err(OidcError::DerSignatureForbidden);
+        }
         return Err(OidcError::InvalidSignatureLength(raw_sig.len()));
     }
+
+    // 2. Length is exactly 64 bytes:
+    // Check if it represents an ASN.1 DER sequence wrapped or truncated to 64 bytes:
+    // Byte 0: 0x30 (SEQUENCE tag)
+    // Byte 1: sequence length (62 = 0x3E for total 64 bytes)
+    // Byte 2: 0x02 (INTEGER tag for scalar r)
+    if raw_sig[0] == 0x30 && (raw_sig[1] == 62 || (raw_sig[1] <= 62 && raw_sig[2] == 0x02)) {
+        return Err(OidcError::DerSignatureForbidden);
+    }
+
+    // 3. Legitimate 64-byte IEEE P1363 raw signature (even if byte 0 is 0x30)
     Signature::from_bytes(raw_sig.into())
         .map_err(|e| OidcError::CryptoError(format!("Malformed IEEE P1363 scalar: {e}")))
 }

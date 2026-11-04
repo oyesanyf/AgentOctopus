@@ -9,7 +9,8 @@
 //! - Bounded delegation depth: maximum 8 hops
 
 use std::collections::BTreeSet;
-
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -115,18 +116,24 @@ pub fn validate_mesh_uri(uri: &str) -> Result<(), MandateError> {
         });
     }
 
-    // Check for directory traversal or path anomalies
-    if uri.contains("..") || uri.contains('\\') {
+    // Check for directory traversal, backslashes, percent-encoded traversal, or credentials
+    if uri.contains("..")
+        || uri.contains('\\')
+        || uri_lower.contains("%2e")
+        || uri_lower.contains("%2f")
+        || uri_lower.contains("%5c")
+        || uri_lower.contains("%00")
+        || uri.contains('@')
+    {
         return Err(MandateError::ProhibitedTarget {
             uri: uri.to_string(),
-            reason: "Contains path traversal or backslashes".to_string(),
+            reason: "Contains path traversal, percent-encoding, or credentials".to_string(),
         });
     }
 
-    // Prohibit loopback and common private IP indicators
+    // Check for prohibited keywords
     if uri_lower.contains("localhost")
         || uri_lower.contains("127.0.0.1")
-        || uri_lower.contains("[::1]")
         || uri_lower.contains("0.0.0.0")
         || uri_lower.contains("169.254.")
     {
@@ -136,14 +143,95 @@ pub fn validate_mesh_uri(uri: &str) -> Result<(), MandateError> {
         });
     }
 
-    // Prohibit raw IPv4 literals (4 octets)
+    // Extract authority part
     let body = uri.split("://").nth(1).unwrap_or("");
-    let host_part = body.split('/').next().unwrap_or("");
-    let octets: Vec<&str> = host_part.split('.').collect();
-    if octets.len() == 4 && octets.iter().all(|s| s.parse::<u8>().is_ok()) {
+    let authority = body.split('/').next().unwrap_or("");
+
+    // Case A: IPv6 in bracket notation [addr] or [addr]:port
+    if authority.starts_with('[') {
+        let closing = authority.find(']').ok_or_else(|| MandateError::ProhibitedTarget {
+            uri: uri.to_string(),
+            reason: "Malformed IPv6 bracket notation".to_string(),
+        })?;
+        let ip_str = &authority[1..closing];
+        let port_part = &authority[closing + 1..];
+
+        if !port_part.is_empty() {
+            if let Some(port_num) = port_part.strip_prefix(':') {
+                if port_num.is_empty() || !port_num.chars().all(|c| c.is_ascii_digit()) || port_num.parse::<u16>().is_err() {
+                    return Err(MandateError::ProhibitedTarget {
+                        uri: uri.to_string(),
+                        reason: "Malformed port in IPv6 URI".to_string(),
+                    });
+                }
+            } else {
+                return Err(MandateError::ProhibitedTarget {
+                    uri: uri.to_string(),
+                    reason: "Malformed character following IPv6 closing bracket".to_string(),
+                });
+            }
+        }
+
+        if let Ok(ipv6) = Ipv6Addr::from_str(ip_str) {
+            return Err(MandateError::ProhibitedTarget {
+                uri: uri.to_string(),
+                reason: format!("Raw IPv6 literal address forbidden; logical names required ({ipv6})"),
+            });
+        }
+    }
+
+    // Case B: Host with optional :port
+    let host = authority.split(':').next().unwrap_or(authority);
+    if let Some(port_part) = authority.strip_prefix(host).and_then(|s| s.strip_prefix(':')) {
+        if port_part.is_empty() || !port_part.chars().all(|c| c.is_ascii_digit()) || port_part.parse::<u16>().is_err() {
+            return Err(MandateError::ProhibitedTarget {
+                uri: uri.to_string(),
+                reason: "Malformed port in URI".to_string(),
+            });
+        }
+    }
+
+    // Mathematical IPv4 check
+    if let Ok(ipv4) = Ipv4Addr::from_str(host) {
+        let octets = ipv4.octets();
+        let is_cgnat = octets[0] == 100 && (octets[1] & 0xC0) == 64;
+        let is_broadcast = octets == [255, 255, 255, 255];
+
+        let reason = if ipv4.is_loopback() {
+            "Loopback IPv4 address forbidden"
+        } else if ipv4.is_private() {
+            "RFC 1918 private IPv4 address forbidden"
+        } else if ipv4.is_link_local() {
+            "Link-local IPv4 address forbidden"
+        } else if ipv4.is_unspecified() {
+            "Unspecified IPv4 address (0.0.0.0) forbidden"
+        } else if is_cgnat {
+            "CGNAT IPv4 address (100.64.0.0/10) forbidden"
+        } else if is_broadcast {
+            "Broadcast IPv4 address forbidden"
+        } else {
+            "Raw IPv4 literal address forbidden; logical names required"
+        };
+
         return Err(MandateError::ProhibitedTarget {
             uri: uri.to_string(),
-            reason: "Raw IPv4 literal address forbidden; logical names required".to_string(),
+            reason: reason.to_string(),
+        });
+    }
+
+    // Check if integer decimal IP notation (e.g. 2130706433 for 127.0.0.1)
+    if host.parse::<u32>().is_ok() {
+        return Err(MandateError::ProhibitedTarget {
+            uri: uri.to_string(),
+            reason: "Integer decimal IP literal forbidden".to_string(),
+        });
+    }
+
+    // Direct IPv6 check (unbracketed)
+    if let Ok(ipv6) = Ipv6Addr::from_str(host) {
+        return Err(MandateError::ProhibitedTarget {
+            uri: uri.to_string(),
+            reason: format!("Raw IPv6 literal address forbidden; logical names required ({ipv6})"),
         });
     }
 
@@ -157,6 +245,7 @@ pub struct DelegationLink {
     pub delegator_spiffe_id: String,
     pub delegator_verifying_key: [u8; 32],
     pub delegatee_spiffe_id: String,
+    pub delegatee_verifying_key: [u8; 32],
     pub attenuated_services: BTreeSet<String>,
     pub attenuated_publish: BTreeSet<String>,
     pub delegated_at: u64,
@@ -166,22 +255,26 @@ pub struct DelegationLink {
 
 impl DelegationLink {
     /// Computes canonical byte representation for signature verification.
+    /// Cryptographically commits to both delegator and delegatee public keys.
     pub fn canonical_payload(
         depth: usize,
         delegator_spiffe_id: &str,
+        delegator_verifying_key: &[u8; 32],
         delegatee_spiffe_id: &str,
+        delegatee_verifying_key: &[u8; 32],
         services: &BTreeSet<String>,
         publish: &BTreeSet<String>,
         delegated_at: u64,
         expires_at: u64,
     ) -> Vec<u8> {
-        // Deterministic format: depth | delegator | delegatee | services | publish | delegated_at | expires_at
-        let mut bytes = Vec::with_capacity(256);
+        let mut bytes = Vec::with_capacity(320);
         bytes.extend_from_slice(&(depth as u64).to_be_bytes());
         bytes.extend_from_slice(delegator_spiffe_id.as_bytes());
         bytes.push(0x00);
+        bytes.extend_from_slice(delegator_verifying_key);
         bytes.extend_from_slice(delegatee_spiffe_id.as_bytes());
         bytes.push(0x00);
+        bytes.extend_from_slice(delegatee_verifying_key);
 
         for s in services {
             bytes.extend_from_slice(s.as_bytes());
@@ -217,11 +310,13 @@ pub struct AttenuatedMandate {
 }
 
 impl AttenuatedMandate {
-    /// Constructs a root capability mandate signed by the primary authority key.
+    /// Constructs a root capability mandate signed by the primary authority key,
+    /// binding the initial holder's public key.
     pub fn create_root(
         root_signing_key: &SigningKey,
         root_spiffe_id: &str,
         initial_holder_spiffe_id: &str,
+        initial_holder_verifying_key: [u8; 32],
         allowed_services: BTreeSet<String>,
         allowed_publish: BTreeSet<String>,
         not_before: u64,
@@ -242,7 +337,9 @@ impl AttenuatedMandate {
         let payload = DelegationLink::canonical_payload(
             0,
             root_spiffe_id,
+            &root_vk,
             initial_holder_spiffe_id,
+            &initial_holder_verifying_key,
             &allowed_services,
             &allowed_publish,
             not_before,
@@ -255,6 +352,7 @@ impl AttenuatedMandate {
             delegator_spiffe_id: root_spiffe_id.to_string(),
             delegator_verifying_key: root_vk,
             delegatee_spiffe_id: initial_holder_spiffe_id.to_string(),
+            delegatee_verifying_key: initial_holder_verifying_key,
             attenuated_services: allowed_services.clone(),
             attenuated_publish: allowed_publish.clone(),
             delegated_at: not_before,
@@ -277,14 +375,16 @@ impl AttenuatedMandate {
     }
 
     /// Attenuates the mandate for a delegatee, strictly enforcing:
-    /// 1. Monotonic capability shrinkage: requested ⊆ parent
-    /// 2. Bounded lifetime: new_exp <= parent_exp
-    /// 3. Incremented depth: depth + 1 <= MAX_DELEGATION_DEPTH
-    /// 4. Delegator signature over child link
+    /// 1. Delegator key matches parent link's authorized delegatee key
+    /// 2. Monotonic capability shrinkage: requested ⊆ parent
+    /// 3. Bounded lifetime: new_exp <= parent_exp
+    /// 4. Incremented depth: depth + 1 <= MAX_DELEGATION_DEPTH
+    /// 5. Cryptographic signature over child link binding delegatee_verifying_key
     pub fn attenuate(
         &self,
         delegator_key: &SigningKey,
         delegatee_spiffe_id: &str,
+        delegatee_verifying_key: [u8; 32],
         narrowed_services: BTreeSet<String>,
         narrowed_publish: BTreeSet<String>,
         new_expires_at: u64,
@@ -341,14 +441,33 @@ impl AttenuatedMandate {
             }
         }
 
+        let delegator_vk = delegator_key.verifying_key().to_bytes();
+
+        // Enforce that delegator_key matches the parent link's authorized delegatee key
+        if let Some(parent_link) = self.delegation_chain.last() {
+            if delegator_vk != parent_link.delegatee_verifying_key {
+                return Err(MandateError::SignatureFailure {
+                    depth: self.depth,
+                    reason: "Delegator signing key does not match parent delegatee verifying key".to_string(),
+                });
+            }
+            if self.current_holder_spiffe_id != parent_link.delegatee_spiffe_id {
+                return Err(MandateError::SignatureFailure {
+                    depth: self.depth,
+                    reason: "Current holder SPIFFE ID does not match parent delegatee".to_string(),
+                });
+            }
+        }
+
         // Monotonic lifetime
         let clamped_exp = std::cmp::min(new_expires_at, self.expires_at);
-        let delegator_vk = delegator_key.verifying_key().to_bytes();
 
         let payload = DelegationLink::canonical_payload(
             next_depth,
             &self.current_holder_spiffe_id,
+            &delegator_vk,
             delegatee_spiffe_id,
+            &delegatee_verifying_key,
             &narrowed_services,
             &narrowed_publish,
             now,
@@ -362,6 +481,7 @@ impl AttenuatedMandate {
             delegator_spiffe_id: self.current_holder_spiffe_id.clone(),
             delegator_verifying_key: delegator_vk,
             delegatee_spiffe_id: delegatee_spiffe_id.to_string(),
+            delegatee_verifying_key,
             attenuated_services: narrowed_services.clone(),
             attenuated_publish: narrowed_publish.clone(),
             delegated_at: now,
@@ -387,6 +507,13 @@ impl AttenuatedMandate {
     }
 
     /// Verifies the entire cryptographic delegation chain from Root to Leaf.
+    /// Strictly asserts:
+    /// 1. Root link delegator verifying key equals expected_root_key
+    /// 2. Root link delegator SPIFFE ID equals root_issuer_spiffe_id
+    /// 3. Inter-hop key continuity: link[i].delegator_vk == link[i-1].delegatee_vk
+    /// 4. Inter-hop SPIFFE continuity: link[i].delegator_spiffe == link[i-1].delegatee_spiffe
+    /// 5. Leaf delegatee SPIFFE ID equals current_holder_spiffe_id
+    /// 6. Monotonic capability shrinkage and valid Ed25519 signatures on all links
     pub fn verify_chain(&self, expected_root_key: &[u8; 32], now: u64) -> Result<(), MandateError> {
         if now < self.not_before {
             return Err(MandateError::MandateNotYetValid {
@@ -406,10 +533,24 @@ impl AttenuatedMandate {
                 reason: "Root verifying key does not match trusted root anchor".to_string(),
             });
         }
-        if self.delegation_chain.len() != self.depth + 1 {
+        if self.delegation_chain.is_empty() || self.delegation_chain.len() != self.depth + 1 {
             return Err(MandateError::SignatureFailure {
                 depth: self.depth,
                 reason: "Delegation chain length mismatch with declared depth".to_string(),
+            });
+        }
+
+        // 1. Assert root link anchor binding
+        if self.delegation_chain[0].delegator_verifying_key != *expected_root_key {
+            return Err(MandateError::SignatureFailure {
+                depth: 0,
+                reason: "Link 0 delegator key does not match trusted root anchor".to_string(),
+            });
+        }
+        if self.delegation_chain[0].delegator_spiffe_id != self.root_issuer_spiffe_id {
+            return Err(MandateError::SignatureFailure {
+                depth: 0,
+                reason: "Link 0 delegator SPIFFE ID does not match root issuer SPIFFE ID".to_string(),
             });
         }
 
@@ -425,7 +566,30 @@ impl AttenuatedMandate {
                 });
             }
 
-            // Verify Ed25519 signature
+            // 2. Inter-hop key and SPIFFE continuity verification
+            if i > 0 {
+                let prev_link = &self.delegation_chain[i - 1];
+                if link.delegator_verifying_key != prev_link.delegatee_verifying_key {
+                    return Err(MandateError::SignatureFailure {
+                        depth: i,
+                        reason: format!(
+                            "Cryptographic delegation key chain broken at hop {}: delegator key does not match parent delegatee key",
+                            i
+                        ),
+                    });
+                }
+                if link.delegator_spiffe_id != prev_link.delegatee_spiffe_id {
+                    return Err(MandateError::SignatureFailure {
+                        depth: i,
+                        reason: format!(
+                            "SPIFFE ID continuity broken at hop {}: delegator '{}' does not match parent delegatee '{}'",
+                            i, link.delegator_spiffe_id, prev_link.delegatee_spiffe_id
+                        ),
+                    });
+                }
+            }
+
+            // 3. Verify Ed25519 signature
             let vk = VerifyingKey::from_bytes(&link.delegator_verifying_key).map_err(|e| {
                 MandateError::SignatureFailure {
                     depth: i,
@@ -445,10 +609,13 @@ impl AttenuatedMandate {
                     reason: format!("Invalid signature format: {e}"),
                 }
             })?;
+
             let payload = DelegationLink::canonical_payload(
                 link.depth,
                 &link.delegator_spiffe_id,
+                &link.delegator_verifying_key,
                 &link.delegatee_spiffe_id,
+                &link.delegatee_verifying_key,
                 &link.attenuated_services,
                 &link.attenuated_publish,
                 link.delegated_at,
@@ -461,7 +628,7 @@ impl AttenuatedMandate {
                     reason: format!("Ed25519 signature verification failed: {e}"),
                 })?;
 
-            // Verify monotonic containment across hops
+            // 4. Verify monotonic capability containment
             if i > 0 {
                 for s in &link.attenuated_services {
                     if !prev_services.contains(s) {
@@ -490,6 +657,18 @@ impl AttenuatedMandate {
             prev_services = &link.attenuated_services;
             prev_publish = &link.attenuated_publish;
             prev_exp = link.expires_at;
+        }
+
+        // 5. Leaf Holder SPIFFE ID Verification
+        let leaf = self.delegation_chain.last().unwrap();
+        if self.current_holder_spiffe_id != leaf.delegatee_spiffe_id {
+            return Err(MandateError::SignatureFailure {
+                depth: self.depth,
+                reason: format!(
+                    "Current holder SPIFFE ID '{}' does not match leaf delegatee SPIFFE ID '{}'",
+                    self.current_holder_spiffe_id, leaf.delegatee_spiffe_id
+                ),
+            });
         }
 
         Ok(())
@@ -564,6 +743,7 @@ mod tests {
     #[test]
     fn test_root_mandate_creation() {
         let root_key = SigningKey::generate(&mut OsRng);
+        let holder_key = SigningKey::generate(&mut OsRng);
         let mut services = BTreeSet::new();
         services.insert("mcp://calc".to_string());
         services.insert("mcp://echo".to_string());
@@ -575,6 +755,7 @@ mod tests {
             &root_key,
             "spiffe://agentoctopus.local/authority",
             "spiffe://agentoctopus.local/arm/arm_calc/epoch/0",
+            holder_key.verifying_key().to_bytes(),
             services,
             publish,
             1000,
@@ -591,6 +772,7 @@ mod tests {
     fn test_monotonic_attenuation_success() {
         let root_key = SigningKey::generate(&mut OsRng);
         let holder1_key = SigningKey::generate(&mut OsRng);
+        let child1_key = SigningKey::generate(&mut OsRng);
 
         let mut root_services = BTreeSet::new();
         root_services.insert("mcp://calc".to_string());
@@ -602,6 +784,7 @@ mod tests {
             &root_key,
             "spiffe://agentoctopus.local/authority",
             "spiffe://agentoctopus.local/arm/holder1",
+            holder1_key.verifying_key().to_bytes(),
             root_services,
             root_publish,
             1000,
@@ -618,6 +801,7 @@ mod tests {
             .attenuate(
                 &holder1_key,
                 "spiffe://agentoctopus.local/arm/child1",
+                child1_key.verifying_key().to_bytes(),
                 child_services,
                 child_publish,
                 4000,
@@ -636,6 +820,7 @@ mod tests {
     fn test_privilege_escalation_rejected() {
         let root_key = SigningKey::generate(&mut OsRng);
         let holder_key = SigningKey::generate(&mut OsRng);
+        let child_key = SigningKey::generate(&mut OsRng);
 
         let mut root_services = BTreeSet::new();
         root_services.insert("mcp://calc".to_string());
@@ -644,6 +829,7 @@ mod tests {
             &root_key,
             "spiffe://agentoctopus.local/authority",
             "spiffe://agentoctopus.local/arm/holder",
+            holder_key.verifying_key().to_bytes(),
             root_services,
             BTreeSet::new(),
             1000,
@@ -659,6 +845,7 @@ mod tests {
         let res = root_mandate.attenuate(
             &holder_key,
             "spiffe://agentoctopus.local/arm/child",
+            child_key.verifying_key().to_bytes(),
             escalated,
             BTreeSet::new(),
             4000,
@@ -704,6 +891,7 @@ mod tests {
     #[test]
     fn test_segregated_rights() {
         let root_key = SigningKey::generate(&mut OsRng);
+        let pub_key = SigningKey::generate(&mut OsRng);
 
         let mut publish = BTreeSet::new();
         publish.insert("mcp://octopus/doc_extractor".to_string());
@@ -712,6 +900,7 @@ mod tests {
             &root_key,
             "spiffe://agentoctopus.local/authority",
             "spiffe://agentoctopus.local/arm/publisher",
+            pub_key.verifying_key().to_bytes(),
             BTreeSet::new(), // No allowed_services
             publish,
             1000,
@@ -737,6 +926,7 @@ mod tests {
         let k0 = SigningKey::generate(&mut OsRng);
         let k1 = SigningKey::generate(&mut OsRng);
         let k2 = SigningKey::generate(&mut OsRng);
+        let k3 = SigningKey::generate(&mut OsRng);
 
         let mut s = BTreeSet::new();
         s.insert("mcp://calc".to_string());
@@ -745,6 +935,7 @@ mod tests {
             &k0,
             "spiffe://agentoctopus.local/root",
             "spiffe://agentoctopus.local/node1",
+            k1.verifying_key().to_bytes(),
             s.clone(),
             BTreeSet::new(),
             1000,
@@ -756,6 +947,7 @@ mod tests {
             .attenuate(
                 &k1,
                 "spiffe://agentoctopus.local/node2",
+                k2.verifying_key().to_bytes(),
                 s.clone(),
                 BTreeSet::new(),
                 8000,
@@ -767,6 +959,7 @@ mod tests {
             .attenuate(
                 &k2,
                 "spiffe://agentoctopus.local/node3",
+                k3.verifying_key().to_bytes(),
                 s.clone(),
                 BTreeSet::new(),
                 7000,
@@ -783,6 +976,7 @@ mod tests {
     fn test_tampered_link_rejected() {
         let k0 = SigningKey::generate(&mut OsRng);
         let k1 = SigningKey::generate(&mut OsRng);
+        let k2 = SigningKey::generate(&mut OsRng);
 
         let mut s = BTreeSet::new();
         s.insert("mcp://calc".to_string());
@@ -791,6 +985,7 @@ mod tests {
             &k0,
             "spiffe://agentoctopus.local/root",
             "spiffe://agentoctopus.local/node1",
+            k1.verifying_key().to_bytes(),
             s.clone(),
             BTreeSet::new(),
             1000,
@@ -802,6 +997,7 @@ mod tests {
             .attenuate(
                 &k1,
                 "spiffe://agentoctopus.local/node2",
+                k2.verifying_key().to_bytes(),
                 s.clone(),
                 BTreeSet::new(),
                 8000,

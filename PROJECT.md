@@ -1,35 +1,47 @@
-# Project: Google CAGE Native Rust Governance Engine Integration for AgentOctopus
+# Project: Google AgentMesh (#734) × AgentOctopus Tier 1 Wasm, CAGE & KillSwitch Production Integration
 
 ## Architecture
-AgentOctopus integrates Google Cybernetic Agent Governance Engine (CAGE v4.0.0, arXiv:2606.12320, Apache-2.0) natively in pure Rust without external Docker or Python sidecar dependencies. The architecture provides complete wire compatibility with the CAGE Substrate Contract v1.0, embedding a 7-tier two-phase governance pipeline directly within the security and containment fabric.
+AgentOctopus integrates Google AgentMesh (`google/agentmesh#734`, `sam-mesh.dev`, Apache-2.0) with its `wasmtime v49.0` WebAssembly sandboxes (`WasmTier1Executor`), CAGE governance (`CageGovernanceEngine`), cephalopod autotomy circuit breaker (`KillSwitch`), and inter-arm neural mesh (`src/neural_mesh.rs`, `src/containment_ring/mesh_guard.rs`).
+
+### Invariant: Zero Prototypes / Complete Production Maturity (Zero "POC" / "PoC" Artifacts)
+Every AgentMesh component—including OIDC `ES256` workload identity (`oidc_actor_issuer`), RFC 8693 token exchange, Biscuit-style `tar_block` mandate attenuation (`mandate_attenuation`), `AgentMeshPepBridge` (`pep_bridge`), `AgentMeshServingNode` (`serving_node`), `AgentMeshEngine` (`mod.rs`), AND AgentOctopus's existing inter-arm mesh (`src/neural_mesh.rs` / `src/containment_ring/mesh_guard.rs`)—must be **fully production-matured**.
+- Canonical production module: **`src/security/agentmesh/`** (`pub mod agentmesh;`).
+- Zero `poc` / `PoC` substrings in any struct, function, enum, route, filename, test, or WebUI label.
 
 ### Data Flow & Component Interfaces
-1. **Policy Ingestion (`substrate_translator.rs`)**:
-   - Ingests Microsoft ACS, LF AAIF, NIST OSCAL 1.1.x, Lula Validation, and Native CAGE YAML via G4 auto-detection priority.
-   - Compiles policies into Cedar forbid rules, STPA Unsafe Control Actions (UCAs), and optional Control Barrier Function parameters.
-   - Serializes compiled policies via pure-Rust RFC 8785 JSON Canonicalization Scheme (JCS) to generate a deterministic 16-hex SHA-256 `policy_version_id`.
-   - Enforces HTTP 409 Conflict (`POLICY_VERSION_MISMATCH`) on version drift.
-2. **Phase 1 Read-Only Verification (`ftra_stpa.rs`, `pipeline.rs`)**:
-   - Tier 0.5 FTRA: Analyzes execution graphs for reversibility (`Reversible`, `Compensatable`, `ConditionalAutonomous`, `IrreversibleTerminal`), enforces caller authority rank, and normalizes NaN/Inf confidence to 0.0 fail-closed.
-   - Tier 1 STPA: Validates UCAs against 4 Leveson hazard categories and strips caller identities, binding strictly to authenticated `TrustedArmHandle`.
-   - Tier 3b Cedar Gate: Evaluates compiled Cedar policies against proposed actions.
-   - Tier 2 Confidence Gate: Evaluates SR 26-2 model confidence thresholds (0.95 ALLOW candidate, 0.70 REQUIRE_APPROVAL, <0.70 DEFER).
-   - Tier 5 Consensus Gate: Evaluates Bayesian consensus quorum.
-3. **Phase 2 Mutating Control (`cbf_fiscal.rs`, `pipeline.rs`)**:
-   - Dynamic `phase2_mode()`: `Skip` on Phase 1 HARD deny, `Preview` on deferral/approval/dry-run, `Commit` on clean Phase 1.
-   - Tier 3a Discrete-Time CBF: Enforces $h(S_{t+1}) = (B_t - c) - B_{\min} \ge (1 - \gamma) h(S_t) \ge 0$, monotonic sequence high-water marks, and monotonic fence epochs.
-   - Tier 4 Two-Phase Fiscal Pre-Reservation: Atomically executes `preview`, `commit`, `rollback`, and `confirm` with zero fiscal leakage.
-4. **Evidence-Bound Cryptographic Routing Seal (`routing_seal.rs`)**:
-   - Issues HMAC-SHA256 routing seals bound to `SecurityAuditLog::record_event` SHA-256 chain hashes (`record_hash`) enforcing Tallam 2026 *Evidence Sufficiency*.
-   - Enforces 30-second TTL, 5-second clock skew tolerance, and atomic single-use consumption.
-5. **Formal BFS State Machine & Trace Conformance (`no_direct_bind_proof.rs`)**:
-   - Pure-Rust BFS state machine proving No-Direct-Bind ($\text{NoDirectBind} \iff (\text{phase} = \text{EXECUTED}) \implies (\text{resolvedAllow} = \text{TRUE})$) across 34 gated states.
-   - Generates counterexample in ungated model (17 states) and proves skipped-tier blocking (31 states).
-   - Verifies audit logs against all 7 `GOVERNANCE_TRACE` v1 conformance rules.
-6. **Actuator Confinement Integration (`arm_ring.rs`)**:
-   - Enforces `execute_tool_with_cage_seal` in `ArmContainmentRing` before Tier-1 Wasm or Tier-2 AppContainer actuation, recording `GOVERNANCE_TRACE` `EXECUTED` events.
-7. **HTTP Substrate Server (`src/web/`)**:
-   - Exposes `/governance/*`, `/v1/governance/*`, and `/api/cage/*` endpoints in `src/web/api.rs` and `src/web/server.rs` with `request_guard` exemptions.
+1. **Host-Only Secret Vault & RFC 8693 Token Exchange (`src/security/agentmesh/`)**:
+   - `OctopusOidcActorIssuer`: Mints RFC 7515 `ES256` P-256 JWTs (`spiffe://agentoctopus.local/arm/{arm_id}/epoch/{epoch}`) and publishes RFC 7517 EC JWKS at `/.well-known/jwks.json` and OpenID discovery at `/.well-known/openid-configuration` with `current` + `retired` key rotation grace overlap, bounded `jti` replay cache, and strict `<= 5s` clock-skew tolerance.
+   - `AgentMeshPepBridge`: Acts as out-of-sandbox policy enforcement point and secret vault. Strips caller `Authorization`, `Cookie`, and `X-Mesh-*` headers; performs RFC 8693 Token Exchange (`POST /oauth/token`); injects `X-Mesh-Authentication: Bearer <token>`; and purges arm tokens in `<1ms` on `KillSwitch::trip()`. Enforces bounded capacity on token vault (no memory leak).
+   - `AttenuatedMeshMandate`: Enforces capability attenuation with Ed25519 signature chaining, strict URI schemes (`mcp://`, `a2a://`, `inference://`, `egress://`), segregated `allowed_services` + `allowed_publish`, zero holder-supplied Datalog rules, and monotonic intersection.
+   - `AgentMeshServingNode`: Embedded loopback HTTP node implementing AgentMesh `policy.json` (`roles`, `allowed_services`, `allowed_publish`, `bindings`), JWKS verification, active revocation/epoch-list enforcement (dual-side #734 defense), and `/mesh/` service routing. Supports upstream cluster routing via `AGENTMESH_UPSTREAM_URL`.
+   - `AgentMeshEngine`: Unified production runtime coordinator coordinating issuer, bridge, mandate attenuation, and serving node.
+2. **Production-Matured `NeuralMesh` Inter-Arm Integration (`src/neural_mesh.rs`, `src/containment_ring/mesh_guard.rs`)**:
+   - Upgrades `NeuralMesh` from prototype to production maturity:
+     - Supports typed `agentmesh` URI schemes (`mcp://`, `a2a://`, `inference://`, `egress://`).
+     - Enforces dual `allowed_publish` + `allowed_services` capability grants, preventing tool/model discovery spoofing.
+     - Implements bounded LRU/capacity eviction on `seen_nonces` (preventing unbounded memory growth / OOM).
+     - Uses constant-time MAC and signature verification.
+3. **Zero-Socket Mesh Pore on Tier 1 Wasm Sandbox (`src/security/wasm_tier1.rs`)**:
+   - Guest `.wasm` / `.wat` modules execute with zero ambient authority (no sockets, no raw IP access, zero tokens/keys in 64 MiB linear memory).
+   - Host import `octopus_wasi::mesh_call(uri_ptr, uri_len, req_ptr, req_len, resp_ptr, resp_cap) -> i32` accepts only logical `mcp://`, `a2a://`, `inference://`, `egress://` URIs and request bytes.
+   - Host reads request from guest memory, checks `KillSwitch`, delegates to `AgentMeshPepBridge`, projects upstream response through `ZeroMutualInformationProjector` ($\Pi_0$), and copies only sanitized bytes into guest memory (`WASI_ERR_ACCESS_DENIED = -5` on refusal). Zero `.unwrap()` / `.expect()` panics.
+4. **Sub-Millisecond KillSwitch Eviction & Non-Cooperative Wasm Trapping (`#734` Solution)**:
+   - On `KillSwitch::trip()`, atomic store occurs in ~10ns.
+   - Simultaneously calls `engine.increment_epoch()`, trapping active Wasm guest loops immediately via `epoch_interruption(true)`.
+   - Evicts cached `(arm_id, epoch)` mesh credentials from `AgentMeshPepBridge` in `<1ms`, closing the 5-minute token expiry window identified in #734. Advances generation epoch $N \to N + 1$. Serving node additionally rejects revoked arm credentials.
+5. **Bidirectional Mesh Routing & Dual-Boundary Isolation (`src/containment_ring/`, `src/security/openshell.rs`)**:
+   - Outbound (`Sandbox -> Mesh`): `TieredExecutionDispatcher` routes `arm_calc` (200 OK) vs `arm_rogue` (403 denied) with zero sibling permission borrowing, feeding `mesh_bytes_exchanged` into `MercuryContainmentEngine` (`HostActuationPore::InterAgentMeshIpc`).
+   - Inbound (`Mesh -> Sandbox`): Published tools `mcp://octopus/doc_extractor` and `mcp://octopus/ledger_validator` gate requests via `X-Mesh-Authentication` and single-use CAGE `RoutingSeal` consumption (`execute_tool_with_cage_seal`).
+   - `OpenShellRuntime`: Enforces dual-boundary containment with `default_network_deny: true`, `wasm_fuel_limit`, and `wasm_epoch_deadline`.
+6. **Interactive Production WebUI & Submenu Verification (`src/web/`)**:
+   - Exempts `/.well-known/openid-configuration`, `/jwks`, and `/mesh/*` from browser session tokens in `request_guard.rs`.
+   - Exposes REST endpoints in `api.rs` and `server.rs` (`/api/agentmesh/status`, `/api/agentmesh/wasm-call`, `/api/agentmesh/killswitch/trip`, etc.).
+   - Adds Tab 17 (`agentmesh-runtime`) to `static_files.rs` with live interactive buttons and telemetry (zero dummy mocks, zero "PoC" labels).
+   - Automated submenu testing in `scripts/test_all_submenus.py` and headless Chrome screen captures in `scripts/capture_dashboard_screens.py`.
+7. **WiX v5 MSI Release Package & GitHub Solo Ship**:
+   - WiX v5 MSI in `wix/AgentOctopus.wxs` strictly without `<Environment Id="PATH">`.
+   - Production bundle `AgentOctopus-windows-x64.zip` with `SHA256SUMS.txt`.
+   - Solo PR ship and GitHub release overwrite with clean UTF-8 notes.
 
 ---
 
@@ -37,26 +49,32 @@ AgentOctopus integrates Google Cybernetic Agent Governance Engine (CAGE v4.0.0, 
 
 | # | Feature | Description | Milestone | Source |
 |---|---------|-------------|-----------|--------|
-| F01 | Multi-Format Policy Auto-Detection | Detects ACS, AAIF, OSCAL 1.1.x, Lula, and CAGE YAML via G4 priority order | M1 | Survey |
-| F02 | Cedar & STPA Rule Compilation | Compiles ingested policies into Cedar forbid rules and STPA UCAs | M1 | Survey |
-| F03 | RFC 8785 JCS & 16-Hex Version Pinning | Canonicalizes policy JSON and extracts 16-hex SHA-256 policy_version_id | M1 | Survey |
-| F04 | HTTP 409 Version Drift Conflict | Enforces HTTP 409 Conflict on pinned policy version mismatch | M1 | Survey |
-| F05 | Tier 0.5 FTRA Reachability & Irreversibility | DAG traversal with Reversible/Compensatable/ConditionalAutonomous/IrreversibleTerminal classification | M1 | Survey |
-| F06 | Fail-Closed Confidence Normalization | Maps NaN/Inf confidence to 0.0 and evaluates SR 26-2 thresholds | M1 | Survey |
-| F07 | Tier 1 STPA Validator & Identity Binding | Validates UCAs across 4 hazard categories bound to TrustedArmHandle | M1 | Survey |
-| F08 | Tier 3a Discrete-Time CBF & Epoch Defense | Discrete-time CBF $h(S_{t+1}) \ge (1-\gamma)h(S_t) \ge 0$, sequence replay high-water marks, fence epochs | M1 | Survey |
-| F09 | Tier 4 Two-Phase Fiscal Pre-Reservation | Transactional preview, commit, rollback, and confirm with zero balance leakage | M1 | Survey |
-| F10 | Evidence-Bound Cryptographic Routing Seals | HMAC-SHA256 seals bound to SecurityAuditLog record_hash, 30s TTL, atomic single-use | M1 | Survey |
-| F11 | 2-Phase 7-Tier Dynamic Pipeline | Pipeline execution with dynamic phase2_mode (Skip/Preview/Commit) and canonical verdicts | M1 | Survey |
-| F12 | Pure-Rust BFS State Machine Proof | Exhaustive BFS model proving No-Direct-Bind on 34 states, 17-state ungated counterexample | M1 | Survey |
-| F13 | 7-Rule GOVERNANCE_TRACE Conformance Verifier | Validates trace streams against schema, plan, coverage, seal, reachable, no_direct_bind, single_use | M1 | Survey |
-| F14 | Unified CageGovernanceEngine Module Exports | Exports unified engine struct and types in security/cage_governance/ and security/mod.rs | M1 | Survey |
-| F15 | Actuator Confinement Seal Gating | execute_tool_with_cage_seal requiring valid unconsumed seal before Tier 1/2 actuation | M2 | Survey |
-| F16 | Actuator GOVERNANCE_TRACE Emission | Emits conforming EXECUTED trace events bound to consumed seal reference | M2 | Survey |
-| F17 | CAGE Substrate Contract HTTP Handlers | Implements ingest-policy, policy-version, validate-action, consume-seal, proof-status, trace-conformance | M3 | Survey |
-| F18 | Web Server Routing & Guard Exemption | Routes substrate endpoints in server.rs and exempts from token in request_guard.rs | M3 | Survey |
-| F19 | Comprehensive Integration Test Suite | Full integration tests in tests/cage_governance_integration_tests.rs covering all requirements | M4 | Survey |
-| F20 | E2E Opaque-Box Suite & Adversarial Hardening | End-to-end requirement validation (Tiers 1-4) and Tier 5 adversarial coverage hardening | M5 | Survey |
+| F01 | Pure-Rust P-256 & Base64url Dependencies | Add `p256` (v0.13, ecdsa) and `base64` (v0.22) to `Cargo.toml` | M1 | Plan §1 |
+| F02 | RFC 7515 `ES256` & RFC 7517 JWKS OIDC Actor Issuer | Mint SPIFFE workload JWTs (`spiffe://agentoctopus.local/arm/{arm_id}/epoch/{epoch}`) and publish EC JWKS with key rotation overlap & bounded jti cache | M1 | Survey & User Directive |
+| F03 | RFC 8693 OAuth 2.0 Token Exchange | Implement `POST /oauth/token` exchange for workload JWTs with bounded vault cache | M1 | Survey |
+| F04 | Mandate Attenuation & Strict URI Filter | Ed25519-signed capability chains, strict `mcp://`/`a2a://`/`inference://`/`egress://`, zero holder Datalog rules, monotonic intersection | M1 | Survey |
+| F05 | Host PEP Header Hygiene | Strip caller `Authorization`, `Cookie`, `X-Mesh-*` headers; inject verified `X-Mesh-Authentication` | M1 | Survey |
+| F06 | Zero-Mutual-Information Response Sanitization | Sanitize upstream responses with `ZeroMutualInformationProjector` before copying to Wasm memory | M1 | Survey |
+| F07 | Native Production AgentMesh Serving Node | Embedded HTTP node implementing `policy.json` (`roles`, `allowed_services`, `allowed_publish`, `bindings`), STS, active revocation list, and `/mesh/` routing | M1 | Survey & User Directive |
+| F08 | Production Matured NeuralMesh & MeshGuard | Upgrade `src/neural_mesh.rs` and `src/containment_ring/mesh_guard.rs` with typed URIs, dual capability grants, bounded LRU nonces, and constant-time MAC | M1 | User Directive |
+| F09 | Zero-Secret `WasmMeshBridgeContext` Host Binding | Host-only storage in `Store<WasmHostState>`, keeping 64 MiB linear memory free of secrets | M2 | Survey |
+| F10 | `octopus_wasi::mesh_call` Capability Pore | Narrow host import filtering schemes, returning `WASI_ERR_ACCESS_DENIED = -5` on refusal | M2 | Survey |
+| F11 | Built-in `WASM_MESH_CALLER_WAT` & Receipts | Built-in WAT guest module and execution receipt telemetry (`mesh_calls_attempted`, `mesh_calls_succeeded`, `mesh_bytes_exchanged`) | M2 | Survey |
+| F12 | Sub-Millisecond KillSwitch Eviction (<1ms) | Evict cached `(arm_id, epoch)` tokens in `<1ms` upon circuit breaker trip | M2 | Survey |
+| F13 | Wasm Engine Epoch Trapping | Trigger `engine.increment_epoch()` to immediately trap in-flight Wasm guest loops via `epoch_interruption(true)` | M2 | Survey |
+| F14 | Outbound Mesh Routing (`Sandbox -> Mesh`) | Route isolated sandboxes (`arm_calc` vs `arm_rogue`) under distinct identities with zero sibling borrowing | M2 | Survey |
+| F15 | Mercury Pore Pressure Egress Feedback | Feed `mesh_bytes_exchanged` into `MercuryContainmentEngine` (`HostActuationPore::InterAgentMeshIpc`) | M2 | Survey |
+| F16 | Inbound Published Tools & CAGE Seal Gating | Gate inbound `mcp://octopus/doc_extractor` and `ledger_validator` via `X-Mesh-Authentication` and CAGE `RoutingSeal` | M2 | Survey |
+| F17 | OpenShell Dual-Boundary Containment | Enforce `default_network_deny: true`, `wasm_fuel_limit`, and `wasm_epoch_deadline` over mesh pore | M2 | Survey |
+| F18 | Web Request Guard Loopback & Mesh Exemptions | Exempt `/.well-known/openid-configuration`, `/jwks`, and `/mesh/*` in `request_guard.rs` | M3 | Survey |
+| F19 | AgentMesh Production REST Web API Handlers | Expose discovery, jwks, wasm-call, inbound tools, killswitch trip, and status in `api.rs` and `server.rs` | M3 | Survey & User Directive |
+| F20 | Interactive WebUI Dashboard Panel (Tab 17) | Production zero-mock dashboard panel with interactive controls for mesh calls, CAGE seals, autotomy, and JWKS | M3 | Survey |
+| F21 | Automated Submenu Verification Suite | Extend `scripts/test_all_submenus.py` to systematically verify all Tab 17 endpoints against running server | M4 | Survey |
+| F22 | Automated Headless Screen Capture | Script `scripts/capture_dashboard_screens.py` capturing live PNG screenshots of all active dashboard panels | M4 | Survey |
+| F23 | WiX v5 MSI Installer Definition | Author `wix/AgentOctopus.wxs` with ZERO `<Environment Id="PATH">` tags, shortcuts to Program Menu/Desktop | M5 | Survey |
+| F24 | Production Release Packaging & Checksums | `cargo build --release`, compile MSI, package `AgentOctopus-windows-x64.zip` with `SHA256SUMS.txt` | M5 | Survey |
+| F25 | Solo GitHub Release Overwrite | Publish/overwrite release assets on `oyesanyf/AgentOctopus` using clean UTF-8 release notes | M5 | Survey |
+| F26 | Comprehensive End-to-End Production Test Suite | Implement `tests/agentmesh_production_integration_tests.rs` covering all 8 core scenarios | M5 | Survey & User Directive |
 
 ---
 
@@ -64,28 +82,47 @@ AgentOctopus integrates Google Cybernetic Agent Governance Engine (CAGE v4.0.0, 
 
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| M1 | Native Rust CAGE Governance Engine Core | Implement `src/security/cage_governance/` (all 6 core submodules + `mod.rs`), register in `src/security/mod.rs` and `src/lib.rs` (Features F01-F14) | none | DONE (32 unit + 14 stress + 9 challenger tests pass, commit 5696218) |
-| M2 | Actuator Confinement Seal Enforcement | Integrate `execute_tool_with_cage_seal` and `GOVERNANCE_TRACE` `EXECUTED` emission into `src/containment_ring/arm_ring.rs` (Features F15-F16) | M1 | DONE (26 containment ring + 8 challenger tests pass, commits aa6ba08 & 1a041fa) |
-| M3 | CAGE Substrate Contract HTTP Endpoints | Wire `CageGovernanceEngine` into `WebState` (`src/web/api.rs`), implement substrate handlers, route in `src/web/server.rs`, exempt in `src/web/request_guard.rs` (Features F17-F18) | M1, M2 | DONE (22 web + 14 challenger m3 + 6 challenger m3.2 tests pass, commits 558b6bb, 93e337e, efc4769) |
-| M4 | Comprehensive Integration Test Suite | Implement `tests/cage_governance_integration_tests.rs` verifying 5 formats, FTRA, CBF, seals, single-use actuation, 34-state BFS proof, trace conformance (Feature F19) | M1, M2, M3 | DONE (25 integration + 15 challenger m4 + 8 challenger m4.2 tests pass, commits 8716fff, e2b78da, 1a98a70) |
-| M5 | Final Milestone: 100% E2E Pass & Adversarial Hardening | Pass 100% of E2E test suite (Tiers 1-4) published by E2E Testing Track, followed by Phase 2 adversarial coverage hardening (Tier 5) (Feature F20) | M4, E2E Track | DONE (179 baseline e2e + 14 challenger m5.2 + 15 challenger m5.1 = 208 CAGE tests pass across 14 targets, commits 2c61bff, b799971, dc63cbe) |
+| M1 | AgentMesh Production Core Engine & Matured NeuralMesh | `Cargo.toml`, `src/security/agentmesh/` (`oidc_actor_issuer.rs`, `mandate_attenuation.rs`, `pep_bridge.rs`, `serving_node.rs`, `mod.rs`), `src/neural_mesh.rs`, `src/containment_ring/mesh_guard.rs`, registered in `src/security/mod.rs` (F01–F08) | none | IN_PROGRESS |
+| M2 | Tier 1 Wasm Sandbox Mesh Pore & Sub-ms KillSwitch | `src/security/wasm_tier1.rs`, `src/containment_ring/tiered_executor.rs`, `src/security/openshell.rs`, `src/containment_ring/arm_ring.rs` (F09–F17) | M1 | PLANNED |
+| M3 | Web API Endpoints & Zero-Mock Interactive Dashboard | `src/web/request_guard.rs`, `src/web/api.rs`, `src/web/server.rs`, `src/web/static_files.rs` Tab 17 (F18–F20) | M1, M2 | PLANNED |
+| M4 | Automated Submenu Verification & Headless Screen Capture | `scripts/test_all_submenus.py` Tab 17 expansion, `scripts/capture_dashboard_screens.py`, live execution against server (F21–F22) | M1, M2, M3 | PLANNED |
+| M5 | Final Milestone: 100% E2E Pass, WiX MSI Build & Solo GitHub Release | `tests/agentmesh_production_integration_tests.rs`, `wix/AgentOctopus.wxs`, `scripts/build_release_msi.ps1`, `scripts/publish_release.ps1`, ZIP + SHA256, GitHub release overwrite (F23–F26) | M4 | PLANNED |
 
 ---
 
 ## Interface Contracts
 
-### M1 Core ↔ M2 Containment Ring
-- `CageGovernanceEngine::verify_and_consume_seal(&self, seal: &CageRoutingSeal, expected_action: &str, expected_digest: &str) -> Result<(), SealRejection>`
-- `CageGovernanceEngine::record_actuation_trace(&self, seal_ref: &str, action: &str, receipt: &TieredExecutionReceipt) -> Result<String, GovernanceTraceError>`
-- `CageGovernanceEngine::confirm_fiscal_reservation(&self, debit_id: &str) -> Result<(), CbfViolation>`
+### M1 Core ↔ M2 Wasm Sandbox & Containment
+- `AgentMeshPepBridge::dispatch_mesh_call_sync(&self, arm_id: &str, epoch: u64, role: &ArmRole, uri: &str, req_bytes: &[u8]) -> Result<Vec<u8>, MeshCallError>`
+- `AgentMeshPepBridge::trip_arm_killswitch(&self, arm_id: &str) -> Duration`
+- `WasmTier1Executor::increment_epoch(&self)`
+- `WasmMeshBridgeContext`: Holds `arm_id`, `generation_epoch`, `role`, `killswitch`, `pep_bridge`, quotas.
 
-### M1 Core ↔ M3 Web API
-- `CageGovernanceEngine::ingest_policy(&self, raw_policy: &str, expected_version: Option<&str>) -> Result<IngestPolicyResponse, CageApiError>`
-- `CageGovernanceEngine::active_policy_version(&self) -> String`
-- `CageGovernanceEngine::validate_action(&self, req: &GovernanceRequest) -> Result<GovernanceEvaluationResult, CageApiError>`
-- `CageGovernanceEngine::verify_and_consume_seal_direct(&self, seal_json: &str) -> Result<ConsumeSealResponse, CageApiError>`
-- `CageGovernanceEngine::proof_status(&self) -> ProofStatusResponse`
-- `CageGovernanceEngine::verify_trace_conformance(&self, traces: &[serde_json::Value]) -> Result<StreamVerificationReport, CageApiError>`
+### M1 Core ↔ NeuralMesh / MeshGuard
+- `NeuralMesh::send_mesh_message(&self, msg: &NeuralMeshMessage) -> Result<(), NeuralMeshError>`
+- `MeshGuard::verify_message(&self, msg: &NeuralMeshMessage) -> Result<bool, MeshGuardError>`
+- Bounded LRU on `seen_nonces` with max capacity (e.g. 10,000 nonces) and constant-time HMAC-SHA256 comparison.
+
+### M1/M2 ↔ M3 Web API
+- `AgentMeshEngine::oidc_issuer(&self) -> &OctopusOidcActorIssuer`
+- `AgentMeshEngine::pep_bridge(&self) -> &Arc<AgentMeshPepBridge>`
+- `AgentMeshEngine::status(&self) -> AgentMeshStatus`
+- `WebState::agentmesh_engine`: `Arc<AgentMeshEngine>`
+- `TOKEN_EXEMPT_PATHS`: `"/.well-known/openid-configuration"`, `"/jwks"`, `/mesh/*`
+
+### M3 Web ↔ M4 Submenu Verification & Screen Captures
+- `GET http://127.0.0.1:<port>/?tab=agentmesh-runtime`
+- `POST /api/agentmesh/wasm-call`
+- `POST /api/agentmesh/killswitch/trip`
+- `POST /mesh/mcp/octopus/doc_extractor`
+- `reports/screenshots/`: `01_agentmesh_dashboard.png`, `02_wasm_outbound_allowed.png`, `03_wasm_outbound_denied.png`, `04_killswitch_autotomy.png`, `05_inbound_doc_extractor.png`
+
+### M4 Verification ↔ M5 Packaging & Release
+- All automated submenu tests pass (17/17 tabs, 0 failures).
+- `cargo test --test agentmesh_production_integration_tests` passes (all 8 scenarios green).
+- WiX v5 command: `& $WixCmd build wix\AgentOctopus.wxs -arch x64 -out AgentOctopus.msi`.
+- Release archive: `AgentOctopus-windows-x64.zip` with `SHA256SUMS.txt`.
+- GitHub CLI: `d:\tools\gh.exe release create v0.1.0 ... --notes-file <file> --clobber`.
 
 ---
 
@@ -93,25 +130,36 @@ AgentOctopus integrates Google Cybernetic Agent Governance Engine (CAGE v4.0.0, 
 
 ```
 d:\harfile\AgentOctopus\
+├── Cargo.toml                                         # [MODIFIED] Add p256, base64
 ├── src/
 │   ├── security/
-│   │   ├── mod.rs                                    # Module registration & re-exports
-│   │   └── cage_governance/                          # [NEW] CAGE Native Core
-│   │       ├── mod.rs                                # Public exports & CageGovernanceEngine
-│   │       ├── substrate_translator.rs              # 5-format policy translator & RFC 8785 JCS
-│   │       ├── ftra_stpa.rs                          # Tier 0.5 FTRA DAG analyzer & Tier 1 STPA validator
-│   │       ├── cbf_fiscal.rs                         # Tier 3a Discrete-Time CBF & Tier 4 DebitLedger
-│   │       ├── routing_seal.rs                       # CAGE Substrate §3 evidence-bound routing seal
-│   │       ├── pipeline.rs                           # 7-tier 2-phase dynamic governance pipeline
-│   │       └── no_direct_bind_proof.rs               # BFS 34-state state machine model & trace verifier
+│   │   ├── mod.rs                                     # [MODIFIED] Register agentmesh
+│   │   ├── agentmesh/                                 # [NEW] AgentMesh Production Engine
+│   │   │   ├── mod.rs                                 # AgentMeshEngine coordinator
+│   │   │   ├── oidc_actor_issuer.rs                   # ES256 P-256 JWT & EC JWKS
+│   │   │   ├── mandate_attenuation.rs                 # Ed25519 mandate chains & URI filter
+│   │   │   ├── pep_bridge.rs                          # Header hygiene, token vault, <1ms eviction
+│   │   │   └── serving_node.rs                        # Production serving node & upstream bridge
+│   │   ├── wasm_tier1.rs                              # [MODIFIED] octopus_wasi::mesh_call & context
+│   │   └── openshell.rs                               # [MODIFIED] Dual-boundary mesh execution
+│   ├── neural_mesh.rs                                 # [MODIFIED] Mature inter-arm mesh (bounded nonces, URIs)
 │   ├── containment_ring/
-│   │   └── arm_ring.rs                               # [MODIFIED] execute_tool_with_cage_seal & trace emission
-│   ├── web/
-│   │   ├── api.rs                                    # [MODIFIED] WebState registration & CAGE handlers
-│   │   ├── server.rs                                 # [MODIFIED] Substrate route dispatch
-│   │   └── request_guard.rs                          # [MODIFIED] Loopback path token exemptions
-│   └── lib.rs                                        # [MODIFIED] Library re-exports
+│   │   ├── mesh_guard.rs                              # [MODIFIED] Constant-time MAC & dual capability grants
+│   │   ├── tiered_executor.rs                         # [MODIFIED] Sandbox->Mesh routing & Mercury pore
+│   │   └── arm_ring.rs                                # [MODIFIED] Autotomy & CAGE seal inbound gating
+│   └── web/
+│       ├── request_guard.rs                           # [MODIFIED] Exempt openid-config, jwks, /mesh/*
+│       ├── api.rs                                     # [MODIFIED] WebState & 6 AgentMesh handlers
+│       ├── server.rs                                  # [MODIFIED] Route dispatch matching
+│       └── static_files.rs                            # [MODIFIED] Tab 17 AgentMesh interactive SPA
+├── scripts/
+│   ├── test_all_submenus.py                           # [MODIFIED] Tab 17 submenu test suite
+│   ├── capture_dashboard_screens.py                   # [NEW] Headless Chrome screenshot automation
+│   ├── build_release_msi.ps1                          # [NEW] Release binaries, WiX MSI, ZIP, SHA256
+│   └── publish_release.ps1                            # [NEW] Solo GitHub release script
+├── wix/
+│   └── AgentOctopus.wxs                               # [NEW] WiX v5 installer definition (ZERO PATH)
 ├── tests/
-│   └── cage_governance_integration_tests.rs          # [NEW] Comprehensive integration test suite
-└── PROJECT.md                                        # Living Project Architecture & Milestone Index
+│   └── agentmesh_production_integration_tests.rs      # [NEW] Comprehensive 8-scenario E2E test suite
+└── PROJECT.md                                         # Global Project Index & Living Architecture
 ```

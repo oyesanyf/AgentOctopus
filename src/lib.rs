@@ -161,7 +161,6 @@ pub use security::{
 
 pub use security::{
     validate_mesh_uri, AgentMeshBindingDef, AgentMeshConfig, AgentMeshEngine,
-    AgentMeshKillSwitchPocEngine, AgentMeshPocConfig, AgentMeshPocStatus,
     AgentMeshPolicyConfig, AgentMeshPolicyRoot, AgentMeshReferenceNode,
     AgentMeshRoleDef, AgentMeshServingNode, AgentMeshStatus, AttenuatedMandate,
     CachedMeshToken, ConformanceNodeStats, DelegationLink, EcJwk, ExchangedTokenMetadata,

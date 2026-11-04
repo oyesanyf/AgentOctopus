@@ -423,6 +423,7 @@ fn test_challenge_jti_replay_attack_and_cache_boundary() {
 fn test_challenge_mandate_privilege_escalation_attacks() {
     let k0 = EdSigningKey::generate(&mut OsRng);
     let k1 = EdSigningKey::generate(&mut OsRng);
+    let k2 = EdSigningKey::generate(&mut OsRng);
 
     let mut parent_services = BTreeSet::new();
     parent_services.insert("mcp://calc".to_string());
@@ -435,6 +436,7 @@ fn test_challenge_mandate_privilege_escalation_attacks() {
         &k0,
         "spiffe://agentoctopus.local/root",
         "spiffe://agentoctopus.local/arm/holder1",
+        k1.verifying_key().to_bytes(),
         parent_services,
         parent_publish,
         1_000,
@@ -450,6 +452,7 @@ fn test_challenge_mandate_privilege_escalation_attacks() {
     let res1 = root_mandate.attenuate(
         &k1,
         "spiffe://agentoctopus.local/arm/child1",
+        k2.verifying_key().to_bytes(),
         bad_services,
         BTreeSet::new(),
         4_000,
@@ -470,6 +473,7 @@ fn test_challenge_mandate_privilege_escalation_attacks() {
     let res2 = root_mandate.attenuate(
         &k1,
         "spiffe://agentoctopus.local/arm/child1",
+        k2.verifying_key().to_bytes(),
         valid_services.clone(),
         bad_publish,
         4_000,
@@ -487,6 +491,7 @@ fn test_challenge_mandate_privilege_escalation_attacks() {
     let res3 = root_mandate.attenuate(
         &k1,
         "spiffe://agentoctopus.local/arm/child1",
+        k2.verifying_key().to_bytes(),
         valid_services.clone(),
         smuggled_publish,
         4_000,
@@ -502,6 +507,7 @@ fn test_challenge_mandate_privilege_escalation_attacks() {
         .attenuate(
             &k1,
             "spiffe://agentoctopus.local/arm/child1",
+            k2.verifying_key().to_bytes(),
             valid_services.clone(),
             BTreeSet::new(),
             6_000, // Parent expires at 5000
@@ -533,11 +539,13 @@ fn test_challenge_mandate_privilege_escalation_attacks() {
 
     for hop in 1..=MAX_DELEGATION_DEPTH {
         let next_key = EdSigningKey::generate(&mut OsRng);
+        let next_vk = next_key.verifying_key().to_bytes();
         let next_holder = format!("spiffe://agentoctopus.local/arm/node_{}", hop);
         current_mandate = current_mandate
             .attenuate(
                 &current_key,
                 &next_holder,
+                next_vk,
                 valid_services.clone(),
                 BTreeSet::new(),
                 4_500,
@@ -549,9 +557,12 @@ fn test_challenge_mandate_privilege_escalation_attacks() {
     }
 
     // 9th hop exceeds MAX_DELEGATION_DEPTH = 8
+    let overflow_key = EdSigningKey::generate(&mut OsRng);
+    let overflow_vk = overflow_key.verifying_key().to_bytes();
     let res_exceeded = current_mandate.attenuate(
         &current_key,
         "spiffe://agentoctopus.local/arm/node_overflow",
+        overflow_vk,
         valid_services,
         BTreeSet::new(),
         4_500,
@@ -905,12 +916,15 @@ async fn test_challenge_pep_bridge_submillisecond_killswitch_under_load() {
 fn test_challenge_vulnerability_der_check_false_positive_on_legitimate_signatures() {
     use agent_octopus::security::agentmesh::parse_ieee_p1363_signature;
     use p256::ecdsa::signature::Signer;
+    use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::SigningKey;
 
     let signing_key = SigningKey::random(&mut OsRng);
+    let verifying_key = signing_key.verifying_key();
 
     // Search for a legitimate P-256 IEEE P1363 signature whose first byte is 0x30 (1 in 256 chance)
     let mut found_valid_with_0x30 = None;
+    let mut verified_msg = String::new();
     for counter in 0..10_000u64 {
         let msg = format!("test_msg_{}", counter);
         let sig: p256::ecdsa::Signature = signing_key.sign(msg.as_bytes());
@@ -918,6 +932,7 @@ fn test_challenge_vulnerability_der_check_false_positive_on_legitimate_signature
         assert_eq!(raw.len(), 64);
         if raw[0] == 0x30 {
             found_valid_with_0x30 = Some(raw);
+            verified_msg = msg;
             break;
         }
     }
@@ -926,14 +941,14 @@ fn test_challenge_vulnerability_der_check_false_positive_on_legitimate_signature
     assert_eq!(raw_sig[0], 0x30);
     assert_eq!(raw_sig.len(), 64);
 
-    // EMPIRICAL VULNERABILITY PROOF:
-    // This signature is 100% valid IEEE P1363 raw signature, but parse_ieee_p1363_signature
-    // falsely rejects it as DerSignatureForbidden solely because raw[0] == 0x30!
-    let parse_res = parse_ieee_p1363_signature(&raw_sig);
-    assert_eq!(
-        parse_res,
-        Err(OidcError::DerSignatureForbidden),
-        "CONFIRMED VULNERABILITY: 1 in 256 legitimate IEEE P1363 signatures are falsely rejected as DER!"
+    // Verify parser successfully accepts legitimate 64-byte signature starting with 0x30
+    let parsed_sig = parse_ieee_p1363_signature(&raw_sig)
+        .expect("Legitimate 64-byte signature starting with 0x30 must parse successfully");
+
+    // Verify signature validates against verifying key
+    assert!(
+        verifying_key.verify(verified_msg.as_bytes(), &parsed_sig).is_ok(),
+        "Parsed signature must verify against public key"
     );
 }
 
@@ -943,21 +958,19 @@ fn test_challenge_vulnerability_der_check_false_positive_on_legitimate_signature
 
 #[test]
 fn test_challenge_vulnerability_ssrf_port_bypass_and_ipv6_omission() {
-    // EMPIRICAL VULNERABILITY PROOF:
-    // validate_mesh_uri splits by '/' and does not strip the port before checking 4 octets.
-    // Consequently, RFC1918 private IPv4 addresses with ports completely bypass the IPv4 filter!
+    // RFC1918 private IPv4 addresses with ports are strictly rejected:
     assert!(
-        validate_mesh_uri("mcp://10.0.0.1:8080/calc").is_ok(),
-        "CONFIRMED VULNERABILITY: mcp://10.0.0.1:8080/calc bypasses raw IPv4 literal detection!"
+        validate_mesh_uri("mcp://10.0.0.1:8080/calc").is_err(),
+        "mcp://10.0.0.1:8080/calc must be rejected as prohibited target"
     );
     assert!(
-        validate_mesh_uri("mcp://192.168.1.1:8080/calc").is_ok(),
-        "CONFIRMED VULNERABILITY: mcp://192.168.1.1:8080/calc bypasses raw IPv4 literal detection!"
+        validate_mesh_uri("mcp://192.168.1.1:8080/calc").is_err(),
+        "mcp://192.168.1.1:8080/calc must be rejected as prohibited target"
     );
 
-    // IPv6 addresses (other than [::1]) are also completely unblocked:
+    // IPv6 addresses are also strictly blocked:
     assert!(
-        validate_mesh_uri("mcp://[2001:db8::1]/calc").is_ok(),
-        "CONFIRMED VULNERABILITY: IPv6 literals are not blocked by validate_mesh_uri!"
+        validate_mesh_uri("mcp://[2001:db8::1]/calc").is_err(),
+        "IPv6 literals must be blocked by validate_mesh_uri"
     );
 }

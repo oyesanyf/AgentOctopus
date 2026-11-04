@@ -12,9 +12,11 @@
 use super::oidc_actor_issuer::JwksDocument;
 use crate::security::cage_substrate::base64url_decode_no_pad;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, RwLock};
@@ -114,11 +116,6 @@ impl AgentMeshPolicyConfig {
 
     /// Convenience alias for the default serving policy.
     pub fn default_policy() -> Self {
-        Self::default_serving_policy()
-    }
-
-    /// Compatibility alias for default serving policy.
-    pub fn default_poc_policy() -> Self {
         Self::default_serving_policy()
     }
 
@@ -267,15 +264,211 @@ impl HttpResponse {
     }
 }
 
+/// Cryptographically signed revocation signal for Weakness 1.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedEpochRevocationSignal {
+    pub arm_id: String,
+    pub revocation_epoch: u64,
+    pub timestamp: u64,
+    pub signature: String, // hex-encoded ES256 signature
+}
+
+/// Bounded store for exchanged access tokens preventing memory leaks.
+#[derive(Debug, Clone)]
+pub struct BoundedActiveTokenStore {
+    tokens: HashMap<String, ExchangedTokenMetadata>,
+    insertion_order: VecDeque<String>,
+    capacity: usize,
+}
+
+impl BoundedActiveTokenStore {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            tokens: HashMap::new(),
+            insertion_order: VecDeque::new(),
+            capacity: capacity.max(100),
+        }
+    }
+
+    pub fn insert(&mut self, token_id: String, meta: ExchangedTokenMetadata) {
+        if self.tokens.len() >= self.capacity {
+            while let Some(oldest) = self.insertion_order.pop_front() {
+                if self.tokens.remove(&oldest).is_some() {
+                    break;
+                }
+            }
+        }
+        self.tokens.insert(token_id.clone(), meta);
+        self.insertion_order.push_back(token_id);
+    }
+
+    pub fn get(&self, token_id: &str) -> Option<&ExchangedTokenMetadata> {
+        self.tokens.get(token_id)
+    }
+
+    pub fn revoke_arm(&mut self, arm_id: &str) {
+        self.tokens.retain(|_, m| m.arm_id != arm_id);
+        self.insertion_order.retain(|k| self.tokens.contains_key(k));
+    }
+
+    pub fn advance_arm_epoch(&mut self, arm_id: &str, min_valid_epoch: u64) {
+        self.tokens.retain(|_, m| !(m.arm_id == arm_id && m.epoch < min_valid_epoch));
+        self.insertion_order.retain(|k| self.tokens.contains_key(k));
+    }
+
+    pub fn prune_expired(&mut self, now: u64) {
+        self.tokens.retain(|_, m| m.expires_at > now);
+        self.insertion_order.retain(|k| self.tokens.contains_key(k));
+    }
+
+    pub fn len(&self) -> usize {
+        self.tokens.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tokens.is_empty()
+    }
+}
+
+/// Bounded FIFO nonce store preventing replay attacks.
+#[derive(Debug)]
+pub struct BoundedNonceStore {
+    nonces: HashSet<String>,
+    fifo: VecDeque<String>,
+    capacity: usize,
+}
+
+impl BoundedNonceStore {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            nonces: HashSet::new(),
+            fifo: VecDeque::new(),
+            capacity: capacity.max(100),
+        }
+    }
+
+    pub fn check_and_insert(&mut self, nonce: &str) -> bool {
+        if self.nonces.contains(nonce) {
+            return false;
+        }
+        if self.fifo.len() >= self.capacity {
+            if let Some(old) = self.fifo.pop_front() {
+                self.nonces.remove(&old);
+            }
+        }
+        self.nonces.insert(nonce.to_string());
+        self.fifo.push_back(nonce.to_string());
+        true
+    }
+}
+
+pub const HEADER_PEP_CHANNEL_PROOF: &str = "x-octopus-pep-channel-proof";
+pub const HEADER_PEP_NONCE: &str = "x-octopus-pep-nonce";
+pub const HEADER_PEP_TIMESTAMP: &str = "x-octopus-pep-timestamp";
+pub const HEADER_PEP_CAGE_SEAL: &str = "x-octopus-cage-seal";
+pub const HEADER_NODE_PROOF: &str = "x-octopus-node-proof";
+
+pub const PEP_CHANNEL_MAX_SKEW_MS: u64 = 5_000; // Strict <= 5s drift tolerance
+
+fn compute_hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
+    let mut k = [0u8; 64];
+    if key.len() > 64 {
+        let hash = Sha256::digest(key);
+        k[..32].copy_from_slice(&hash);
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+
+    let mut ipad = [0x36u8; 64];
+    let mut opad = [0x5cu8; 64];
+    for i in 0..64 {
+        ipad[i] ^= k[i];
+        opad[i] ^= k[i];
+    }
+
+    let mut inner = Sha256::new();
+    inner.update(&ipad);
+    inner.update(data);
+    let inner_hash = inner.finalize();
+
+    let mut outer = Sha256::new();
+    outer.update(&opad);
+    outer.update(&inner_hash);
+    let outer_hash = outer.finalize();
+
+    let mut result = [0u8; 32];
+    result.copy_from_slice(&outer_hash);
+    result
+}
+
+/// Computes PEP request channel proof
+pub fn compute_pep_channel_proof(
+    channel_secret: &[u8; 32],
+    method: &str,
+    path: &str,
+    timestamp_ms: u64,
+    nonce: &str,
+    body: &[u8],
+    cage_seal: Option<&str>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(body);
+    let body_hash_hex = hex::encode(hasher.finalize());
+    let seal_str = cage_seal.unwrap_or("");
+
+    let canonical = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}",
+        method.to_uppercase(),
+        path,
+        timestamp_ms,
+        nonce,
+        body_hash_hex,
+        seal_str
+    );
+
+    let hmac = compute_hmac_sha256(channel_secret, canonical.as_bytes());
+    hex::encode(hmac)
+}
+
+/// Computes Node response mutual proof
+pub fn compute_node_response_proof(
+    channel_secret: &[u8; 32],
+    status_code: u16,
+    nonce: &str,
+    body: &[u8],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(body);
+    let body_hash_hex = hex::encode(hasher.finalize());
+
+    let canonical = format!("{}\n{}\n{}", status_code, nonce, body_hash_hex);
+    let hmac = compute_hmac_sha256(channel_secret, canonical.as_bytes());
+    hex::encode(hmac)
+}
+
+#[derive(Debug, Error)]
+pub enum TokenVerificationError {
+    #[error("Token not found or expired")]
+    NotFoundOrExpired,
+    #[error("Arm is actively revoked")]
+    ArmRevoked,
+    #[error("Epoch superseded")]
+    EpochSuperseded,
+    #[error("Service '{0}' not allowed for token")]
+    ServiceDenied(String),
+}
+
 /// Internal shared state for the serving node.
 pub struct ServingNodeInner {
     pub policy: RwLock<AgentMeshPolicyConfig>,
     pub jwks: RwLock<Option<JwksDocument>>,
-    pub active_tokens: RwLock<HashMap<String, ExchangedTokenMetadata>>,
+    pub active_tokens: RwLock<BoundedActiveTokenStore>,
     pub stats: RwLock<ServingNodeStats>,
     pub revoked_arms: RwLock<HashSet<String>>,
     pub arm_epoch_watermarks: RwLock<HashMap<String, u64>>,
     pub node_id: String,
+    pub channel_secret: Option<[u8; 32]>,
+    pub seen_pep_nonces: RwLock<BoundedNonceStore>,
 }
 
 /// Handle to the active embedded loopback HTTP serving node.
@@ -293,17 +486,29 @@ impl AgentMeshServingNode {
         jwks: Option<JwksDocument>,
         preferred_port: u16,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        Self::start_with_channel(policy, jwks, preferred_port, None).await
+    }
+
+    /// Starts the loopback HTTP server with optional mutual PEP channel secret.
+    pub async fn start_with_channel(
+        policy: AgentMeshPolicyConfig,
+        jwks: Option<JwksDocument>,
+        preferred_port: u16,
+        channel_secret: Option<[u8; 32]>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let listener = TcpListener::bind(("127.0.0.1", preferred_port)).await?;
         let bound_port = listener.local_addr()?.port();
 
         let inner = Arc::new(ServingNodeInner {
             policy: RwLock::new(policy),
             jwks: RwLock::new(jwks),
-            active_tokens: RwLock::new(HashMap::new()),
+            active_tokens: RwLock::new(BoundedActiveTokenStore::new(10_000)),
             stats: RwLock::new(ServingNodeStats::default()),
             revoked_arms: RwLock::new(HashSet::new()),
             arm_epoch_watermarks: RwLock::new(HashMap::new()),
             node_id: format!("agentmesh_serving_node_{}", bound_port),
+            channel_secret,
+            seen_pep_nonces: RwLock::new(BoundedNonceStore::new(10_000)),
         });
 
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -370,10 +575,59 @@ impl AgentMeshServingNode {
         rev.insert(arm_id.to_string());
     }
 
+    /// Checks if an arm has been marked revoked.
+    pub async fn is_arm_revoked(&self, arm_id: &str) -> bool {
+        self.inner.revoked_arms.read().await.contains(arm_id)
+    }
+
     /// Dual-side #734 defense: Advance Arm Epoch Watermark
     pub async fn advance_arm_epoch(&self, arm_id: &str, min_valid_epoch: u64) {
         let mut wm = self.inner.arm_epoch_watermarks.write().await;
         wm.insert(arm_id.to_string(), min_valid_epoch);
+    }
+
+    /// Verifies an exchanged token against active store, revocation lists, and capabilities.
+    pub async fn verify_access_token(
+        &self,
+        token: &str,
+        resource: &str,
+    ) -> Result<ExchangedTokenMetadata, TokenVerificationError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut tokens = self.inner.active_tokens.write().await;
+        tokens.prune_expired(now);
+
+        let meta = match tokens.get(token) {
+            Some(m) => m.clone(),
+            None => return Err(TokenVerificationError::NotFoundOrExpired),
+        };
+
+        if now > meta.expires_at {
+            return Err(TokenVerificationError::NotFoundOrExpired);
+        }
+
+        // Check active revocation
+        let rev = self.inner.revoked_arms.read().await;
+        if rev.contains(&meta.arm_id) {
+            return Err(TokenVerificationError::ArmRevoked);
+        }
+
+        // Check epoch watermark
+        let wm = self.inner.arm_epoch_watermarks.read().await;
+        if let Some(&min_epoch) = wm.get(&meta.arm_id) {
+            if meta.epoch < min_epoch {
+                return Err(TokenVerificationError::EpochSuperseded);
+            }
+        }
+
+        // Check allowed services
+        if !meta.allowed_services.iter().any(|s| matches_pattern(s, resource)) {
+            return Err(TokenVerificationError::ServiceDenied(resource.to_string()));
+        }
+
+        Ok(meta)
     }
 
     pub async fn stop(&mut self) {
@@ -452,6 +706,28 @@ async fn handle_connection(
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
 
+    const MAX_HTTP_BODY_BYTES: usize = 10 * 1024 * 1024; // 10 MiB limit
+    if content_len > MAX_HTTP_BODY_BYTES {
+        let resp = HttpResponse::error(
+            413,
+            "Payload Too Large",
+            "payload_too_large",
+            "Request body exceeds 10 MiB limit",
+        );
+        let mut resp_str = format!("HTTP/1.1 {} {}\r\n", resp.status_code, resp.status_text);
+        for (k, v) in &resp.headers {
+            resp_str.push_str(&format!("{}: {}\r\n", k, v));
+        }
+        resp_str.push_str("\r\n");
+        let _ = stream.write_all(resp_str.as_bytes()).await;
+        if !resp.body.is_empty() {
+            let _ = stream.write_all(&resp.body).await;
+        }
+        let _ = stream.flush().await;
+        let _ = stream.shutdown().await;
+        return Ok(());
+    }
+
     let mut body = buf[pos + 4..].to_vec();
     while body.len() < content_len {
         let to_read = (content_len - body.len()).min(chunk.len());
@@ -490,8 +766,100 @@ async fn handle_connection(
 }
 
 async fn route_request(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {
-    match (req.method.as_str(), req.path.as_str()) {
+    // 1. Weakness 4: Mutual PEP-to-Node channel verification
+    let pep_nonce = req.headers.get(HEADER_PEP_NONCE).cloned();
+    if let Some(secret) = &state.channel_secret {
+        let proof = match req.headers.get(HEADER_PEP_CHANNEL_PROOF) {
+            Some(p) => p,
+            None => {
+                return HttpResponse::error(
+                    403,
+                    "Forbidden",
+                    "PEP_CHANNEL_AUTH_REQUIRED",
+                    "Channel proof header missing",
+                );
+            }
+        };
+        let nonce = match &pep_nonce {
+            Some(n) => n,
+            None => {
+                return HttpResponse::error(
+                    403,
+                    "Forbidden",
+                    "PEP_CHANNEL_AUTH_REQUIRED",
+                    "Nonce header missing",
+                );
+            }
+        };
+        let ts_str = match req.headers.get(HEADER_PEP_TIMESTAMP) {
+            Some(t) => t,
+            None => {
+                return HttpResponse::error(
+                    403,
+                    "Forbidden",
+                    "PEP_CHANNEL_AUTH_REQUIRED",
+                    "Timestamp header missing",
+                );
+            }
+        };
+
+        let ts_ms = match ts_str.parse::<u64>() {
+            Ok(t) => t,
+            Err(_) => {
+                return HttpResponse::error(
+                    403,
+                    "Forbidden",
+                    "PEP_CHANNEL_AUTH_INVALID",
+                    "Invalid timestamp",
+                );
+            }
+        };
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        if now_ms.abs_diff(ts_ms) > PEP_CHANNEL_MAX_SKEW_MS {
+            return HttpResponse::error(
+                403,
+                "Forbidden",
+                "PEP_CHANNEL_TIMESTAMP_SKEW",
+                "Timestamp skew exceeded 5s limit",
+            );
+        }
+
+        if !state.seen_pep_nonces.write().await.check_and_insert(nonce) {
+            return HttpResponse::error(
+                403,
+                "Forbidden",
+                "PEP_CHANNEL_NONCE_REPLAY",
+                "Nonce replay detected",
+            );
+        }
+
+        let cage_seal = req.headers.get(HEADER_PEP_CAGE_SEAL).map(|s| s.as_str());
+        let expected_proof = compute_pep_channel_proof(
+            secret,
+            &req.method,
+            &req.path,
+            ts_ms,
+            nonce,
+            &req.body,
+            cage_seal,
+        );
+        if !crate::security::constant_time_eq_hex(proof, &expected_proof) {
+            return HttpResponse::error(
+                403,
+                "Forbidden",
+                "PEP_CHANNEL_PROOF_INVALID",
+                "Constant-time HMAC verification failed",
+            );
+        }
+    }
+
+    // 2. Dispatch routes
+    let mut resp = match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/oauth/token") => handle_token_exchange(req, state).await,
+        ("POST", "/mesh/revoke") => handle_signed_revocation(req, state).await,
         ("POST", "/mesh/mcp/calc") => handle_mcp_calc(req, state).await,
         ("POST", "/mesh/mcp/payroll") => handle_mcp_payroll(req, state).await,
         ("GET", "/mesh/echo_headers") | ("POST", "/mesh/echo_headers") => {
@@ -499,17 +867,116 @@ async fn route_request(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> H
         }
         ("GET", "/.well-known/jwks.json") => handle_jwks(state).await,
         ("GET", "/.well-known/openid-configuration") => handle_openid_config(state).await,
-        ("GET", "/health") | ("GET", "/status") => HttpResponse::json(
+        ("GET", "/health") | ("POST", "/health") | ("GET", "/status") => HttpResponse::json(
             200,
             "OK",
             &serde_json::json!({
                 "status": "healthy",
                 "node_id": state.node_id,
-                "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+                "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
             }),
         ),
         _ => HttpResponse::error(404, "Not Found", "not_found", "The requested path does not exist"),
+    };
+
+    // 3. Inject mutual node response proof header if channel secret is active
+    if let (Some(secret), Some(nonce)) = (&state.channel_secret, pep_nonce) {
+        let node_proof = compute_node_response_proof(secret, resp.status_code, &nonce, &resp.body);
+        resp.headers.push((HEADER_NODE_PROOF.to_string(), node_proof));
     }
+
+    resp
+}
+
+async fn handle_signed_revocation(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {
+    let signal: SignedEpochRevocationSignal = match serde_json::from_slice(&req.body) {
+        Ok(s) => s,
+        Err(e) => {
+            return HttpResponse::error(
+                400,
+                "Bad Request",
+                "invalid_signal",
+                &format!("Failed to parse SignedEpochRevocationSignal: {e}"),
+            );
+        }
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Verify timestamp skew <= 30 seconds
+    if now.abs_diff(signal.timestamp) > 30 {
+        return HttpResponse::error(
+            400,
+            "Bad Request",
+            "revocation_timestamp_skew",
+            "Revocation signal timestamp skew exceeded 30s",
+        );
+    }
+
+    let sig_input = format!("{}:{}:{}", signal.arm_id, signal.revocation_epoch, signal.timestamp);
+    let sig_bytes = match hex::decode(&signal.signature) {
+        Ok(b) => b,
+        Err(_) => {
+            return HttpResponse::error(
+                401,
+                "Unauthorized",
+                "invalid_signature_hex",
+                "Revocation signature is not valid hex",
+            );
+        }
+    };
+
+    let jwks_guard = state.jwks.read().await;
+    let jwks = match jwks_guard.as_ref() {
+        Some(j) => j,
+        None => {
+            return HttpResponse::error(
+                500,
+                "Internal Server Error",
+                "server_error",
+                "No JWKS configured to verify revocation signal",
+            );
+        }
+    };
+
+    let verified = jwks.keys.iter().any(|k| {
+        verify_es256_p256(sig_input.as_bytes(), &sig_bytes, &k.x, &k.y)
+    });
+
+    if !verified {
+        return HttpResponse::error(
+            401,
+            "Unauthorized",
+            "invalid_revocation_signature",
+            "Revocation digital signature verification failed",
+        );
+    }
+
+    // Apply revocation and epoch advance
+    {
+        let mut rev = state.revoked_arms.write().await;
+        rev.insert(signal.arm_id.clone());
+    }
+    {
+        let mut wm = state.arm_epoch_watermarks.write().await;
+        let current_wm = wm.get(&signal.arm_id).copied().unwrap_or(0);
+        if signal.revocation_epoch >= current_wm {
+            wm.insert(signal.arm_id.clone(), signal.revocation_epoch);
+        }
+    }
+
+    HttpResponse::json(
+        200,
+        "OK",
+        &serde_json::json!({
+            "status": "revoked",
+            "arm_id": signal.arm_id,
+            "revocation_epoch": signal.revocation_epoch,
+        }),
+    )
 }
 
 async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {
@@ -667,7 +1134,10 @@ async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInne
     }
 
     // 4. Timestamp & Skew Verification (<= 5s window)
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     if let Some(exp) = payload_val.get("exp").and_then(|e| e.as_u64()) {
         if now > exp + 5 {
             state.stats.write().await.sts_exchanges_denied += 1;
@@ -712,30 +1182,41 @@ async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInne
     }
 
     let jwks_guard = state.jwks.read().await;
-    if let Some(jwks) = jwks_guard.as_ref() {
-        let matching_key = jwks.keys.iter().find(|k| k.kid == kid || kid.is_empty());
-        match matching_key {
-            Some(key_dto) => {
-                let signing_input = format!("{}.{}", jws_parts[0], jws_parts[1]);
-                if !verify_es256_p256(signing_input.as_bytes(), &sig_bytes, &key_dto.x, &key_dto.y) {
-                    state.stats.write().await.sts_exchanges_denied += 1;
-                    return HttpResponse::error(
-                        401,
-                        "Unauthorized",
-                        "invalid_grant",
-                        "Digital signature verification failed",
-                    );
-                }
-            }
-            None => {
+    let jwks = match jwks_guard.as_ref() {
+        Some(j) => j,
+        None => {
+            state.stats.write().await.sts_exchanges_denied += 1;
+            return HttpResponse::error(
+                500,
+                "Internal Server Error",
+                "server_error",
+                "No active JWKS configured for token verification",
+            );
+        }
+    };
+
+    let matching_key = jwks.keys.iter().find(|k| k.kid == kid || kid.is_empty());
+    match matching_key {
+        Some(key_dto) => {
+            let signing_input = format!("{}.{}", jws_parts[0], jws_parts[1]);
+            if !verify_es256_p256(signing_input.as_bytes(), &sig_bytes, &key_dto.x, &key_dto.y) {
                 state.stats.write().await.sts_exchanges_denied += 1;
                 return HttpResponse::error(
                     401,
                     "Unauthorized",
                     "invalid_grant",
-                    &format!("Unknown key ID '{}' in active JWKS", kid),
+                    "Digital signature verification failed",
                 );
             }
+        }
+        None => {
+            state.stats.write().await.sts_exchanges_denied += 1;
+            return HttpResponse::error(
+                401,
+                "Unauthorized",
+                "invalid_grant",
+                &format!("Unknown key ID '{}' in active JWKS", kid),
+            );
         }
     }
 

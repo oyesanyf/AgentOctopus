@@ -7,10 +7,20 @@
 //! - Production Serving Node (`serving_node`)
 //! - Sub-Millisecond KillSwitch Eviction & Non-Cooperative Wasm Trapping
 
+pub mod key_broker;
 pub mod mandate_attenuation;
 pub mod oidc_actor_issuer;
 pub mod pep_bridge;
 pub mod serving_node;
+pub mod wan_transport;
+
+pub use key_broker::{
+    DpapiProtector, KeyBrokerError, MeshKeyBroker, OsProtectedKeyBroker, OutOfProcessIpcKeyBroker,
+};
+pub use wan_transport::{
+    AgentMeshWanTransport, AutoNatMessage, AutoNatStatus, DcutrMessage, NatReachability, NatType,
+    PqcHandshakeInit, PqcHandshakeResponse, PqcSessionKeys, RelayMessage, WanTransportError,
+};
 
 pub use mandate_attenuation::{
     validate_mesh_uri, AttenuatedMandate, DelegationLink, MandateError, ALLOWED_SCHEMES,
@@ -65,8 +75,6 @@ impl Default for AgentMeshConfig {
     }
 }
 
-pub type AgentMeshPocConfig = AgentMeshConfig;
-
 /// Status telemetry exported to the WebUI dashboard (Tab 17).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentMeshStatus {
@@ -84,8 +92,6 @@ pub struct AgentMeshStatus {
     pub active_jwks_kid: String,
 }
 
-pub type AgentMeshPocStatus = AgentMeshStatus;
-
 /// Central coordinator for the AgentMesh integration.
 pub struct AgentMeshEngine {
     issuer: Arc<OctopusOidcActorIssuer>,
@@ -95,8 +101,6 @@ pub struct AgentMeshEngine {
     status_tracker: Arc<RwLock<AgentMeshStatus>>,
     config: AgentMeshConfig,
 }
-
-pub type AgentMeshKillSwitchPocEngine = AgentMeshEngine;
 
 impl AgentMeshEngine {
     /// Initializes the engine, mints issuer keys, and prepares the PEP bridge.
@@ -120,6 +124,7 @@ impl AgentMeshEngine {
             PepBridgeConfig {
                 mesh_node_base_url: initial_node_url,
                 token_exchange_timeout_ms: 2000,
+                channel_secret: None,
             },
             Arc::clone(&issuer),
             Arc::clone(&killswitch),
@@ -283,16 +288,55 @@ impl AgentMeshEngine {
         st.total_inbound_calls += 1;
         drop(st);
 
-        // 1. Verify X-Mesh-Authentication token
-        let _token = auth_header
-            .and_then(|h| h.strip_prefix("Bearer "))
-            .ok_or_else(|| OctopusSecurityError::CapabilityDenied("Missing Bearer X-Mesh-Authentication".to_string()))?;
-
-        // 2. Validate CAGE Routing Seal
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+
+        // 1. Genuine inbound token verification (exchanged token or Workload JWT)
+        let token = auth_header
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .ok_or_else(|| OctopusSecurityError::CapabilityDenied("Missing Bearer X-Mesh-Authentication".to_string()))?;
+
+        let node_guard = self.serving_node.read().await;
+        if let Some(node) = node_guard.as_ref() {
+            if token.starts_with("mesh_tok_") {
+                node.verify_access_token(token, uri).await.map_err(|e| {
+                    OctopusSecurityError::CapabilityDenied(format!(
+                        "Inbound exchanged mesh token verification failed: {}",
+                        e
+                    ))
+                })?;
+            } else {
+                let claims = self.issuer.verify_arm_token(token, now).map_err(|e| {
+                    OctopusSecurityError::CapabilityDenied(format!(
+                        "Inbound workload JWT signature verification failed: {}",
+                        e
+                    ))
+                })?;
+                if self.pep_bridge.is_arm_revoked(&claims.arm_id) {
+                    return Err(OctopusSecurityError::CapabilityDenied(format!(
+                        "Inbound workload arm '{}' is revoked",
+                        claims.arm_id
+                    )));
+                }
+            }
+        } else {
+            let claims = self.issuer.verify_arm_token(token, now).map_err(|e| {
+                OctopusSecurityError::CapabilityDenied(format!(
+                    "Inbound token verification failed: {}",
+                    e
+                ))
+            })?;
+            if self.pep_bridge.is_arm_revoked(&claims.arm_id) {
+                return Err(OctopusSecurityError::CapabilityDenied(format!(
+                    "Inbound workload arm '{}' is revoked",
+                    claims.arm_id
+                )));
+            }
+        }
+
+        // 2. Validate CAGE Routing Seal
         if cage_seal.is_expired(now) {
             return Err(OctopusSecurityError::CapabilityDenied("CAGE RoutingSeal expired".to_string()));
         }
@@ -339,10 +383,6 @@ impl AgentMeshEngine {
         let mut st = self.status_tracker.write().await;
         st.cached_credentials_count = self.pep_bridge.cached_token_count();
         st.clone()
-    }
-
-    pub async fn poc_status(&self) -> AgentMeshStatus {
-        self.status().await
     }
 
     /// Returns the live JWKS JSON string.

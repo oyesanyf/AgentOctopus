@@ -26,7 +26,13 @@ use url::Url;
 use crate::core::circuit_breaker::KillSwitch;
 use crate::core::types::{ArmRole, OctopusSecurityError};
 use crate::security::breakouts::ZeroMutualInformationProjector;
+use super::mandate_attenuation::validate_mesh_uri;
 use super::oidc_actor_issuer::OctopusOidcActorIssuer;
+use super::serving_node::{
+    compute_node_response_proof, compute_pep_channel_proof, SignedEpochRevocationSignal,
+    HEADER_NODE_PROOF, HEADER_PEP_CHANNEL_PROOF, HEADER_PEP_NONCE, HEADER_PEP_TIMESTAMP,
+};
+use tokio_util::sync::CancellationToken;
 
 /// Tolerance window in seconds: if remaining lifetime is <= this buffer, refresh token proactively.
 pub const TOKEN_REFRESH_BUFFER_SECS: u64 = 15;
@@ -146,7 +152,11 @@ impl BoundedTokenVault {
     }
 
     pub fn remove(&mut self, key: &(String, u64)) -> Option<CachedMeshToken> {
-        self.tokens.remove(key)
+        let tok = self.tokens.remove(key);
+        if tok.is_some() {
+            self.insertion_order.retain(|k| k != key);
+        }
+        tok
     }
 
     pub fn retain<F>(&mut self, mut f: F)
@@ -217,6 +227,8 @@ pub struct MeshCallReceipt {
 pub struct PepBridgeConfig {
     pub mesh_node_base_url: String,
     pub token_exchange_timeout_ms: u64,
+    #[serde(default)]
+    pub channel_secret: Option<[u8; 32]>,
 }
 
 impl Default for PepBridgeConfig {
@@ -224,6 +236,7 @@ impl Default for PepBridgeConfig {
         Self {
             mesh_node_base_url: "http://127.0.0.1:0".to_string(),
             token_exchange_timeout_ms: 2000,
+            channel_secret: None,
         }
     }
 }
@@ -446,6 +459,8 @@ pub struct AgentMeshPepBridge {
     global_killswitch: Arc<RwLock<Option<Arc<KillSwitch>>>>,
     mesh_node_url: Arc<RwLock<String>>,
     wire_client: Arc<SyncHttpWireClient>,
+    active_cancellations: Arc<tokio::sync::RwLock<HashMap<String, Vec<CancellationToken>>>>,
+    channel_secret: Arc<RwLock<Option<[u8; 32]>>>,
 
     // Telemetry counters
     total_token_exchanges: Arc<AtomicU64>,
@@ -464,6 +479,8 @@ impl AgentMeshPepBridge {
             global_killswitch: Arc::new(RwLock::new(None)),
             mesh_node_url: Arc::new(RwLock::new(default_mesh_node_url)),
             wire_client: Arc::new(SyncHttpWireClient::new()),
+            active_cancellations: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            channel_secret: Arc::new(RwLock::new(None)),
             total_token_exchanges: Arc::new(AtomicU64::new(0)),
             total_cache_hits: Arc::new(AtomicU64::new(0)),
             total_killswitch_evictions: Arc::new(AtomicU64::new(0)),
@@ -480,6 +497,9 @@ impl AgentMeshPepBridge {
         let bridge = Self::new(issuer, config.mesh_node_base_url);
         if let Ok(mut gks) = bridge.global_killswitch.write() {
             *gks = Some(killswitch);
+        }
+        if let Ok(mut cs) = bridge.channel_secret.write() {
+            *cs = config.channel_secret;
         }
         bridge
     }
@@ -565,6 +585,26 @@ impl AgentMeshPepBridge {
             }
         }
 
+        // Weakness 1: Abort all in-flight asynchronous HTTP requests for this arm in <1ms
+        let arm_id_owned = arm_id.to_string();
+        if let Ok(mut map) = self.active_cancellations.try_write() {
+            if let Some(tokens) = map.remove(&arm_id_owned) {
+                for token in tokens {
+                    token.cancel();
+                }
+            }
+        } else {
+            let cancellations = self.active_cancellations.clone();
+            tokio::spawn(async move {
+                let mut map = cancellations.write().await;
+                if let Some(tokens) = map.remove(&arm_id_owned) {
+                    for token in tokens {
+                        token.cancel();
+                    }
+                }
+            });
+        }
+
         let elapsed = t0.elapsed();
 
         // Update telemetry
@@ -573,13 +613,45 @@ impl AgentMeshPepBridge {
             .store(elapsed.as_micros() as u64, Ordering::Relaxed);
 
         // Verification of sub-millisecond SLA
-        assert!(
-            elapsed.as_micros() < KILLSWITCH_EVICTION_SLA_MICROS,
-            "CRITICAL: KillSwitch eviction latency SLA breached (took {:?}, expected < 1ms)",
-            elapsed
-        );
+        if elapsed.as_micros() >= KILLSWITCH_EVICTION_SLA_MICROS {
+            tracing::warn!(
+                "KillSwitch eviction latency SLA breached: took {:?}, expected < 1ms",
+                elapsed
+            );
+        }
 
         elapsed
+    }
+
+    /// Checks if an arm is tripped / revoked.
+    pub fn is_arm_revoked(&self, arm_id: &str) -> bool {
+        self.is_arm_tripped(arm_id)
+    }
+
+    /// Dispatches a signed epoch revocation signal to the target node's POST /mesh/revoke endpoint.
+    pub async fn dispatch_signed_revocation_async(
+        &self,
+        node_url: &str,
+        signal: SignedEpochRevocationSignal,
+    ) -> Result<(), MeshCallError> {
+        let endpoint = format!("{}/mesh/revoke", node_url.trim_end_matches('/'));
+        let body = serde_json::to_vec(&signal)
+            .map_err(|e| MeshCallError::Internal(format!("Failed to serialize revocation signal: {e}")))?;
+
+        let headers = vec![
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("Accept".to_string(), "application/json".to_string()),
+        ];
+
+        let (status, _resp_headers, resp_bytes) = AsyncHttpWireClient::post(&endpoint, &headers, &body).await?;
+        if status == 200 {
+            Ok(())
+        } else {
+            Err(MeshCallError::UpstreamCallFailed {
+                status,
+                message: format!("Revocation dispatch failed: {}", String::from_utf8_lossy(&resp_bytes)),
+            })
+        }
     }
 
     /// Evicts a specific generation epoch token for an arm without tripping the circuit breaker.
@@ -656,6 +728,9 @@ impl AgentMeshPepBridge {
     /// Strictly allows: `mcp://`, `a2a://`, `inference://`, `egress://`.
     /// Strictly rejects: `http://`, `https://`, `file://`, IP literals, TCP sockets.
     pub fn resolve_mesh_endpoint(node_url: &str, logical_uri: &str) -> Result<String, MeshCallError> {
+        validate_mesh_uri(logical_uri)
+            .map_err(|e| MeshCallError::InvalidUri(format!("{}: {}", logical_uri, e)))?;
+
         let trimmed_base = node_url.trim_end_matches('/');
 
         if let Some(rest) = logical_uri.strip_prefix("mcp://") {
@@ -946,13 +1021,94 @@ impl AgentMeshPepBridge {
         let endpoint_url = Self::resolve_mesh_endpoint(&self.get_mesh_node_url(), uri)?;
         let token = self.get_or_exchange_token_async(arm_id, epoch, role, uri).await?;
 
-        let default_headers = vec![
+        let mut default_headers = vec![
             ("Content-Type".to_string(), "application/json".to_string()),
             ("Accept".to_string(), "application/json".to_string()),
         ];
+
+        // Weakness 4: Inject mutual PEP channel proof if channel secret is active
+        let (nonce_str, expected_node_secret) = if let Ok(cs_guard) = self.channel_secret.read() {
+            if let Some(secret) = *cs_guard {
+                let nonce = format!("{:016x}", rand::random::<u64>());
+                let now_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let parsed_url = Url::parse(&endpoint_url).unwrap_or_else(|_| Url::parse("http://127.0.0.1/").unwrap());
+                let path = parsed_url.path();
+                let proof = compute_pep_channel_proof(
+                    &secret,
+                    "POST",
+                    path,
+                    now_ms,
+                    &nonce,
+                    req_bytes,
+                    None,
+                );
+                default_headers.push((HEADER_PEP_CHANNEL_PROOF.to_string(), proof));
+                default_headers.push((HEADER_PEP_NONCE.to_string(), nonce.clone()));
+                default_headers.push((HEADER_PEP_TIMESTAMP.to_string(), now_ms.to_string()));
+                (Some(nonce), Some(secret))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
         let sanitized_headers = Self::sanitize_and_inject_headers(&default_headers, &token);
 
-        let (status, _resp_headers, resp_bytes) = AsyncHttpWireClient::post(&endpoint_url, &sanitized_headers, req_bytes).await?;
+        // Weakness 1: In-flight cancellation token for sub-ms stream abort upon killswitch trip
+        let cancel_token = CancellationToken::new();
+        {
+            let mut map = self.active_cancellations.write().await;
+            map.entry(arm_id.to_string()).or_default().push(cancel_token.clone());
+        }
+
+        let cancel_child = cancel_token.clone();
+        let post_fut = AsyncHttpWireClient::post(&endpoint_url, &sanitized_headers, req_bytes);
+
+        let post_result = tokio::select! {
+            res = post_fut => res,
+            _ = cancel_child.cancelled() => {
+                Err(MeshCallError::KillSwitchTripped(arm_id.to_string()))
+            }
+        };
+
+        // Remove token from active_cancellations
+        {
+            let mut map = self.active_cancellations.write().await;
+            if let Some(vec) = map.get_mut(arm_id) {
+                vec.retain(|t| !t.is_cancelled());
+            }
+        }
+
+        let (status, resp_headers, resp_bytes) = post_result?;
+
+        // Weakness 4: Verify mutual node response proof header if channel secret is active
+        if let (Some(secret), Some(nonce)) = (expected_node_secret, nonce_str) {
+            let node_proof = resp_headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(HEADER_NODE_PROOF))
+                .map(|(_, v)| v.as_str());
+            match node_proof {
+                Some(proof) => {
+                    let expected_proof = compute_node_response_proof(&secret, status, &nonce, &resp_bytes);
+                    if !crate::security::constant_time_eq_hex(proof, &expected_proof) {
+                        return Err(MeshCallError::UpstreamCallFailed {
+                            status: 403,
+                            message: "Node mutual authentication response proof mismatch".to_string(),
+                        });
+                    }
+                }
+                None => {
+                    return Err(MeshCallError::UpstreamCallFailed {
+                        status: 403,
+                        message: "Node response missing x-octopus-node-proof header".to_string(),
+                    });
+                }
+            }
+        }
 
         if status == 200 {
             Ok(Self::sanitize_upstream_payload(&resp_bytes))

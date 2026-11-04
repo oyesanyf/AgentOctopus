@@ -231,7 +231,7 @@ impl NeuralMesh {
 
     /// Verifies cryptographic signature, freshness, and anti-replay status of a received message.
     pub async fn verify_message(&self, message: &NeuralMessage) -> Result<(), MeshError> {
-        let state = self.inner.lock().await;
+        let mut state = self.inner.lock().await;
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -257,6 +257,19 @@ impl NeuralMesh {
         if !crate::security::constant_time_eq_hex(&message.signature, &expected_sig) {
             return Err(MeshError::AuthenticationFailed);
         }
+
+        // Receiver Anti-Replay: check and record seen nonces per sender (bounded FIFO queue)
+        let nonce_key = (message.sender.clone(), message.nonce);
+        if state.seen_nonces.contains(&nonce_key) {
+            return Err(MeshError::ReplayDetected);
+        }
+        if state.seen_nonces.len() >= MAX_SEEN_NONCES {
+            if let Some(oldest) = state.nonce_queue.pop_front() {
+                state.seen_nonces.remove(&oldest);
+            }
+        }
+        state.seen_nonces.insert(nonce_key.clone());
+        state.nonce_queue.push_back(nonce_key);
 
         Ok(())
     }
@@ -307,7 +320,7 @@ impl ArmEndpoint {
         let nonce = NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
 
         let (target_tx, signature) = {
-            let mut state = self.mesh.inner.lock().await;
+            let state = self.mesh.inner.lock().await;
             if !state.senders.contains_key(&self.id) {
                 return Err(MeshError::UnknownSender);
             }
@@ -330,19 +343,6 @@ impl ArmEndpoint {
                     return Err(MeshError::UnauthorizedCapabilityGrant);
                 }
             }
-
-            // Bounded anti-replay protection (max 10,000 nonces FIFO queue)
-            let nonce_key = (self.id.clone(), nonce);
-            if state.seen_nonces.contains(&nonce_key) {
-                return Err(MeshError::ReplayDetected);
-            }
-            if state.seen_nonces.len() >= MAX_SEEN_NONCES {
-                if let Some(oldest) = state.nonce_queue.pop_front() {
-                    state.seen_nonces.remove(&oldest);
-                }
-            }
-            state.seen_nonces.insert(nonce_key.clone());
-            state.nonce_queue.push_back(nonce_key);
 
             let payload = build_sign_payload(
                 &self.id,
