@@ -33,7 +33,9 @@ Desktop.ini
 
 # Compressed archives & agent subagent workspaces
 *.zip
+*.tar.gz
 .agents/
+examples/agentmesh-wasm-sandbox/.run/
 
 # SQLite databases
 /terminator.db

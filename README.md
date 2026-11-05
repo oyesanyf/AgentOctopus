@@ -28,13 +28,14 @@ Agent Octopus actively neutralizes the **Agentjacking Kill Chain** (DEFCON / Ten
 
 ---
 
-## 🌐 Google AgentMesh × Wasmtime (`v49.0.4`) Zero-Socket Sandbox Integration
+## 🌐 Google AgentMesh (`v0.2.0`) × Wasmtime (`v49.0.4`) Zero-Socket Sandbox Integration
 
-Agent Octopus provides a runnable, zero-socket WebAssembly (`wasmtime v49.0.4`) and OS sandbox integration aligned with [`google/agentmesh#734`](https://github.com/google/agentmesh/issues/734):
+Agent Octopus provides a cross-platform (`Linux`, `macOS`, `Windows`), zero-socket WebAssembly (`wasmtime v49.0.4`) and OS sandbox integration verified end-to-end against unmodified [`google/agentmesh` v0.2.0](https://github.com/google/agentmesh/releases/tag/v0.2.0) binaries (`agentmesh-one` + `office-node` + `edge-node`) for [`google/agentmesh#734`](https://github.com/google/agentmesh/issues/734):
 
-- **Architecture & Walkthrough Guide**: [`docs/AGENTMESH_WASM_INTEGRATION.md`](docs/AGENTMESH_WASM_INTEGRATION.md)
-- **Runnable 6-Stage Sandbox Example**: [`examples/agentmesh_wasm_sandbox_demo.rs`](examples/agentmesh_wasm_sandbox_demo.rs) (`cargo run --example agentmesh_wasm_sandbox_demo`)
-- **End-to-End Integration & Adversarial Test Suites**: [`tests/agentmesh_integration_tests.rs`](tests/agentmesh_integration_tests.rs) and [`tests/agentmesh_m1_adversarial_stress_tests.rs`](tests/agentmesh_m1_adversarial_stress_tests.rs)
+- **Live Multi-Node `v0.2.0` Quickstart (`Linux` / `macOS` / `Windows`)**: [`examples/agentmesh-wasm-sandbox/`](examples/agentmesh-wasm-sandbox/) (`./examples/agentmesh-wasm-sandbox/run.sh` or `powershell -ExecutionPolicy Bypass -File examples\agentmesh-wasm-sandbox\run.ps1`)
+- **Architecture & Verification Guide**: [`docs/AGENTMESH_WASM_INTEGRATION.md`](docs/AGENTMESH_WASM_INTEGRATION.md)
+- **Live & Embedded Runnable Examples**: [`examples/agentmesh_live_v020_e2e.rs`](examples/agentmesh_live_v020_e2e.rs) and [`examples/agentmesh_wasm_sandbox_demo.rs`](examples/agentmesh_wasm_sandbox_demo.rs)
+- **End-to-End Integration & Adversarial Test Suites**: [`tests/agentmesh_live_v020_e2e.rs`](tests/agentmesh_live_v020_e2e.rs), [`tests/agentmesh_integration_tests.rs`](tests/agentmesh_integration_tests.rs), and [`tests/agentmesh_m1_adversarial_stress_tests.rs`](tests/agentmesh_m1_adversarial_stress_tests.rs)
 - **Core Rust Implementation**: [`src/security/agentmesh/`](src/security/agentmesh/), [`src/security/wasm_tier1.rs`](src/security/wasm_tier1.rs), and [`src/security/linux_sandbox.rs`](src/security/linux_sandbox.rs)
 
 ---

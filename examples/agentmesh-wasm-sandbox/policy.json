@@ -1,0 +1,45 @@
+{
+  "roles": [
+    {
+      "name": "mesh:role:node",
+      "allowed_services": ["*"],
+      "allowed_publish": ["*"],
+      "allowed_targets": ["*"],
+      "allowed_labels": ["*"]
+    },
+    {
+      "name": "mesh:role:router",
+      "allowed_services": ["*"],
+      "allowed_targets": ["*"]
+    },
+    {
+      "name": "calc_sandbox",
+      "allowed_services": [
+        "system://mesh.catalog",
+        "mcp://calc",
+        "mcp://echo-headers",
+        "mcp://octopus-doc-extractor"
+      ],
+      "allowed_targets": ["*"]
+    },
+    {
+      "name": "payroll_admin",
+      "allowed_services": [
+        "system://mesh.catalog",
+        "mcp://calc",
+        "mcp://payroll"
+      ],
+      "allowed_targets": ["*"]
+    }
+  ],
+  "bindings": [
+    {
+      "role": "calc_sandbox",
+      "members": ["user:spiffe://agentoctopus.local/arm/arm_calc/epoch/*"]
+    },
+    {
+      "role": "payroll_admin",
+      "members": ["user:spiffe://agentoctopus.local/arm/arm_payroll/epoch/*"]
+    }
+  ]
+}

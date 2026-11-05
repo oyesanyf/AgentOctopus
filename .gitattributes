@@ -1,0 +1,7 @@
+# Enforce LF line endings on shell scripts, Makefiles, and YAML templates across Windows, macOS, and Linux
+*.sh text eol=lf
+Makefile text eol=lf
+**/Makefile text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.tmpl text eol=lf

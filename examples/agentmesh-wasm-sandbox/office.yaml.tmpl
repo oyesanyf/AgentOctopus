@@ -1,0 +1,20 @@
+version: "v1alpha1"
+labels:
+  site: office
+services:
+  - type: mcp
+    name: calc
+    description: "Calculator MCP server in the office"
+    target_url: "http://127.0.0.1:__MCP_PORT__/mcp/calc"
+  - type: mcp
+    name: payroll
+    description: "Payroll MCP server restricted to payroll_admin"
+    target_url: "http://127.0.0.1:__MCP_PORT__/mcp/payroll"
+  - type: mcp
+    name: echo-headers
+    description: "Header hygiene inspection MCP server"
+    target_url: "http://127.0.0.1:__MCP_PORT__/mcp/echo-headers"
+  - type: mcp
+    name: octopus-doc-extractor
+    description: "Sandboxed Wasmtime v49.0.4 document extractor"
+    target_url: "http://127.0.0.1:__MCP_PORT__/mcp/octopus-doc-extractor"
