@@ -57,7 +57,9 @@ pub const TOKEN_EXEMPT_PATHS: &[&str] = &[
     "/.well-known/jwks.json",
     "/.well-known/openid-configuration",
     "/jwks",
+    "/jwks.json",
     "/oauth/token",
+    "/oauth/revoke",
     "/governance/ingest-policy",
     "/governance/policy-version",
     "/governance/validate-action",
@@ -79,9 +81,13 @@ pub fn is_mesh_path(path: &str) -> bool {
     let trimmed = path.trim_end_matches('/');
     trimmed == "/mesh"
         || trimmed.starts_with("/mesh/")
+        || trimmed == "/mcp/octopus-doc-extractor"
+        || trimmed == "/mcp/octopus-ledger-validator"
         || trimmed == "/oauth/token"
+        || trimmed == "/oauth/revoke"
         || trimmed == "/.well-known/openid-configuration"
         || trimmed == "/jwks"
+        || trimmed == "/jwks.json"
 }
 
 /// Returns true if the path belongs to the CAGE Substrate Contract v1.0 interface.

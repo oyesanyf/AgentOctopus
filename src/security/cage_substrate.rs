@@ -1225,6 +1225,8 @@ pub struct JwkKeyDto {
     pub crv: String,
     pub kid: String,
     pub x: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<String>,
     pub r#use: String,
     pub alg: String,
 }

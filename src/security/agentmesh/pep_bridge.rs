@@ -41,10 +41,10 @@ pub const TOKEN_REFRESH_BUFFER_SECS: u64 = 15;
 pub const KILLSWITCH_EVICTION_SLA_MICROS: u128 = 1_000;
 
 /// Default connect timeout for loopback HTTP transport.
-pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 1_500;
+pub const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 3_000;
 
-/// Default read/write timeout for loopback HTTP transport.
-pub const DEFAULT_IO_TIMEOUT_MS: u64 = 3_000;
+/// Default read/write timeout for loopback/mesh HTTP transport.
+pub const DEFAULT_IO_TIMEOUT_MS: u64 = 10_000;
 
 /// Maximum number of cached tokens in vault
 pub const MAX_CACHED_TOKENS_CAPACITY: usize = 1_024;
@@ -181,7 +181,7 @@ impl BoundedTokenVault {
     }
 }
 
-/// RFC 8693 OAuth 2.0 Token Exchange Request (JSON representation).
+/// RFC 8693 OAuth 2.0 Token Exchange Request (`application/x-www-form-urlencoded` per RFC 8693 §2.1 & `google/agentmesh` `internal/node/sts.go`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rfc8693TokenRequest {
     pub grant_type: String,
@@ -193,6 +193,75 @@ pub struct Rfc8693TokenRequest {
     pub audience: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seal: Option<bool>,
+}
+
+/// RFC 3986 / `application/x-www-form-urlencoded` percent-encoder for OAuth 2.0 form fields.
+pub fn url_encode_form_component(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 16);
+    for b in input.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                out.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    out
+}
+
+impl Rfc8693TokenRequest {
+    /// Serializes the RFC 8693 token exchange parameters as `application/x-www-form-urlencoded`
+    /// so Go's `http.Request.ParseForm()` in `agentmesh-node` (`internal/node/sts.go`) parses every field.
+    pub fn to_form_urlencoded(&self) -> Vec<u8> {
+        let mut pairs = vec![
+            format!("grant_type={}", url_encode_form_component(&self.grant_type)),
+            format!(
+                "subject_token={}",
+                url_encode_form_component(&self.subject_token)
+            ),
+            format!(
+                "subject_token_type={}",
+                url_encode_form_component(&self.subject_token_type)
+            ),
+        ];
+        if let Some(ref rtt) = self.requested_token_type {
+            pairs.push(format!(
+                "requested_token_type={}",
+                url_encode_form_component(rtt)
+            ));
+        }
+        if let Some(ref aud) = self.audience {
+            pairs.push(format!("audience={}", url_encode_form_component(aud)));
+        }
+        if let Some(ref res) = self.resource {
+            pairs.push(format!("resource={}", url_encode_form_component(res)));
+        }
+        if let Some(ref sc) = self.scope {
+            pairs.push(format!("scope={}", url_encode_form_component(sc)));
+        }
+        if let Some(true) = self.seal {
+            pairs.push("seal=true".to_string());
+        }
+        pairs.join("&").into_bytes()
+    }
+}
+
+/// Discovered service entry returned by `GET /mesh/service/discover` on `agentmesh-node`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscoveredMeshService {
+    pub peer_id: String,
+    #[serde(default)]
+    pub srv_name: String,
+    #[serde(default)]
+    pub srv_description: String,
+    #[serde(default)]
+    pub local_proxy_url: String,
 }
 
 /// RFC 8693 OAuth 2.0 Token Exchange Successful Response.
@@ -280,9 +349,29 @@ impl SyncHttpWireClient {
         }
     }
 
+    /// Dispatches an HTTP GET request over a raw TCP connection.
+    pub fn get(
+        &self,
+        target_url: &str,
+        headers: &[(String, String)],
+    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), MeshCallError> {
+        self.request("GET", target_url, headers, &[])
+    }
+
     /// Dispatches an HTTP POST request over a raw TCP connection.
     pub fn post(
         &self,
+        target_url: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), MeshCallError> {
+        self.request("POST", target_url, headers, body)
+    }
+
+    /// Dispatches an HTTP/1.1 request over a raw TCP connection.
+    pub fn request(
+        &self,
+        method: &str,
         target_url: &str,
         headers: &[(String, String)],
         body: &[u8],
@@ -315,10 +404,22 @@ impl SyncHttpWireClient {
             .set_write_timeout(Some(self.write_timeout))
             .map_err(|e| MeshCallError::NetworkError(format!("Set write timeout failed: {}", e)))?;
 
-        let mut wire_req = format!(
-            "POST {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Length: {}\r\nConnection: close\r\n",
-            request_target, host, port, body.len()
-        );
+        let host_hdr = if port == 80 {
+            host.to_string()
+        } else {
+            format!("{}:{}", host, port)
+        };
+        let mut wire_req = if method.eq_ignore_ascii_case("GET") && body.is_empty() {
+            format!(
+                "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
+                request_target, host_hdr
+            )
+        } else {
+            format!(
+                "{} {} HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
+                method, request_target, host_hdr, body.len()
+            )
+        };
 
         for (k, v) in headers {
             wire_req.push_str(&format!("{}: {}\r\n", k, v));
@@ -343,6 +444,41 @@ impl SyncHttpWireClient {
             .map_err(|e| MeshCallError::NetworkError(format!("TCP read error: {}", e)))?;
 
         Self::parse_http_response(&raw_response)
+    }
+
+    /// Decodes an HTTP/1.1 `Transfer-Encoding: chunked` body per RFC 9112 §7.1.
+    pub fn decode_chunked_body(raw_body: &[u8]) -> Result<Vec<u8>, MeshCallError> {
+        let mut out = Vec::with_capacity(raw_body.len());
+        let mut idx = 0;
+        while idx < raw_body.len() {
+            let line_end = raw_body[idx..]
+                .windows(2)
+                .position(|w| w == b"\r\n")
+                .ok_or_else(|| {
+                    MeshCallError::NetworkError("Malformed chunked body: missing CRLF after chunk size".into())
+                })?;
+            let size_line = std::str::from_utf8(&raw_body[idx..idx + line_end])
+                .map_err(|e| MeshCallError::NetworkError(format!("Invalid chunk size UTF-8: {e}")))?;
+            let hex_part = size_line.split(';').next().unwrap_or("").trim();
+            let chunk_size = usize::from_str_radix(hex_part, 16).map_err(|e| {
+                MeshCallError::NetworkError(format!("Invalid hex chunk size '{}': {}", hex_part, e))
+            })?;
+            idx += line_end + 2;
+            if chunk_size == 0 {
+                break;
+            }
+            if idx + chunk_size > raw_body.len() {
+                return Err(MeshCallError::NetworkError(
+                    "Truncated chunked HTTP response body".into(),
+                ));
+            }
+            out.extend_from_slice(&raw_body[idx..idx + chunk_size]);
+            idx += chunk_size;
+            if raw_body.get(idx..idx + 2) == Some(b"\r\n") {
+                idx += 2;
+            }
+        }
+        Ok(out)
     }
 
     /// Parses a raw HTTP/1.1 response buffer into status code, headers, and body.
@@ -373,13 +509,27 @@ impl SyncHttpWireClient {
             .map_err(|e| MeshCallError::NetworkError(format!("Failed to parse HTTP status '{}': {}", parts[1], e)))?;
 
         let mut headers = Vec::new();
+        let mut is_chunked = false;
         for line in lines {
             if let Some((k, v)) = line.split_once(':') {
-                headers.push((k.trim().to_string(), v.trim().to_string()));
+                let key = k.trim().to_string();
+                let val = v.trim().to_string();
+                if key.eq_ignore_ascii_case("transfer-encoding")
+                    && val.to_ascii_lowercase().contains("chunked")
+                {
+                    is_chunked = true;
+                }
+                headers.push((key, val));
             }
         }
 
-        Ok((status_code, headers, body_bytes.to_vec()))
+        let decoded_body = if is_chunked {
+            Self::decode_chunked_body(body_bytes)?
+        } else {
+            body_bytes.to_vec()
+        };
+
+        Ok((status_code, headers, decoded_body))
     }
 }
 
@@ -387,7 +537,23 @@ impl SyncHttpWireClient {
 pub struct AsyncHttpWireClient;
 
 impl AsyncHttpWireClient {
+    pub async fn get(
+        target_url: &str,
+        headers: &[(String, String)],
+    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), MeshCallError> {
+        Self::request("GET", target_url, headers, &[]).await
+    }
+
     pub async fn post(
+        target_url: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), MeshCallError> {
+        Self::request("POST", target_url, headers, body).await
+    }
+
+    pub async fn request(
+        method: &str,
         target_url: &str,
         headers: &[(String, String)],
         body: &[u8],
@@ -411,10 +577,22 @@ impl AsyncHttpWireClient {
         .map_err(|_| MeshCallError::NetworkError(format!("Async connect timeout to {}:{}", host, port)))?
         .map_err(|e| MeshCallError::NetworkError(format!("Async connect failed: {}", e)))?;
 
-        let mut wire_req = format!(
-            "POST {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Length: {}\r\nConnection: close\r\n",
-            request_target, host, port, body.len()
-        );
+        let host_hdr = if port == 80 {
+            host.to_string()
+        } else {
+            format!("{}:{}", host, port)
+        };
+        let mut wire_req = if method.eq_ignore_ascii_case("GET") && body.is_empty() {
+            format!(
+                "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
+                request_target, host_hdr
+            )
+        } else {
+            format!(
+                "{} {} HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
+                method, request_target, host_hdr, body.len()
+            )
+        };
 
         for (k, v) in headers {
             wire_req.push_str(&format!("{}: {}\r\n", k, v));
@@ -461,6 +639,8 @@ pub struct AgentMeshPepBridge {
     wire_client: Arc<SyncHttpWireClient>,
     active_cancellations: Arc<tokio::sync::RwLock<HashMap<String, Vec<CancellationToken>>>>,
     channel_secret: Arc<RwLock<Option<[u8; 32]>>>,
+    peer_directory_cache: Arc<RwLock<HashMap<(String, String), String>>>,
+    default_provider_peer_id: Arc<RwLock<Option<String>>>,
 
     // Telemetry counters
     total_token_exchanges: Arc<AtomicU64>,
@@ -481,10 +661,29 @@ impl AgentMeshPepBridge {
             wire_client: Arc::new(SyncHttpWireClient::new()),
             active_cancellations: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             channel_secret: Arc::new(RwLock::new(None)),
+            peer_directory_cache: Arc::new(RwLock::new(HashMap::new())),
+            default_provider_peer_id: Arc::new(RwLock::new(
+                std::env::var("AGENTMESH_PROVIDER_PEER_ID").ok().filter(|s| !s.trim().is_empty()),
+            )),
             total_token_exchanges: Arc::new(AtomicU64::new(0)),
             total_cache_hits: Arc::new(AtomicU64::new(0)),
             total_killswitch_evictions: Arc::new(AtomicU64::new(0)),
             last_eviction_duration_us: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Sets or clears an explicit fallback/default provider `PeerID` (`12D3KooW...`) used when
+    /// calling `/mesh/<peer-id>/<type>/<name>` against an `agentmesh-node` proxy.
+    pub fn set_default_provider_peer_id(&self, peer_id: Option<String>) {
+        if let Ok(mut guard) = self.default_provider_peer_id.write() {
+            *guard = peer_id.filter(|s| !s.trim().is_empty());
+        }
+    }
+
+    /// Clears cached `(service_type, service_name) -> peer_id` discovery mappings.
+    pub fn clear_peer_directory_cache(&self) {
+        if let Ok(mut guard) = self.peer_directory_cache.write() {
+            guard.clear();
         }
     }
 
@@ -642,6 +841,59 @@ impl AgentMeshPepBridge {
         }
     }
 
+    /// Dispatches an RFC 7009 OAuth 2.0 Token Revocation (`POST /oauth/revoke`) with
+    /// `Content-Type: application/x-www-form-urlencoded` (`token=<biscuit>`) to an `agentmesh-node`.
+    pub fn revoke_token_rfc7009_sync(&self, access_token: &str) -> Result<(), MeshCallError> {
+        let endpoint = format!("{}/oauth/revoke", self.get_mesh_node_url().trim_end_matches('/'));
+        let form_body = format!("token={}", url_encode_form_component(access_token)).into_bytes();
+        let headers = vec![
+            (
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            ),
+            ("Accept".to_string(), "application/json".to_string()),
+        ];
+        let (status, _resp_headers, resp_bytes) =
+            self.wire_client.post(&endpoint, &headers, &form_body)?;
+        if (200..300).contains(&status) {
+            Ok(())
+        } else {
+            Err(MeshCallError::UpstreamCallFailed {
+                status,
+                message: format!(
+                    "RFC 7009 revocation failed: {}",
+                    String::from_utf8_lossy(&resp_bytes)
+                ),
+            })
+        }
+    }
+
+    /// Asynchronous counterpart for RFC 7009 Token Revocation (`POST /oauth/revoke`).
+    pub async fn revoke_token_rfc7009_async(&self, access_token: &str) -> Result<(), MeshCallError> {
+        let endpoint = format!("{}/oauth/revoke", self.get_mesh_node_url().trim_end_matches('/'));
+        let form_body = format!("token={}", url_encode_form_component(access_token)).into_bytes();
+        let headers = vec![
+            (
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            ),
+            ("Accept".to_string(), "application/json".to_string()),
+        ];
+        let (status, _resp_headers, resp_bytes) =
+            AsyncHttpWireClient::post(&endpoint, &headers, &form_body).await?;
+        if (200..300).contains(&status) {
+            Ok(())
+        } else {
+            Err(MeshCallError::UpstreamCallFailed {
+                status,
+                message: format!(
+                    "RFC 7009 revocation failed: {}",
+                    String::from_utf8_lossy(&resp_bytes)
+                ),
+            })
+        }
+    }
+
     /// Dispatches a signed epoch revocation signal to the target node's POST /mesh/revoke endpoint.
     pub async fn dispatch_signed_revocation_async(
         &self,
@@ -735,42 +987,230 @@ impl AgentMeshPepBridge {
     }
 
     // ------------------------------------------------------------------------
-    // Logical URI Resolution & Scheme Validation
+    // Logical URI Resolution, Service Discovery & Scheme Validation
     // ------------------------------------------------------------------------
 
-    /// Resolves logical mesh URIs into the target HTTP endpoint on the mesh node.
+    /// Extracts `(service_type, service_name)` for `mcp://` and `a2a://` URIs used with
+    /// `GET /mesh/service/discover` on `agentmesh-node`.
+    pub fn extract_service_type_and_name(logical_uri: &str) -> Option<(&'static str, &str)> {
+        if let Some(rest) = logical_uri.strip_prefix("mcp://") {
+            let svc = rest.split('/').next().unwrap_or(rest);
+            Some(("mcp", svc))
+        } else if let Some(rest) = logical_uri.strip_prefix("a2a://") {
+            let svc = rest.split('/').next().unwrap_or(rest);
+            Some(("a2a", svc))
+        } else {
+            None
+        }
+    }
+
+    /// Resolves logical mesh URIs into the target HTTP endpoint on the mesh node, optionally
+    /// targeting a discovered provider `peer_id` (`/mesh/<peer-id>/mcp/<service>`).
     /// Strictly allows: `mcp://`, `a2a://`, `inference://`, `egress://`.
     /// Strictly rejects: `http://`, `https://`, `file://`, IP literals, TCP sockets.
-    pub fn resolve_mesh_endpoint(node_url: &str, logical_uri: &str) -> Result<String, MeshCallError> {
+    pub fn resolve_mesh_endpoint_with_peer(
+        node_url: &str,
+        logical_uri: &str,
+        peer_id: Option<&str>,
+    ) -> Result<String, MeshCallError> {
         validate_mesh_uri(logical_uri)
             .map_err(|e| MeshCallError::InvalidUri(format!("{}: {}", logical_uri, e)))?;
 
         let trimmed_base = node_url.trim_end_matches('/');
+        let peer_opt = peer_id.map(str::trim).filter(|p| !p.is_empty());
 
         if let Some(rest) = logical_uri.strip_prefix("mcp://") {
-            Ok(format!("{}/mesh/mcp/{}", trimmed_base, rest))
+            match peer_opt {
+                Some(pid) => Ok(format!("{}/mesh/{}/mcp/{}", trimmed_base, pid, rest)),
+                None => Ok(format!("{}/mesh/mcp/{}", trimmed_base, rest)),
+            }
         } else if let Some(rest) = logical_uri.strip_prefix("a2a://") {
-            Ok(format!("{}/mesh/a2a/{}", trimmed_base, rest))
+            match peer_opt {
+                Some(pid) => Ok(format!("{}/mesh/{}/a2a/{}", trimmed_base, pid, rest)),
+                None => Ok(format!("{}/mesh/a2a/{}", trimmed_base, rest)),
+            }
         } else if let Some(rest) = logical_uri.strip_prefix("inference://") {
-            Ok(format!("{}/mesh/inference/{}", trimmed_base, rest))
+            match peer_opt {
+                Some(pid) => Ok(format!(
+                    "{}/mesh/{}/inference/{}/v1/chat/completions",
+                    trimmed_base, pid, rest
+                )),
+                None => Ok(format!("{}/v1/chat/completions", trimmed_base)),
+            }
         } else if let Some(rest) = logical_uri.strip_prefix("egress://") {
-            Ok(format!("{}/mesh/egress/{}", trimmed_base, rest))
+            match peer_opt {
+                Some(pid) => Ok(format!("{}/mesh/{}/egress/{}", trimmed_base, pid, rest)),
+                None => Ok(format!("{}/egress/{}", trimmed_base, rest)),
+            }
         } else {
             Err(MeshCallError::InvalidUri(logical_uri.to_string()))
         }
+    }
+
+    /// Resolves logical mesh URIs into the local HTTP endpoint on the mesh node without a peer prefix.
+    pub fn resolve_mesh_endpoint(node_url: &str, logical_uri: &str) -> Result<String, MeshCallError> {
+        Self::resolve_mesh_endpoint_with_peer(node_url, logical_uri, None)
+    }
+
+    fn lookup_cached_peer(&self, base_url: &str, svc_type: &str, svc_name: &str) -> Option<String> {
+        let key = (format!("{}:{}", base_url, svc_type), svc_name.to_string());
+        if let Ok(cache) = self.peer_directory_cache.read() {
+            if let Some(pid) = cache.get(&key) {
+                if !pid.is_empty() {
+                    return Some(pid.clone());
+                }
+            }
+        }
+        self.default_provider_peer_id
+            .read()
+            .ok()
+            .and_then(|g| g.clone())
+    }
+
+    fn lookup_any_cached_peer_for_node(&self, base_url: &str) -> Option<String> {
+        let prefix = format!("{}:", base_url);
+        if let Ok(cache) = self.peer_directory_cache.read() {
+            for ((k_prefix, _), pid) in cache.iter() {
+                if k_prefix.starts_with(&prefix) && !pid.is_empty() {
+                    return Some(pid.clone());
+                }
+            }
+        }
+        self.default_provider_peer_id
+            .read()
+            .ok()
+            .and_then(|g| g.clone())
+    }
+
+    /// Queries `GET {base_url}/mesh/service/discover` on `agentmesh-node` to resolve the
+    /// remote provider `PeerID` (`12D3KooW...`) for `(svc_type, svc_name)`.
+    pub fn discover_service_peer_sync(
+        &self,
+        base_url: &str,
+        svc_type: &str,
+        svc_name: &str,
+        mesh_token: &str,
+    ) -> Option<String> {
+        if let Some(cached) = self.lookup_cached_peer(base_url, svc_type, svc_name) {
+            return Some(cached);
+        }
+
+        let trimmed = base_url.trim_end_matches('/');
+        let headers = vec![
+            (
+                "X-Mesh-Authentication".to_string(),
+                format!("Bearer {}", mesh_token),
+            ),
+            ("Accept".to_string(), "application/json".to_string()),
+        ];
+
+        let exact_url = format!(
+            "{}/mesh/service/discover?type={}&name={}",
+            trimmed,
+            url_encode_form_component(svc_type),
+            url_encode_form_component(svc_name)
+        );
+        if let Ok((200, _, body)) = self.wire_client.get(&exact_url, &headers) {
+            if let Ok(entries) = serde_json::from_slice::<Vec<DiscoveredMeshService>>(&body) {
+                if let Some(first) = entries.into_iter().find(|e| !e.peer_id.is_empty()) {
+                    if let Ok(mut cache) = self.peer_directory_cache.write() {
+                        cache.insert(
+                            (format!("{}:{}", base_url, svc_type), svc_name.to_string()),
+                            first.peer_id.clone(),
+                        );
+                    }
+                    return Some(first.peer_id);
+                }
+            }
+        }
+
+        // Fallback: if exact service was hidden by policy filtering, query any visible service of same type
+        // or reuse a known provider PeerID for this node so denied calls still hit `/mesh/<peer-id>/...` and receive 403.
+        let broad_url = format!(
+            "{}/mesh/service/discover?type={}",
+            trimmed,
+            url_encode_form_component(svc_type)
+        );
+        if let Ok((200, _, body)) = self.wire_client.get(&broad_url, &headers) {
+            if let Ok(entries) = serde_json::from_slice::<Vec<DiscoveredMeshService>>(&body) {
+                if let Some(first) = entries.into_iter().find(|e| !e.peer_id.is_empty()) {
+                    return Some(first.peer_id);
+                }
+            }
+        }
+
+        self.lookup_any_cached_peer_for_node(base_url)
+    }
+
+    /// Asynchronous counterpart for `GET /mesh/service/discover`.
+    pub async fn discover_service_peer_async(
+        &self,
+        base_url: &str,
+        svc_type: &str,
+        svc_name: &str,
+        mesh_token: &str,
+    ) -> Option<String> {
+        if let Some(cached) = self.lookup_cached_peer(base_url, svc_type, svc_name) {
+            return Some(cached);
+        }
+
+        let trimmed = base_url.trim_end_matches('/');
+        let headers = vec![
+            (
+                "X-Mesh-Authentication".to_string(),
+                format!("Bearer {}", mesh_token),
+            ),
+            ("Accept".to_string(), "application/json".to_string()),
+        ];
+
+        let exact_url = format!(
+            "{}/mesh/service/discover?type={}&name={}",
+            trimmed,
+            url_encode_form_component(svc_type),
+            url_encode_form_component(svc_name)
+        );
+        if let Ok((200, _, body)) = AsyncHttpWireClient::get(&exact_url, &headers).await {
+            if let Ok(entries) = serde_json::from_slice::<Vec<DiscoveredMeshService>>(&body) {
+                if let Some(first) = entries.into_iter().find(|e| !e.peer_id.is_empty()) {
+                    if let Ok(mut cache) = self.peer_directory_cache.write() {
+                        cache.insert(
+                            (format!("{}:{}", base_url, svc_type), svc_name.to_string()),
+                            first.peer_id.clone(),
+                        );
+                    }
+                    return Some(first.peer_id);
+                }
+            }
+        }
+
+        let broad_url = format!(
+            "{}/mesh/service/discover?type={}",
+            trimmed,
+            url_encode_form_component(svc_type)
+        );
+        if let Ok((200, _, body)) = AsyncHttpWireClient::get(&broad_url, &headers).await {
+            if let Ok(entries) = serde_json::from_slice::<Vec<DiscoveredMeshService>>(&body) {
+                if let Some(first) = entries.into_iter().find(|e| !e.peer_id.is_empty()) {
+                    return Some(first.peer_id);
+                }
+            }
+        }
+
+        self.lookup_any_cached_peer_for_node(base_url)
     }
 
     // ------------------------------------------------------------------------
     // RFC 8693 Token Exchange Workflow
     // ------------------------------------------------------------------------
 
-    /// Obtains a cached token or performs RFC 8693 token exchange if missing or near expiry.
+    /// Obtains a cached token or performs RFC 8693 token exchange (`application/x-www-form-urlencoded`)
+    /// if missing or near expiry.
     pub fn get_or_exchange_token_sync(
         &self,
         arm_id: &str,
         epoch: u64,
         role: &ArmRole,
-        target_resource: &str,
+        _target_resource: &str,
     ) -> Result<String, MeshCallError> {
         // 1. Fail closed if KillSwitch is tripped
         if self.is_arm_tripped(arm_id) {
@@ -800,22 +1240,26 @@ impl AgentMeshPepBridge {
             .mint_arm_token(arm_id, epoch, role)
             .map_err(|e| MeshCallError::TokenMintError(e.to_string()))?;
 
-        // 4. Construct RFC 8693 Token Exchange request
+        // 4. Construct RFC 8693 Token Exchange request (form-urlencoded per RFC 8693 §2.1 & `agentmesh` `sts.go`)
         let token_req = Rfc8693TokenRequest {
             grant_type: "urn:ietf:params:oauth:grant-type:token-exchange".to_string(),
             subject_token: workload_jwt,
             subject_token_type: "urn:ietf:params:oauth:token-type:jwt".to_string(),
             requested_token_type: Some("urn:ietf:params:oauth:token-type:access_token".to_string()),
-            audience: Some("agentmesh.local".to_string()),
-            resource: Some(target_resource.to_string()),
+            audience: Some(self.issuer.audience().to_string()),
+            resource: None,
+            scope: None,
+            seal: None,
         };
 
-        let req_body = serde_json::to_vec(&token_req)
-            .map_err(|e| MeshCallError::Internal(format!("Failed to serialize RFC 8693 request: {}", e)))?;
+        let req_body = token_req.to_form_urlencoded();
 
         let token_endpoint = format!("{}/oauth/token", self.get_mesh_node_url().trim_end_matches('/'));
         let headers = vec![
-            ("Content-Type".to_string(), "application/json".to_string()),
+            (
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            ),
             ("Accept".to_string(), "application/json".to_string()),
         ];
 
@@ -862,13 +1306,13 @@ impl AgentMeshPepBridge {
         }
     }
 
-    /// Asynchronous counterpart for RFC 8693 token exchange.
+    /// Asynchronous counterpart for RFC 8693 token exchange (`application/x-www-form-urlencoded`).
     pub async fn get_or_exchange_token_async(
         &self,
         arm_id: &str,
         epoch: u64,
         role: &ArmRole,
-        target_resource: &str,
+        _target_resource: &str,
     ) -> Result<String, MeshCallError> {
         if self.is_arm_tripped(arm_id) {
             return Err(MeshCallError::KillSwitchTripped(arm_id.to_string()));
@@ -900,16 +1344,20 @@ impl AgentMeshPepBridge {
             subject_token: workload_jwt,
             subject_token_type: "urn:ietf:params:oauth:token-type:jwt".to_string(),
             requested_token_type: Some("urn:ietf:params:oauth:token-type:access_token".to_string()),
-            audience: Some("agentmesh.local".to_string()),
-            resource: Some(target_resource.to_string()),
+            audience: Some(self.issuer.audience().to_string()),
+            resource: None,
+            scope: None,
+            seal: None,
         };
 
-        let req_body = serde_json::to_vec(&token_req)
-            .map_err(|e| MeshCallError::Internal(format!("Failed to serialize RFC 8693 request: {}", e)))?;
+        let req_body = token_req.to_form_urlencoded();
 
         let token_endpoint = format!("{}/oauth/token", self.get_mesh_node_url().trim_end_matches('/'));
         let headers = vec![
-            ("Content-Type".to_string(), "application/json".to_string()),
+            (
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            ),
             ("Accept".to_string(), "application/json".to_string()),
         ];
 
@@ -954,9 +1402,176 @@ impl AgentMeshPepBridge {
         }
     }
 
+    /// Exchanges a workload JWT for a task-attenuated (and optionally sealed) Biscuit via
+    /// `POST /oauth/token` (`resource` / `scope` / `seal=true` -> `tar_block` on `agentmesh-node`).
+    /// Does not overwrite the arm's standing `(arm_id, epoch)` vault entry.
+    pub fn exchange_scoped_task_token_sync(
+        &self,
+        arm_id: &str,
+        epoch: u64,
+        role: &ArmRole,
+        resource: Option<&str>,
+        scope: Option<&str>,
+        seal: bool,
+    ) -> Result<String, MeshCallError> {
+        if self.is_arm_tripped(arm_id) {
+            return Err(MeshCallError::KillSwitchTripped(arm_id.to_string()));
+        }
+
+        let workload_jwt = self
+            .issuer
+            .mint_arm_token(arm_id, epoch, role)
+            .map_err(|e| MeshCallError::TokenMintError(e.to_string()))?;
+
+        let token_req = Rfc8693TokenRequest {
+            grant_type: "urn:ietf:params:oauth:grant-type:token-exchange".to_string(),
+            subject_token: workload_jwt,
+            subject_token_type: "urn:ietf:params:oauth:token-type:jwt".to_string(),
+            requested_token_type: Some("urn:ietf:params:oauth:token-type:access_token".to_string()),
+            audience: Some(self.issuer.audience().to_string()),
+            resource: resource.map(str::to_string),
+            scope: scope.map(str::to_string),
+            seal: if seal { Some(true) } else { None },
+        };
+
+        let token_endpoint =
+            format!("{}/oauth/token", self.get_mesh_node_url().trim_end_matches('/'));
+        let headers = vec![
+            (
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            ),
+            ("Accept".to_string(), "application/json".to_string()),
+        ];
+        let (status, _resp_headers, resp_bytes) =
+            self.wire_client
+                .post(&token_endpoint, &headers, &token_req.to_form_urlencoded())?;
+
+        if status == 200 {
+            let token_resp: Rfc8693TokenResponse =
+                serde_json::from_slice(&resp_bytes).map_err(|e| {
+                    MeshCallError::TokenExchangeFailed {
+                        status,
+                        message: format!("Malformed RFC 8693 token response: {}", e),
+                    }
+                })?;
+            self.total_token_exchanges.fetch_add(1, Ordering::Relaxed);
+            Ok(token_resp.access_token)
+        } else if status == 403 {
+            Err(MeshCallError::AccessDenied(
+                String::from_utf8_lossy(&resp_bytes).to_string(),
+            ))
+        } else {
+            let err_desc = serde_json::from_slice::<Rfc8693ErrorResponse>(&resp_bytes)
+                .map(|e| e.error_description.unwrap_or(e.error))
+                .unwrap_or_else(|_| String::from_utf8_lossy(&resp_bytes).to_string());
+            Err(MeshCallError::TokenExchangeFailed {
+                status,
+                message: err_desc,
+            })
+        }
+    }
+
+    /// Asynchronous counterpart for `exchange_scoped_task_token_sync`.
+    pub async fn exchange_scoped_task_token_async(
+        &self,
+        arm_id: &str,
+        epoch: u64,
+        role: &ArmRole,
+        resource: Option<&str>,
+        scope: Option<&str>,
+        seal: bool,
+    ) -> Result<String, MeshCallError> {
+        if self.is_arm_tripped(arm_id) {
+            return Err(MeshCallError::KillSwitchTripped(arm_id.to_string()));
+        }
+
+        let workload_jwt = self
+            .issuer
+            .mint_arm_token(arm_id, epoch, role)
+            .map_err(|e| MeshCallError::TokenMintError(e.to_string()))?;
+
+        let token_req = Rfc8693TokenRequest {
+            grant_type: "urn:ietf:params:oauth:grant-type:token-exchange".to_string(),
+            subject_token: workload_jwt,
+            subject_token_type: "urn:ietf:params:oauth:token-type:jwt".to_string(),
+            requested_token_type: Some("urn:ietf:params:oauth:token-type:access_token".to_string()),
+            audience: Some(self.issuer.audience().to_string()),
+            resource: resource.map(str::to_string),
+            scope: scope.map(str::to_string),
+            seal: if seal { Some(true) } else { None },
+        };
+
+        let token_endpoint =
+            format!("{}/oauth/token", self.get_mesh_node_url().trim_end_matches('/'));
+        let headers = vec![
+            (
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            ),
+            ("Accept".to_string(), "application/json".to_string()),
+        ];
+        let (status, _resp_headers, resp_bytes) = AsyncHttpWireClient::post(
+            &token_endpoint,
+            &headers,
+            &token_req.to_form_urlencoded(),
+        )
+        .await?;
+
+        if status == 200 {
+            let token_resp: Rfc8693TokenResponse =
+                serde_json::from_slice(&resp_bytes).map_err(|e| {
+                    MeshCallError::TokenExchangeFailed {
+                        status,
+                        message: format!("Malformed RFC 8693 token response: {}", e),
+                    }
+                })?;
+            self.total_token_exchanges.fetch_add(1, Ordering::Relaxed);
+            Ok(token_resp.access_token)
+        } else if status == 403 {
+            Err(MeshCallError::AccessDenied(
+                String::from_utf8_lossy(&resp_bytes).to_string(),
+            ))
+        } else {
+            let err_desc = serde_json::from_slice::<Rfc8693ErrorResponse>(&resp_bytes)
+                .map(|e| e.error_description.unwrap_or(e.error))
+                .unwrap_or_else(|_| String::from_utf8_lossy(&resp_bytes).to_string());
+            Err(MeshCallError::TokenExchangeFailed {
+                status,
+                message: err_desc,
+            })
+        }
+    }
+
     // ------------------------------------------------------------------------
     // Response Sanitization: Zero-Mutual-Information Projector
     // ------------------------------------------------------------------------
+
+    /// Extracts JSON payloads from MCP Streamable HTTP `text/event-stream` frames (`data: {...}`)
+    /// if the upstream server responded in SSE format; passes raw JSON/text through unchanged.
+    pub fn unwrap_sse_json_if_needed(
+        resp_headers: &[(String, String)],
+        raw_bytes: &[u8],
+    ) -> Vec<u8> {
+        let is_sse = resp_headers.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case("content-type")
+                && v.to_ascii_lowercase().contains("text/event-stream")
+        });
+        if !is_sse {
+            return raw_bytes.to_vec();
+        }
+        let text = String::from_utf8_lossy(raw_bytes);
+        let mut last_data = None;
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("data:") {
+                let trimmed = rest.trim();
+                if !trimmed.is_empty() {
+                    last_data = Some(trimmed.as_bytes().to_vec());
+                }
+            }
+        }
+        last_data.unwrap_or_else(|| raw_bytes.to_vec())
+    }
 
     /// Projects upstream raw bytes through `ZeroMutualInformationProjector`.
     /// Strips zero-width stego chars, redacts secrets with `<ZK_MI_REDACTED>`,
@@ -976,6 +1591,84 @@ impl AgentMeshPepBridge {
     // Public Dispatch Interface for Wasm & Containment
     // ------------------------------------------------------------------------
 
+    /// Dispatches a mesh call synchronously using an explicit pre-exchanged Biscuit token
+    /// (e.g. a task-attenuated `tar_block` token from `exchange_scoped_task_token_sync`) and
+    /// optional caller headers to test header hygiene.
+    pub fn dispatch_mesh_call_with_token_sync(
+        &self,
+        arm_id: &str,
+        uri: &str,
+        token: &str,
+        extra_caller_headers: &[(String, String)],
+        req_bytes: &[u8],
+    ) -> Result<Vec<u8>, MeshCallError> {
+        if self.is_arm_tripped(arm_id) {
+            return Err(MeshCallError::KillSwitchTripped(arm_id.to_string()));
+        }
+
+        let base_url = self.get_mesh_node_url();
+        let initial_peer = Self::extract_service_type_and_name(uri)
+            .and_then(|(st, sn)| self.lookup_cached_peer(&base_url, st, sn));
+        let endpoint_url =
+            Self::resolve_mesh_endpoint_with_peer(&base_url, uri, initial_peer.as_deref())?;
+
+        let mut caller_headers = Vec::with_capacity(extra_caller_headers.len() + 2);
+        caller_headers.extend_from_slice(extra_caller_headers);
+        if !caller_headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        {
+            caller_headers.push(("Content-Type".to_string(), "application/json".to_string()));
+        }
+        if !caller_headers
+            .iter()
+            .any(|k| k.0.eq_ignore_ascii_case("accept"))
+        {
+            caller_headers.push((
+                "Accept".to_string(),
+                "application/json, text/event-stream".to_string(),
+            ));
+        }
+
+        let sanitized_headers = Self::sanitize_and_inject_headers(&caller_headers, token);
+
+        let (mut status, mut resp_headers, mut resp_bytes) =
+            self.wire_client
+                .post(&endpoint_url, &sanitized_headers, req_bytes)?;
+
+        // Transparently discover remote provider PeerID on `agentmesh-node` if direct path returned 404
+        if status == 404 && initial_peer.is_none() {
+            if let Some((svc_type, svc_name)) = Self::extract_service_type_and_name(uri) {
+                if let Some(peer_id) =
+                    self.discover_service_peer_sync(&base_url, svc_type, svc_name, token)
+                {
+                    let peer_endpoint =
+                        Self::resolve_mesh_endpoint_with_peer(&base_url, uri, Some(&peer_id))?;
+                    let retry = self
+                        .wire_client
+                        .post(&peer_endpoint, &sanitized_headers, req_bytes)?;
+                    status = retry.0;
+                    resp_headers = retry.1;
+                    resp_bytes = retry.2;
+                }
+            }
+        }
+
+        if status == 200 {
+            let unwrapped = Self::unwrap_sse_json_if_needed(&resp_headers, &resp_bytes);
+            Ok(Self::sanitize_upstream_payload(&unwrapped))
+        } else if status == 403 {
+            Err(MeshCallError::AccessDenied(
+                String::from_utf8_lossy(&resp_bytes).to_string(),
+            ))
+        } else {
+            Err(MeshCallError::UpstreamCallFailed {
+                status,
+                message: String::from_utf8_lossy(&resp_bytes).to_string(),
+            })
+        }
+    }
+
     /// Synchronous dispatch for `octopus_wasi::mesh_call` inside Tier 1 Wasm host import.
     pub fn dispatch_mesh_call_sync(
         &self,
@@ -985,38 +1678,15 @@ impl AgentMeshPepBridge {
         uri: &str,
         req_bytes: &[u8],
     ) -> Result<Vec<u8>, MeshCallError> {
-        // 1. Check KillSwitch
         if self.is_arm_tripped(arm_id) {
             return Err(MeshCallError::KillSwitchTripped(arm_id.to_string()));
         }
 
-        // 2. Validate and resolve URI
-        let endpoint_url = Self::resolve_mesh_endpoint(&self.get_mesh_node_url(), uri)?;
+        validate_mesh_uri(uri)
+            .map_err(|e| MeshCallError::InvalidUri(format!("{}: {}", uri, e)))?;
 
-        // 3. Obtain exchanged token from vault or STS
         let token = self.get_or_exchange_token_sync(arm_id, epoch, role, uri)?;
-
-        // 4. Sanitize headers and inject X-Mesh-Authentication
-        let default_headers = vec![
-            ("Content-Type".to_string(), "application/json".to_string()),
-            ("Accept".to_string(), "application/json".to_string()),
-        ];
-        let sanitized_headers = Self::sanitize_and_inject_headers(&default_headers, &token);
-
-        // 5. Transmit request to mesh service
-        let (status, _resp_headers, resp_bytes) = self.wire_client.post(&endpoint_url, &sanitized_headers, req_bytes)?;
-
-        // 6. Handle response status & project payload
-        if status == 200 {
-            Ok(Self::sanitize_upstream_payload(&resp_bytes))
-        } else if status == 403 {
-            Err(MeshCallError::AccessDenied(String::from_utf8_lossy(&resp_bytes).to_string()))
-        } else {
-            Err(MeshCallError::UpstreamCallFailed {
-                status,
-                message: String::from_utf8_lossy(&resp_bytes).to_string(),
-            })
-        }
+        self.dispatch_mesh_call_with_token_sync(arm_id, uri, &token, &[], req_bytes)
     }
 
     /// Asynchronous dispatch for Tokio tasks and Web API endpoints.
@@ -1032,12 +1702,29 @@ impl AgentMeshPepBridge {
             return Err(MeshCallError::KillSwitchTripped(arm_id.to_string()));
         }
 
-        let endpoint_url = Self::resolve_mesh_endpoint(&self.get_mesh_node_url(), uri)?;
+        let base_url = self.get_mesh_node_url();
+        let has_channel_secret = self
+            .channel_secret
+            .read()
+            .ok()
+            .and_then(|g| *g)
+            .is_some();
+        let initial_peer = if has_channel_secret {
+            None
+        } else {
+            Self::extract_service_type_and_name(uri)
+                .and_then(|(st, sn)| self.lookup_cached_peer(&base_url, st, sn))
+        };
+        let endpoint_url =
+            Self::resolve_mesh_endpoint_with_peer(&base_url, uri, initial_peer.as_deref())?;
         let token = self.get_or_exchange_token_async(arm_id, epoch, role, uri).await?;
 
         let mut default_headers = vec![
             ("Content-Type".to_string(), "application/json".to_string()),
-            ("Accept".to_string(), "application/json".to_string()),
+            (
+                "Accept".to_string(),
+                "application/json, text/event-stream".to_string(),
+            ),
         ];
 
         // Weakness 4: Inject mutual PEP channel proof if channel secret is active
@@ -1097,7 +1784,26 @@ impl AgentMeshPepBridge {
             }
         }
 
-        let (status, resp_headers, resp_bytes) = post_result?;
+        let (mut status, mut resp_headers, mut resp_bytes) = post_result?;
+
+        // Transparently discover remote provider PeerID on `agentmesh-node` if direct path returned 404
+        if status == 404 && initial_peer.is_none() && expected_node_secret.is_none() {
+            if let Some((svc_type, svc_name)) = Self::extract_service_type_and_name(uri) {
+                if let Some(peer_id) = self
+                    .discover_service_peer_async(&base_url, svc_type, svc_name, &token)
+                    .await
+                {
+                    let peer_endpoint =
+                        Self::resolve_mesh_endpoint_with_peer(&base_url, uri, Some(&peer_id))?;
+                    let retry =
+                        AsyncHttpWireClient::post(&peer_endpoint, &sanitized_headers, req_bytes)
+                            .await?;
+                    status = retry.0;
+                    resp_headers = retry.1;
+                    resp_bytes = retry.2;
+                }
+            }
+        }
 
         // Weakness 4: Verify mutual node response proof header if channel secret is active
         if let (Some(secret), Some(nonce)) = (expected_node_secret, nonce_str) {
@@ -1125,7 +1831,8 @@ impl AgentMeshPepBridge {
         }
 
         if status == 200 {
-            Ok(Self::sanitize_upstream_payload(&resp_bytes))
+            let unwrapped = Self::unwrap_sse_json_if_needed(&resp_headers, &resp_bytes);
+            Ok(Self::sanitize_upstream_payload(&unwrapped))
         } else if status == 403 {
             Err(MeshCallError::AccessDenied(String::from_utf8_lossy(&resp_bytes).to_string()))
         } else {
@@ -1198,22 +1905,40 @@ mod tests {
     fn test_strict_uri_scheme_filtering() {
         let base_url = "http://127.0.0.1:8080";
 
-        // Allowed schemes
+        // Allowed schemes (local fallback & peer-scoped proxy paths)
         assert_eq!(
             AgentMeshPepBridge::resolve_mesh_endpoint(base_url, "mcp://calc").unwrap(),
             "http://127.0.0.1:8080/mesh/mcp/calc"
+        );
+        assert_eq!(
+            AgentMeshPepBridge::resolve_mesh_endpoint_with_peer(
+                base_url,
+                "mcp://calc",
+                Some("12D3KooWExamplePeerId")
+            )
+            .unwrap(),
+            "http://127.0.0.1:8080/mesh/12D3KooWExamplePeerId/mcp/calc"
         );
         assert_eq!(
             AgentMeshPepBridge::resolve_mesh_endpoint(base_url, "a2a://worker").unwrap(),
             "http://127.0.0.1:8080/mesh/a2a/worker"
         );
         assert_eq!(
+            AgentMeshPepBridge::resolve_mesh_endpoint_with_peer(
+                base_url,
+                "a2a://worker",
+                Some("12D3KooWExamplePeerId")
+            )
+            .unwrap(),
+            "http://127.0.0.1:8080/mesh/12D3KooWExamplePeerId/a2a/worker"
+        );
+        assert_eq!(
             AgentMeshPepBridge::resolve_mesh_endpoint(base_url, "inference://qwen").unwrap(),
-            "http://127.0.0.1:8080/mesh/inference/qwen"
+            "http://127.0.0.1:8080/v1/chat/completions"
         );
         assert_eq!(
             AgentMeshPepBridge::resolve_mesh_endpoint(base_url, "egress://api.service.com").unwrap(),
-            "http://127.0.0.1:8080/mesh/egress/api.service.com"
+            "http://127.0.0.1:8080/egress/api.service.com"
         );
 
         // Prohibited schemes (must fail closed)
@@ -1233,6 +1958,30 @@ mod tests {
             AgentMeshPepBridge::resolve_mesh_endpoint(base_url, "tcp://192.168.1.1:5000"),
             Err(MeshCallError::InvalidUri(_))
         ));
+    }
+
+    #[test]
+    fn test_chunked_http_decoding_and_form_urlencoded_rfc8693() {
+        let raw_resp = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n7\r\n{\"ok\":1\r\n1\r\n}\r\n0\r\n\r\n";
+        let (status, _hdrs, body) = SyncHttpWireClient::parse_http_response(raw_resp).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body, b"{\"ok\":1}");
+
+        let req = Rfc8693TokenRequest {
+            grant_type: "urn:ietf:params:oauth:grant-type:token-exchange".to_string(),
+            subject_token: "hdr.pay.sig".to_string(),
+            subject_token_type: "urn:ietf:params:oauth:token-type:jwt".to_string(),
+            requested_token_type: None,
+            audience: Some("agentmesh".to_string()),
+            resource: None,
+            scope: Some("mcp://calc".to_string()),
+            seal: Some(true),
+        };
+        let encoded = String::from_utf8(req.to_form_urlencoded()).unwrap();
+        assert!(encoded.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange"));
+        assert!(encoded.contains("audience=agentmesh"));
+        assert!(encoded.contains("scope=mcp%3A%2F%2Fcalc"));
+        assert!(encoded.contains("seal=true"));
     }
 
     #[test]

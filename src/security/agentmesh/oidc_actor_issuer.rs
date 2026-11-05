@@ -28,7 +28,7 @@ pub const DEFAULT_TOKEN_TTL_SECS: u64 = 300; // 5 minutes
 pub const DEFAULT_ROTATION_GRACE_SECS: u64 = 300; // 5 minutes
 pub const MAX_CLOCK_DRIFT_SECS: u64 = 5; // Strict <= 5s drift tolerance (fixing #734 60s gap)
 pub const SPIFFE_ISSUER_DEFAULT: &str = "spiffe://agentoctopus.local";
-pub const AUDIENCE_DEFAULT: &str = "agentmesh.local";
+pub const AUDIENCE_DEFAULT: &str = "agentmesh";
 pub const MAX_JTI_CACHE_ENTRIES: usize = 10_000;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -257,6 +257,7 @@ impl BoundedJtiCache {
 
 pub struct OctopusOidcActorIssuer {
     issuer_url: String,
+    subject_prefix: Option<String>,
     audience: String,
     token_ttl_secs: u64,
     rotation_grace_secs: u64,
@@ -286,6 +287,7 @@ impl OctopusOidcActorIssuer {
 
         Self {
             issuer_url: issuer_url.to_string(),
+            subject_prefix: None,
             audience: audience.to_string(),
             token_ttl_secs: DEFAULT_TOKEN_TTL_SECS,
             rotation_grace_secs: DEFAULT_ROTATION_GRACE_SECS,
@@ -294,6 +296,29 @@ impl OctopusOidcActorIssuer {
             retired_key: RwLock::new(None),
             jti_cache: RwLock::new(BoundedJtiCache::new(MAX_JTI_CACHE_ENTRIES)),
         }
+    }
+
+    /// Sets an explicit subject prefix (e.g. `spiffe://agentoctopus.local`) so that
+    /// HTTP OIDC discovery URLs (`http://127.0.0.1:<port>`) mint port-independent SPIFFE `sub` claims.
+    pub fn with_subject_prefix(mut self, prefix: &str) -> Self {
+        self.subject_prefix = Some(prefix.trim_end_matches('/').to_string());
+        self
+    }
+
+    /// Overrides the minted token TTL in seconds.
+    pub fn with_token_ttl_secs(mut self, ttl_secs: u64) -> Self {
+        self.token_ttl_secs = ttl_secs.max(1);
+        self
+    }
+
+    /// Returns the configured issuer URL (`iss`).
+    pub fn issuer_url(&self) -> &str {
+        &self.issuer_url
+    }
+
+    /// Returns the configured audience (`aud`).
+    pub fn audience(&self) -> &str {
+        &self.audience
     }
 
     /// Convenience constructor with defaults
@@ -375,6 +400,7 @@ impl OctopusOidcActorIssuer {
                 kty: k.kty,
                 crv: k.crv,
                 x: k.x,
+                y: Some(k.y),
                 kid: k.kid,
                 r#use: k.key_use,
                 alg: k.alg,
@@ -420,6 +446,29 @@ impl OctopusOidcActorIssuer {
         role: &ArmRole,
         now: u64,
     ) -> Result<String, OidcError> {
+        self.mint_arm_token_with_overrides(
+            arm_id,
+            epoch,
+            role,
+            now,
+            None,
+            None,
+            Some(self.token_ttl_secs),
+        )
+    }
+
+    /// Mints a signed ES256 workload JWT with optional issuer/audience/TTL overrides
+    /// (used for testing negative audience, wrong issuer, and expiry boundary cases).
+    pub fn mint_arm_token_with_overrides(
+        &self,
+        arm_id: &str,
+        epoch: u64,
+        role: &ArmRole,
+        now: u64,
+        issuer_override: Option<&str>,
+        audience_override: Option<&str>,
+        ttl_override_secs: Option<u64>,
+    ) -> Result<String, OidcError> {
         let curr_guard = self.current_key.read().expect("current_key read lock poisoned");
 
         let header = JwsHeader {
@@ -428,19 +477,24 @@ impl OctopusOidcActorIssuer {
             kid: curr_guard.kid.clone(),
         };
 
-        let sub = format!("{}/arm/{}/epoch/{}", self.issuer_url.trim_end_matches('/'), arm_id, epoch);
+        let sub_base = self
+            .subject_prefix
+            .as_deref()
+            .unwrap_or_else(|| self.issuer_url.trim_end_matches('/'));
+        let sub = format!("{}/arm/{}/epoch/{}", sub_base, arm_id, epoch);
         let jti = format!("{:016x}{:016x}", rand::random::<u64>(), rand::random::<u64>());
+        let ttl = ttl_override_secs.unwrap_or(self.token_ttl_secs);
 
         let claims = WorkloadClaims {
-            iss: self.issuer_url.clone(),
+            iss: issuer_override.unwrap_or(&self.issuer_url).to_string(),
             sub,
-            aud: self.audience.clone(),
+            aud: audience_override.unwrap_or(&self.audience).to_string(),
             arm_id: arm_id.to_string(),
             epoch,
             role: format!("{role:?}"),
             iat: now,
             nbf: now,
-            exp: now + self.token_ttl_secs,
+            exp: now.saturating_add(ttl),
             jti,
         };
 
@@ -582,6 +636,143 @@ impl OctopusOidcActorIssuer {
     }
 }
 
+/// Lightweight loopback OIDC Discovery & JWKS HTTP server (`127.0.0.1:<port>`)
+/// so external verifiers (`agentmesh-one --workload-issuer=http://127.0.0.1:<port>`)
+/// can perform standard OpenID Connect Discovery 1.0 and RFC 7517 EC P-256 JWKS fetches.
+pub struct OidcLoopbackServer {
+    issuer: std::sync::Arc<OctopusOidcActorIssuer>,
+    port: u16,
+    shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
+    server_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl OidcLoopbackServer {
+    /// Binds an ephemeral or fixed loopback port on `127.0.0.1`, constructs an
+    /// `OctopusOidcActorIssuer` whose `iss` matches `http://127.0.0.1:<port>` and whose
+    /// `sub` uses `spiffe://agentoctopus.local`, and starts serving OIDC discovery + JWKS.
+    pub async fn start(
+        bind_port: u16,
+        audience: &str,
+        subject_prefix: Option<&str>,
+    ) -> std::io::Result<Self> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", bind_port)).await?;
+        let port = listener.local_addr()?.port();
+        let issuer_url = format!("http://127.0.0.1:{port}");
+        let mut issuer_obj = OctopusOidcActorIssuer::new(&issuer_url, audience);
+        if let Some(prefix) = subject_prefix {
+            issuer_obj = issuer_obj.with_subject_prefix(prefix);
+        }
+        let issuer = std::sync::Arc::new(issuer_obj);
+        let issuer_clone = std::sync::Arc::clone(&issuer);
+
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+
+        let server_task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    accept_res = listener.accept() => {
+                        let (mut stream, _) = match accept_res {
+                            Ok(pair) => pair,
+                            Err(_) => break,
+                        };
+                        let iss = std::sync::Arc::clone(&issuer_clone);
+                        let base_url = format!("http://127.0.0.1:{port}");
+                        tokio::spawn(async move {
+                            let mut buf = [0u8; 4096];
+                            let n = match tokio::time::timeout(
+                                std::time::Duration::from_secs(3),
+                                stream.read(&mut buf),
+                            ).await {
+                                Ok(Ok(n)) if n > 0 => n,
+                                _ => return,
+                            };
+                            let req_str = String::from_utf8_lossy(&buf[..n]);
+                            let first_line = req_str.lines().next().unwrap_or("");
+                            let mut parts = first_line.split_whitespace();
+                            let method = parts.next().unwrap_or("GET");
+                            let raw_path = parts.next().unwrap_or("/");
+                            let path = raw_path.split('?').next().unwrap_or("/");
+
+                            let (status, body) = match (method, path) {
+                                ("GET", "/.well-known/openid-configuration") => {
+                                    let cfg = iss.get_openid_configuration(&base_url);
+                                    ("200 OK", serde_json::to_vec(&cfg).unwrap_or_default())
+                                }
+                                ("GET", "/.well-known/jwks.json")
+                                | ("GET", "/jwks.json")
+                                | ("GET", "/jwks") => {
+                                    let now = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    let jwks = iss.get_jwks(now);
+                                    ("200 OK", serde_json::to_vec(&jwks).unwrap_or_default())
+                                }
+                                ("GET", "/healthz") | ("GET", "/health") => {
+                                    ("200 OK", br#"{"status":"ok"}"#.to_vec())
+                                }
+                                _ => ("404 Not Found", br#"{"error":"not_found"}"#.to_vec()),
+                            };
+
+                            let hdr = format!(
+                                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = stream.write_all(hdr.as_bytes()).await;
+                            let _ = stream.write_all(&body).await;
+                            let _ = stream.flush().await;
+                        });
+                    }
+                    _ = shutdown_rx.changed() => {
+                        if *shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            issuer,
+            port,
+            shutdown_tx: Some(shutdown_tx),
+            server_task: Some(server_task),
+        })
+    }
+
+    pub fn issuer(&self) -> &std::sync::Arc<OctopusOidcActorIssuer> {
+        &self.issuer
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    pub fn url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+
+    pub async fn stop(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
+        if let Some(handle) = self.server_task.take() {
+            let _ = handle.await;
+        }
+    }
+}
+
+impl Drop for OidcLoopbackServer {
+    fn drop(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(true);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,5 +901,29 @@ mod tests {
         // Second verification of identical token (same jti) fails with ReplayDetected
         let res2 = issuer.verify_arm_token(&token, now);
         assert!(matches!(res2, Err(OidcError::ReplayDetected(_))));
+    }
+
+    #[test]
+    fn test_jwks_response_preserves_ec_y_coordinate() {
+        let issuer = OctopusOidcActorIssuer::new_ephemeral("http://127.0.0.1:5005");
+        let resp = issuer.jwks_response();
+        assert_eq!(resp.keys.len(), 1);
+        assert_eq!(resp.keys[0].kty, "EC");
+        assert_eq!(resp.keys[0].crv, "P-256");
+        assert!(resp.keys[0].y.as_deref().is_some_and(|y| !y.is_empty()));
+    }
+
+    #[test]
+    fn test_subject_prefix_spiffe_separation() {
+        let issuer = OctopusOidcActorIssuer::new("http://127.0.0.1:18081", "agentmesh")
+            .with_subject_prefix("spiffe://agentoctopus.local");
+        let now = 20_000;
+        let tok = issuer
+            .mint_arm_token_with_time("arm_calc", 3, &ArmRole::NetworkEgress, now)
+            .unwrap();
+        let claims = issuer.verify_arm_token(&tok, now).unwrap();
+        assert_eq!(claims.iss, "http://127.0.0.1:18081");
+        assert_eq!(claims.aud, "agentmesh");
+        assert_eq!(claims.sub, "spiffe://agentoctopus.local/arm/arm_calc/epoch/3");
     }
 }

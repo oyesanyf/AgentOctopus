@@ -28,11 +28,13 @@ pub use mandate_attenuation::{
 };
 pub use oidc_actor_issuer::{
     parse_ieee_p1363_signature, verifying_key_to_jwk_coords, EcJwk, JwsHeader, JwksDocument,
-    OctopusOidcActorIssuer, OidcError, OpenIdConfiguration, WorkloadClaims,
+    OctopusOidcActorIssuer, OidcError, OidcLoopbackServer, OpenIdConfiguration, WorkloadClaims,
+    AUDIENCE_DEFAULT, SPIFFE_ISSUER_DEFAULT,
 };
 pub use pep_bridge::{
-    AgentMeshPepBridge, CachedMeshToken, MeshCallError, MeshCallReceipt, PepBridgeConfig,
-    PepVaultTelemetry, SyncHttpWireClient, AsyncHttpWireClient,
+    url_encode_form_component, AgentMeshPepBridge, AsyncHttpWireClient, CachedMeshToken,
+    DiscoveredMeshService, MeshCallError, MeshCallReceipt, PepBridgeConfig, PepVaultTelemetry,
+    SyncHttpWireClient,
 };
 pub use serving_node::{
     AgentMeshBindingDef, AgentMeshPolicyConfig, AgentMeshPolicyRoot, AgentMeshRoleDef,
@@ -157,10 +159,14 @@ impl AgentMeshEngine {
         config: AgentMeshConfig,
         killswitch: Arc<KillSwitch>,
     ) -> Result<Self, OctopusSecurityError> {
-        let issuer = Arc::new(OctopusOidcActorIssuer::new(
-            &config.base_issuer_url,
-            "agentmesh.local",
-        ));
+        let audience = std::env::var("AGENTMESH_AUDIENCE")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| AUDIENCE_DEFAULT.to_string());
+        let issuer = Arc::new(
+            OctopusOidcActorIssuer::new(&config.base_issuer_url, &audience)
+                .with_subject_prefix(SPIFFE_ISSUER_DEFAULT),
+        );
 
         let active_kid = issuer.active_key_id();
 
@@ -348,8 +354,18 @@ impl AgentMeshEngine {
             "mcp://octopus/doc_extractor" | "/mesh/mcp/octopus/doc_extractor" => {
                 Ok(("mcp://octopus/doc_extractor", "wasm_doc_extractor"))
             }
+            "mcp://octopus-doc-extractor"
+            | "/mesh/mcp/octopus-doc-extractor"
+            | "/mcp/octopus-doc-extractor" => {
+                Ok(("mcp://octopus-doc-extractor", "wasm_doc_extractor"))
+            }
             "mcp://octopus/ledger_validator" | "/mesh/mcp/octopus/ledger_validator" => {
                 Ok(("mcp://octopus/ledger_validator", "wasm_ledger_validator"))
+            }
+            "mcp://octopus-ledger-validator"
+            | "/mesh/mcp/octopus-ledger-validator"
+            | "/mcp/octopus-ledger-validator" => {
+                Ok(("mcp://octopus-ledger-validator", "wasm_ledger_validator"))
             }
             _ => Err(OctopusSecurityError::CapabilityDenied(format!(
                 "Unknown inbound published tool: {}",

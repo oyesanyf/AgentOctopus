@@ -1127,15 +1127,12 @@ async fn test_challenge_inbound_mesh_token_verification_adversarial_matrix() {
         .unwrap()
         .as_secs();
 
-    let valid_seal = CageRoutingSeal {
-        seal_id: "seal-inbound-test-01".to_string(),
-        policy_version_id: "0123456789abcdef".to_string(),
-        action_digest: "a".repeat(64),
-        record_hash: "b".repeat(64),
-        issued_at: now,
-        expires_at: now + 30,
-        signature: "c".repeat(64),
-    };
+    let baseline_seal = engine
+        .mint_inbound_cage_seal("mcp://octopus/doc_extractor", b"hello data")
+        .expect("Mint baseline CAGE seal failed");
+    let valid_seal = engine
+        .mint_inbound_cage_seal("mcp://octopus/doc_extractor", b"hello data")
+        .expect("Mint matrix CAGE seal failed");
 
     // Mint legitimate token
     let genuine_token = engine
@@ -1143,12 +1140,12 @@ async fn test_challenge_inbound_mesh_token_verification_adversarial_matrix() {
         .mint_arm_token_with_time("arm_calc", 1, &ArmRole::UntrustedDocIngest, now)
         .expect("Mint failed");
 
-    // Baseline: Valid call succeeds
+    // Baseline: Valid call succeeds (consumes single-use baseline_seal)
     let baseline_res = engine
         .execute_inbound_mesh_call(
             "mcp://octopus/doc_extractor",
             Some(&format!("Bearer {}", genuine_token)),
-            &valid_seal,
+            &baseline_seal,
             b"hello data",
         )
         .await;
@@ -1216,8 +1213,8 @@ async fn test_challenge_inbound_mesh_token_verification_adversarial_matrix() {
     // Attack 13.6: Tampered JWT Claims -> MUST FAIL
     let tampered_claims = json!({
         "iss": "http://127.0.0.1:5006",
-        "sub": "http://127.0.0.1:5006/arm/arm_admin/epoch/1",
-        "aud": "agentmesh.local",
+        "sub": "spiffe://agentoctopus.local/arm/arm_admin/epoch/1",
+        "aud": "agentmesh",
         "arm_id": "arm_admin",
         "epoch": 1,
         "role": "Supervisor",

@@ -21,8 +21,27 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, RwLock};
 
+/// Wire format helper accepting both `{"policy_config": {"roles": ..., "bindings": ...}}`
+/// and upstream `google/agentmesh` protojson `{"roles": ..., "bindings": ...}`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum AgentMeshPolicyConfigWire {
+    Wrapped { policy_config: AgentMeshPolicyRoot },
+    Direct(AgentMeshPolicyRoot),
+}
+
+impl From<AgentMeshPolicyConfigWire> for AgentMeshPolicyConfig {
+    fn from(wire: AgentMeshPolicyConfigWire) -> Self {
+        match wire {
+            AgentMeshPolicyConfigWire::Wrapped { policy_config } => Self { policy_config },
+            AgentMeshPolicyConfigWire::Direct(policy_config) => Self { policy_config },
+        }
+    }
+}
+
 /// Root wrapper for Google AgentMesh policy configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "AgentMeshPolicyConfigWire")]
 pub struct AgentMeshPolicyConfig {
     pub policy_config: AgentMeshPolicyRoot,
 }
@@ -62,10 +81,13 @@ impl AgentMeshPolicyConfig {
                     AgentMeshRoleDef {
                         name: "calc_worker".to_string(),
                         allowed_services: vec![
+                            "system://mesh.catalog".to_string(),
                             "mcp://calc".to_string(),
                             "mcp://echo".to_string(),
                             "mcp://echo_headers".to_string(),
                             "mcp://echo-headers".to_string(),
+                            "mcp://octopus/doc_extractor".to_string(),
+                            "mcp://octopus-doc-extractor".to_string(),
                         ],
                         allowed_publish: vec![],
                         allowed_targets: vec!["mcp://calc".to_string()],
@@ -73,6 +95,7 @@ impl AgentMeshPolicyConfig {
                     AgentMeshRoleDef {
                         name: "payroll_admin".to_string(),
                         allowed_services: vec![
+                            "system://mesh.catalog".to_string(),
                             "mcp://calc".to_string(),
                             "mcp://payroll".to_string(),
                             "mcp://echo_headers".to_string(),
@@ -83,10 +106,15 @@ impl AgentMeshPolicyConfig {
                     },
                     AgentMeshRoleDef {
                         name: "octopus_publisher".to_string(),
-                        allowed_services: vec!["mcp://*".to_string()],
+                        allowed_services: vec![
+                            "system://mesh.catalog".to_string(),
+                            "mcp://*".to_string(),
+                        ],
                         allowed_publish: vec![
                             "mcp://octopus/doc_extractor".to_string(),
                             "mcp://octopus/ledger_validator".to_string(),
+                            "mcp://octopus-doc-extractor".to_string(),
+                            "mcp://octopus-ledger-validator".to_string(),
                         ],
                         allowed_targets: vec!["mcp://*".to_string()],
                     },
@@ -95,10 +123,15 @@ impl AgentMeshPolicyConfig {
                     AgentMeshBindingDef {
                         role: "calc_worker".to_string(),
                         members: vec![
+                            "user:spiffe://agentoctopus.local/arm/arm_calc/epoch/*".to_string(),
                             "spiffe://agentoctopus.local/arm/arm_calc/epoch/*".to_string(),
                             "http://127.0.0.1:5005/arm/arm_calc/epoch/*".to_string(),
+                            "http://127.0.0.1:5006/arm/arm_calc/epoch/*".to_string(),
+                            "user:spiffe://agentoctopus.local/arm/1/epoch/*".to_string(),
                             "spiffe://agentoctopus.local/arm/1/epoch/*".to_string(),
                             "http://127.0.0.1:5005/arm/1/epoch/*".to_string(),
+                            "user:spiffe://agentoctopus.local/arm/arm-UntrustedDocIngest-0/epoch/*"
+                                .to_string(),
                             "spiffe://agentoctopus.local/arm/arm-UntrustedDocIngest-0/epoch/*"
                                 .to_string(),
                             "http://127.0.0.1:5005/arm/arm-UntrustedDocIngest-0/epoch/*"
@@ -108,6 +141,7 @@ impl AgentMeshPolicyConfig {
                     AgentMeshBindingDef {
                         role: "payroll_admin".to_string(),
                         members: vec![
+                            "user:spiffe://agentoctopus.local/arm/arm_payroll/epoch/*".to_string(),
                             "spiffe://agentoctopus.local/arm/arm_payroll/epoch/*".to_string(),
                             "http://127.0.0.1:5005/arm/arm_payroll/epoch/*".to_string(),
                         ],
@@ -115,6 +149,8 @@ impl AgentMeshPolicyConfig {
                     AgentMeshBindingDef {
                         role: "octopus_publisher".to_string(),
                         members: vec![
+                            "user:spiffe://agentoctopus.local/arm/arm_publisher/epoch/*"
+                                .to_string(),
                             "spiffe://agentoctopus.local/arm/arm_publisher/epoch/*".to_string(),
                             "http://127.0.0.1:5005/arm/arm_publisher/epoch/*".to_string(),
                         ],
@@ -142,12 +178,16 @@ impl AgentMeshPolicyConfig {
         false
     }
 
-    /// Resolves all role definitions bound to the given SPIFFE ID.
+    /// Resolves all role definitions bound to the given SPIFFE ID or `user:<sub_value>`.
     pub fn resolve_roles_for_subject(&self, spiffe_id: &str) -> Vec<&AgentMeshRoleDef> {
+        let bare = spiffe_id.strip_prefix("user:").unwrap_or(spiffe_id);
+        let user_prefixed = format!("user:{}", bare);
         let mut matching_roles = Vec::new();
         for binding in &self.policy_config.bindings {
             for member_pattern in &binding.members {
-                if matches_pattern(member_pattern, spiffe_id) {
+                if matches_pattern(member_pattern, bare)
+                    || matches_pattern(member_pattern, &user_prefixed)
+                {
                     if let Some(role) = self.policy_config.roles.iter().find(|r| r.name == binding.role) {
                         matching_roles.push(role);
                     }
@@ -291,6 +331,7 @@ pub struct SignedEpochRevocationSignal {
 #[derive(Debug, Clone)]
 pub struct BoundedActiveTokenStore {
     tokens: HashMap<String, ExchangedTokenMetadata>,
+    revoked_tokens: HashSet<String>,
     insertion_order: VecDeque<String>,
     capacity: usize,
 }
@@ -299,6 +340,7 @@ impl BoundedActiveTokenStore {
     pub fn new(capacity: usize) -> Self {
         Self {
             tokens: HashMap::new(),
+            revoked_tokens: HashSet::new(),
             insertion_order: VecDeque::new(),
             capacity: capacity.max(100),
         }
@@ -312,12 +354,27 @@ impl BoundedActiveTokenStore {
                 }
             }
         }
+        self.revoked_tokens.remove(&token_id);
         self.tokens.insert(token_id.clone(), meta);
         self.insertion_order.push_back(token_id);
     }
 
     pub fn get(&self, token_id: &str) -> Option<&ExchangedTokenMetadata> {
         self.tokens.get(token_id)
+    }
+
+    pub fn revoke_token(&mut self, token_id: &str) -> bool {
+        let existed = self.tokens.remove(token_id).is_some();
+        self.insertion_order.retain(|k| k != token_id);
+        if self.revoked_tokens.len() >= self.capacity {
+            self.revoked_tokens.clear();
+        }
+        self.revoked_tokens.insert(token_id.to_string());
+        existed
+    }
+
+    pub fn is_token_revoked(&self, token_id: &str) -> bool {
+        self.revoked_tokens.contains(token_id)
     }
 
     pub fn revoke_arm(&mut self, arm_id: &str) {
@@ -638,6 +695,10 @@ impl AgentMeshServingNode {
         let mut tokens = self.inner.active_tokens.write().await;
         tokens.prune_expired(now);
 
+        if tokens.is_token_revoked(token) {
+            return Err(TokenVerificationError::ArmRevoked);
+        }
+
         let meta = match tokens.get(token) {
             Some(m) => m.clone(),
             None => return Err(TokenVerificationError::NotFoundOrExpired),
@@ -895,39 +956,70 @@ async fn route_request(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> H
         }
     }
 
-    // 2. Dispatch routes
-    let mut resp = match (req.method.as_str(), req.path.as_str()) {
+    // 2. Normalize peer-scoped `/mesh/<peer-id>/<type>/<rest>` paths to `/mesh/<type>/<rest>`
+    let normalized_path = if let Some(after_mesh) = req.path.strip_prefix("/mesh/") {
+        if let Some((first_seg, rest)) = after_mesh.split_once('/') {
+            if !matches!(
+                first_seg,
+                "mcp" | "a2a" | "inference" | "egress" | "echo_headers" | "revoke" | "service"
+            ) && (rest.starts_with("mcp/")
+                || rest.starts_with("a2a/")
+                || rest.starts_with("inference/")
+                || rest.starts_with("egress/"))
+            {
+                format!("/mesh/{}", rest)
+            } else {
+                req.path.clone()
+            }
+        } else {
+            req.path.clone()
+        }
+    } else {
+        req.path.clone()
+    };
+
+    // 3. Dispatch routes
+    let mut resp = match (req.method.as_str(), normalized_path.as_str()) {
         ("POST", "/oauth/token") => handle_token_exchange(req, state).await,
+        ("POST", "/oauth/revoke") => handle_oauth_revoke(req, state).await,
         ("POST", "/mesh/revoke") => handle_signed_revocation(req, state).await,
+        ("GET", "/mesh/service/discover") => handle_service_discover(req, state).await,
         ("POST", "/mesh/mcp/calc") => handle_mcp_calc(req, state).await,
         ("POST", "/mesh/mcp/payroll") => handle_mcp_payroll(req, state).await,
         ("POST", "/mesh/mcp/echo_headers")
         | ("POST", "/mesh/mcp/echo-headers")
-        | ("GET", "/mesh/mcp/echo_headers") => handle_mcp_echo_headers(req, state).await,
-        ("POST", "/mesh/mcp/octopus/doc_extractor") => {
-            handle_published_wasm_tool(
-                req,
-                state,
-                "mcp://octopus/doc_extractor",
-                "wasm_doc_extractor",
-            )
-            .await
+        | ("GET", "/mesh/mcp/echo_headers")
+        | ("GET", "/mesh/mcp/echo-headers") => handle_mcp_echo_headers(req, state).await,
+        ("POST", "/mesh/mcp/octopus/doc_extractor")
+        | ("POST", "/mesh/mcp/octopus-doc-extractor") => {
+            let tool_uri = if normalized_path.ends_with("octopus-doc-extractor") {
+                "mcp://octopus-doc-extractor"
+            } else {
+                "mcp://octopus/doc_extractor"
+            };
+            handle_published_wasm_tool(req, state, tool_uri, "wasm_doc_extractor").await
         }
-        ("POST", "/mesh/mcp/octopus/ledger_validator") => {
-            handle_published_wasm_tool(
-                req,
-                state,
-                "mcp://octopus/ledger_validator",
-                "wasm_ledger_validator",
-            )
-            .await
+        ("POST", "/mesh/mcp/octopus/ledger_validator")
+        | ("POST", "/mesh/mcp/octopus-ledger-validator") => {
+            let tool_uri = if normalized_path.ends_with("octopus-ledger-validator") {
+                "mcp://octopus-ledger-validator"
+            } else {
+                "mcp://octopus/ledger_validator"
+            };
+            handle_published_wasm_tool(req, state, tool_uri, "wasm_ledger_validator").await
         }
         ("GET", "/mesh/echo_headers") | ("POST", "/mesh/echo_headers") => {
             handle_echo_headers(req, state).await
         }
-        ("GET", "/.well-known/jwks.json") | ("GET", "/jwks") => handle_jwks(state).await,
+        ("GET", "/.well-known/jwks.json") | ("GET", "/jwks.json") | ("GET", "/jwks") => {
+            handle_jwks(state).await
+        }
         ("GET", "/.well-known/openid-configuration") => handle_openid_config(state).await,
-        ("GET", "/health") | ("POST", "/health") | ("GET", "/status") => HttpResponse::json(
+        ("GET", "/health")
+        | ("POST", "/health")
+        | ("GET", "/status")
+        | ("GET", "/readyz")
+        | ("GET", "/info") => HttpResponse::json(
             200,
             "OK",
             &serde_json::json!({
@@ -946,6 +1038,104 @@ async fn route_request(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> H
     }
 
     resp
+}
+
+async fn handle_oauth_revoke(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {
+    let token_to_revoke = if req
+        .headers
+        .get("content-type")
+        .map(|ct| ct.starts_with("application/json"))
+        .unwrap_or(false)
+    {
+        serde_json::from_slice::<serde_json::Value>(&req.body)
+            .ok()
+            .and_then(|v| v.get("token").and_then(|t| t.as_str()).map(str::to_string))
+    } else {
+        let body_str = String::from_utf8_lossy(&req.body);
+        body_str.split('&').find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            if k == "token" {
+                Some(percent_decode(v))
+            } else {
+                None
+            }
+        })
+    };
+
+    let Some(token) = token_to_revoke.filter(|t| !t.trim().is_empty()) else {
+        return HttpResponse::error(400, "Bad Request", "invalid_request", "token parameter is required");
+    };
+
+    state.active_tokens.write().await.revoke_token(&token);
+    HttpResponse::json(
+        200,
+        "OK",
+        &serde_json::json!({
+            "status": "revoked"
+        }),
+    )
+}
+
+async fn handle_service_discover(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {
+    let mut filter_type = None;
+    let mut filter_name = None;
+    if let Some(q) = &req.query {
+        for pair in q.split('&') {
+            if let Some((k, v)) = pair.split_once('=') {
+                match k {
+                    "type" => filter_type = Some(percent_decode(v)),
+                    "name" => filter_name = Some(percent_decode(v)),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if filter_type.as_deref().map(|t| t != "mcp" && !t.is_empty()).unwrap_or(false) {
+        return HttpResponse::json(200, "OK", &Vec::<serde_json::Value>::new());
+    }
+
+    let caller_allowed: Option<Vec<String>> = if let Some(auth) = extract_bearer_token(&req) {
+        state
+            .active_tokens
+            .read()
+            .await
+            .get(&auth)
+            .map(|m| m.allowed_services.clone())
+    } else {
+        None
+    };
+
+    let port = state.node_id.rsplit('_').next().unwrap_or("0");
+    let catalog = [
+        ("calc", "mcp://calc", "Calculator MCP service"),
+        ("payroll", "mcp://payroll", "Sensitive payroll MCP service"),
+        ("echo-headers", "mcp://echo-headers", "Header hygiene inspection MCP service"),
+        ("octopus-doc-extractor", "mcp://octopus-doc-extractor", "Wasmtime v49 document extractor"),
+        ("octopus-ledger-validator", "mcp://octopus-ledger-validator", "Wasmtime v49 ledger validator"),
+    ];
+
+    let mut entries = Vec::new();
+    for (srv_name, uri, desc) in catalog {
+        if let Some(ref want_name) = filter_name {
+            if !want_name.is_empty() && want_name != srv_name {
+                continue;
+            }
+        }
+        if let Some(ref allowed) = caller_allowed {
+            if !allowed.iter().any(|pat| matches_pattern(pat, uri)) {
+                continue;
+            }
+        }
+        entries.push(serde_json::json!({
+            "peer_id": state.node_id,
+            "srv_name": srv_name,
+            "srv_description": desc,
+            "local_proxy_url": format!("http://127.0.0.1:{}/mesh/{}/mcp/{}", port, state.node_id, srv_name),
+        }));
+    }
+
+    HttpResponse::json(200, "OK", &entries)
 }
 
 async fn handle_signed_revocation(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {
@@ -1305,7 +1495,7 @@ async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInne
         }
     }
 
-    // 7. Mint Exchanged Mesh Credential
+    // 7. Mint Exchanged Mesh Credential (with optional RFC 8693 `resource` / `scope` narrowing)
     let token_nonce: [u8; 16] = rand::random();
     let access_token = format!("mesh_tok_{}", hex::encode(token_nonce));
     let mut allowed_services = Vec::new();
@@ -1313,6 +1503,30 @@ async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInne
     for r in &bound_roles {
         role_names.push(r.name.clone());
         allowed_services.extend(r.allowed_services.clone());
+    }
+
+    let mut requested_narrowing: Vec<String> = Vec::new();
+    if let Some(ref res_uri) = parsed_req.resource {
+        if !res_uri.trim().is_empty() {
+            requested_narrowing.push(res_uri.trim().to_string());
+        }
+    }
+    if let Some(ref scope_str) = parsed_req.scope {
+        for s in scope_str.split_whitespace() {
+            if !s.trim().is_empty() {
+                requested_narrowing.push(s.trim().to_string());
+            }
+        }
+    }
+    if !requested_narrowing.is_empty() {
+        allowed_services = requested_narrowing
+            .into_iter()
+            .filter(|req_svc| {
+                allowed_services
+                    .iter()
+                    .any(|grant| matches_pattern(grant, req_svc))
+            })
+            .collect();
     }
 
     let token_meta = ExchangedTokenMetadata {
@@ -1353,6 +1567,9 @@ async fn handle_mcp_calc(req: HttpRequest, state: &Arc<ConformanceNodeInner>) ->
     };
 
     let tokens = state.active_tokens.read().await;
+    if tokens.is_token_revoked(&auth) {
+        return HttpResponse::error(403, "Forbidden", "access_denied", "Token was revoked via RFC 7009");
+    }
     let meta = match tokens.get(&auth) {
         Some(m) => m,
         None => return HttpResponse::error(401, "Unauthorized", "invalid_token", "Exchanged token not found or expired"),
@@ -1407,6 +1624,10 @@ async fn handle_mcp_payroll(req: HttpRequest, state: &Arc<ConformanceNodeInner>)
     };
 
     let tokens = state.active_tokens.read().await;
+    if tokens.is_token_revoked(&auth) {
+        state.stats.write().await.mcp_payroll_denials += 1;
+        return HttpResponse::error(403, "Forbidden", "access_denied", "Token was revoked via RFC 7009");
+    }
     let meta = match tokens.get(&auth) {
         Some(m) => m,
         None => return HttpResponse::error(401, "Unauthorized", "invalid_token", "Token invalid"),
@@ -1460,6 +1681,14 @@ async fn handle_mcp_echo_headers(req: HttpRequest, state: &Arc<ConformanceNodeIn
     };
 
     let tokens = state.active_tokens.read().await;
+    if tokens.is_token_revoked(&auth) {
+        return HttpResponse::error(
+            403,
+            "Forbidden",
+            "access_denied",
+            "Token was revoked via RFC 7009",
+        );
+    }
     let meta = match tokens.get(&auth) {
         Some(m) => m.clone(),
         None => {

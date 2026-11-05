@@ -2860,7 +2860,7 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
-        ("GET", "/jwks") => {
+        ("GET", "/jwks") | ("GET", "/jwks.json") => {
             let (status_code, json_body) = handle_agentmesh_jwks(&state);
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -2956,7 +2956,13 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
-        ("POST", p) if p.starts_with("/mesh/mcp/octopus/") => {
+        ("POST", p)
+            if p.starts_with("/mesh/mcp/octopus/")
+                || p == "/mesh/mcp/octopus-doc-extractor"
+                || p == "/mesh/mcp/octopus-ledger-validator"
+                || p == "/mcp/octopus-doc-extractor"
+                || p == "/mcp/octopus-ledger-validator" =>
+        {
             let auth_hdr = extract_header_value(headers_str, "x-mesh-authentication")
                 .or_else(|| extract_header_value(headers_str, "authorization"));
             let seal_hdr = extract_header_value(headers_str, "x-octopus-cage-seal");
