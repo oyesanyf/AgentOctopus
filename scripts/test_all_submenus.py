@@ -56,11 +56,21 @@ BASE_URL = _resolve_active_base_url()
 
 def _fetch_dashboard_token(base_url):
     import re
+    env_tok = os.environ.get("OCTOPUS_TOKEN", "").strip()
+    if env_tok:
+        return env_tok
+    try:
+        with open("logs/.octopus_operator_token", "r", encoding="utf-8") as f:
+            disk_tok = f.read().strip()
+            if disk_tok:
+                return disk_tok
+    except Exception:
+        pass
     try:
         status, html, _ = _http_request(f"{base_url}/", timeout=2.0)
         if status == 200:
             m = re.search(r'<meta\s+name="octopus-token"\s+content="([0-9a-fA-F]+)"', html)
-            if m:
+            if m and m.group(1):
                 return m.group(1)
     except Exception:
         pass
@@ -944,6 +954,116 @@ def run_all_tests():
         results.record_pass(tab, "POST /api/containment/oshoosiclaw-evaluate (5-Policy RL Benchmark & 95% CIs)", f"Backend: {oc_eval.get('environment_backend')}, Superiority: {oc_eval.get('empirical_superiority_verified')}")
     else:
         results.record_fail(tab, "POST /api/containment/oshoosiclaw-evaluate", f"Status {status}, Body: {body[:100]}")
+
+    # =========================================================================
+    # TAB 17: GOOGLE AGENTMESH & WASMTIME V49.0.4 ZERO-SOCKET SANDBOX
+    # =========================================================================
+    tab = "Tab 17: Google AgentMesh & Wasmtime v49.0.4 Sandbox"
+    print(f"\n--- Checking {tab} ---")
+
+    # 17.1 Dashboard DOM presence for Tab 17 interactive controls
+    status, idx_html, _ = http_get("/")
+    if status == 200 and 'id="agentmesh-runtime"' in idx_html and 'btn-am-allow' in idx_html and 'btn-am-ks-trip' in idx_html:
+        results.record_pass(tab, "Tab 17 DOM Controls & Accessible Live Region", "agentmesh-runtime, btn-am-allow, btn-am-ks-trip verified")
+    else:
+        results.record_fail(tab, "Tab 17 DOM Controls", f"Status {status}")
+
+    # 17.2 OpenID Connect Discovery & Merged RFC 7517 JWKS (Ed25519 + P-256 ES256)
+    status_oidc, body_oidc, _ = http_get("/.well-known/openid-configuration")
+    oidc_doc = json.loads(body_oidc) if status_oidc == 200 else {}
+    status_jwks, body_jwks, _ = http_get("/.well-known/jwks.json")
+    jwks_doc = json.loads(body_jwks) if status_jwks == 200 else {}
+    jwks_keys = jwks_doc.get("keys", [])
+    has_p256 = any(k.get("crv") == "P-256" and k.get("alg") == "ES256" for k in jwks_keys)
+    has_ed25519 = any(k.get("crv") == "Ed25519" for k in jwks_keys)
+    if status_oidc == 200 and "ES256" in oidc_doc.get("id_token_signing_alg_values_supported", []) and has_p256 and has_ed25519:
+        results.record_pass(tab, "GET /.well-known/openid-configuration & /.well-known/jwks.json", f"Keys={len(jwks_keys)} (P-256 ES256 + CAGE Ed25519)")
+    else:
+        results.record_fail(tab, "OIDC Discovery & Merged JWKS", f"OIDC={status_oidc}, JWKS={status_jwks}, keys={jwks_keys}")
+
+    # 17.3 AgentMesh Engine & Loopback Serving Node Status
+    status, body, _ = http_get("/api/agentmesh/status")
+    am_st = json.loads(body) if status == 200 else {}
+    if status == 200 and am_st.get("serving_node_active") is True and am_st.get("tier2_confinement_posture"):
+        results.record_pass(tab, "GET /api/agentmesh/status (Loopback PEP + Tier 2 Posture)", f"Port={am_st.get('serving_node_port')}, KID={am_st.get('active_jwks_kid')}")
+    else:
+        results.record_fail(tab, "GET /api/agentmesh/status", f"Status {status}, Body: {body[:120]}")
+
+    # 17.4 Outbound Authorized Wasm Call (arm_calc -> mcp://calc) + Zero-Secret Linear Memory
+    status, body, _ = http_post("/api/agentmesh/wasm-call", {"arm_id": "arm_calc", "target_uri": "mcp://calc", "payload": '{"op":"add","a":21,"b":21}'})
+    am_allow = json.loads(body) if status == 200 else {}
+    if status == 200 and am_allow.get("allowed") is True and am_allow.get("linear_memory_zero_secret_verified") is True:
+        results.record_pass(tab, "POST /api/agentmesh/wasm-call (Authorized arm_calc -> mcp://calc)", f"Fuel={am_allow.get('fuel_consumed')}, ZeroSecretMem=True")
+    else:
+        results.record_fail(tab, "POST /api/agentmesh/wasm-call (Authorized)", f"Status {status}, Body: {body[:140]}")
+
+    # 17.5 Outbound Header Hygiene Verification (arm_calc -> mcp://echo_headers)
+    status, body, _ = http_post("/api/agentmesh/wasm-call", {"arm_id": "arm_calc", "target_uri": "mcp://echo_headers", "payload": '{"probe":"hygiene"}'})
+    am_hdr = json.loads(body) if status == 200 else {}
+    if status == 200 and am_hdr.get("allowed") is True and am_hdr.get("linear_memory_zero_secret_verified") is True and "authorization_stripped" in am_hdr.get("sanitized_response", ""):
+        results.record_pass(tab, "POST /api/agentmesh/wasm-call (Header Hygiene mcp://echo_headers)", "Authorization/Cookie stripped, X-Mesh-Authentication verified")
+    else:
+        results.record_fail(tab, "POST /api/agentmesh/wasm-call (Header Hygiene)", f"Status {status}, Body: {body[:140]}")
+
+    # 17.6 Outbound Unauthorized Wasm Call (arm_rogue -> mcp://payroll -> 403 WASI_ERR_ACCESS_DENIED = -5)
+    status, body, _ = http_post("/api/agentmesh/wasm-call", {"arm_id": "arm_rogue", "target_uri": "mcp://payroll", "payload": '{"exfil":1}'})
+    am_deny = json.loads(body) if body else {}
+    if status == 403 and am_deny.get("allowed") is False and am_deny.get("wasm_exit_code") == -5:
+        results.record_pass(tab, "POST /api/agentmesh/wasm-call (Denied arm_rogue -> mcp://payroll)", f"HTTP 403, Wasm exit={am_deny.get('wasm_exit_code')}")
+    else:
+        results.record_fail(tab, "POST /api/agentmesh/wasm-call (Denied)", f"Status {status}, Body: {body[:140]}")
+
+    # 17.7 Ed25519 Monotonic Mandate Attenuation (200 OK) & Privilege Escalation Rejection (403)
+    st_m_ok, b_m_ok, _ = http_post("/api/agentmesh/mandates/attenuate", {
+        "parent_services": ["mcp://calc", "mcp://echo_headers"],
+        "parent_publish": ["mcp://octopus/doc_extractor"],
+        "child_services": ["mcp://calc"],
+        "child_publish": []
+    })
+    st_m_esc, b_m_esc, _ = http_post("/api/agentmesh/mandates/attenuate", {
+        "parent_services": ["mcp://calc"],
+        "parent_publish": [],
+        "child_services": ["mcp://payroll"],
+        "child_publish": []
+    })
+    if st_m_ok == 200 and st_m_esc == 403:
+        results.record_pass(tab, "POST /api/agentmesh/mandates/attenuate (Ed25519 Subset 200 & Escalation 403)", "Monotonic shrinkage enforced")
+    else:
+        results.record_fail(tab, "POST /api/agentmesh/mandates/attenuate", f"OK={st_m_ok}, Escalation={st_m_esc}")
+
+    # 17.8 Inbound Published Wasm Tool: Missing Auth (401), Valid CAGE Seal (200), & Seal Replay (409)
+    st_unauth, _, _ = _http_request(f"{BASE_URL}/mesh/mcp/octopus/doc_extractor", method="POST", body=b"test", headers={"Host": urllib.parse.urlsplit(BASE_URL).netloc})
+    st_mint, b_mint, _ = http_post("/api/agentmesh/mint-inbound-seal", {"tool_uri": "mcp://octopus/doc_extractor", "payload": "Audit clause 7", "arm_id": "arm_publisher"})
+    minted = json.loads(b_mint) if st_mint == 200 else {}
+    in_headers = {
+        "X-Mesh-Authentication": minted.get("bearer_token", ""),
+        "X-Octopus-Cage-Seal": minted.get("cage_seal_b64", ""),
+        "Content-Type": "application/octet-stream"
+    }
+    st_in_1, b_in_1, _ = _http_request(f"{BASE_URL}/mesh/mcp/octopus/doc_extractor", method="POST", body=b"Audit clause 7", headers=in_headers)
+    st_in_2, b_in_2, _ = _http_request(f"{BASE_URL}/mesh/mcp/octopus/doc_extractor", method="POST", body=b"Audit clause 7", headers=in_headers)
+    if st_unauth == 401 and st_in_1 == 200 and st_in_2 == 409:
+        results.record_pass(tab, "POST /mesh/mcp/octopus/doc_extractor (Unauth 401, CAGE Wasm 200, Replay 409)", "Single-use CAGE seal & Wasm execution verified")
+    else:
+        results.record_fail(tab, "POST /mesh/mcp/octopus/doc_extractor", f"Unauth={st_unauth}, First={st_in_1} ({b_in_1[:80]}), Replay={st_in_2} ({b_in_2[:80]})")
+
+    # 17.9 Sub-Millisecond KillSwitch Autotomy Trip (<1ms), Post-Trip Fail-Closed (403), & Reset (200)
+    st_ks, b_ks, _ = http_post("/api/agentmesh/killswitch/trip", {"arm_id": "arm_calc"})
+    ks_res = json.loads(b_ks) if st_ks == 200 else {}
+    st_post_ks, b_post_ks, _ = http_post("/api/agentmesh/wasm-call", {"arm_id": "arm_calc", "target_uri": "mcp://calc", "payload": "{}"})
+    st_rst, b_rst, _ = http_post("/api/agentmesh/killswitch/reset", {})
+    rst_res = json.loads(b_rst) if st_rst == 200 else {}
+    if (
+        st_ks == 200
+        and ks_res.get("sub_millisecond_verified") is True
+        and st_post_ks == 403
+        and st_rst == 200
+        and rst_res.get("killswitch_tripped") is False
+        and rst_res.get("generation_epoch", 0) >= 1
+    ):
+        results.record_pass(tab, "POST /api/agentmesh/killswitch/{trip,reset} (<1ms Autotomy + Epoch Increment)", f"Latency={ks_res.get('latency_us', 0):.2f} us, NewEpoch={rst_res.get('generation_epoch')}")
+    else:
+        results.record_fail(tab, "POST /api/agentmesh/killswitch/{trip,reset}", f"Trip={st_ks} ({b_ks[:80]}), PostKS={st_post_ks}, Reset={st_rst}")
 
     # =========================================================================
     # SUMMARY REPORT

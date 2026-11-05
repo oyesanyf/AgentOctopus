@@ -180,15 +180,13 @@ pub fn validate_mesh_uri(uri: &str) -> Result<(), MandateError> {
         }
     }
 
-    // Case B: Host with optional :port
+    // Case B: Host with explicit :port is strictly forbidden in logical AgentMesh URIs
     let host = authority.split(':').next().unwrap_or(authority);
-    if let Some(port_part) = authority.strip_prefix(host).and_then(|s| s.strip_prefix(':')) {
-        if port_part.is_empty() || !port_part.chars().all(|c| c.is_ascii_digit()) || port_part.parse::<u16>().is_err() {
-            return Err(MandateError::ProhibitedTarget {
-                uri: uri.to_string(),
-                reason: "Malformed port in URI".to_string(),
-            });
-        }
+    if authority.contains(':') {
+        return Err(MandateError::ProhibitedTarget {
+            uri: uri.to_string(),
+            reason: "Explicit port numbers are forbidden in logical AgentMesh URIs".to_string(),
+        });
     }
 
     // Mathematical IPv4 check

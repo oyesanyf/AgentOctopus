@@ -55,6 +55,9 @@ pub const TOKEN_EXEMPT_PATHS: &[&str] = &[
     "/health",
     "/api/health",
     "/.well-known/jwks.json",
+    "/.well-known/openid-configuration",
+    "/jwks",
+    "/oauth/token",
     "/governance/ingest-policy",
     "/governance/policy-version",
     "/governance/validate-action",
@@ -69,6 +72,17 @@ pub const TOKEN_EXEMPT_PATHS: &[&str] = &[
     "/api/cage/proof-status",
     "/api/cage/trace-conformance",
 ];
+
+/// Returns true if the path belongs to the AgentMesh OIDC discovery, token exchange, or inbound MCP surface.
+/// Inbound `/mesh/*` routes enforce their own `X-Mesh-Authentication` JWT/token + `X-Octopus-Cage-Seal` verification.
+pub fn is_mesh_path(path: &str) -> bool {
+    let trimmed = path.trim_end_matches('/');
+    trimmed == "/mesh"
+        || trimmed.starts_with("/mesh/")
+        || trimmed == "/oauth/token"
+        || trimmed == "/.well-known/openid-configuration"
+        || trimmed == "/jwks"
+}
 
 /// Returns true if the path belongs to the CAGE Substrate Contract v1.0 interface.
 pub fn is_cage_substrate_path(path: &str) -> bool {
@@ -92,6 +106,7 @@ pub fn is_token_exempt_path(path: &str) -> bool {
     TOKEN_EXEMPT_PATHS.contains(&path)
         || TOKEN_EXEMPT_PATHS.contains(&trimmed)
         || is_cage_substrate_path(path)
+        || is_mesh_path(path)
 }
 
 /// Extracts a Bearer token from the `Authorization` header, if present.
@@ -568,5 +583,38 @@ mod tests {
             authorize_request(&req("POST", "/api/run-rust-tests", h), "mock_token"),
             Err(GuardRejection::Unauthorized)
         );
+        let h_am = "GET /api/agentmesh/status HTTP/1.1\r\nHost: 127.0.0.1:5005";
+        assert_eq!(
+            authorize_request(&req("GET", "/api/agentmesh/status", h_am), "mock_token"),
+            Err(GuardRejection::Unauthorized)
+        );
+    }
+
+    #[test]
+    fn accepts_agentmesh_oidc_and_inbound_mcp_loopback_while_blocking_rebinding() {
+        for (m, p) in [
+            ("GET", "/.well-known/openid-configuration"),
+            ("GET", "/jwks"),
+            ("POST", "/oauth/token"),
+            ("POST", "/mesh/mcp/octopus/doc_extractor"),
+        ] {
+            let h = format!("{} {} HTTP/1.1\r\nHost: 127.0.0.1:5005", m, p);
+            assert!(
+                authorize_request(&req(m, p, &h), "mock_token").is_ok(),
+                "{} {} should pass loopback guard",
+                m,
+                p
+            );
+        }
+
+        let bad_host =
+            "POST /mesh/mcp/octopus/doc_extractor HTTP/1.1\r\nHost: rebind.attacker.example:5005";
+        assert!(matches!(
+            authorize_request(
+                &req("POST", "/mesh/mcp/octopus/doc_extractor", bad_host),
+                "mock_token"
+            ),
+            Err(GuardRejection::BadHost(_))
+        ));
     }
 }

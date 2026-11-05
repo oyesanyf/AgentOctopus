@@ -96,8 +96,12 @@ impl AgentMeshPolicyConfig {
                         role: "calc_worker".to_string(),
                         members: vec![
                             "spiffe://agentoctopus.local/arm/arm_calc/epoch/*".to_string(),
+                            "http://127.0.0.1:5005/arm/arm_calc/epoch/*".to_string(),
                             "spiffe://agentoctopus.local/arm/1/epoch/*".to_string(),
+                            "http://127.0.0.1:5005/arm/1/epoch/*".to_string(),
                             "spiffe://agentoctopus.local/arm/arm-UntrustedDocIngest-0/epoch/*"
+                                .to_string(),
+                            "http://127.0.0.1:5005/arm/arm-UntrustedDocIngest-0/epoch/*"
                                 .to_string(),
                         ],
                     },
@@ -105,12 +109,14 @@ impl AgentMeshPolicyConfig {
                         role: "payroll_admin".to_string(),
                         members: vec![
                             "spiffe://agentoctopus.local/arm/arm_payroll/epoch/*".to_string(),
+                            "http://127.0.0.1:5005/arm/arm_payroll/epoch/*".to_string(),
                         ],
                     },
                     AgentMeshBindingDef {
                         role: "octopus_publisher".to_string(),
                         members: vec![
                             "spiffe://agentoctopus.local/arm/arm_publisher/epoch/*".to_string(),
+                            "http://127.0.0.1:5005/arm/arm_publisher/epoch/*".to_string(),
                         ],
                     },
                 ],

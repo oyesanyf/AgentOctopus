@@ -711,6 +711,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
   <div class="nav-tab" onclick="switchTab('openevolve-view')">🧬 OpenEvolve (Arm 109)</div>
   <div class="nav-tab" onclick="switchTab('dream-rsi-view')">💭 Open Dream-RSI (Arm 110)</div>
   <div class="nav-tab" onclick="switchTab('harness2-view')">🕸️ Harness² (Arm 111)</div>
+  <div class="nav-tab" onclick="switchTab('agentmesh-runtime')">🌐 AgentMesh &amp; Wasm Sandbox</div>
   <div class="nav-tab" onclick="switchTab('user-guide')">📖 Docs &amp; Integration Guide</div>
 </nav>
 
@@ -3405,6 +3406,8 @@ with urllib.request.urlopen(req) as resp:
         </table>
       </div>
     </div>
+  </div>
+
   <!-- TAB 13: OPENEVOLVE CODE OPTIMIZER (ARM 109) -->
   <div id="openevolve-view" class="tab-content">
     <nav class="breadcrumb-bar" aria-label="Breadcrumb">
@@ -3991,6 +3994,157 @@ with urllib.request.urlopen(req) as resp:
     </div>
   </div>
 
+  <!-- TAB 17: GOOGLE AGENTMESH X WASMTIME V49.0.4 SANDBOX RUNTIME -->
+  <div id="agentmesh-runtime" class="tab-content">
+    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+      <div class="breadcrumb-trail">
+        <a class="breadcrumb-link" href="javascript:void(0)" onclick="switchTab('test-runner')"><span>🏠</span> Dashboard</a>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-current">🌐 Google AgentMesh &amp; Wasmtime v49.0.4 Zero-Socket Sandbox</span>
+      </div>
+    </nav>
+
+    <div class="card" style="border-left: 4px solid #38bdf8;">
+      <div class="card-header" style="flex-wrap: wrap; gap: 0.75rem;">
+        <div>
+          <h2 style="margin-bottom: 0.25rem;">🌐 Google AgentMesh × Wasmtime v49.0.4 Zero-Socket Execution Substrate</h2>
+          <p style="margin: 0; font-size: 0.84rem; color: #94a3b8;">
+            Out-of-sandbox RFC 7515 <code>ES256</code> OIDC Workload Identity + RFC 8693 Token Exchange PEP Vault + 7-Tier CAGE Single-Use Seals + Sub-Millisecond KillSwitch Epoch Autotomy.
+          </p>
+        </div>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <button class="btn" onclick="fetchAgentMeshStatus(true)" style="background: rgba(56,189,248,0.18); border: 1px solid #0284c7; color: #e0f2fe;">🔄 Refresh Telemetry</button>
+          <a href="/.well-known/openid-configuration" target="_blank" rel="noopener" class="btn" style="background: rgba(168,85,247,0.18); border: 1px solid #9333ea; color: #f3e8ff; text-decoration: none;">🪪 OIDC Discovery</a>
+          <a href="/jwks" target="_blank" rel="noopener" class="btn" style="background: rgba(34,197,94,0.18); border: 1px solid #16a34a; color: #dcfce7; text-decoration: none;">🔑 ES256 P-256 JWKS</a>
+        </div>
+      </div>
+
+      <div id="am-live-banner" role="status" aria-live="polite" style="margin: 0.75rem 0 1rem 0; padding: 0.75rem 1rem; border-radius: 8px; background: rgba(15,23,42,0.85); border: 1px solid #334155; font-size: 0.86rem; color: #e2e8f0;">
+        <strong>Posture Ready:</strong> Embedded AgentMesh Serving Node + Wasmtime v49.0.4 Zero-Socket Pore (<code>octopus_wasi::mesh_call</code>) armed with zero credentials inside guest linear memory.
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 0.75rem;">
+        <div style="background: rgba(15,23,42,0.7); border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem;">
+          <div style="font-size: 0.74rem; color: #94a3b8; text-transform: uppercase;">Engine &amp; Node State</div>
+          <div id="am-kpi-state" style="font-size: 1.05rem; font-weight: 700; color: #4ade80; margin-top: 0.25rem;">RUNNING</div>
+          <div id="am-kpi-port" style="font-size: 0.75rem; color: #64748b; margin-top: 0.15rem;">Loopback PEP Bound</div>
+        </div>
+        <div style="background: rgba(15,23,42,0.7); border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem;">
+          <div style="font-size: 0.74rem; color: #94a3b8; text-transform: uppercase;">Active ES256 JWK KID</div>
+          <div id="am-kpi-kid" style="font-size: 0.9rem; font-family: monospace; font-weight: 600; color: #38bdf8; margin-top: 0.25rem; word-break: break-all;">loading...</div>
+          <div style="font-size: 0.75rem; color: #64748b; margin-top: 0.15rem;">RFC 7515 P-256 (IEEE P1363)</div>
+        </div>
+        <div style="background: rgba(15,23,42,0.7); border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem;">
+          <div style="font-size: 0.74rem; color: #94a3b8; text-transform: uppercase;">Generation Epoch</div>
+          <div id="am-kpi-epoch" style="font-size: 1.15rem; font-weight: 700; color: #c084fc; margin-top: 0.25rem;">0</div>
+          <div id="am-kpi-vault" style="font-size: 0.75rem; color: #64748b; margin-top: 0.15rem;">Host Vault Tokens: 0</div>
+        </div>
+        <div style="background: rgba(15,23,42,0.7); border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem;">
+          <div style="font-size: 0.74rem; color: #94a3b8; text-transform: uppercase;">KillSwitch Eviction</div>
+          <div id="am-kpi-latency" style="font-size: 1.1rem; font-weight: 700; color: #fbbf24; margin-top: 0.25rem;">&lt; 1,000 µs SLA</div>
+          <div id="am-kpi-ks-state" style="font-size: 0.75rem; color: #64748b; margin-top: 0.15rem;">Autotomy: ARMED</div>
+        </div>
+        <div style="background: rgba(15,23,42,0.7); border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem;">
+          <div style="font-size: 0.74rem; color: #94a3b8; text-transform: uppercase;">Outbound / Inbound Calls</div>
+          <div id="am-kpi-calls" style="font-size: 1.05rem; font-weight: 700; color: #f8fafc; margin-top: 0.25rem;">0 allow / 0 deny / 0 in</div>
+          <div style="font-size: 0.75rem; color: #4ade80; margin-top: 0.15rem;">Linear Memory Secrets: 0 Bytes</div>
+        </div>
+      </div>
+
+      <div style="margin-top: 0.75rem; font-size: 0.78rem; color: #94a3b8;">
+        <strong>Tier 2 Native Host Confinement Parity:</strong> <code id="am-tier2-posture" style="color: #7dd3fc;">loading...</code>
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 1rem;">
+      <div class="card">
+        <div class="card-header">
+          <h2>🛡️ Outbound Sandbox → Mesh (<code>octopus_wasi::mesh_call</code>)</h2>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.7rem;">
+          <div>
+            <label for="am-arm-select" style="display: block; font-size: 0.8rem; font-weight: 600; color: #cbd5e1; margin-bottom: 0.25rem;">Sandboxed Workload Identity (SPIFFE Arm)</label>
+            <select id="am-arm-select" style="width: 100%; font-size: 0.84rem;">
+              <option value="arm_calc">arm_calc — Authorized Caller (spiffe://octopus.local/arm/arm_calc)</option>
+              <option value="arm_rogue">arm_rogue — Untrusted Limb (spiffe://octopus.local/arm/arm_rogue)</option>
+            </select>
+          </div>
+          <div>
+            <label for="am-target-uri" style="display: block; font-size: 0.8rem; font-weight: 600; color: #cbd5e1; margin-bottom: 0.25rem;">Named Mesh Target URI (Raw IP/Hostnames Blocked)</label>
+            <input type="text" id="am-target-uri" value="mcp://calc" autocorrect="off" autocapitalize="off" spellcheck="false" style="width: 100%; font-family: monospace; font-size: 0.84rem;" />
+          </div>
+          <div>
+            <label for="am-wasm-payload" style="display: block; font-size: 0.8rem; font-weight: 600; color: #cbd5e1; margin-bottom: 0.25rem;">Wasm Guest Request Payload (UTF-8 / JSON)</label>
+            <input type="text" id="am-wasm-payload" value="{&quot;op&quot;:&quot;add&quot;,&quot;a&quot;:21,&quot;b&quot;:21}" autocorrect="off" autocapitalize="off" spellcheck="false" style="width: 100%; font-family: monospace; font-size: 0.84rem;" />
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.25rem;">
+            <button id="btn-am-allow" class="btn" onclick="runAgentMeshPreset('allowed')" style="background: rgba(34,197,94,0.2); border: 1px solid #16a34a; color: #dcfce7;">✅ Authorized Call (mcp://calc)</button>
+            <button id="btn-am-headers" class="btn" onclick="runAgentMeshPreset('headers')" style="background: rgba(56,189,248,0.2); border: 1px solid #0284c7; color: #e0f2fe;">🧼 Header Hygiene (mcp://echo_headers)</button>
+            <button id="btn-am-deny" class="btn" onclick="runAgentMeshPreset('denied')" style="background: rgba(239,68,68,0.2); border: 1px solid #dc2626; color: #fee2e2;">🚫 Unauthorized Call (arm_rogue → mcp://payroll)</button>
+            <button id="btn-am-custom" class="btn" onclick="executeAgentMeshWasmCall()" style="background: rgba(148,163,184,0.2); border: 1px solid #64748b; color: #f1f5f9;">▶ Execute Custom Wasm Call</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2>⚡ KillSwitch Autotomy, Inbound CAGE Seal &amp; Ed25519 Mandates</h2>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+          <div style="padding: 0.7rem; background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.35); border-radius: 8px;">
+            <div style="font-size: 0.82rem; font-weight: 600; color: #fca5a5; margin-bottom: 0.35rem;">1. Sub-Millisecond Cephalopod Autotomy (Wasm Epoch Trap + Vault Purge)</div>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+              <button id="btn-am-ks-trip" class="btn" onclick="tripAgentMeshKillSwitch()" style="background: rgba(239,68,68,0.25); border: 1px solid #ef4444; color: #fee2e2;">🚨 Trip KillSwitch Autotomy (&lt;1ms)</button>
+              <button id="btn-am-ks-reset" class="btn" onclick="resetAgentMeshKillSwitch()" style="background: rgba(34,197,94,0.2); border: 1px solid #16a34a; color: #dcfce7;">♻️ Reset KillSwitch (Next Epoch)</button>
+            </div>
+          </div>
+
+          <div style="padding: 0.7rem; background: rgba(56,189,248,0.08); border: 1px solid rgba(56,189,248,0.3); border-radius: 8px;">
+            <label for="am-inbound-uri" style="display: block; font-size: 0.82rem; font-weight: 600; color: #7dd3fc; margin-bottom: 0.35rem;">2. Inbound Mesh → Published Wasm Tool (Single-Use CAGE Seal + Replay Defense)</label>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+              <input type="text" id="am-inbound-uri" value="/mesh/mcp/octopus/doc_extractor" autocorrect="off" autocapitalize="off" spellcheck="false" style="flex: 1; min-width: 220px; font-family: monospace; font-size: 0.8rem;" />
+              <button id="btn-am-inbound" class="btn" onclick="runInboundCageWasmFlow(false)" style="background: rgba(56,189,248,0.22); border: 1px solid #0284c7; color: #e0f2fe;">🔏 Execute Inbound Wasm (200 OK)</button>
+              <button id="btn-am-inbound-replay" class="btn" onclick="runInboundCageWasmFlow(true)" style="background: rgba(245,158,11,0.22); border: 1px solid #d97706; color: #fef3c7;">🔁 Test Seal Replay (409)</button>
+            </div>
+          </div>
+
+          <div style="padding: 0.7rem; background: rgba(168,85,247,0.08); border: 1px solid rgba(168,85,247,0.3); border-radius: 8px;">
+            <label for="am-mandate-child-service" style="display: block; font-size: 0.82rem; font-weight: 600; color: #d8b4fe; margin-bottom: 0.35rem;">3. Ed25519 Monotonic Capability Mandate Attenuation</label>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+              <input type="text" id="am-mandate-child-service" value="mcp://calc" autocorrect="off" autocapitalize="off" spellcheck="false" style="flex: 1; min-width: 180px; font-family: monospace; font-size: 0.8rem;" />
+              <button id="btn-am-mandate-ok" class="btn" onclick="verifyAgentMeshMandate(false)" style="background: rgba(168,85,247,0.22); border: 1px solid #9333ea; color: #f3e8ff;">⛓️ Attenuate Subset (200)</button>
+              <button id="btn-am-mandate-esc" class="btn" onclick="verifyAgentMeshMandate(true)" style="background: rgba(239,68,68,0.2); border: 1px solid #dc2626; color: #fee2e2;">🛑 Escalation Probe (403)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>📊 Live Sandbox &amp; Mesh Verification Receipts</h2>
+      </div>
+      <div style="overflow-x: auto; margin-bottom: 0.85rem;">
+        <table class="test-table" style="font-size: 0.8rem;">
+          <thead>
+            <tr>
+              <th scope="col">Direction / Workflow</th>
+              <th scope="col">Principal / Arm</th>
+              <th scope="col">Target URI</th>
+              <th scope="col">HTTP / Wasm Verdict</th>
+              <th scope="col">Fuel / Latency</th>
+              <th scope="col">Zero-Secret Memory</th>
+            </tr>
+          </thead>
+          <tbody id="am-trace-tbody">
+            <tr><td colspan="6" style="text-align: center; color: #94a3b8;">Execute an outbound Wasm call, inbound CAGE tool actuation, or KillSwitch autotomy test above to record live cryptographic telemetry.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <pre id="am-receipt-json" style="margin: 0; padding: 0.85rem; background: #090d16; border: 1px solid #1e293b; border-radius: 8px; font-size: 0.78rem; color: #93c5fd; max-height: 280px; overflow: auto;">// Cryptographic execution receipt JSON will render here</pre>
+    </div>
+  </div>
+
 </main>
 
 <script>
@@ -4151,6 +4305,7 @@ with urllib.request.urlopen(req) as resp:
         const onclickAttr = t.getAttribute('onclick') || '';
         if (onclickAttr.includes(`'${tabId}'`) || onclickAttr.includes(`"${tabId}"`)) {
           t.classList.add('active');
+          try { t.scrollIntoView({ inline: 'center', block: 'nearest' }); } catch (_) {}
         }
       });
 
@@ -4181,6 +4336,8 @@ with urllib.request.urlopen(req) as resp:
         fetchDreamRsiData(true);
       } else if (tabId === 'harness2-view') {
         fetchHarness2Data(true);
+      } else if (tabId === 'agentmesh-runtime') {
+        fetchAgentMeshStatus(true);
       } else if (tabId === 'universal-killswitch') {
         fetchKillSwitchStatus(true);
         loadUniversalProtocolCatalog();
@@ -8341,6 +8498,334 @@ def exfiltrate_credentials():
   setInterval(fetchDreamRsiData, 5000);
   setInterval(fetchHarness2Data, 5000);
   setInterval(fetchKillSwitchStatus, 3000);
+  // =========================================================================
+  // TAB 17: GOOGLE AGENTMESH X WASMTIME V49.0.4 SANDBOX RUNTIME FUNCTIONS
+  // =========================================================================
+  function setAgentMeshBanner(tone, title, detail) {
+    const banner = document.getElementById('am-live-banner');
+    if (!banner) return;
+    const palette = {
+      ok: { bg: 'rgba(20,83,45,0.45)', border: '#22c55e', color: '#dcfce7' },
+      deny: { bg: 'rgba(127,29,29,0.5)', border: '#ef4444', color: '#fee2e2' },
+      warn: { bg: 'rgba(120,53,15,0.5)', border: '#f59e0b', color: '#fef3c7' },
+      info: { bg: 'rgba(15,23,42,0.85)', border: '#38bdf8', color: '#e0f2fe' }
+    }[tone] || { bg: 'rgba(15,23,42,0.85)', border: '#334155', color: '#e2e8f0' };
+    banner.style.background = palette.bg;
+    banner.style.borderColor = palette.border;
+    banner.style.color = palette.color;
+    banner.innerHTML = '<strong>' + escapeHtml(title) + ':</strong> ' + escapeHtml(detail);
+  }
+
+  function appendAgentMeshTraceRow(direction, principal, uri, verdictText, isAllowed, metricText, zeroSecretText) {
+    const tbody = document.getElementById('am-trace-tbody');
+    if (!tbody) return;
+    if (tbody.children.length === 1 && tbody.children[0].children.length === 1) {
+      tbody.innerHTML = '';
+    }
+    const tr = document.createElement('tr');
+    const badgeStyle = isAllowed
+      ? 'background: rgba(34,197,94,0.2); color: #86efac; border: 1px solid #16a34a;'
+      : 'background: rgba(239,68,68,0.22); color: #fca5a5; border: 1px solid #ef4444;';
+    tr.innerHTML =
+      '<td>' + escapeHtml(direction) + '</td>' +
+      '<td><code>' + escapeHtml(principal) + '</code></td>' +
+      '<td><code>' + escapeHtml(uri) + '</code></td>' +
+      '<td><span class="badge" style="' + badgeStyle + '">' + escapeHtml(verdictText) + '</span></td>' +
+      '<td style="font-family: monospace;">' + escapeHtml(metricText) + '</td>' +
+      '<td style="color: #4ade80; font-weight: 600;">' + escapeHtml(zeroSecretText) + '</td>';
+    tbody.insertBefore(tr, tbody.firstChild);
+    while (tbody.children.length > 15) {
+      tbody.removeChild(tbody.lastChild);
+    }
+  }
+
+  async function fetchAgentMeshStatus(manual) {
+    try {
+      const resp = await fetch('/api/agentmesh/status');
+      if (!resp.ok) return;
+      const st = await resp.json();
+      const elState = document.getElementById('am-kpi-state');
+      const elPort = document.getElementById('am-kpi-port');
+      const elKid = document.getElementById('am-kpi-kid');
+      const elEpoch = document.getElementById('am-kpi-epoch');
+      const elVault = document.getElementById('am-kpi-vault');
+      const elLatency = document.getElementById('am-kpi-latency');
+      const elKs = document.getElementById('am-kpi-ks-state');
+      const elCalls = document.getElementById('am-kpi-calls');
+      const elTier2 = document.getElementById('am-tier2-posture');
+
+      if (elState) {
+        elState.textContent = st.engine_state || 'RUNNING';
+        elState.style.color = st.killswitch_tripped ? '#f87171' : '#4ade80';
+      }
+      if (elPort) {
+        elPort.textContent = st.serving_node_port
+          ? ('Loopback Node 127.0.0.1:' + st.serving_node_port)
+          : 'External / Unbound';
+      }
+      if (elKid) elKid.textContent = st.active_jwks_kid || 'n/a';
+      if (elEpoch) elEpoch.textContent = String(st.generation_epoch ?? 0);
+      if (elVault) elVault.textContent = 'Host Vault Tokens: ' + String(st.cached_credentials_count ?? 0);
+      if (elLatency) {
+        if (st.last_revocation_latency_ns && st.last_revocation_latency_ns > 0) {
+          elLatency.textContent = (st.last_revocation_latency_ns / 1000.0).toFixed(2) + ' µs';
+        } else {
+          elLatency.textContent = '< 1,000 µs SLA';
+        }
+      }
+      if (elKs) {
+        elKs.textContent = st.killswitch_tripped ? 'Autotomy: SEVERED (FAIL-CLOSED)' : 'Autotomy: ARMED';
+        elKs.style.color = st.killswitch_tripped ? '#fca5a5' : '#94a3b8';
+      }
+      if (elCalls) {
+        elCalls.textContent =
+          (st.successful_outbound_calls ?? 0) + ' allow / ' +
+          (st.denied_outbound_calls ?? 0) + ' deny / ' +
+          (st.total_inbound_calls ?? 0) + ' in';
+      }
+      if (elTier2 && st.tier2_confinement_posture) {
+        elTier2.textContent = st.tier2_confinement_posture;
+      }
+    } catch (_) {}
+  }
+
+  async function runAgentMeshPreset(kind) {
+    const armEl = document.getElementById('am-arm-select');
+    const uriEl = document.getElementById('am-target-uri');
+    const payEl = document.getElementById('am-wasm-payload');
+    if (kind === 'allowed') {
+      if (armEl) armEl.value = 'arm_calc';
+      if (uriEl) uriEl.value = 'mcp://calc';
+      if (payEl) payEl.value = '{"op":"add","a":21,"b":21}';
+    } else if (kind === 'headers') {
+      if (armEl) armEl.value = 'arm_calc';
+      if (uriEl) uriEl.value = 'mcp://echo_headers';
+      if (payEl) payEl.value = '{"probe":"header_hygiene"}';
+    } else if (kind === 'denied') {
+      if (armEl) armEl.value = 'arm_rogue';
+      if (uriEl) uriEl.value = 'mcp://payroll';
+      if (payEl) payEl.value = '{"exfiltrate":"salaries"}';
+    }
+    await executeAgentMeshWasmCall();
+  }
+
+  async function executeAgentMeshWasmCall() {
+    const arm_id = (document.getElementById('am-arm-select') || {}).value || 'arm_calc';
+    const target_uri = (document.getElementById('am-target-uri') || {}).value || 'mcp://calc';
+    const payload = (document.getElementById('am-wasm-payload') || {}).value || '{}';
+    const pre = document.getElementById('am-receipt-json');
+    try {
+      const resp = await fetch('/api/agentmesh/wasm-call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ arm_id, target_uri, payload })
+      });
+      const data = await resp.json();
+      if (pre) pre.textContent = JSON.stringify(data, null, 2);
+      const allowed = resp.status === 200 && data.allowed === true;
+      const fuelText = (data.fuel_consumed !== undefined)
+        ? (data.fuel_consumed + ' fuel / ' + (data.execution_us ?? 0) + ' µs')
+        : ('HTTP ' + resp.status);
+      const zeroSec = data.linear_memory_zero_secret_verified
+        ? 'VERIFIED (0 Secrets)'
+        : (data.code === 'LIMB_KILLED_AUTOTOMY' ? 'TRAP BEFORE EXEC' : 'CHECKED');
+      appendAgentMeshTraceRow(
+        'Sandbox → Mesh (Wasm)',
+        arm_id + '@epoch' + (data.generation_epoch ?? '?'),
+        target_uri,
+        allowed ? ('200 OK (exit=' + data.wasm_exit_code + ')') : ('403 DENIED (' + (data.code || ('exit=' + data.wasm_exit_code)) + ')'),
+        allowed,
+        fuelText,
+        zeroSec
+      );
+      if (allowed) {
+        setAgentMeshBanner('ok', 'Authorized Wasm Mesh Call Succeeded', arm_id + ' invoked ' + target_uri + ' via out-of-sandbox RFC 8693 token exchange; zero secrets in guest linear memory.');
+      } else {
+        setAgentMeshBanner('deny', 'Fail-Closed Sandbox Mesh Denial', arm_id + ' blocked from ' + target_uri + ' (' + (data.code || 'WASI_ERR_ACCESS_DENIED = -5') + ').');
+      }
+      await fetchAgentMeshStatus(false);
+    } catch (e) {
+      setAgentMeshBanner('deny', 'Request Fault', String(e));
+    }
+  }
+
+  async function tripAgentMeshKillSwitch() {
+    const pre = document.getElementById('am-receipt-json');
+    try {
+      const resp = await fetch('/api/agentmesh/killswitch/trip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ arm_id: 'arm_calc' })
+      });
+      const data = await resp.json();
+      if (pre) pre.textContent = JSON.stringify(data, null, 2);
+      const us = (data.latency_us !== undefined) ? data.latency_us.toFixed(2) + ' µs' : (data.latency_ns + ' ns');
+      appendAgentMeshTraceRow(
+        'KillSwitch Autotomy',
+        'arm_calc',
+        'wasmtime::Engine::increment_epoch()',
+        'SEVERED (epoch → ' + data.generation_epoch + ')',
+        false,
+        us,
+        'VAULT PURGED (0 Cached)'
+      );
+      setAgentMeshBanner('warn', 'Sub-Millisecond KillSwitch Autotomy Tripped', 'Wasmtime epoch incremented and host PEP token vault purged in ' + us + ' (< 1,000 µs SLA).');
+      await fetchAgentMeshStatus(false);
+    } catch (e) {
+      setAgentMeshBanner('deny', 'KillSwitch Fault', String(e));
+    }
+  }
+
+  async function resetAgentMeshKillSwitch() {
+    const pre = document.getElementById('am-receipt-json');
+    try {
+      const resp = await fetch('/api/agentmesh/killswitch/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      });
+      const data = await resp.json();
+      if (pre) pre.textContent = JSON.stringify(data, null, 2);
+      setAgentMeshBanner('info', 'KillSwitch Rearmed on New Epoch', 'Operational under monotonic generation epoch ' + (data.generation_epoch ?? 0) + '.');
+      await fetchAgentMeshStatus(false);
+    } catch (e) {
+      setAgentMeshBanner('deny', 'Reset Fault', String(e));
+    }
+  }
+
+  async function runInboundCageWasmFlow(testReplay) {
+    const pre = document.getElementById('am-receipt-json');
+    const pathInput = (document.getElementById('am-inbound-uri') || {}).value || '/mesh/mcp/octopus/doc_extractor';
+    const toolPath = pathInput.startsWith('/mesh/') ? pathInput : '/mesh/mcp/octopus/doc_extractor';
+    const payload = 'Audit quarterly vendor contract clauses for zero-trust compliance.';
+    try {
+      const mintResp = await fetch('/api/agentmesh/mint-inbound-seal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool_uri: 'mcp://octopus/doc_extractor', payload, arm_id: 'arm_publisher' })
+      });
+      const minted = await mintResp.json();
+      if (!mintResp.ok) {
+        if (pre) pre.textContent = JSON.stringify(minted, null, 2);
+        return;
+      }
+
+      const firstResp = await fetch(toolPath, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Mesh-Authentication': minted.bearer_token,
+          'X-Octopus-Cage-Seal': minted.cage_seal_b64
+        },
+        body: payload
+      });
+      const firstData = await firstResp.json();
+
+      if (!testReplay) {
+        if (pre) pre.textContent = JSON.stringify(firstData, null, 2);
+        appendAgentMeshTraceRow(
+          'Mesh → Sandbox (Inbound)',
+          'arm_publisher',
+          toolPath,
+          firstResp.status + (firstResp.status === 200 ? ' OK (CAGE Seal Consumed)' : ' DENIED'),
+          firstResp.status === 200,
+          (firstData.fuel_consumed ?? 0) + ' fuel',
+          firstData.linear_memory_zero_secret_verified ? 'VERIFIED (0 Secrets)' : 'VERIFIED'
+        );
+        setAgentMeshBanner('ok', 'Inbound Published Wasm Tool Executed', 'Verified X-Mesh-Authentication + consumed single-use CAGE seal ' + (firstData.seal_id || '').slice(0, 14) + '...');
+      } else {
+        const replayResp = await fetch(toolPath, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-Mesh-Authentication': minted.bearer_token,
+            'X-Octopus-Cage-Seal': minted.cage_seal_b64
+          },
+          body: payload
+        });
+        const replayData = await replayResp.json();
+        if (pre) pre.textContent = JSON.stringify({ first_call_status: firstResp.status, replay_status: replayResp.status, replay_error: replayData }, null, 2);
+        appendAgentMeshTraceRow(
+          'Mesh → Sandbox (Seal Replay)',
+          'arm_publisher',
+          toolPath,
+          replayResp.status + ' CONFLICT (Replay Blocked)',
+          false,
+          'Atomic Single-Use Gate',
+          'REPLAY REJECTED'
+        );
+        setAgentMeshBanner('deny', 'Single-Use CAGE Seal Replay Blocked (HTTP 409)', 'Second presentation of consumed routing seal deterministically rejected before Wasm instantiation.');
+      }
+      await fetchAgentMeshStatus(false);
+    } catch (e) {
+      setAgentMeshBanner('deny', 'Inbound Flow Fault', String(e));
+    }
+  }
+
+  async function verifyAgentMeshMandate(escalate) {
+    const pre = document.getElementById('am-receipt-json');
+    const childInput = (document.getElementById('am-mandate-child-service') || {}).value || 'mcp://calc';
+    const child_services = escalate ? ['mcp://payroll'] : [childInput];
+    try {
+      const resp = await fetch('/api/agentmesh/mandates/attenuate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent_services: ['mcp://calc', 'mcp://echo_headers'],
+          parent_publish: ['mcp://octopus/doc_extractor'],
+          child_services,
+          child_publish: []
+        })
+      });
+      const data = await resp.json();
+      if (pre) pre.textContent = JSON.stringify(data, null, 2);
+      const ok = resp.status === 200;
+      appendAgentMeshTraceRow(
+        'Ed25519 Mandate Hop',
+        'arm_calc → subworker',
+        child_services.join(','),
+        ok ? '200 VERIFIED (Depth ' + data.depth + ')' : '403 ESCALATION BLOCKED',
+        ok,
+        (data.chain_links ?? 2) + ' links',
+        'Ed25519 Bound'
+      );
+      setAgentMeshBanner(
+        ok ? 'ok' : 'deny',
+        ok ? 'Ed25519 Monotonic Attenuation Verified' : 'Privilege Escalation Rejected (HTTP 403)',
+        ok ? ('Child mandate narrowed strictly to ' + child_services.join(', ')) : (data.message || 'Child requested service outside parent grant')
+      );
+    } catch (e) {
+      setAgentMeshBanner('deny', 'Mandate Fault', String(e));
+    }
+  }
+
+  fetchAgentMeshStatus(false);
+  setInterval(() => fetchAgentMeshStatus(false), 4000);
+
+  // URL query parameter auto-navigation (?tab=agentmesh-runtime&demo=allowed|denied|killswitch)
+  (async function initUrlTabRouting() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const tabParam = params.get('tab');
+      if (tabParam) {
+        switchTab(tabParam);
+      }
+      const demoParam = params.get('demo');
+      if (tabParam === 'agentmesh-runtime' && demoParam) {
+        if (demoParam === 'allowed') {
+          await runAgentMeshPreset('allowed');
+          await runAgentMeshPreset('headers');
+        } else if (demoParam === 'denied') {
+          await runAgentMeshPreset('denied');
+          await verifyAgentMeshMandate(true);
+        } else if (demoParam === 'killswitch') {
+          await runAgentMeshPreset('allowed');
+          await tripAgentMeshKillSwitch();
+          await executeAgentMeshWasmCall();
+        }
+      }
+    } catch (_) {}
+  })();
 </script>
 </body>
 </html>

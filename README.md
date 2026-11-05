@@ -28,6 +28,17 @@ Agent Octopus actively neutralizes the **Agentjacking Kill Chain** (DEFCON / Ten
 
 ---
 
+## 🌐 Google AgentMesh × Wasmtime (`v49.0.4`) Zero-Socket Sandbox Integration
+
+Agent Octopus provides a runnable, zero-socket WebAssembly (`wasmtime v49.0.4`) and OS sandbox integration aligned with [`google/agentmesh#734`](https://github.com/google/agentmesh/issues/734):
+
+- **Architecture & Walkthrough Guide**: [`docs/AGENTMESH_WASM_INTEGRATION.md`](docs/AGENTMESH_WASM_INTEGRATION.md)
+- **Runnable 6-Stage Sandbox Example**: [`examples/agentmesh_wasm_sandbox_demo.rs`](examples/agentmesh_wasm_sandbox_demo.rs) (`cargo run --example agentmesh_wasm_sandbox_demo`)
+- **End-to-End Integration & Adversarial Test Suites**: [`tests/agentmesh_integration_tests.rs`](tests/agentmesh_integration_tests.rs) and [`tests/agentmesh_m1_adversarial_stress_tests.rs`](tests/agentmesh_m1_adversarial_stress_tests.rs)
+- **Core Rust Implementation**: [`src/security/agentmesh/`](src/security/agentmesh/), [`src/security/wasm_tier1.rs`](src/security/wasm_tier1.rs), and [`src/security/linux_sandbox.rs`](src/security/linux_sandbox.rs)
+
+---
+
 ## 🏛️ System Architecture
 
 <p align="center">

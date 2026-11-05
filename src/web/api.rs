@@ -90,6 +90,7 @@ pub struct WebState {
     pub harness2_arm: Arc<crate::security::harness2::RecursiveHarnessOptimizerArm>,
     pub cage_engine: Arc<CageGovernanceEngine>,
     pub cage_substrate: Arc<crate::security::cage_substrate::CageSubstrateState>,
+    pub agentmesh_engine: Arc<crate::security::agentmesh::AgentMeshEngine>,
 }
 
 fn load_or_init_egress_domains() -> Vec<String> {
@@ -282,6 +283,15 @@ impl Default for WebState {
         let cage_substrate =
             Arc::new(crate::security::cage_substrate::CageSubstrateState::default());
 
+        let agentmesh_killswitch = Arc::new(crate::core::circuit_breaker::KillSwitch::new());
+        let agentmesh_engine = Arc::new(
+            crate::security::agentmesh::AgentMeshEngine::new_unstarted(
+                crate::security::agentmesh::AgentMeshConfig::default(),
+                agentmesh_killswitch,
+            )
+            .expect("Failed to initialize AgentMeshEngine"),
+        );
+
         Self {
             gateway,
             audit_log,
@@ -311,6 +321,7 @@ impl Default for WebState {
             harness2_arm,
             cage_engine,
             cage_substrate,
+            agentmesh_engine,
         }
     }
 }
@@ -4103,6 +4114,560 @@ pub fn handle_killswitch_protocols() -> (&'static str, String) {
     (
         "200 OK",
         serde_json::to_string(&summary).unwrap_or_else(|_| "{}".to_string()),
+    )
+}
+
+// =============================================================================
+// Google AgentMesh x Wasmtime v49.0.4 Runtime Endpoints (Tab 17)
+// =============================================================================
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AgentMeshWasmCallRequest {
+    pub arm_id: Option<String>,
+    pub target_uri: Option<String>,
+    pub payload: Option<String>,
+    pub epoch: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AgentMeshMintSealRequest {
+    pub tool_uri: Option<String>,
+    pub payload: Option<String>,
+    pub arm_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AgentMeshKillSwitchRequest {
+    pub arm_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AgentMeshMandateRequest {
+    pub parent_services: Option<Vec<String>>,
+    pub parent_publish: Option<Vec<String>>,
+    pub child_services: Option<Vec<String>>,
+    pub child_publish: Option<Vec<String>>,
+    pub child_spiffe_id: Option<String>,
+}
+
+/// Issues a single-use bootstrap nonce when requested by an authenticated local operator (`X-Octopus-Token`).
+pub fn handle_session_bootstrap_nonce() -> (&'static str, String) {
+    let nonce = super::request_guard::issue_bootstrap_nonce();
+    (
+        "200 OK",
+        json!({
+            "bootstrap_nonce": nonce
+        })
+        .to_string(),
+    )
+}
+
+/// Serves OpenID Connect Discovery metadata (`GET /.well-known/openid-configuration`).
+pub fn handle_agentmesh_openid_config(state: &WebState) -> (&'static str, String) {
+    ("200 OK", state.agentmesh_engine.openid_configuration_json())
+}
+
+/// Serves pure RFC 7517 `ES256` `P-256` JWKS (`GET /jwks`).
+pub fn handle_agentmesh_jwks(state: &WebState) -> (&'static str, String) {
+    ("200 OK", state.agentmesh_engine.jwks_json())
+}
+
+/// Serves merged RFC 7517 JWKS containing both CAGE `Ed25519` (`OKP`) and AgentMesh `P-256` (`EC`/`ES256`) keys (`GET /.well-known/jwks.json`).
+pub fn handle_merged_well_known_jwks(state: &WebState) -> (&'static str, String) {
+    let (_status, cage_body) = state.cage_substrate.handle_jwks();
+    let mut keys: Vec<serde_json::Value> = serde_json::from_str::<serde_json::Value>(&cage_body)
+        .ok()
+        .and_then(|v| v.get("keys").and_then(|k| k.as_array()).cloned())
+        .unwrap_or_default();
+
+    let am_jwks = state.agentmesh_engine.issuer().jwks_response();
+    if let Ok(serde_json::Value::Array(am_keys)) = serde_json::to_value(am_jwks.keys) {
+        keys.extend(am_keys);
+    }
+
+    (
+        "200 OK",
+        json!({
+            "keys": keys
+        })
+        .to_string(),
+    )
+}
+
+/// Returns live AgentMesh + Wasmtime Tier 1/Tier 2 status (`GET /api/agentmesh/status`).
+pub async fn handle_agentmesh_status(state: &WebState) -> (&'static str, String) {
+    let _ = state.agentmesh_engine.ensure_serving_node_started().await;
+    let status = state.agentmesh_engine.status().await;
+    (
+        "200 OK",
+        serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string()),
+    )
+}
+
+/// Executes a genuine Tier 1 `wasmtime v49.0.4` outbound mesh call (`POST /api/agentmesh/wasm-call`).
+pub async fn handle_agentmesh_wasm_call(state: &WebState, body: &str) -> (&'static str, String) {
+    let req: AgentMeshWasmCallRequest = if body.trim().is_empty() {
+        AgentMeshWasmCallRequest::default()
+    } else {
+        match serde_json::from_str(body) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    "400 Bad Request",
+                    json_error_payload(
+                        "INVALID_JSON",
+                        &format!("Invalid JSON for /api/agentmesh/wasm-call: {}", e),
+                    ),
+                );
+            }
+        }
+    };
+
+    let arm_id = req.arm_id.unwrap_or_else(|| "arm_calc".to_string());
+    let target_uri = req.target_uri.unwrap_or_else(|| "mcp://calc".to_string());
+    let payload = req
+        .payload
+        .unwrap_or_else(|| r#"{"op":"add","a":21,"b":21}"#.to_string());
+
+    let role = match arm_id.as_str() {
+        "arm_calc" => ArmRole::NetworkEgress,
+        "arm_publisher" => ArmRole::CedarPolicyEvaluation,
+        "arm_rogue" => ArmRole::UntrustedDocIngest,
+        _ => ArmRole::UntrustedDocIngest,
+    };
+
+    let current_epoch = state.agentmesh_engine.status().await.generation_epoch;
+    let epoch = req.epoch.unwrap_or(current_epoch);
+
+    match state
+        .agentmesh_engine
+        .execute_sandbox_wasm_mesh_call(&arm_id, epoch, &role, &target_uri, payload.as_bytes())
+        .await
+    {
+        Ok(report) => {
+            state.audit_log.record_event(
+                "AGENTMESH_WASM_OUTBOUND_CALL",
+                &arm_id,
+                &format!(
+                    "uri={} epoch={} allowed={} wasm_exit={} fuel={} zero_secret_mem={}",
+                    report.target_uri,
+                    report.generation_epoch,
+                    report.allowed,
+                    report.wasm_exit_code,
+                    report.fuel_consumed,
+                    report.linear_memory_zero_secret_verified
+                ),
+                if report.allowed { "ALLOWED" } else { "DENIED" },
+            );
+
+            if report.allowed {
+                (
+                    "200 OK",
+                    serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string()),
+                )
+            } else {
+                let mut val = serde_json::to_value(&report).unwrap_or_else(|_| json!({}));
+                if let Some(obj) = val.as_object_mut() {
+                    obj.insert("error".to_string(), json!(true));
+                    obj.insert("code".to_string(), json!("MESH_CAPABILITY_DENIED"));
+                }
+                ("403 Forbidden", val.to_string())
+            }
+        }
+        Err(crate::core::types::OctopusSecurityError::LimbKilled) => {
+            state.audit_log.record_event(
+                "AGENTMESH_WASM_CALL_BLOCKED_AUTOTOMY",
+                &arm_id,
+                &format!("KillSwitch active: rejected outbound Wasm call to {}", target_uri),
+                "DENIED",
+            );
+            (
+                "403 Forbidden",
+                json!({
+                    "error": true,
+                    "code": "LIMB_KILLED_AUTOTOMY",
+                    "allowed": false,
+                    "arm_id": arm_id,
+                    "target_uri": target_uri,
+                    "message": "KillSwitch autotomy is tripped; Wasmtime epoch interrupted and PEP token vault purged."
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => (
+            "403 Forbidden",
+            json_error_payload("WASM_MESH_EXECUTION_DENIED", &e.to_string()),
+        ),
+    }
+}
+
+/// Mints a genuine 7-tier CAGE single-use `CageRoutingSeal` + `ES256` workload JWT for inbound Wasm tool testing (`POST /api/agentmesh/mint-inbound-seal`).
+pub async fn handle_agentmesh_mint_inbound_seal(
+    state: &WebState,
+    body: &str,
+) -> (&'static str, String) {
+    let req: AgentMeshMintSealRequest = if body.trim().is_empty() {
+        AgentMeshMintSealRequest::default()
+    } else {
+        match serde_json::from_str(body) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    "400 Bad Request",
+                    json_error_payload(
+                        "INVALID_JSON",
+                        &format!("Invalid JSON for /api/agentmesh/mint-inbound-seal: {}", e),
+                    ),
+                );
+            }
+        }
+    };
+
+    let tool_uri = req
+        .tool_uri
+        .unwrap_or_else(|| "mcp://octopus/doc_extractor".to_string());
+    let payload = req
+        .payload
+        .unwrap_or_else(|| "Extract quarterly contract posture for audit review.".to_string());
+    let arm_id = req
+        .arm_id
+        .unwrap_or_else(|| "arm_publisher".to_string());
+
+    let seal = match state
+        .agentmesh_engine
+        .mint_inbound_cage_seal(&tool_uri, payload.as_bytes())
+    {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                "403 Forbidden",
+                json_error_payload("CAGE_SEAL_DENIED", &e.to_string()),
+            );
+        }
+    };
+
+    let _ = state.agentmesh_engine.ensure_serving_node_started().await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let epoch = state.agentmesh_engine.status().await.generation_epoch;
+    let bearer_value = match state
+        .agentmesh_engine
+        .pep_bridge()
+        .get_or_exchange_token_async(&arm_id, epoch, &ArmRole::CedarPolicyEvaluation, &tool_uri)
+        .await
+    {
+        Ok(mesh_tok) => mesh_tok,
+        Err(_) => match state.agentmesh_engine.issuer().mint_arm_token_with_time(
+            &arm_id,
+            epoch,
+            &ArmRole::CedarPolicyEvaluation,
+            now,
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                return (
+                    "500 Internal Server Error",
+                    json_error_payload("JWT_MINT_FAILED", &e.to_string()),
+                );
+            }
+        },
+    };
+
+    let seal_json = serde_json::to_string(&seal).unwrap_or_default();
+    let seal_b64 = crate::security::cage_substrate::base64url_encode_no_pad(seal_json.as_bytes());
+
+    (
+        "200 OK",
+        json!({
+            "tool_uri": tool_uri,
+            "payload": payload,
+            "bearer_token": format!("Bearer {}", bearer_value),
+            "cage_seal": seal,
+            "cage_seal_b64": seal_b64
+        })
+        .to_string(),
+    )
+}
+
+/// Verifies `X-Mesh-Authentication` + single-use `X-Octopus-Cage-Seal` and executes real Tier 1 Wasm (`POST /mesh/mcp/octopus/*`).
+pub async fn handle_agentmesh_inbound_mcp_call(
+    state: &WebState,
+    tool_path: &str,
+    auth_header: Option<&str>,
+    seal_header: Option<&str>,
+    body: &[u8],
+) -> (&'static str, String) {
+    if auth_header.map(str::trim).unwrap_or("").is_empty() {
+        return (
+            "401 Unauthorized",
+            json_error_payload(
+                "MISSING_MESH_AUTHENTICATION",
+                "Missing Bearer X-Mesh-Authentication header",
+            ),
+        );
+    }
+
+    let raw_seal = match seal_header.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => s,
+        None => {
+            return (
+                "403 Forbidden",
+                json_error_payload(
+                    "MISSING_CAGE_SEAL",
+                    "Missing X-Octopus-Cage-Seal single-use routing seal header",
+                ),
+            );
+        }
+    };
+
+    let seal: crate::security::cage_governance::CageRoutingSeal = if raw_seal.starts_with('{') {
+        match serde_json::from_str(raw_seal) {
+            Ok(s) => s,
+            Err(e) => {
+                return (
+                    "403 Forbidden",
+                    json_error_payload("MALFORMED_CAGE_SEAL", &e.to_string()),
+                );
+            }
+        }
+    } else {
+        match crate::security::cage_substrate::base64url_decode_no_pad(raw_seal)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        {
+            Some(s) => s,
+            None => {
+                return (
+                    "403 Forbidden",
+                    json_error_payload(
+                        "MALFORMED_CAGE_SEAL",
+                        "Failed to decode base64url X-Octopus-Cage-Seal",
+                    ),
+                );
+            }
+        }
+    };
+
+    match state
+        .agentmesh_engine
+        .execute_inbound_mesh_call_detailed(tool_path, auth_header, &seal, body)
+        .await
+    {
+        Ok(report) => {
+            state.audit_log.record_event(
+                "AGENTMESH_INBOUND_WASM_EXECUTED",
+                "agentmesh_inbound_peer",
+                &format!(
+                    "tool={} seal_id={} fuel={} zero_secret_mem={}",
+                    report.wasm_tool_name,
+                    report.seal_id,
+                    report.fuel_consumed,
+                    report.linear_memory_zero_secret_verified
+                ),
+                "EXECUTED",
+            );
+            (
+                "200 OK",
+                serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string()),
+            )
+        }
+        Err((401, e)) => (
+            "401 Unauthorized",
+            json_error_payload("INVALID_MESH_AUTHENTICATION", &e.to_string()),
+        ),
+        Err((404, e)) => (
+            "404 Not Found",
+            json_error_payload("UNKNOWN_PUBLISHED_TOOL", &e.to_string()),
+        ),
+        Err((409, e)) => (
+            "409 Conflict",
+            json_error_payload("CAGE_SEAL_ALREADY_CONSUMED", &e.to_string()),
+        ),
+        Err((_code, e)) => (
+            "403 Forbidden",
+            json_error_payload("INBOUND_MESH_DENIED", &e.to_string()),
+        ),
+    }
+}
+
+/// Trips sub-millisecond KillSwitch autotomy (`POST /api/agentmesh/killswitch/trip`).
+pub async fn handle_agentmesh_killswitch_trip(
+    state: &WebState,
+    body: &str,
+) -> (&'static str, String) {
+    let req: AgentMeshKillSwitchRequest = if body.trim().is_empty() {
+        AgentMeshKillSwitchRequest::default()
+    } else {
+        serde_json::from_str(body).unwrap_or_default()
+    };
+    let arm_id = req.arm_id.unwrap_or_else(|| "arm_calc".to_string());
+
+    let elapsed = state.agentmesh_engine.trip_killswitch_autotomy(&arm_id).await;
+    let latency_ns = elapsed.as_nanos() as u64;
+    let latency_us = (latency_ns as f64) / 1000.0;
+    let status = state.agentmesh_engine.status().await;
+
+    state.audit_log.record_event(
+        "AGENTMESH_KILLSWITCH_AUTOTOMY_TRIPPED",
+        &arm_id,
+        &format!(
+            "latency_ns={} latency_us={:.2} new_epoch={} vault_remaining={}",
+            latency_ns, latency_us, status.generation_epoch, status.cached_credentials_count
+        ),
+        "SEVERED",
+    );
+
+    (
+        "200 OK",
+        json!({
+            "arm_id": arm_id,
+            "killswitch_tripped": true,
+            "latency_ns": latency_ns,
+            "latency_us": latency_us,
+            "sub_millisecond_verified": latency_ns < 1_000_000,
+            "generation_epoch": status.generation_epoch,
+            "cached_credentials_count": status.cached_credentials_count,
+            "status": status
+        })
+        .to_string(),
+    )
+}
+
+/// Resets KillSwitch autotomy under the newly incremented generation epoch (`POST /api/agentmesh/killswitch/reset`).
+pub async fn handle_agentmesh_killswitch_reset(state: &WebState) -> (&'static str, String) {
+    state.agentmesh_engine.reset_killswitch().await;
+    let status = state.agentmesh_engine.status().await;
+    state.audit_log.record_event(
+        "AGENTMESH_KILLSWITCH_RESET",
+        "dashboard_operator",
+        &format!("Restored AgentMesh execution under epoch {}", status.generation_epoch),
+        "RESTORED",
+    );
+    (
+        "200 OK",
+        serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string()),
+    )
+}
+
+/// Mints and cryptographically verifies an Ed25519 `AttenuatedMandate` delegation hop (`POST /api/agentmesh/mandates/attenuate`).
+pub fn handle_agentmesh_mandate_attenuate(state: &WebState, body: &str) -> (&'static str, String) {
+    use crate::security::agentmesh::AttenuatedMandate;
+    use ed25519_dalek::SigningKey;
+    use rand::rngs::OsRng;
+    use std::collections::BTreeSet;
+
+    let req: AgentMeshMandateRequest = if body.trim().is_empty() {
+        AgentMeshMandateRequest::default()
+    } else {
+        match serde_json::from_str(body) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    "400 Bad Request",
+                    json_error_payload(
+                        "INVALID_JSON",
+                        &format!("Invalid JSON for /api/agentmesh/mandates/attenuate: {}", e),
+                    ),
+                );
+            }
+        }
+    };
+
+    let parent_services: BTreeSet<String> = req
+        .parent_services
+        .unwrap_or_else(|| vec!["mcp://calc".to_string(), "mcp://echo_headers".to_string()])
+        .into_iter()
+        .collect();
+    let parent_publish: BTreeSet<String> = req
+        .parent_publish
+        .unwrap_or_else(|| vec!["mcp://octopus/doc_extractor".to_string()])
+        .into_iter()
+        .collect();
+    let child_services: BTreeSet<String> = req
+        .child_services
+        .unwrap_or_else(|| vec!["mcp://calc".to_string()])
+        .into_iter()
+        .collect();
+    let child_publish: BTreeSet<String> = req.child_publish.unwrap_or_default().into_iter().collect();
+    let child_spiffe = req
+        .child_spiffe_id
+        .unwrap_or_else(|| "spiffe://octopus.local/arm/arm_calc_subworker".to_string());
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let root_sk = SigningKey::generate(&mut OsRng);
+    let parent_sk = SigningKey::generate(&mut OsRng);
+    let child_sk = SigningKey::generate(&mut OsRng);
+    let root_vk = root_sk.verifying_key().to_bytes();
+
+    let root_mandate = match AttenuatedMandate::create_root(
+        &root_sk,
+        "spiffe://octopus.local/supervisor",
+        "spiffe://octopus.local/arm/arm_calc",
+        parent_sk.verifying_key().to_bytes(),
+        parent_services,
+        parent_publish,
+        now,
+        now + 300,
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                "403 Forbidden",
+                json_error_payload("MANDATE_ROOT_REJECTED", &e.to_string()),
+            );
+        }
+    };
+
+    let attenuated = match root_mandate.attenuate(
+        &parent_sk,
+        &child_spiffe,
+        child_sk.verifying_key().to_bytes(),
+        child_services,
+        child_publish,
+        now + 120,
+        now,
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            state.audit_log.record_event(
+                "AGENTMESH_MANDATE_ESCALATION_BLOCKED",
+                &child_spiffe,
+                &e.to_string(),
+                "DENIED",
+            );
+            return (
+                "403 Forbidden",
+                json_error_payload("PRIVILEGE_ESCALATION_BLOCKED", &e.to_string()),
+            );
+        }
+    };
+
+    if let Err(e) = attenuated.verify_chain(&root_vk, now) {
+        return (
+            "403 Forbidden",
+            json_error_payload("MANDATE_VERIFICATION_FAILED", &e.to_string()),
+        );
+    }
+
+    (
+        "200 OK",
+        json!({
+            "verified": true,
+            "mandate_id": attenuated.mandate_id,
+            "depth": attenuated.depth,
+            "holder": attenuated.current_holder_spiffe_id,
+            "allowed_services": attenuated.allowed_services,
+            "allowed_publish": attenuated.allowed_publish,
+            "expires_at": attenuated.expires_at,
+            "chain_links": attenuated.delegation_chain.len()
+        })
+        .to_string(),
     )
 }
 

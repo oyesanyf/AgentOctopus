@@ -1,11 +1,15 @@
 use super::api::{
-    handle_atlas_dynamic_tests, handle_atlas_status, handle_atlas_sync, handle_audit_log,
-    handle_breakout_guards_status, handle_cage_consume_seal, handle_cage_ingest_policy,
-    handle_cage_policy_version, handle_cage_proof_status, handle_cage_trace_conformance,
-    handle_cage_validate_action_with_version, handle_containment_ring_regenerate,
-    handle_containment_ring_sever, handle_containment_ring_stale_replay, handle_containment_rings,
-    handle_dogwood_evaluate, handle_dogwood_presets, handle_dogwood_simulate_trace,
-    handle_dogwood_trace, handle_dream_rsi_feed_trajectories, handle_dream_rsi_policy,
+    handle_agentmesh_inbound_mcp_call, handle_agentmesh_jwks, handle_agentmesh_killswitch_reset,
+    handle_agentmesh_killswitch_trip, handle_agentmesh_mandate_attenuate,
+    handle_agentmesh_mint_inbound_seal, handle_agentmesh_openid_config, handle_agentmesh_status,
+    handle_agentmesh_wasm_call, handle_atlas_dynamic_tests, handle_atlas_status, handle_atlas_sync,
+    handle_audit_log, handle_breakout_guards_status, handle_cage_consume_seal,
+    handle_cage_ingest_policy, handle_cage_policy_version, handle_cage_proof_status,
+    handle_cage_trace_conformance, handle_cage_validate_action_with_version,
+    handle_containment_ring_regenerate, handle_containment_ring_sever,
+    handle_containment_ring_stale_replay, handle_containment_rings, handle_dogwood_evaluate,
+    handle_dogwood_presets, handle_dogwood_simulate_trace, handle_dogwood_trace,
+    handle_dream_rsi_feed_trajectories, handle_dream_rsi_policy,
     handle_dream_rsi_recommend_priorities, handle_dream_rsi_rollout, handle_dream_rsi_status,
     handle_dream_rsi_train, handle_evaluate_cedar, handle_evolution_approve,
     handle_evolution_auto_fix, handle_evolution_candidates, handle_evolution_evaluate,
@@ -15,7 +19,7 @@ use super::api::{
     handle_harness2_library, handle_harness2_run, handle_harness2_status,
     handle_harness2_validate_tree, handle_kernel_stats, handle_killswitch_disarm_with_peer,
     handle_killswitch_engage, handle_killswitch_protocols, handle_killswitch_status,
-    handle_live_tests, handle_oshoosiclaw_containment_evaluate,
+    handle_live_tests, handle_merged_well_known_jwks, handle_oshoosiclaw_containment_evaluate,
     handle_oshoosiclaw_containment_status, handle_oss_fuzz_burst, handle_oss_fuzz_sarif,
     handle_oss_fuzz_status, handle_osv_scanner_sarif, handle_osv_scanner_scan_now,
     handle_osv_scanner_status, handle_otel_sessions, handle_otel_spans, handle_pqc_audit_cbom,
@@ -35,8 +39,8 @@ use super::api::{
     handle_research_validate, handle_research_verify_accuracy, handle_resilience_metrics,
     handle_rl_defense_latest_cycle, handle_rl_defense_status, handle_rl_defense_train_cycle,
     handle_rl_evaluate_action, handle_runtime_activity_stream, handle_sentinel_reset_lockdown,
-    handle_sentinel_simulate_breach, handle_status, handle_update_egress_domains,
-    handle_validate_sisyphean, handle_vassilev_proof, WebState,
+    handle_sentinel_simulate_breach, handle_session_bootstrap_nonce, handle_status,
+    handle_update_egress_domains, handle_validate_sisyphean, handle_vassilev_proof, WebState,
 };
 use super::static_files::INDEX_HTML;
 use super::strict_http::{validate_complete_body, validate_header};
@@ -93,6 +97,7 @@ pub fn select_available_loopback_port(preferred_port: u16) -> u16 {
 pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state = Arc::new(WebState::default());
     let _ = state.cage_substrate.journal.recover_and_re_enforce();
+    let _ = state.agentmesh_engine.ensure_serving_node_started().await;
 
     let requested_port: u16 = addr
         .rsplit(':')
@@ -188,6 +193,10 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
 
     let _ = std::fs::create_dir_all("logs");
     let _ = std::fs::write("logs/active_port.txt", selected_port.to_string());
+    let _ = std::fs::write(
+        "logs/.octopus_operator_token",
+        super::request_guard::dashboard_token(),
+    );
 
     for listener in &listeners {
         if let Ok(local) = listener.local_addr() {
@@ -829,7 +838,7 @@ async fn handle_connection(
         }
 
         ("GET", "/.well-known/jwks.json") => {
-            let (status_code, json_body) = state.cage_substrate.handle_jwks();
+            let (status_code, json_body) = handle_merged_well_known_jwks(&state);
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -2839,6 +2848,131 @@ async fn handle_connection(
             stream.write_all(response.as_bytes()).await?;
         }
 
+        ("GET", "/.well-known/openid-configuration") => {
+            let (status_code, json_body) = handle_agentmesh_openid_config(&state);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/jwks") => {
+            let (status_code, json_body) = handle_agentmesh_jwks(&state);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/session/bootstrap-nonce") => {
+            let (status_code, json_body) = handle_session_bootstrap_nonce();
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/agentmesh/status") => {
+            let (status_code, json_body) = handle_agentmesh_status(&state).await;
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/agentmesh/wasm-call") => {
+            let (status_code, json_body) = handle_agentmesh_wasm_call(&state, body).await;
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/agentmesh/mint-inbound-seal") => {
+            let (status_code, json_body) = handle_agentmesh_mint_inbound_seal(&state, body).await;
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/agentmesh/killswitch/trip") => {
+            let (status_code, json_body) = handle_agentmesh_killswitch_trip(&state, body).await;
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/agentmesh/killswitch/reset") => {
+            let (status_code, json_body) = handle_agentmesh_killswitch_reset(&state).await;
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/agentmesh/mandates/attenuate") => {
+            let (status_code, json_body) = handle_agentmesh_mandate_attenuate(&state, body);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", p) if p.starts_with("/mesh/mcp/octopus/") => {
+            let auth_hdr = extract_header_value(headers_str, "x-mesh-authentication")
+                .or_else(|| extract_header_value(headers_str, "authorization"));
+            let seal_hdr = extract_header_value(headers_str, "x-octopus-cage-seal");
+            let (status_code, json_body) =
+                handle_agentmesh_inbound_mcp_call(&state, p, auth_hdr, seal_hdr, body.as_bytes())
+                    .await;
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
         ("OPTIONS", _) => {
             // No CORS grants: same-origin dashboard requests never preflight.
             let response = format!(
@@ -3412,6 +3546,8 @@ async fn handle_sse_test_stream(
             "sentinel_ring_tests" => "sentinel_ring_tests",
             "oshoosiclaw_adapted_containment_tests" => "oshoosiclaw_adapted_containment_tests",
             "comprehensive_breakout_defense_tests" => "comprehensive_breakout_defense_tests",
+            "agentmesh_integration_tests" => "agentmesh_integration_tests",
+            "agentmesh_m1_adversarial_stress_tests" => "agentmesh_m1_adversarial_stress_tests",
             _ => {
                 let err_event = format!(
                     "data: {}\n\n",
