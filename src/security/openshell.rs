@@ -157,6 +157,7 @@ impl WasmArmSandbox {
         // 3. Genuine Wasmtime Engine & JIT Bytecode Module
         let mut wasm_config = Config::new();
         wasm_config.consume_fuel(true);
+        wasm_config.epoch_interruption(true);
 
         let wasm_engine = Engine::new(&wasm_config).map_err(|e| {
             OctopusSecurityError::IsolationViolation(format!("Wasmtime Engine Init Failed: {}", e))
@@ -244,11 +245,18 @@ impl WasmArmSandbox {
     }
 
     /// Independently terminates the sandbox immediately from the supervisor.
-    /// Trips the supervisor cancellation token and calls TerminateJobObject at the Windows NT kernel level.
+    /// Trips the supervisor cancellation token, increments the Wasmtime epoch to trap running guests,
+    /// and calls TerminateJobObject at the OS kernel level.
     pub fn terminate_sandbox(&self, exit_code: u32) -> Result<(), OctopusSecurityError> {
         self.supervisor_terminated.store(true, Ordering::SeqCst);
+        self.wasm_engine.increment_epoch();
         self.job_object.terminate(exit_code)?;
         Ok(())
+    }
+
+    /// Advances the Wasmtime engine epoch for non-cooperative guest interruption.
+    pub fn increment_wasm_epoch(&self) {
+        self.wasm_engine.increment_epoch();
     }
 
     /// Executes an agent task within the combined Windows Containment Runtime (Job Object + AppContainer + Wasmtime).
@@ -285,6 +293,7 @@ impl WasmArmSandbox {
                 e
             ))
         })?;
+        store.set_epoch_deadline(self.config.wasm_epoch_deadline.max(1));
 
         let linker = Linker::new(&self.wasm_engine);
         let instance = linker

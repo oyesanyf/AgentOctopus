@@ -65,6 +65,7 @@ impl AgentMeshPolicyConfig {
                             "mcp://calc".to_string(),
                             "mcp://echo".to_string(),
                             "mcp://echo_headers".to_string(),
+                            "mcp://echo-headers".to_string(),
                         ],
                         allowed_publish: vec![],
                         allowed_targets: vec!["mcp://calc".to_string()],
@@ -75,6 +76,7 @@ impl AgentMeshPolicyConfig {
                             "mcp://calc".to_string(),
                             "mcp://payroll".to_string(),
                             "mcp://echo_headers".to_string(),
+                            "mcp://echo-headers".to_string(),
                         ],
                         allowed_publish: vec![],
                         allowed_targets: vec!["mcp://*".to_string()],
@@ -95,6 +97,8 @@ impl AgentMeshPolicyConfig {
                         members: vec![
                             "spiffe://agentoctopus.local/arm/arm_calc/epoch/*".to_string(),
                             "spiffe://agentoctopus.local/arm/1/epoch/*".to_string(),
+                            "spiffe://agentoctopus.local/arm/arm-UntrustedDocIngest-0/epoch/*"
+                                .to_string(),
                         ],
                     },
                     AgentMeshBindingDef {
@@ -184,6 +188,10 @@ pub struct ServingNodeStats {
     pub mcp_payroll_calls: u64,
     pub mcp_payroll_denials: u64,
     pub header_echo_inspections: u64,
+    #[serde(default)]
+    pub published_wasm_calls: u64,
+    #[serde(default)]
+    pub published_seal_replays_blocked: u64,
 }
 
 pub type ConformanceNodeStats = ServingNodeStats;
@@ -469,6 +477,8 @@ pub struct ServingNodeInner {
     pub node_id: String,
     pub channel_secret: Option<[u8; 32]>,
     pub seen_pep_nonces: RwLock<BoundedNonceStore>,
+    pub cage_engine: RwLock<Arc<crate::security::cage_governance::CageGovernanceEngine>>,
+    pub wasm_executor: RwLock<Option<Arc<crate::security::wasm_tier1::WasmTier1Executor>>>,
 }
 
 /// Handle to the active embedded loopback HTTP serving node.
@@ -509,6 +519,14 @@ impl AgentMeshServingNode {
             node_id: format!("agentmesh_serving_node_{}", bound_port),
             channel_secret,
             seen_pep_nonces: RwLock::new(BoundedNonceStore::new(10_000)),
+            cage_engine: RwLock::new(Arc::new(
+                crate::security::cage_governance::CageGovernanceEngine::default(),
+            )),
+            wasm_executor: RwLock::new(
+                crate::security::wasm_tier1::WasmTier1Executor::try_new()
+                    .ok()
+                    .map(Arc::new),
+            ),
         });
 
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -573,6 +591,21 @@ impl AgentMeshServingNode {
     pub async fn revoke_arm(&self, arm_id: &str) {
         let mut rev = self.inner.revoked_arms.write().await;
         rev.insert(arm_id.to_string());
+    }
+
+    /// Clears all active arm revocations on the serving node (used on explicit supervisor reset).
+    pub async fn clear_revoked_arms(&self) {
+        self.inner.revoked_arms.write().await.clear();
+    }
+
+    /// Attaches shared CAGE governance and Tier 1 Wasm executors for inbound published tools.
+    pub async fn attach_cage_and_wasm(
+        &self,
+        cage_engine: Arc<crate::security::cage_governance::CageGovernanceEngine>,
+        wasm_executor: Arc<crate::security::wasm_tier1::WasmTier1Executor>,
+    ) {
+        *self.inner.cage_engine.write().await = cage_engine;
+        *self.inner.wasm_executor.write().await = Some(wasm_executor);
     }
 
     /// Checks if an arm has been marked revoked.
@@ -862,10 +895,31 @@ async fn route_request(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> H
         ("POST", "/mesh/revoke") => handle_signed_revocation(req, state).await,
         ("POST", "/mesh/mcp/calc") => handle_mcp_calc(req, state).await,
         ("POST", "/mesh/mcp/payroll") => handle_mcp_payroll(req, state).await,
+        ("POST", "/mesh/mcp/echo_headers")
+        | ("POST", "/mesh/mcp/echo-headers")
+        | ("GET", "/mesh/mcp/echo_headers") => handle_mcp_echo_headers(req, state).await,
+        ("POST", "/mesh/mcp/octopus/doc_extractor") => {
+            handle_published_wasm_tool(
+                req,
+                state,
+                "mcp://octopus/doc_extractor",
+                "wasm_doc_extractor",
+            )
+            .await
+        }
+        ("POST", "/mesh/mcp/octopus/ledger_validator") => {
+            handle_published_wasm_tool(
+                req,
+                state,
+                "mcp://octopus/ledger_validator",
+                "wasm_ledger_validator",
+            )
+            .await
+        }
         ("GET", "/mesh/echo_headers") | ("POST", "/mesh/echo_headers") => {
             handle_echo_headers(req, state).await
         }
-        ("GET", "/.well-known/jwks.json") => handle_jwks(state).await,
+        ("GET", "/.well-known/jwks.json") | ("GET", "/jwks") => handle_jwks(state).await,
         ("GET", "/.well-known/openid-configuration") => handle_openid_config(state).await,
         ("GET", "/health") | ("POST", "/health") | ("GET", "/status") => HttpResponse::json(
             200,
@@ -1382,6 +1436,361 @@ async fn handle_mcp_payroll(req: HttpRequest, state: &Arc<ConformanceNodeInner>)
             "payroll_records_accessed": 42,
         }),
     )
+}
+
+async fn handle_mcp_echo_headers(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {
+    state.stats.write().await.header_echo_inspections += 1;
+
+    let auth = match extract_bearer_token(&req) {
+        Some(t) => t,
+        None => {
+            return HttpResponse::error(
+                401,
+                "Unauthorized",
+                "unauthorized",
+                "Missing Bearer token",
+            )
+        }
+    };
+
+    let tokens = state.active_tokens.read().await;
+    let meta = match tokens.get(&auth) {
+        Some(m) => m.clone(),
+        None => {
+            return HttpResponse::error(
+                401,
+                "Unauthorized",
+                "invalid_token",
+                "Exchanged token not found or expired",
+            )
+        }
+    };
+    drop(tokens);
+
+    if state.revoked_arms.read().await.contains(&meta.arm_id) {
+        return HttpResponse::error(
+            403,
+            "Forbidden",
+            "access_denied",
+            "Arm is in active revocation list",
+        );
+    }
+
+    if !meta.allowed_services.iter().any(|s| {
+        matches_pattern(s, "mcp://echo_headers") || matches_pattern(s, "mcp://echo-headers")
+    }) {
+        return HttpResponse::error(
+            403,
+            "Forbidden",
+            "access_denied",
+            "Token lacks mcp://echo_headers authority",
+        );
+    }
+
+    let auth_header_present = req.headers.contains_key("authorization");
+    let cookie_header_present = req.headers.contains_key("cookie");
+    let mesh_auth_present = req.headers.contains_key("x-mesh-authentication");
+    let mut redacted_header_names: Vec<String> = req.headers.keys().cloned().collect();
+    redacted_header_names.sort();
+
+    // Never echo raw X-Mesh-Authentication bearer bytes back into Wasm guest memory.
+    HttpResponse::json(
+        200,
+        "OK",
+        &serde_json::json!({
+            "status": "ok",
+            "service": "mcp://echo_headers",
+            "caller": meta.subject,
+            "authorization_header_present": auth_header_present,
+            "cookie_header_present": cookie_header_present,
+            "authorization_stripped": !auth_header_present,
+            "cookie_stripped": !cookie_header_present,
+            "x_mesh_authentication_present": mesh_auth_present,
+            "observed_header_names": redacted_header_names,
+        }),
+    )
+}
+
+async fn handle_published_wasm_tool(
+    req: HttpRequest,
+    state: &Arc<ConformanceNodeInner>,
+    tool_uri: &str,
+    wasm_tool_name: &str,
+) -> HttpResponse {
+    use crate::security::cage_governance::{CageRoutingSeal, SealRejection};
+    use crate::security::wasm_tier1::WasmSandboxLimits;
+
+    let auth = match extract_bearer_token(&req) {
+        Some(t) => t,
+        None => {
+            return HttpResponse::error(
+                401,
+                "Unauthorized",
+                "unauthorized",
+                "Missing Bearer X-Mesh-Authentication header",
+            )
+        }
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // 1. Verify exchanged token or ES256 workload JWT
+    let caller_subject: String;
+    if auth.starts_with("mesh_tok_") {
+        let mut tokens = state.active_tokens.write().await;
+        tokens.prune_expired(now);
+        let meta = match tokens.get(&auth) {
+            Some(m) => m.clone(),
+            None => {
+                return HttpResponse::error(
+                    401,
+                    "Unauthorized",
+                    "invalid_token",
+                    "Exchanged token not found or expired",
+                )
+            }
+        };
+        drop(tokens);
+        if state.revoked_arms.read().await.contains(&meta.arm_id) {
+            return HttpResponse::error(
+                403,
+                "Forbidden",
+                "access_denied",
+                "Caller arm is in active revocation list",
+            );
+        }
+        if !meta
+            .allowed_services
+            .iter()
+            .any(|s| matches_pattern(s, tool_uri))
+        {
+            return HttpResponse::error(
+                403,
+                "Forbidden",
+                "access_denied",
+                &format!("Token lacks permission for {}", tool_uri),
+            );
+        }
+        caller_subject = meta.subject;
+    } else {
+        // Verify ES256 JWS against configured JWKS
+        let parts: Vec<&str> = auth.split('.').collect();
+        if parts.len() != 3 {
+            return HttpResponse::error(
+                401,
+                "Unauthorized",
+                "invalid_token",
+                "Malformed bearer token",
+            );
+        }
+        let payload_bytes = match base64url_decode_no_pad(parts[1]) {
+            Ok(b) => b,
+            Err(_) => {
+                return HttpResponse::error(
+                    401,
+                    "Unauthorized",
+                    "invalid_token",
+                    "Invalid JWT payload encoding",
+                )
+            }
+        };
+        let sig_bytes = match base64url_decode_no_pad(parts[2]) {
+            Ok(b) => b,
+            Err(_) => {
+                return HttpResponse::error(
+                    401,
+                    "Unauthorized",
+                    "invalid_token",
+                    "Invalid JWT signature encoding",
+                )
+            }
+        };
+        let payload_val: serde_json::Value = match serde_json::from_slice(&payload_bytes) {
+            Ok(v) => v,
+            Err(_) => {
+                return HttpResponse::error(
+                    401,
+                    "Unauthorized",
+                    "invalid_token",
+                    "Invalid JWT payload JSON",
+                )
+            }
+        };
+        if let Some(exp) = payload_val.get("exp").and_then(|v| v.as_u64()) {
+            if now > exp + 5 {
+                return HttpResponse::error(
+                    401,
+                    "Unauthorized",
+                    "token_expired",
+                    "Bearer JWT expired beyond 5s skew window",
+                );
+            }
+        }
+        let signing_input = format!("{}.{}", parts[0], parts[1]);
+        let jwks_guard = state.jwks.read().await;
+        let verified = match jwks_guard.as_ref() {
+            Some(jwks) => jwks
+                .keys
+                .iter()
+                .any(|k| verify_es256_p256(signing_input.as_bytes(), &sig_bytes, &k.x, &k.y)),
+            None => false,
+        };
+        drop(jwks_guard);
+        if !verified {
+            return HttpResponse::error(
+                401,
+                "Unauthorized",
+                "invalid_signature",
+                "ES256 JWT signature verification failed",
+            );
+        }
+        let sub = payload_val
+            .get("sub")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let arm_id = payload_val
+            .get("arm_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if state.revoked_arms.read().await.contains(arm_id) {
+            return HttpResponse::error(
+                403,
+                "Forbidden",
+                "access_denied",
+                "Caller arm is revoked",
+            );
+        }
+        if !state.policy.read().await.is_service_allowed(&sub, tool_uri) {
+            return HttpResponse::error(
+                403,
+                "Forbidden",
+                "access_denied",
+                &format!("Subject '{}' is not authorized for {}", sub, tool_uri),
+            );
+        }
+        caller_subject = sub;
+    }
+
+    // 2. Verify and atomically consume single-use CAGE RoutingSeal
+    let raw_seal = match req.headers.get(HEADER_PEP_CAGE_SEAL) {
+        Some(s) if !s.trim().is_empty() => s.trim(),
+        _ => {
+            return HttpResponse::error(
+                403,
+                "Forbidden",
+                "missing_cage_seal",
+                "Inbound published Wasm actuation requires X-Octopus-Cage-Seal",
+            )
+        }
+    };
+
+    let seal: CageRoutingSeal = if raw_seal.starts_with('{') {
+        match serde_json::from_str(raw_seal) {
+            Ok(s) => s,
+            Err(e) => {
+                return HttpResponse::error(
+                    400,
+                    "Bad Request",
+                    "malformed_cage_seal",
+                    &format!("Invalid CAGE seal JSON: {e}"),
+                )
+            }
+        }
+    } else {
+        match base64url_decode_no_pad(raw_seal)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+        {
+            Some(s) => s,
+            None => {
+                return HttpResponse::error(
+                    400,
+                    "Bad Request",
+                    "malformed_cage_seal",
+                    "Invalid base64url-encoded CAGE seal",
+                )
+            }
+        }
+    };
+
+    let cage_engine = state.cage_engine.read().await.clone();
+    let params_val = serde_json::json!({
+        "tool_uri": tool_uri,
+        "payload_sha256": hex::encode(Sha256::digest(&req.body)),
+        "payload_len": req.body.len(),
+    });
+    let expected_digest = cage_engine.compute_action_digest(wasm_tool_name, &params_val);
+
+    if let Err(rej) = cage_engine.verify_and_consume_seal(&seal, wasm_tool_name, &expected_digest) {
+        return match rej {
+            SealRejection::AlreadyConsumed(seal_id) => {
+                state.stats.write().await.published_seal_replays_blocked += 1;
+                HttpResponse::error(
+                    409,
+                    "Conflict",
+                    "SEAL_ALREADY_CONSUMED",
+                    &format!("Single-use CAGE RoutingSeal '{}' was already consumed", seal_id),
+                )
+            }
+            other => HttpResponse::error(
+                403,
+                "Forbidden",
+                "INVALID_CAGE_SEAL",
+                &format!("CAGE RoutingSeal rejected: {}", other),
+            ),
+        };
+    }
+
+    // 3. Execute real Tier 1 Wasmtime sandbox module
+    let wasm_opt = state.wasm_executor.read().await.clone();
+    let Some(wasm) = wasm_opt else {
+        return HttpResponse::error(
+            500,
+            "Internal Server Error",
+            "wasm_unavailable",
+            "WasmTier1Executor not initialized on serving node",
+        );
+    };
+
+    let limits = WasmSandboxLimits::default();
+    let receipt_res = if wasm_tool_name == "wasm_ledger_validator" {
+        wasm.execute_ledger_validator(&req.body, limits)
+    } else {
+        wasm.execute_doc_extractor(&req.body, limits)
+    };
+
+    match receipt_res {
+        Ok(receipt) => {
+            state.stats.write().await.published_wasm_calls += 1;
+            HttpResponse::json(
+                200,
+                "OK",
+                &serde_json::json!({
+                    "status": "ok",
+                    "tool": wasm_tool_name,
+                    "uri": tool_uri,
+                    "caller": caller_subject,
+                    "seal_id": seal.seal_id,
+                    "wasm_exit_code": receipt.exit_code,
+                    "fuel_consumed": receipt.fuel_consumed,
+                    "peak_linear_memory_bytes": receipt.peak_linear_memory_bytes,
+                    "linear_memory_zero_secret_verified": receipt.linear_memory_zero_secret_verified,
+                    "sanitized_output": receipt.zero_mi_projection.canonical_output,
+                    "raw_output": receipt.raw_output,
+                }),
+            )
+        }
+        Err(e) => HttpResponse::error(
+            422,
+            "Unprocessable Entity",
+            "wasm_execution_failed",
+            &e.to_string(),
+        ),
+    }
 }
 
 async fn handle_echo_headers(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {

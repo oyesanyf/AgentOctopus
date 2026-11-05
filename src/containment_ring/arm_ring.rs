@@ -368,6 +368,12 @@ pub struct ArmContainmentRing {
     /// Optional attached CAGE governance engine for seal validation and actuation trace emission.
     pub(crate) cage_engine:
         Arc<std::sync::RwLock<Option<Arc<crate::security::cage_governance::CageGovernanceEngine>>>>,
+    /// Optional attached AgentMesh PEP bridge for automatic epoch token eviction on autotomy.
+    pub(crate) pep_bridge: Arc<
+        std::sync::RwLock<
+            Option<Arc<crate::security::agentmesh::pep_bridge::AgentMeshPepBridge>>,
+        >,
+    >,
 }
 
 impl ArmContainmentRing {
@@ -559,7 +565,23 @@ impl ArmContainmentRing {
             quarantined_instances: Arc::new(RwLock::new(HashMap::new())),
             taint_state: Arc::new(RwLock::new((initial_tier, Vec::new()))),
             cage_engine: Arc::new(std::sync::RwLock::new(None)),
+            pep_bridge: Arc::new(std::sync::RwLock::new(None)),
         }
+    }
+
+    /// Attaches an AgentMesh PEP bridge so autotomy sever/regeneration evicts cached tokens.
+    pub fn attach_pep_bridge(
+        &self,
+        bridge: Arc<crate::security::agentmesh::pep_bridge::AgentMeshPepBridge>,
+    ) {
+        *self.pep_bridge.write().unwrap() = Some(bridge);
+    }
+
+    /// Returns a handle to the attached AgentMesh PEP bridge, if configured.
+    pub fn pep_bridge(
+        &self,
+    ) -> Option<Arc<crate::security::agentmesh::pep_bridge::AgentMeshPepBridge>> {
+        self.pep_bridge.read().unwrap().clone()
     }
 
     /// Attaches a CAGE governance engine using the builder pattern.
@@ -638,6 +660,12 @@ impl ArmContainmentRing {
         self.is_severed.store(true, Ordering::SeqCst);
         let mut revoked = self.revoked_epochs.write().await;
         revoked.insert(current_gen);
+        drop(revoked);
+
+        if let Some(bridge) = self.pep_bridge() {
+            let _ = bridge.trip_arm_killswitch(&self.agent_name);
+            let _ = bridge.trip_arm_killswitch(&self.arm_id.to_string());
+        }
 
         // Terminate and clean up all active quarantined worker processes
         let mut instances = self.quarantined_instances.write().await;
@@ -654,6 +682,10 @@ impl ArmContainmentRing {
         {
             let mut revoked = self.revoked_epochs.write().await;
             revoked.insert(old_gen);
+        }
+        if let Some(bridge) = self.pep_bridge() {
+            bridge.evict_arm_epoch(&self.agent_name, old_gen);
+            bridge.evict_arm_epoch(&self.arm_id.to_string(), old_gen);
         }
         let next_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.step_counter.store(0, Ordering::SeqCst);

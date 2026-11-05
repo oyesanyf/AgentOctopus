@@ -628,6 +628,20 @@ impl AgentMeshPepBridge {
         self.is_arm_tripped(arm_id)
     }
 
+    /// Resets any registered circuit breaker for `arm_id` (and global circuit breaker if set).
+    pub fn reset_arm_killswitch(&self, arm_id: &str) {
+        if let Ok(reg) = self.killswitch_registry.read() {
+            if let Some(ks) = reg.get(arm_id) {
+                ks.reset();
+            }
+        }
+        if let Ok(gks_lock) = self.global_killswitch.read() {
+            if let Some(ref ks) = *gks_lock {
+                ks.reset();
+            }
+        }
+    }
+
     /// Dispatches a signed epoch revocation signal to the target node's POST /mesh/revoke endpoint.
     pub async fn dispatch_signed_revocation_async(
         &self,

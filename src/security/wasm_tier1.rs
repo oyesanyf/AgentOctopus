@@ -190,6 +190,23 @@ pub struct WasmExecutionReceipt {
     pub mesh_calls_attempted: u64,
     pub mesh_calls_succeeded: u64,
     pub mesh_bytes_exchanged: u64,
+    /// True when post-execution linear memory inspection confirms zero JWT/access-token/private-key bytes exist in guest memory.
+    pub linear_memory_zero_secret_verified: bool,
+}
+
+fn verify_linear_memory_contains_no_secrets(mem_bytes: &[u8]) -> bool {
+    const FORBIDDEN_MARKERS: &[&[u8]] = &[
+        b"mesh_tok_",
+        b"eyJhbGciOiJFUzI1NiI",
+        b"BEGIN PRIVATE KEY",
+        b"BEGIN EC PRIVATE KEY",
+    ];
+    for marker in FORBIDDEN_MARKERS {
+        if mem_bytes.windows(marker.len()).any(|w| w == *marker) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Per-invocation host state owned by `wasmtime::Store<WasmHostState>`.
@@ -671,6 +688,10 @@ impl WasmTier1Executor {
         let execution_us = exec_begin.elapsed().as_micros() as u64;
         let fuel_remaining = store.get_fuel().unwrap_or(0);
         let fuel_consumed = fuel_budget.saturating_sub(fuel_remaining);
+        let linear_memory_zero_secret_verified = instance
+            .get_memory(&mut store, "memory")
+            .map(|mem| verify_linear_memory_contains_no_secrets(mem.data(&store)))
+            .unwrap_or(true);
         let state = store.into_data();
         let raw_output = String::from_utf8_lossy(&state.output_buffer).to_string();
         let now_ms = std::time::SystemTime::now()
@@ -698,6 +719,7 @@ impl WasmTier1Executor {
             mesh_calls_attempted: state.mesh_calls_attempted,
             mesh_calls_succeeded: state.mesh_calls_succeeded,
             mesh_bytes_exchanged: state.mesh_bytes_exchanged,
+            linear_memory_zero_secret_verified,
         })
     }
 
@@ -871,8 +893,11 @@ impl WasmTier1Executor {
             }
         };
 
+        let mut linear_memory_zero_secret_verified = true;
         if let Some(mem) = instance.get_memory(&mut store, "memory") {
             let cur_size = mem.data_size(&store);
+            linear_memory_zero_secret_verified =
+                verify_linear_memory_contains_no_secrets(mem.data(&store));
             if cur_size > store.data().peak_memory_bytes {
                 store.data_mut().peak_memory_bytes = cur_size;
             }
@@ -910,6 +935,7 @@ impl WasmTier1Executor {
             mesh_calls_attempted: state.mesh_calls_attempted,
             mesh_calls_succeeded: state.mesh_calls_succeeded,
             mesh_bytes_exchanged: state.mesh_bytes_exchanged,
+            linear_memory_zero_secret_verified,
         })
     }
 

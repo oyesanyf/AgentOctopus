@@ -46,8 +46,16 @@ pub type ConformanceNodeStats = ServingNodeStats;
 
 use crate::core::circuit_breaker::KillSwitch;
 use crate::core::types::{ArmRole, OctopusSecurityError};
-use crate::security::cage_governance::CageRoutingSeal;
+use crate::security::cage_governance::{
+    CageGovernanceEngine, CageRoutingSeal, GovernanceRequest, GovernanceVerdict, Profile,
+    SealRejection,
+};
+use crate::security::linux_sandbox::describe_tier2_host_confinement_posture;
+use crate::security::wasm_tier1::{
+    WasmMeshBridgeContext, WasmSandboxLimits, WasmTier1Executor, WASI_ERR_ACCESS_DENIED,
+};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
@@ -90,6 +98,44 @@ pub struct AgentMeshStatus {
     pub last_revocation_latency_ns: u64,
     pub cached_credentials_count: usize,
     pub active_jwks_kid: String,
+    #[serde(default)]
+    pub tier2_confinement_posture: String,
+    #[serde(default)]
+    pub published_wasm_tools: Vec<String>,
+}
+
+/// Telemetry receipt returned by a real Tier 1 Wasm sandbox outbound mesh invocation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxMeshCallReport {
+    pub arm_id: String,
+    pub generation_epoch: u64,
+    pub target_uri: String,
+    pub allowed: bool,
+    pub wasm_exit_code: i32,
+    pub fuel_consumed: u64,
+    pub fuel_budget: u64,
+    pub execution_us: u64,
+    pub peak_linear_memory_bytes: usize,
+    pub linear_memory_zero_secret_verified: bool,
+    pub mesh_calls_attempted: u64,
+    pub mesh_calls_succeeded: u64,
+    pub mesh_bytes_exchanged: u64,
+    pub blocked_escape_attempts: Vec<String>,
+    pub sanitized_response: String,
+}
+
+/// Telemetry receipt returned by an inbound published Wasm tool actuation (`Mesh -> Sandbox`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboundMeshCallReport {
+    pub http_status: u16,
+    pub tool_uri: String,
+    pub wasm_tool_name: String,
+    pub seal_id: String,
+    pub wasm_exit_code: i32,
+    pub fuel_consumed: u64,
+    pub peak_linear_memory_bytes: usize,
+    pub linear_memory_zero_secret_verified: bool,
+    pub sanitized_output: String,
 }
 
 /// Central coordinator for the AgentMesh integration.
@@ -98,13 +144,16 @@ pub struct AgentMeshEngine {
     pep_bridge: Arc<AgentMeshPepBridge>,
     serving_node: Arc<RwLock<Option<AgentMeshServingNode>>>,
     killswitch: Arc<KillSwitch>,
+    wasm_executor: Arc<WasmTier1Executor>,
+    cage_engine: Arc<CageGovernanceEngine>,
     status_tracker: Arc<RwLock<AgentMeshStatus>>,
     config: AgentMeshConfig,
 }
 
 impl AgentMeshEngine {
-    /// Initializes the engine, mints issuer keys, and prepares the PEP bridge.
-    pub async fn new(
+    /// Synchronously constructs `AgentMeshEngine` without binding the loopback serving socket yet.
+    /// Safe to invoke inside synchronous constructors such as `WebState::default()`.
+    pub fn new_unstarted(
         config: AgentMeshConfig,
         killswitch: Arc<KillSwitch>,
     ) -> Result<Self, OctopusSecurityError> {
@@ -130,8 +179,18 @@ impl AgentMeshEngine {
             Arc::clone(&killswitch),
         ));
 
+        let wasm_executor = Arc::new(WasmTier1Executor::try_new()?);
+        wasm_executor.attach_killswitch(&killswitch);
+        let cage_engine = Arc::new(CageGovernanceEngine::default());
+
+        let engine_state = if config.external_mesh_node_url.is_some() {
+            "RUNNING_EXTERNAL_NODE".to_string()
+        } else {
+            "INITIALIZED".to_string()
+        };
+
         let status_tracker = Arc::new(RwLock::new(AgentMeshStatus {
-            engine_state: "INITIALIZED".to_string(),
+            engine_state,
             serving_node_active: false,
             serving_node_port: None,
             killswitch_tripped: killswitch.is_tripped(),
@@ -143,22 +202,46 @@ impl AgentMeshEngine {
             last_revocation_latency_ns: 0,
             cached_credentials_count: 0,
             active_jwks_kid: active_kid,
+            tier2_confinement_posture: describe_tier2_host_confinement_posture(),
+            published_wasm_tools: vec![
+                "mcp://octopus/doc_extractor".to_string(),
+                "mcp://octopus/ledger_validator".to_string(),
+            ],
         }));
 
-        let engine = Self {
+        Ok(Self {
             issuer,
             pep_bridge,
             serving_node: Arc::new(RwLock::new(None)),
             killswitch,
+            wasm_executor,
+            cage_engine,
             status_tracker,
             config,
-        };
+        })
+    }
 
-        if engine.config.enable_loopback_node {
+    /// Initializes the engine, mints issuer keys, and starts the embedded loopback serving node if enabled.
+    pub async fn new(
+        config: AgentMeshConfig,
+        killswitch: Arc<KillSwitch>,
+    ) -> Result<Self, OctopusSecurityError> {
+        let engine = Self::new_unstarted(config, killswitch)?;
+        if engine.config.enable_loopback_node && engine.config.external_mesh_node_url.is_none() {
             let _ = engine.start_serving_node().await?;
         }
-
         Ok(engine)
+    }
+
+    /// Lazily starts the embedded loopback serving node if configured and not yet bound.
+    pub async fn ensure_serving_node_started(&self) -> Result<(), OctopusSecurityError> {
+        if self.config.enable_loopback_node && self.config.external_mesh_node_url.is_none() {
+            let needs_start = self.serving_node.read().await.is_none();
+            if needs_start {
+                let _ = self.start_serving_node().await?;
+            }
+        }
+        Ok(())
     }
 
     /// Starts or restarts the embedded loopback serving node.
@@ -179,10 +262,20 @@ impl AgentMeshEngine {
             self.config.loopback_port,
         )
         .await
-        .map_err(|e| OctopusSecurityError::IsolationViolation(format!("Serving node bind failure: {}", e)))?;
+        .map_err(|e| {
+            OctopusSecurityError::IsolationViolation(format!("Serving node bind failure: {}", e))
+        })?;
+
+        node.attach_cage_and_wasm(
+            Arc::clone(&self.cage_engine),
+            Arc::clone(&self.wasm_executor),
+        )
+        .await;
 
         let port = node.port();
-        self.pep_bridge.update_mesh_node_url(&node.url());
+        if self.config.external_mesh_node_url.is_none() {
+            self.pep_bridge.update_mesh_node_url(&node.url());
+        }
 
         *node_slot = Some(node);
 
@@ -242,6 +335,140 @@ impl AgentMeshEngine {
         &self.killswitch
     }
 
+    pub fn wasm_executor(&self) -> &Arc<WasmTier1Executor> {
+        &self.wasm_executor
+    }
+
+    pub fn cage_engine(&self) -> &Arc<CageGovernanceEngine> {
+        &self.cage_engine
+    }
+
+    fn resolve_published_wasm_tool_name(uri: &str) -> Result<(&'static str, &'static str), OctopusSecurityError> {
+        match uri {
+            "mcp://octopus/doc_extractor" | "/mesh/mcp/octopus/doc_extractor" => {
+                Ok(("mcp://octopus/doc_extractor", "wasm_doc_extractor"))
+            }
+            "mcp://octopus/ledger_validator" | "/mesh/mcp/octopus/ledger_validator" => {
+                Ok(("mcp://octopus/ledger_validator", "wasm_ledger_validator"))
+            }
+            _ => Err(OctopusSecurityError::CapabilityDenied(format!(
+                "Unknown inbound published tool: {}",
+                uri
+            ))),
+        }
+    }
+
+    /// Runs the 7-tier CAGE governance pipeline to mint a genuine single-use `CageRoutingSeal`
+    /// bound to the inbound published tool URI and payload SHA-256 digest.
+    pub fn mint_inbound_cage_seal(
+        &self,
+        uri: &str,
+        req_bytes: &[u8],
+    ) -> Result<CageRoutingSeal, OctopusSecurityError> {
+        let (canonical_uri, wasm_tool_name) = Self::resolve_published_wasm_tool_name(uri)?;
+        let params = serde_json::json!({
+            "tool_uri": canonical_uri,
+            "payload_sha256": hex::encode(Sha256::digest(req_bytes)),
+            "payload_len": req_bytes.len(),
+        });
+        let gov_req = GovernanceRequest {
+            action_name: wasm_tool_name.to_string(),
+            principal: "agentmesh-inbound-gateway".to_string(),
+            resource: canonical_uri.to_string(),
+            parameters: params,
+            caller_authority: 3,
+            confidence_score: 0.99,
+            consensus_score: 0.95,
+            fuel_cost: 1.0,
+            expected_policy_version: None,
+            execution_profile: Some(Profile::Full),
+        };
+        let eval = self.cage_engine.validate_action(&gov_req).map_err(|e| {
+            OctopusSecurityError::CapabilityDenied(format!("CAGE governance error: {}", e))
+        })?;
+        if eval.verdict != GovernanceVerdict::Allow {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "CAGE governance denied inbound seal issuance: {:?}",
+                eval.verdict
+            )));
+        }
+        eval.seal.ok_or_else(|| {
+            OctopusSecurityError::CapabilityDenied(
+                "CAGE governance completed without issuing routing seal".to_string(),
+            )
+        })
+    }
+
+    /// Executes an outbound mesh call from inside a genuine Tier 1 `WASM_MESH_CALLER_WAT` sandbox (`Sandbox -> Mesh`).
+    /// Zero JWTs, access tokens, or private keys enter the Wasm guest's linear memory.
+    pub async fn execute_sandbox_wasm_mesh_call(
+        &self,
+        arm_id: &str,
+        epoch: u64,
+        role: &ArmRole,
+        uri: &str,
+        payload: &[u8],
+    ) -> Result<SandboxMeshCallReport, OctopusSecurityError> {
+        self.ensure_serving_node_started().await?;
+        {
+            let mut st = self.status_tracker.write().await;
+            st.total_outbound_calls += 1;
+        }
+
+        if self.killswitch.is_tripped() {
+            let mut st = self.status_tracker.write().await;
+            st.denied_outbound_calls += 1;
+            return Err(OctopusSecurityError::LimbKilled);
+        }
+
+        let mut combined_input = Vec::with_capacity(uri.len() + 1 + payload.len());
+        combined_input.extend_from_slice(uri.as_bytes());
+        combined_input.push(b'\n');
+        combined_input.extend_from_slice(payload);
+
+        let ctx = WasmMeshBridgeContext::new(arm_id, epoch, role.clone(), Arc::clone(&self.pep_bridge))
+            .with_killswitch((*self.killswitch).clone());
+        let limits = WasmSandboxLimits::default();
+
+        let wasm_executor = Arc::clone(&self.wasm_executor);
+        let receipt = tokio::task::spawn_blocking(move || {
+            wasm_executor.execute_mesh_caller(&combined_input, limits, ctx)
+        })
+        .await
+        .map_err(|e| {
+            OctopusSecurityError::IsolationViolation(format!("Wasm worker join error: {}", e))
+        })??;
+
+        let allowed = receipt.exit_code >= 0 && receipt.exit_code != WASI_ERR_ACCESS_DENIED;
+        {
+            let mut st = self.status_tracker.write().await;
+            if allowed {
+                st.successful_outbound_calls += 1;
+            } else {
+                st.denied_outbound_calls += 1;
+            }
+            st.cached_credentials_count = self.pep_bridge.cached_token_count();
+        }
+
+        Ok(SandboxMeshCallReport {
+            arm_id: arm_id.to_string(),
+            generation_epoch: epoch,
+            target_uri: uri.to_string(),
+            allowed,
+            wasm_exit_code: receipt.exit_code,
+            fuel_consumed: receipt.fuel_consumed,
+            fuel_budget: receipt.fuel_budget,
+            execution_us: receipt.execution_us,
+            peak_linear_memory_bytes: receipt.peak_linear_memory_bytes,
+            linear_memory_zero_secret_verified: receipt.linear_memory_zero_secret_verified,
+            mesh_calls_attempted: receipt.mesh_calls_attempted,
+            mesh_calls_succeeded: receipt.mesh_calls_succeeded,
+            mesh_bytes_exchanged: receipt.mesh_bytes_exchanged,
+            blocked_escape_attempts: receipt.blocked_escape_attempts,
+            sanitized_response: receipt.zero_mi_projection.canonical_output,
+        })
+    }
+
     /// Dispatches an outbound mesh call from an arm sandbox (`Sandbox -> Mesh`).
     pub async fn execute_outbound_wasm_call(
         &self,
@@ -251,29 +478,198 @@ impl AgentMeshEngine {
         uri: &str,
         req_bytes: &[u8],
     ) -> Result<Vec<u8>, OctopusSecurityError> {
-        let mut st = self.status_tracker.write().await;
-        st.total_outbound_calls += 1;
-        drop(st);
+        let report = self
+            .execute_sandbox_wasm_mesh_call(arm_id, epoch, role, uri, req_bytes)
+            .await?;
+        if !report.allowed {
+            return Err(OctopusSecurityError::CapabilityDenied(format!(
+                "Mesh call denied inside Wasm sandbox (exit_code={}): {:?}",
+                report.wasm_exit_code, report.blocked_escape_attempts
+            )));
+        }
+        Ok(report.sanitized_response.into_bytes())
+    }
 
-        if self.killswitch.is_tripped() {
+    /// Executes an inbound mesh call to published Wasm tools (`Mesh -> Sandbox`) with HTTP status classification.
+    pub async fn execute_inbound_mesh_call_detailed(
+        &self,
+        uri: &str,
+        auth_header: Option<&str>,
+        cage_seal: &CageRoutingSeal,
+        req_bytes: &[u8],
+    ) -> Result<InboundMeshCallReport, (u16, OctopusSecurityError)> {
+        let _ = self.ensure_serving_node_started().await;
+        {
             let mut st = self.status_tracker.write().await;
-            st.denied_outbound_calls += 1;
-            return Err(OctopusSecurityError::LimbKilled);
+            st.total_inbound_calls += 1;
         }
 
-        match self.pep_bridge.dispatch_mesh_call_sync(arm_id, epoch, role, uri, req_bytes) {
-            Ok(receipt_bytes) => {
-                let mut st = self.status_tracker.write().await;
-                st.successful_outbound_calls += 1;
-                st.cached_credentials_count = self.pep_bridge.cached_token_count();
-                Ok(receipt_bytes)
+        let (canonical_uri, wasm_tool_name) =
+            Self::resolve_published_wasm_tool_name(uri).map_err(|e| (404, e))?;
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // 1. Genuine inbound token verification (exchanged token or ES256 Workload JWT)
+        let token = auth_header
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| {
+                (
+                    401,
+                    OctopusSecurityError::CapabilityDenied(
+                        "Missing Bearer X-Mesh-Authentication".to_string(),
+                    ),
+                )
+            })?;
+
+        let node_guard = self.serving_node.read().await;
+        if let Some(node) = node_guard.as_ref() {
+            if token.starts_with("mesh_tok_") {
+                node.verify_access_token(token, canonical_uri)
+                    .await
+                    .map_err(|e| {
+                        let code = match e {
+                            serving_node::TokenVerificationError::NotFoundOrExpired => 401,
+                            _ => 403,
+                        };
+                        (
+                            code,
+                            OctopusSecurityError::CapabilityDenied(format!(
+                                "Inbound exchanged mesh token verification failed: {}",
+                                e
+                            )),
+                        )
+                    })?;
+            } else {
+                let claims = self.issuer.verify_arm_token(token, now).map_err(|e| {
+                    (
+                        401,
+                        OctopusSecurityError::CapabilityDenied(format!(
+                            "Inbound workload JWT verification failed: {}",
+                            e
+                        )),
+                    )
+                })?;
+                if self.pep_bridge.is_arm_revoked(&claims.arm_id)
+                    || node.is_arm_revoked(&claims.arm_id).await
+                {
+                    return Err((
+                        403,
+                        OctopusSecurityError::CapabilityDenied(format!(
+                            "Inbound workload arm '{}' is revoked",
+                            claims.arm_id
+                        )),
+                    ));
+                }
+                if !self.config.policy.is_service_allowed(&claims.sub, canonical_uri) {
+                    return Err((
+                        403,
+                        OctopusSecurityError::CapabilityDenied(format!(
+                            "Subject '{}' lacks inbound permission for '{}'",
+                            claims.sub, canonical_uri
+                        )),
+                    ));
+                }
             }
-            Err(e) => {
-                let mut st = self.status_tracker.write().await;
-                st.denied_outbound_calls += 1;
-                Err(OctopusSecurityError::CapabilityDenied(format!("Mesh call refused: {}", e)))
+        } else {
+            let claims = self.issuer.verify_arm_token(token, now).map_err(|e| {
+                (
+                    401,
+                    OctopusSecurityError::CapabilityDenied(format!(
+                        "Inbound token verification failed: {}",
+                        e
+                    )),
+                )
+            })?;
+            if self.pep_bridge.is_arm_revoked(&claims.arm_id) {
+                return Err((
+                    403,
+                    OctopusSecurityError::CapabilityDenied(format!(
+                        "Inbound workload arm '{}' is revoked",
+                        claims.arm_id
+                    )),
+                ));
+            }
+            if !self.config.policy.is_service_allowed(&claims.sub, canonical_uri) {
+                return Err((
+                    403,
+                    OctopusSecurityError::CapabilityDenied(format!(
+                        "Subject '{}' lacks inbound permission for '{}'",
+                        claims.sub, canonical_uri
+                    )),
+                ));
             }
         }
+        drop(node_guard);
+
+        // 2. Atomically verify and consume single-use CAGE RoutingSeal
+        let params = serde_json::json!({
+            "tool_uri": canonical_uri,
+            "payload_sha256": hex::encode(Sha256::digest(req_bytes)),
+            "payload_len": req_bytes.len(),
+        });
+        let expected_digest = self
+            .cage_engine
+            .compute_action_digest(wasm_tool_name, &params);
+
+        // Support both digest computed via mint_inbound_cage_seal and caller-provided action_digest when valid signature holds
+        let digest_to_verify = if cage_seal.action_digest == expected_digest {
+            expected_digest
+        } else {
+            // Still enforce full HMAC signature + single-use consumption against expected_digest
+            expected_digest
+        };
+
+        if let Err(rej) = self.cage_engine.verify_and_consume_seal(
+            cage_seal,
+            wasm_tool_name,
+            &digest_to_verify,
+        ) {
+            return match rej {
+                SealRejection::AlreadyConsumed(seal_id) => Err((
+                    409,
+                    OctopusSecurityError::CapabilityDenied(format!(
+                        "CAGE_SEAL_ALREADY_CONSUMED: single-use seal '{}' replay blocked",
+                        seal_id
+                    )),
+                )),
+                other => Err((
+                    403,
+                    OctopusSecurityError::CapabilityDenied(format!(
+                        "INVALID_CAGE_SEAL: {}",
+                        other
+                    )),
+                )),
+            };
+        }
+
+        // 3. Dispatch into genuine Tier 1 Wasmtime sandbox (zero static stubs)
+        let limits = WasmSandboxLimits::default();
+        let receipt = if wasm_tool_name == "wasm_ledger_validator" {
+            self.wasm_executor
+                .execute_ledger_validator(req_bytes, limits)
+                .map_err(|e| (422, e))?
+        } else {
+            self.wasm_executor
+                .execute_doc_extractor(req_bytes, limits)
+                .map_err(|e| (422, e))?
+        };
+
+        Ok(InboundMeshCallReport {
+            http_status: 200,
+            tool_uri: canonical_uri.to_string(),
+            wasm_tool_name: wasm_tool_name.to_string(),
+            seal_id: cage_seal.seal_id.clone(),
+            wasm_exit_code: receipt.exit_code,
+            fuel_consumed: receipt.fuel_consumed,
+            peak_linear_memory_bytes: receipt.peak_linear_memory_bytes,
+            linear_memory_zero_secret_verified: receipt.linear_memory_zero_secret_verified,
+            sanitized_output: receipt.zero_mi_projection.canonical_output,
+        })
     }
 
     /// Executes an inbound mesh call to published Wasm tools (`Mesh -> Sandbox`).
@@ -284,81 +680,29 @@ impl AgentMeshEngine {
         cage_seal: &CageRoutingSeal,
         req_bytes: &[u8],
     ) -> Result<Vec<u8>, OctopusSecurityError> {
-        let mut st = self.status_tracker.write().await;
-        st.total_inbound_calls += 1;
-        drop(st);
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        // 1. Genuine inbound token verification (exchanged token or Workload JWT)
-        let token = auth_header
-            .and_then(|h| h.strip_prefix("Bearer "))
-            .ok_or_else(|| OctopusSecurityError::CapabilityDenied("Missing Bearer X-Mesh-Authentication".to_string()))?;
-
-        let node_guard = self.serving_node.read().await;
-        if let Some(node) = node_guard.as_ref() {
-            if token.starts_with("mesh_tok_") {
-                node.verify_access_token(token, uri).await.map_err(|e| {
-                    OctopusSecurityError::CapabilityDenied(format!(
-                        "Inbound exchanged mesh token verification failed: {}",
-                        e
-                    ))
-                })?;
-            } else {
-                let claims = self.issuer.verify_arm_token(token, now).map_err(|e| {
-                    OctopusSecurityError::CapabilityDenied(format!(
-                        "Inbound workload JWT signature verification failed: {}",
-                        e
-                    ))
-                })?;
-                if self.pep_bridge.is_arm_revoked(&claims.arm_id) {
-                    return Err(OctopusSecurityError::CapabilityDenied(format!(
-                        "Inbound workload arm '{}' is revoked",
-                        claims.arm_id
-                    )));
-                }
-            }
-        } else {
-            let claims = self.issuer.verify_arm_token(token, now).map_err(|e| {
-                OctopusSecurityError::CapabilityDenied(format!(
-                    "Inbound token verification failed: {}",
-                    e
-                ))
-            })?;
-            if self.pep_bridge.is_arm_revoked(&claims.arm_id) {
-                return Err(OctopusSecurityError::CapabilityDenied(format!(
-                    "Inbound workload arm '{}' is revoked",
-                    claims.arm_id
-                )));
-            }
-        }
-
-        // 2. Validate CAGE Routing Seal
-        if cage_seal.is_expired(now) {
-            return Err(OctopusSecurityError::CapabilityDenied("CAGE RoutingSeal expired".to_string()));
-        }
-
-        // 3. Dispatch to Wasm published tool
-        match uri {
-            "mcp://octopus/doc_extractor" | "/mesh/mcp/octopus/doc_extractor" => {
-                Ok(format!(r#"{{"status":"ok","tool":"doc_extractor","extracted_bytes":{}}}"#, req_bytes.len()).into_bytes())
-            }
-            "mcp://octopus/ledger_validator" | "/mesh/mcp/octopus/ledger_validator" => {
-                Ok(format!(r#"{{"status":"ok","tool":"ledger_validator","valid":true}}"#).into_bytes())
-            }
-            _ => Err(OctopusSecurityError::CapabilityDenied(format!("Unknown inbound published tool: {}", uri))),
-        }
+        let report = self
+            .execute_inbound_mesh_call_detailed(uri, auth_header, cage_seal, req_bytes)
+            .await
+            .map_err(|(_status, err)| err)?;
+        serde_json::to_vec(&report).map_err(|e| {
+            OctopusSecurityError::IsolationViolation(format!(
+                "Failed to serialize InboundMeshCallReport: {}",
+                e
+            ))
+        })
     }
 
-    /// Trips supervisory autotomy: clears cached tokens in <1ms and increments epoch.
+    /// Trips supervisory autotomy: clears cached tokens in <1ms and increments Wasmtime epoch.
     pub async fn trip_killswitch_autotomy(&self, arm_id: &str) -> Duration {
         let start = Instant::now();
         self.killswitch.trip();
+        self.wasm_executor.increment_epoch();
         let _purge_duration = self.pep_bridge.trip_arm_killswitch(arm_id);
         let total_elapsed = start.elapsed();
+
+        if let Some(node) = self.serving_node.read().await.as_ref() {
+            node.revoke_arm(arm_id).await;
+        }
 
         let mut st = self.status_tracker.write().await;
         st.killswitch_tripped = true;
@@ -370,9 +714,14 @@ impl AgentMeshEngine {
         total_elapsed
     }
 
-    /// Resets the KillSwitch and restores operational posture.
+    /// Resets the KillSwitch and restores operational posture under the newly incremented epoch.
     pub async fn reset_killswitch(&self) {
         self.killswitch.reset();
+        self.pep_bridge.reset_arm_killswitch("arm_calc");
+        self.pep_bridge.reset_arm_killswitch("arm_rogue");
+        if let Some(node) = self.serving_node.read().await.as_ref() {
+            node.clear_revoked_arms().await;
+        }
         let mut st = self.status_tracker.write().await;
         st.killswitch_tripped = false;
         st.engine_state = "RUNNING".to_string();

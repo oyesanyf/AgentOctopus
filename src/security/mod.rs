@@ -10,12 +10,12 @@ pub mod capabilities;
 pub use agentmesh::{
     validate_mesh_uri, AgentMeshBindingDef, AgentMeshConfig, AgentMeshEngine,
     AgentMeshPolicyConfig, AgentMeshPolicyRoot, AgentMeshReferenceNode,
-    AgentMeshRoleDef, AgentMeshServingNode, AgentMeshStatus, AttenuatedMandate,
-    CachedMeshToken, ConformanceNodeStats, DelegationLink, EcJwk, ExchangedTokenMetadata,
-    JwsHeader, JwksDocument, MandateError, MeshCallError, MeshCallReceipt,
-    OctopusOidcActorIssuer, OidcError, OpenIdConfiguration, PepBridgeConfig,
-    PepVaultTelemetry, ServingNodeStats, SyncHttpWireClient, AsyncHttpWireClient,
-    WorkloadClaims, ALLOWED_SCHEMES, MAX_DELEGATION_DEPTH,
+    AgentMeshRoleDef, AgentMeshServingNode, AgentMeshStatus, AsyncHttpWireClient,
+    AttenuatedMandate, CachedMeshToken, ConformanceNodeStats, DelegationLink, EcJwk,
+    ExchangedTokenMetadata, InboundMeshCallReport, JwksDocument, JwsHeader, MandateError,
+    MeshCallError, MeshCallReceipt, OctopusOidcActorIssuer, OidcError, OpenIdConfiguration,
+    PepBridgeConfig, PepVaultTelemetry, SandboxMeshCallReport, ServingNodeStats,
+    SyncHttpWireClient, WorkloadClaims, ALLOWED_SCHEMES, MAX_DELEGATION_DEPTH,
 };
 
 pub use cage_governance::{
@@ -37,6 +37,7 @@ pub mod governor;
 pub mod guard_arms;
 pub mod identity;
 pub mod isolation;
+pub mod linux_sandbox;
 pub mod log_sanitizer;
 pub mod math_validator;
 pub mod openshell;
@@ -46,6 +47,14 @@ pub mod rasp;
 pub mod research_arms;
 pub mod rl_defense;
 pub mod windows_sandbox;
+
+pub use linux_sandbox::{
+    build_socket_filter_bpf, describe_tier2_host_confinement_posture, evaluate_bpf_filter,
+    spawn_tier2_linux_command, LinuxConfinementConfig, LinuxConfinementVerification,
+    LinuxResourceLimits, AARCH64_BLOCKED_SOCKET_SYSCALLS, AUDIT_ARCH_AARCH64, AUDIT_ARCH_X86_64,
+    LINUX_EACCES, SECCOMP_RET_ALLOW, SECCOMP_RET_ERRNO, SECCOMP_RET_KILL_PROCESS,
+    X86_64_BLOCKED_SOCKET_SYSCALLS,
+};
 
 pub use agentjacking_guard::{
     AgentjackingGuard, AgentjackingPhase, AgentjackingVerdict, SessionTaintState,
@@ -165,11 +174,12 @@ pub use rl_defense::{
 };
 pub use spider_physics::{OrbWebContainmentEngine, OrbWebEvaluationResult, SilkRegime};
 pub use windows_sandbox::{
-    evaluate_pre_resume_confinement_gate, verify_windows_confinement_invariants,
-    AppContainerTokenVerification, Tier2ConfinedChildResult, WindowsConfinementPolicy,
+    evaluate_pre_resume_confinement_gate, spawn_tier2_appcontainer_command,
+    verify_windows_confinement_invariants, AppContainerTokenVerification, Tier2ConfinedChildResult,
+    WindowsConfinementPolicy,
 };
 #[cfg(windows)]
-pub use windows_sandbox::{spawn_tier2_appcontainer_command, verify_process_appcontainer_token};
+pub use windows_sandbox::verify_process_appcontainer_token;
 
 pub mod executable_identity;
 pub use executable_identity::{

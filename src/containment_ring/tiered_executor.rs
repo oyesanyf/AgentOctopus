@@ -26,7 +26,9 @@ use crate::security::mercury_guard::{
     KERNEL_IO_COALESCENCE_BUDGET_BYTES,
 };
 use crate::security::token_posture::TokenPosture;
-use crate::security::wasm_tier1::{WasmExecutionReceipt, WasmSandboxLimits, WasmTier1Executor};
+use crate::security::wasm_tier1::{
+    WasmExecutionReceipt, WasmMeshBridgeContext, WasmSandboxLimits, WasmTier1Executor,
+};
 use crate::security::windows_sandbox::{
     spawn_tier2_appcontainer_command, AppContainerTokenVerification, WindowsJobObject,
 };
@@ -120,8 +122,17 @@ impl TieredExecutionDispatcher {
         &self,
         req: &TieredToolRequest,
     ) -> Result<TieredExecutionReceipt, OctopusSecurityError> {
+        self.dispatch_with_mesh_context(req, None)
+    }
+
+    /// Dispatches a tool request with an optional host-only `WasmMeshBridgeContext` for AgentMesh calls.
+    pub fn dispatch_with_mesh_context(
+        &self,
+        req: &TieredToolRequest,
+        mesh_context: Option<WasmMeshBridgeContext>,
+    ) -> Result<TieredExecutionReceipt, OctopusSecurityError> {
         match Self::classify_tier(req) {
-            ExecutionTier::Tier1InProcessWasm => self.dispatch_tier1_wasm(req),
+            ExecutionTier::Tier1InProcessWasm => self.dispatch_tier1_wasm(req, mesh_context),
             ExecutionTier::Tier2NativeWin32Confinement => self.dispatch_tier2_win32(req),
         }
     }
@@ -129,40 +140,62 @@ impl TieredExecutionDispatcher {
     fn dispatch_tier1_wasm(
         &self,
         req: &TieredToolRequest,
+        mesh_context: Option<WasmMeshBridgeContext>,
     ) -> Result<TieredExecutionReceipt, OctopusSecurityError> {
         let start = Instant::now();
         let _ = std::fs::create_dir_all(&req.scratchpad_root);
         let limits = WasmSandboxLimits {
             scratchpad_root: req.scratchpad_root.clone(),
             allow_scratch_write: req.allow_scratch_write,
+            mesh_context: mesh_context.clone(),
             ..WasmSandboxLimits::default()
         };
 
         let wasm_receipt = if let Some(ref wat) = req.custom_wat {
-            self.wasm_tier1
-                .execute_wat(&req.tool_name, wat.as_bytes(), &req.payload, limits)?
+            self.wasm_tier1.execute_wat_with_context(
+                &req.tool_name,
+                wat.as_bytes(),
+                &req.payload,
+                limits,
+                mesh_context,
+            )?
         } else {
             match req.tool_name.as_str() {
                 "ledger_write" | "wasm_ledger_validator" | "LedgerWrite" => self
                     .wasm_tier1
                     .execute_ledger_validator(&req.payload, limits)?,
+                "wasm_mesh_caller" | "mesh_call" => {
+                    let ctx = mesh_context.ok_or_else(|| {
+                        OctopusSecurityError::CapabilityDenied(
+                            "TIER1_MESH_CONTEXT_MISSING: wasm_mesh_caller requires host WasmMeshBridgeContext".to_string(),
+                        )
+                    })?;
+                    self.wasm_tier1
+                        .execute_mesh_caller(&req.payload, limits, ctx)?
+                }
                 _ => self
                     .wasm_tier1
                     .execute_doc_extractor(&req.payload, limits)?,
             }
         };
 
-        // Feed supervisor-measured Wasm I/O and fuel into MercuryContainmentEngine
+        // Feed supervisor-measured Wasm I/O, mesh bytes, and fuel into MercuryContainmentEngine
         let egress_bytes = (wasm_receipt.scratch_bytes_written as usize)
+            .saturating_add(wasm_receipt.mesh_bytes_exchanged as usize)
             .saturating_add(wasm_receipt.raw_output.len()) as f64;
         let fragment_mass = egress_bytes / KERNEL_IO_COALESCENCE_BUDGET_BYTES;
         let applied_pressure_pa = (wasm_receipt.fuel_consumed as f64 / 50_000.0) * 25.0;
+        let pore = if wasm_receipt.mesh_calls_attempted > 0 {
+            HostActuationPore::InterAgentMeshIpc
+        } else {
+            HostActuationPore::SharedMemoryMapping
+        };
         let mercury_eval = self.mercury.evaluate_pore_pressure(
             &req.agent_id,
-            HostActuationPore::SharedMemoryMapping,
+            pore,
             applied_pressure_pa,
             0.05,
-            0.0010,
+            pore.default_pore_radius_m(),
             fragment_mass,
         );
 

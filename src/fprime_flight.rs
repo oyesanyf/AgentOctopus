@@ -1618,7 +1618,7 @@ mod tests {
     // Test 3: BufferManager post-init sealed static arena pool & CWE-770 OOM immunity
     #[test]
     fn test_fprime_buffer_manager_static_arena_pool_cwe770_immunity() {
-        let arena = StaticArenaPool::new(4, 4, 4);
+        let arena = StaticArenaPool::new(2, 2, 2);
         assert!(!arena.is_sealed());
 
         // Pre-init lease
