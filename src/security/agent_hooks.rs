@@ -106,7 +106,7 @@ impl HookEventType {
 
     pub fn from_name(name: &str) -> Self {
         match name.trim() {
-            "PreToolUse" | "preToolUse" | "pre" => Self::PreToolUse,
+            "PreToolUse" | "preToolUse" | "pre" | "before" => Self::PreToolUse,
             "PostToolUse" | "postToolUse" | "post" => Self::PostToolUse,
             "beforeShellExecution" => Self::BeforeShellExecution,
             "afterShellExecution" => Self::AfterShellExecution,
@@ -400,6 +400,10 @@ pub fn parse_claude_request(json_str: &str, is_post: bool) -> Result<NormalizedH
     let val: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON for Claude: {e}"))?;
 
+    if !val.is_object() {
+        return Err("Invalid JSON for Claude: Payload must be a JSON object".to_string());
+    }
+
     let event_type = if is_post {
         HookEventType::PostToolUse
     } else {
@@ -438,6 +442,10 @@ pub fn parse_cursor_request(json_str: &str, event_name: &str) -> Result<Normaliz
     let val: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON for Cursor: {e}"))?;
 
+    if !val.is_object() {
+        return Err("Invalid JSON for Cursor: Payload must be a JSON object".to_string());
+    }
+
     let event_type = HookEventType::from_name(event_name);
     let command = extract_wire_command(&val);
     let file_path = extract_wire_file_path(&val);
@@ -473,6 +481,10 @@ pub fn parse_copilot_request(json_str: &str, event_name: &str) -> Result<Normali
     let val: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON for Copilot: {e}"))?;
 
+    if !val.is_object() {
+        return Err("Invalid JSON for Copilot: Payload must be a JSON object".to_string());
+    }
+
     let event_type = HookEventType::from_name(event_name);
     let command = extract_wire_command(&val);
     let file_path = extract_wire_file_path(&val);
@@ -502,6 +514,10 @@ pub fn parse_opencode_request(json_str: &str) -> Result<NormalizedHookRequest, S
     let val: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON for OpenCode: {e}"))?;
 
+    if !val.is_object() {
+        return Err("Invalid JSON for OpenCode: Payload must be a JSON object".to_string());
+    }
+
     let event_type = HookEventType::PreToolUse;
     let command = extract_wire_command(&val);
     let file_path = extract_wire_file_path(&val);
@@ -530,6 +546,10 @@ pub fn parse_opencode_request(json_str: &str) -> Result<NormalizedHookRequest, S
 pub fn parse_mcp_call_request(json_str: &str) -> Result<NormalizedHookRequest, String> {
     let val: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON-RPC 2.0: {e}"))?;
+
+    if !val.is_object() {
+        return Err("Invalid JSON-RPC 2.0: Payload must be a JSON object".to_string());
+    }
 
     let rpc_id = val.get("id").cloned();
     let params = val.get("params").cloned().unwrap_or(serde_json::Value::Null);
