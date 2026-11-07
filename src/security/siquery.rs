@@ -9,7 +9,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use chrono::Utc;
 use parking_lot::RwLock;
@@ -378,8 +378,8 @@ impl SiqueryEngine {
         conn.progress_handler(
             1000,
             Some(move || {
-                // If query exceeds 15 seconds, return false to abort execution with SQLITE_INTERRUPT
-                query_start.elapsed() <= Duration::from_secs(15)
+                // In SQLite/rusqlite, returning true triggers SQLITE_INTERRUPT to abort execution
+                query_start.elapsed().as_secs() >= 15
             }),
         );
 

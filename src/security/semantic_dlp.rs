@@ -398,7 +398,11 @@ impl GlinerSpanNerEngine {
                 }
             }
             "deal_value" | "monetary_amount" => {
-                if clean.starts_with('$') || clean.starts_with('€') || clean.starts_with('£') {
+                let is_sym = clean.starts_with('$') || clean.starts_with('€') || clean.starts_with('£') || clean.starts_with('¥');
+                let is_iso = ["USD", "EUR", "GBP", "CAD", "AUD", "CHF", "JPY"]
+                    .iter()
+                    .any(|&code| clean.to_ascii_uppercase().starts_with(code));
+                if is_sym || is_iso {
                     0.94
                 } else {
                     0.20
@@ -442,15 +446,33 @@ impl GlinerSpanNerEngine {
                 });
             }
 
-            if (trimmed.starts_with('$') || trimmed.starts_with('€') || trimmed.starts_with('£'))
-                && trimmed.chars().skip(1).any(|c| c.is_ascii_digit())
-            {
+            let is_sym = (trimmed.starts_with('$') || trimmed.starts_with('€') || trimmed.starts_with('£') || trimmed.starts_with('¥'))
+                && trimmed.chars().skip(1).any(|c| c.is_ascii_digit());
+            let is_iso = ["USD", "EUR", "GBP", "CAD", "AUD", "CHF", "JPY"]
+                .iter()
+                .any(|&code| trimmed.to_ascii_uppercase().starts_with(code));
+
+            if is_sym || is_iso {
                 let start = text.find(word).unwrap_or(0);
                 matches.push(GlinerSpanMatch {
                     label: "deal_value".to_string(),
                     text: word.to_string(),
                     span: (start, start + word.len()),
                     score: 0.95,
+                });
+            }
+
+            // NPI check
+            if trimmed.len() == 10
+                && trimmed.chars().all(|c| c.is_ascii_digit())
+                && RedactXStructuredValidator::npi_valid(trimmed)
+            {
+                let start = text.find(trimmed).unwrap_or(0);
+                matches.push(GlinerSpanMatch {
+                    label: "hipaa_npi".to_string(),
+                    text: trimmed.to_string(),
+                    span: (start, start + trimmed.len()),
+                    score: 0.98,
                 });
             }
 
@@ -565,9 +587,86 @@ pub fn safe_utf8_slice(s: &str, start_char: usize, char_len: usize) -> &str {
     &s[start_byte..end_byte]
 }
 
-pub fn tokenize_dlp_payload(text: &str) -> impl Iterator<Item = &str> {
-    text.split(|c: char| c.is_whitespace() || c == ',' || c == ';' || c == '"' || c == '\'' || c == '{' || c == '}' || c == '[' || c == ']')
-        .filter(|s| !s.is_empty())
+// =============================================================================
+// Structural Delimiter Tokenization for Compact JSON, Query Strings & Deal Values
+// =============================================================================
+
+/// Returns true if character `c` is a structural syntax delimiter in JSON, query strings,
+/// CLI flags, headers, or code syntax that should segment tokens during DLP scanning.
+#[inline]
+pub fn is_dlp_structural_delimiter(c: char) -> bool {
+    c.is_whitespace()
+        || c.is_control()
+        || matches!(
+            c,
+            '{' | '}'
+                | '['
+                | ']'
+                | '('
+                | ')'
+                | '<'
+                | '>'
+                | ':'
+                | ';'
+                | ','
+                | '"'
+                | '\''
+                | '`'
+                | '='
+                | '&'
+                | '?'
+                | '\\'
+                | '/'
+                | '|'
+        )
+}
+
+/// Tokenizes an input payload into candidate subslice tokens by splitting on
+/// whitespace, control characters, and structural delimiters (`{}[]():;,"'=\&/?|`).
+pub fn tokenize_dlp_payload(payload: &str) -> impl Iterator<Item = &str> {
+    payload
+        .split(is_dlp_structural_delimiter)
+        .map(|tok| tok.trim_matches(['.', '!', '?', '`', '(', ')', '"', '\'']))
+        .filter(|tok| !tok.is_empty())
+}
+
+/// Returns true if character `c` is a structural delimiter for deal value parsing.
+/// Unlike `is_dlp_structural_delimiter`, this preserves internal commas in monetary numbers
+/// (such as `$1,500,000` or `EUR 2,000,000`), while splitting on whitespace and structural brackets.
+#[inline]
+pub fn is_dlp_deal_delimiter(c: char) -> bool {
+    c.is_whitespace()
+        || c.is_control()
+        || matches!(
+            c,
+            '{' | '}'
+                | '['
+                | ']'
+                | '('
+                | ')'
+                | '<'
+                | '>'
+                | ':'
+                | ';'
+                | '"'
+                | '\''
+                | '`'
+                | '='
+                | '&'
+                | '?'
+                | '\\'
+                | '/'
+                | '|'
+        )
+}
+
+/// Tokenizes an input payload for deal value parsing, preserving internal commas in numbers
+/// while trimming trailing/leading commas, colons, or punctuation from token boundaries.
+pub fn tokenize_dlp_deal_payload(payload: &str) -> impl Iterator<Item = &str> {
+    payload
+        .split(is_dlp_deal_delimiter)
+        .map(|tok| tok.trim_matches([',', ';', '.', '!', '?', '`', '(', ')', '"', '\'']))
+        .filter(|tok| !tok.is_empty())
 }
 
 // =============================================================================
@@ -612,84 +711,368 @@ impl SemanticDlpEngine {
     }
 
     fn detect_deal_values(&self, payload: &str, lower: &str, matches: &mut Vec<SemanticDlpEntity>) {
-        let has_deal_context = lower.contains("deal")
+        let is_deal_context = lower.contains("deal")
             || lower.contains("acquisition")
             || lower.contains("m&a")
+            || lower.contains("m & a")
+            || lower.contains("m_and_a")
+            || lower.contains("merger")
             || lower.contains("purchase")
             || lower.contains("contract")
             || lower.contains("valuation")
+            || lower.contains("target_valuation")
+            || lower.contains("target valuation")
+            || lower.contains("transaction")
+            || lower.contains("deal value")
             || lower.contains("deal_value")
-            || lower.contains("target_valuation");
+            || lower.contains("deal-value")
+            || lower.contains("deal size")
+            || lower.contains("deal_size")
+            || lower.contains("deal-size")
+            || lower.contains("deal amount")
+            || lower.contains("deal_amount")
+            || lower.contains("deal-amount")
+            || lower.contains("transaction value")
+            || lower.contains("transaction_value")
+            || lower.contains("transaction-value")
+            || lower.contains("acquisition price")
+            || lower.contains("acquisition_price")
+            || lower.contains("acquisition-price")
+            || lower.contains("purchase price")
+            || lower.contains("purchase_price")
+            || lower.contains("purchase-price")
+            || lower.contains("оценка")
+            || lower.contains("сделки")
+            || lower.contains("приобретен")
+            || lower.contains("стоимость");
 
-        for token in tokenize_dlp_payload(payload) {
-            let clean = token.trim_matches(['$', '€', '£', ',', ';', ':', '"', '\'']);
-            let mut num_str = clean.to_string();
-            let mut multiplier = 1.0;
-            if num_str.ends_with('M') || num_str.ends_with('m') {
-                num_str.pop();
-                multiplier = 1_000_000.0;
-            } else if num_str.ends_with('B') || num_str.ends_with('b') {
-                num_str.pop();
-                multiplier = 1_000_000_000.0;
-            } else if num_str.ends_with('K') || num_str.ends_with('k') {
-                num_str.pop();
-                multiplier = 1_000.0;
+        if !is_deal_context {
+            return;
+        }
+
+        const ISO_CURRENCIES: &[&str] = &["USD", "EUR", "GBP", "CAD", "AUD", "CHF", "JPY"];
+        const CURRENCY_SYMBOLS: &[char] = &['$', '€', '£', '¥'];
+
+        let tokens: Vec<&str> = tokenize_dlp_deal_payload(payload).collect();
+        let mut i = 0;
+        let mut scan_cursor = 0;
+
+        while i < tokens.len() {
+            let token = tokens[i];
+            let mut trimmed = token.trim_matches([
+                ',', ';', ':', '(', ')', '[', ']', '{', '}', '"', '\'', '\\', '=', '&',
+            ]);
+            trimmed = trimmed.trim_start_matches(|c: char| {
+                !c.is_ascii_digit() && !CURRENCY_SYMBOLS.contains(&c) && !c.is_ascii_alphabetic()
+            });
+
+            if trimmed.is_empty() {
+                i += 1;
+                continue;
             }
 
-            let num_clean: String = num_str.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
-            if let Ok(val) = num_clean.parse::<f64>() {
-                let total_val = val * multiplier;
-                if total_val >= 100.0 && (has_deal_context || token.starts_with('$') || token.starts_with('€') || token.starts_with('£')) {
-                    let (classification, policy) = if total_val >= self.deal_threshold_usd {
-                        (ClassificationLattice::CrownJewel, PolicyLattice::Quarantine)
-                    } else {
-                        (ClassificationLattice::Confidential, PolicyLattice::Block)
-                    };
+            // 1. Identify currency prefix and extract numeric candidate string
+            enum CurrencyMatch<'a> {
+                Attached(&'a str),
+                Separated,
+            }
 
-                    let start = payload.find(token).unwrap_or(0);
+            let mut currency_match = None;
+
+            // Check single-char currency symbols
+            if let Some(&sym) = CURRENCY_SYMBOLS.iter().find(|&&s| trimmed.starts_with(s)) {
+                let rest = &trimmed[sym.len_utf8()..];
+                let num_part = rest.trim_start_matches([':', '=', '-', ' ']);
+                if num_part.is_empty() {
+                    currency_match = Some(CurrencyMatch::Separated);
+                } else if num_part
+                    .chars()
+                    .next()
+                    .map_or(false, |c| c.is_ascii_digit())
+                {
+                    currency_match = Some(CurrencyMatch::Attached(num_part));
+                }
+            }
+
+            // Check standard ISO 4217 currency codes (USD, EUR, GBP, CAD, AUD, CHF, JPY)
+            if currency_match.is_none() {
+                if let Some(prefix) = trimmed.get(..3) {
+                    if ISO_CURRENCIES
+                        .iter()
+                        .any(|&c| prefix.eq_ignore_ascii_case(c))
+                    {
+                        let rest = &trimmed[3..];
+                        let num_part = rest.trim_start_matches([':', '=', '-', ' ']);
+                        if num_part.is_empty() {
+                            currency_match = Some(CurrencyMatch::Separated);
+                        } else if num_part
+                            .chars()
+                            .next()
+                            .map_or(false, |c| c.is_ascii_digit())
+                        {
+                            currency_match = Some(CurrencyMatch::Attached(num_part));
+                        }
+                    }
+                }
+            }
+
+            // Check digit-first amounts (e.g. "15M USD", "20M EUR", or "1.2B" in deal context)
+            if currency_match.is_none()
+                && trimmed.chars().next().map_or(false, |c| c.is_ascii_digit())
+            {
+                let has_currency_suffix = if i + 1 < tokens.len() {
+                    let next_clean = tokens[i + 1].trim_matches([
+                        ',', ';', ':', '(', ')', '[', ']', '{', '}', '"', '\'', '\\', '=', '&',
+                    ]);
+                    ISO_CURRENCIES
+                        .iter()
+                        .any(|&c| next_clean.eq_ignore_ascii_case(c))
+                        || CURRENCY_SYMBOLS.iter().any(|&s| next_clean.starts_with(s))
+                } else {
+                    false
+                };
+
+                let has_attached_magnitude = trimmed.ends_with('M')
+                    || trimmed.ends_with('m')
+                    || trimmed.ends_with('B')
+                    || trimmed.ends_with('b');
+
+                if has_currency_suffix || has_attached_magnitude {
+                    currency_match = Some(CurrencyMatch::Attached(trimmed));
+                }
+            }
+
+            let (num_candidate, mut tokens_consumed, lookahead_idx) = match currency_match {
+                Some(CurrencyMatch::Attached(num_str)) => (num_str, 1, i + 1),
+                Some(CurrencyMatch::Separated) if i + 1 < tokens.len() => {
+                    let next_trimmed = tokens[i + 1].trim_matches([
+                        ',', ';', ':', '(', ')', '[', ']', '{', '}', '"', '\'', '\\', '=', '&',
+                    ]);
+                    let num_clean = next_trimmed.trim_start_matches(['$', '€', '£', '¥']);
+                    if num_clean
+                        .chars()
+                        .next()
+                        .map_or(false, |c| c.is_ascii_digit())
+                    {
+                        (num_clean, 2, i + 2)
+                    } else {
+                        i += 1;
+                        continue;
+                    }
+                }
+                _ => {
+                    i += 1;
+                    continue;
+                }
+            };
+
+            // 2. Determine magnitude multiplier strictly from token suffix or adjacent lookahead token
+            let (mut multiplier, has_suffix_mult) =
+                if num_candidate.ends_with('M') || num_candidate.ends_with('m') {
+                    (1_000_000.0, true)
+                } else if num_candidate.ends_with('B') || num_candidate.ends_with('b') {
+                    (1_000_000_000.0, true)
+                } else if num_candidate.ends_with('K') || num_candidate.ends_with('k') {
+                    (1_000.0, true)
+                } else {
+                    (1.0, false)
+                };
+
+            if !has_suffix_mult && lookahead_idx < tokens.len() {
+                let lookahead_clean = tokens[lookahead_idx]
+                    .trim_matches([',', ';', ':', '(', ')', '[', ']', '"', '\'']);
+                let lookahead_lower = lookahead_clean.to_ascii_lowercase();
+                if lookahead_lower == "million" || lookahead_lower == "m" {
+                    multiplier = 1_000_000.0;
+                    tokens_consumed += 1;
+                } else if lookahead_lower == "billion" || lookahead_lower == "b" {
+                    multiplier = 1_000_000_000.0;
+                    tokens_consumed += 1;
+                } else if lookahead_lower == "thousand" || lookahead_lower == "k" {
+                    multiplier = 1_000.0;
+                    tokens_consumed += 1;
+                }
+            }
+
+            // 3. Parse numeric value and compute total
+            let num_clean: String = num_candidate
+                .chars()
+                .filter(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            if let Ok(val) = num_clean.parse::<f64>() {
+                let total = val * multiplier;
+
+                let first_token = tokens[i];
+                let last_token = tokens[i + tokens_consumed - 1];
+                let start = payload[scan_cursor..]
+                    .find(first_token)
+                    .map(|pos| scan_cursor + pos)
+                    .unwrap_or(scan_cursor);
+                let end = if let Some(last_pos) = payload[start..].find(last_token) {
+                    start + last_pos + last_token.len()
+                } else {
+                    start + first_token.len()
+                };
+                scan_cursor = end;
+                let raw_snippet = &payload[start..end];
+
+                if total >= self.deal_threshold_usd {
                     matches.push(SemanticDlpEntity {
                         kind: SemanticEntityKind::DealValue,
-                        raw: token.to_string(),
-                        text: format!("${:.2}", total_val),
-                        span: (start, start + token.len()),
-                        confidence: 0.95,
-                        classification,
-                        policy,
+                        raw: raw_snippet.to_string(),
+                        text: format!("${:.2}", total),
+                        span: (start, end),
+                        confidence: 0.98,
+                        classification: ClassificationLattice::CrownJewel,
+                        policy: PolicyLattice::Quarantine,
+                    });
+                } else {
+                    matches.push(SemanticDlpEntity {
+                        kind: SemanticEntityKind::DealValue,
+                        raw: raw_snippet.to_string(),
+                        text: format!("${:.2}", total),
+                        span: (start, end),
+                        confidence: 0.92,
+                        classification: ClassificationLattice::Confidential,
+                        policy: PolicyLattice::Block,
                     });
                 }
             }
+
+            i += tokens_consumed;
         }
     }
 
-    fn detect_phi(&self, payload: &str, _lower: &str, matches: &mut Vec<SemanticDlpEntity>) {
+    fn detect_phi(&self, payload: &str, lower: &str, matches: &mut Vec<SemanticDlpEntity>) {
+        let has_phi_context = lower.contains("patient")
+            || lower.contains("medical record")
+            || lower.contains("medical")
+            || lower.contains("clinical")
+            || lower.contains("lab findings")
+            || lower.contains("diagnosis")
+            || lower.contains("prescription")
+            || lower.contains("treatment")
+            || lower.contains("physician")
+            || lower.contains("attending")
+            || lower.contains("doctor")
+            || lower.contains("dr.")
+            || lower.contains("dr ")
+            || lower.contains("nurse")
+            || lower.contains("provider")
+            || lower.contains("hospital")
+            || lower.contains("clinic")
+            || lower.contains("healthcare")
+            || lower.contains("ssn")
+            || lower.contains("hipaa")
+            || lower.contains("npi")
+            || lower.contains("mrn")
+            || lower.contains("patient id")
+            || lower.contains("chart number");
+
         for word in tokenize_dlp_payload(payload) {
-            let clean = word.trim_matches([',', ';', '.', ':', '(', ')', '[', ']', '{', '}', '"', '\'']);
-            let parts: Vec<&str> = clean.split('-').collect();
-            if parts.len() == 3 && RedactXStructuredValidator::ssn_valid(parts[0], parts[1], parts[2]) {
-                let start = payload.find(clean).unwrap_or(0);
-                matches.push(SemanticDlpEntity {
-                    kind: SemanticEntityKind::PhiMedicalRecord,
-                    raw: clean.to_string(),
-                    text: clean.to_string(),
-                    span: (start, start + clean.len()),
-                    confidence: 0.99,
-                    classification: ClassificationLattice::CrownJewel,
-                    policy: PolicyLattice::Quarantine,
-                });
+            let trimmed = word.trim_matches([
+                ',', ';', '.', ':', '(', ')', '[', ']', '{', '}', '"', '\'', '\\', '=', '&',
+            ]);
+
+            // 1. SSN Check: \d{3}-\d{2}-\d{4}
+            let parts: Vec<&str> = trimmed.split('-').collect();
+            if parts.len() == 3
+                && parts[0].len() == 3
+                && parts[0].chars().all(|c| c.is_ascii_digit())
+                && parts[1].len() == 2
+                && parts[1].chars().all(|c| c.is_ascii_digit())
+                && parts[2].len() == 4
+                && parts[2].chars().all(|c| c.is_ascii_digit())
+            {
+                if RedactXStructuredValidator::ssn_valid(parts[0], parts[1], parts[2]) {
+                    let start =
+                        (trimmed.as_ptr() as usize).saturating_sub(payload.as_ptr() as usize);
+                    let end = start + trimmed.len();
+                    if !matches.iter().any(|m| m.span == (start, end)) {
+                        matches.push(SemanticDlpEntity {
+                            kind: SemanticEntityKind::PhiMedicalRecord,
+                            raw: trimmed.to_string(),
+                            text: trimmed.to_string(),
+                            span: (start, end),
+                            confidence: if has_phi_context { 0.99 } else { 0.95 },
+                            classification: ClassificationLattice::CrownJewel,
+                            policy: PolicyLattice::Quarantine,
+                        });
+                    }
+                }
+            }
+
+            // 2. 10-digit NPI Check when clinical context or medical triggers are present
+            if has_phi_context {
+                let candidate_npi = if trimmed.to_ascii_lowercase().starts_with("npi") {
+                    trimmed[3..].trim_matches(|c: char| !c.is_ascii_digit())
+                } else {
+                    trimmed
+                };
+                if candidate_npi.len() == 10
+                    && candidate_npi.chars().all(|c| c.is_ascii_digit())
+                    && RedactXStructuredValidator::npi_valid(candidate_npi)
+                {
+                    let start =
+                        (candidate_npi.as_ptr() as usize).saturating_sub(payload.as_ptr() as usize);
+                    let end = start + candidate_npi.len();
+                    if !matches.iter().any(|m| m.span == (start, end)) {
+                        matches.push(SemanticDlpEntity {
+                            kind: SemanticEntityKind::PhiMedicalRecord,
+                            raw: candidate_npi.to_string(),
+                            text: candidate_npi.to_string(),
+                            span: (start, end),
+                            confidence: 0.98,
+                            classification: ClassificationLattice::CrownJewel,
+                            policy: PolicyLattice::Quarantine,
+                        });
+                    }
+                }
+
+                // 3. Candidate attached MRN tokens (e.g. MRN:1234569 or MRN-1234569)
+                if trimmed.to_ascii_lowercase().starts_with("mrn") {
+                    let candidate_mrn =
+                        trimmed[3..].trim_matches(|c: char| !c.is_ascii_alphanumeric());
+                    if candidate_mrn.len() >= 6
+                        && candidate_mrn.len() <= 12
+                        && RedactXStructuredValidator::mod11_valid(candidate_mrn)
+                    {
+                        let start = (candidate_mrn.as_ptr() as usize)
+                            .saturating_sub(payload.as_ptr() as usize);
+                        let end = start + candidate_mrn.len();
+                        if !matches.iter().any(|m| m.span == (start, end)) {
+                            matches.push(SemanticDlpEntity {
+                                kind: SemanticEntityKind::PhiMedicalRecord,
+                                raw: candidate_mrn.to_string(),
+                                text: candidate_mrn.to_string(),
+                                span: (start, end),
+                                confidence: 0.96,
+                                classification: ClassificationLattice::CrownJewel,
+                                policy: PolicyLattice::Quarantine,
+                            });
+                        }
+                    }
+                }
             }
         }
 
-        for mrn in RedactXStructuredValidator::mrn_scan(payload) {
-            let start = payload.find(&mrn).unwrap_or(0);
-            matches.push(SemanticDlpEntity {
-                kind: SemanticEntityKind::PhiMedicalRecord,
-                raw: mrn.clone(),
-                text: mrn.clone(),
-                span: (start, start + mrn.len()),
-                confidence: 0.96,
-                classification: ClassificationLattice::CrownJewel,
-                policy: PolicyLattice::Quarantine,
-            });
+        // Global MRN scan across payload
+        if has_phi_context {
+            for mrn in RedactXStructuredValidator::mrn_scan(payload) {
+                let start = payload.find(&mrn).unwrap_or(0);
+                let end = start + mrn.len();
+                if !matches.iter().any(|m| m.span == (start, end)) {
+                    matches.push(SemanticDlpEntity {
+                        kind: SemanticEntityKind::PhiMedicalRecord,
+                        raw: mrn.clone(),
+                        text: mrn,
+                        span: (start, end),
+                        confidence: 0.96,
+                        classification: ClassificationLattice::CrownJewel,
+                        policy: PolicyLattice::Quarantine,
+                    });
+                }
+            }
         }
     }
 

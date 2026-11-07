@@ -4264,16 +4264,23 @@ pub fn handle_siquery_query(
 
     let engine = crate::security::siquery::SiqueryEngine::new();
     match engine.execute_query_formatted(&sql, output_format) {
-        Ok(res) => (
-            "200 OK",
-            serde_json::json!({
-                "status": "success",
-                "query": sql,
-                "format": format_str,
-                "result": res,
-            })
-            .to_string(),
-        ),
+        Ok(res) => {
+            let result_val: serde_json::Value = if output_format == crate::security::siquery::SiqueryOutputFormat::Json {
+                serde_json::from_str(&res).unwrap_or_else(|_| serde_json::Value::String(res))
+            } else {
+                serde_json::Value::String(res)
+            };
+            (
+                "200 OK",
+                serde_json::json!({
+                    "status": "success",
+                    "query": sql,
+                    "format": format_str,
+                    "result": result_val,
+                })
+                .to_string(),
+            )
+        }
         Err(e) => ("400 Bad Request", json_error_payload("QUERY_EXECUTION_ERROR", &e)),
     }
 }

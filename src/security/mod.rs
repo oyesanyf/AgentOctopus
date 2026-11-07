@@ -286,14 +286,17 @@ pub use process_immunity::{
     AgentRuntimeChild, BinaryCapabilities, LineageInspectionResult, TokenDeltaObservation,
 };
 pub use semantic_command::{
-    parse_semantic_command, tokenize_command, unwrap_shell_and_env_nesting,
-    DynamicBinaryMetadataProbe, PrivilegeEquivalenceClass, SemanticCommand,
+    classify_action_class, parse_semantic_command, tokenize_command, unwrap_env_invocation,
+    unwrap_shell_and_env_nesting, unwrap_shell_invocation, DynamicBinaryMetadataProbe,
+    PrivilegeEquivalenceClass, SemanticCommand,
 };
 pub use semantic_dlp::{
-    luhn_check, query_recent_semantic_events, record_semantic_dlp_event, safe_utf8_slice,
-    snapshot_semantic_dlp_events, PresidioGlinerPiiZeroGuard, RedactXStructuredValidator,
-    SemanticDlpEngine, SemanticDlpEntity, SemanticDlpRecord, SemanticDlpVerdict,
-    SemanticEntityKind, ZeroLeakageProof,
+    is_dlp_deal_delimiter, is_dlp_structural_delimiter, luhn_check, query_recent_semantic_events,
+    record_semantic_dlp_event, safe_utf8_slice, snapshot_semantic_dlp_events,
+    tokenize_dlp_deal_payload, tokenize_dlp_payload, GlinerSpanMatch, GlinerSpanNerEngine,
+    PresidioGlinerPiiZeroGuard, RedactXStructuredValidator, SemanticDlpEngine,
+    SemanticDlpEntity, SemanticDlpRecord, SemanticDlpVerdict, SemanticEntityKind,
+    ZeroLeakageProof,
 };
 pub use sensitive_paths::{
     classify_sensitive_system_path, is_sensitive_credential_store,

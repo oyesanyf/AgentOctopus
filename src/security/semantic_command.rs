@@ -421,11 +421,42 @@ pub fn unwrap_shell_invocation(tokens: &[String]) -> Option<String> {
             }
         }
         "powershell" | "pwsh" => {
-            // Find -Command or -c flag
+            let ps_params = crate::security::command_line::parse_powershell_args(&tokens[1..]);
+            for param in ps_params {
+                match param {
+                    crate::security::command_line::PsParameter::EncodedCommand(b64) => {
+                        if let crate::security::command_line::EncodedCommandState::Decoded {
+                            decoded_utf16le,
+                            ..
+                        } = crate::security::command_line::decode_encoded_command(&b64)
+                        {
+                            return Some(decoded_utf16le);
+                        }
+                    }
+                    crate::security::command_line::PsParameter::Command(cmd) => {
+                        if !cmd.trim().is_empty() {
+                            return Some(cmd);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Direct token scan fallback
             for i in 1..tokens.len() {
                 let arg_lc = tokens[i].to_ascii_lowercase();
                 if (arg_lc == "-command" || arg_lc == "-c") && i + 1 < tokens.len() {
                     return Some(tokens[i + 1..].join(" "));
+                }
+                if (arg_lc == "-encodedcommand" || arg_lc == "-enc" || arg_lc == "-ec" || arg_lc == "-e")
+                    && i + 1 < tokens.len()
+                {
+                    if let crate::security::command_line::EncodedCommandState::Decoded {
+                        decoded_utf16le,
+                        ..
+                    } = crate::security::command_line::decode_encoded_command(&tokens[i + 1])
+                    {
+                        return Some(decoded_utf16le);
+                    }
                 }
             }
         }
