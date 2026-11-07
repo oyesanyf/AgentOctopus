@@ -82,14 +82,23 @@ pub fn extract_proc_stem(name: &str) -> String {
         } else {
             trimmed
         }
+    } else if let Some(exe_idx) = trimmed.to_ascii_lowercase().find(".exe") {
+        let after_exe = &trimmed[exe_idx + 4..];
+        if after_exe.is_empty()
+            || after_exe.starts_with(' ')
+            || after_exe.starts_with('\t')
+            || after_exe.starts_with('"')
+            || after_exe.starts_with('\'')
+        {
+            &trimmed[..exe_idx + 4]
+        } else {
+            trimmed.split_whitespace().next().unwrap_or(trimmed)
+        }
     } else {
         trimmed.split_whitespace().next().unwrap_or(trimmed)
     };
 
-    let base = exec_token
-        .rsplit(['\\', '/'])
-        .next()
-        .unwrap_or(exec_token);
+    let base = exec_token.rsplit(['\\', '/']).next().unwrap_or(exec_token);
 
     let cleaned = base.trim().trim_matches('"').trim_matches('\'');
     let name_lc = cleaned.to_ascii_lowercase();
@@ -226,7 +235,8 @@ fn is_blanket_immunity_denied(name: &str) -> bool {
             | "cursor"
             | "code"
             | "windsurf"
-    ) || is_developer_or_agent_runtime(&name_no_exe) {
+    ) || is_developer_or_agent_runtime(&name_no_exe)
+    {
         return true;
     }
 
@@ -235,7 +245,9 @@ fn is_blanket_immunity_denied(name: &str) -> bool {
     let first_token = trimmed.split_whitespace().next().unwrap_or(trimmed);
     let candidate_path = std::path::Path::new(first_token);
     if candidate_path.exists() {
-        if let Ok(meta) = crate::security::semantic_command::DynamicBinaryMetadataProbe::probe_path(candidate_path) {
+        if let Ok(meta) = crate::security::semantic_command::DynamicBinaryMetadataProbe::probe_path(
+            candidate_path,
+        ) {
             if meta.is_privileged_target() {
                 return true;
             }
@@ -551,9 +563,17 @@ mod tests {
         };
 
         let deltas = evaluate_security_context_delta(&parent, &escalated_child);
-        assert!(deltas.iter().any(|d| matches!(d, SecurityContextDelta::LinuxEuidEscalation { .. })));
-        assert!(deltas.iter().any(|d| matches!(d, SecurityContextDelta::LinuxCapabilityExpansion { .. })));
-        assert!(deltas.iter().any(|d| matches!(d, SecurityContextDelta::WindowsIntegrityEscalation { .. })));
-        assert!(deltas.iter().any(|d| matches!(d, SecurityContextDelta::WindowsTokenElevation)));
+        assert!(deltas
+            .iter()
+            .any(|d| matches!(d, SecurityContextDelta::LinuxEuidEscalation { .. })));
+        assert!(deltas
+            .iter()
+            .any(|d| matches!(d, SecurityContextDelta::LinuxCapabilityExpansion { .. })));
+        assert!(deltas
+            .iter()
+            .any(|d| matches!(d, SecurityContextDelta::WindowsIntegrityEscalation { .. })));
+        assert!(deltas
+            .iter()
+            .any(|d| matches!(d, SecurityContextDelta::WindowsTokenElevation)));
     }
 }
