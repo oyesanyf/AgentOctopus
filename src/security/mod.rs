@@ -252,3 +252,56 @@ pub use universal_protocols::{
     OsiLayer, ProtocolDefinition, ProtocolDomain, ProtocolVectorType, UniversalProtocolCatalog,
     CATALOG_ENTRIES,
 };
+
+pub mod active_sockets;
+pub mod agent_hooks;
+pub mod circumvention;
+pub mod exec_sensor;
+pub mod process_immunity;
+pub mod semantic_command;
+pub mod semantic_dlp;
+pub mod sensitive_paths;
+pub mod siquery;
+
+pub use active_sockets::{query_live_os_process_sockets, OsQueryProcessSocketRow};
+pub use agent_hooks::{
+    evaluate_hook_synchronously, format_claude_response, format_copilot_response,
+    format_cursor_response, format_mcp_error_response, format_opencode_response,
+    install_agent_hooks, parse_claude_request, parse_copilot_request, parse_cursor_request,
+    parse_mcp_request, parse_opencode_request, snapshot_interceptions, AgentInterceptionRecord,
+    HookEvaluationDecision, HookEventType, NormalizedHookRequest, SupportedAgentKind,
+};
+pub use circumvention::{
+    evaluate_denial_outcome, is_cross_boundary_invocation, observe_denial, CircumventionAlert,
+    DenialPatternKind, DynamicDenialSignal, TemporalCircumventionCorrelator,
+    TemporalCircumventionEngine,
+};
+pub use exec_sensor::{
+    ExecEvent, ExecEventSubscriber, ExecSensorBuffer, EXEC_SENSOR_BUFFER,
+    EXEC_SENSOR_DEFAULT_CAPACITY,
+};
+pub use process_immunity::{
+    inspect_process_lineage, is_immutable_os_kernel_anchor, is_process_immune,
+    observe_process_token_delta, probe_binary_capabilities, stem_matches_exact,
+    AgentRuntimeChild, BinaryCapabilities, LineageInspectionResult, TokenDeltaObservation,
+};
+pub use semantic_command::{
+    parse_semantic_command, tokenize_command, unwrap_shell_and_env_nesting,
+    DynamicBinaryMetadataProbe, PrivilegeEquivalenceClass, SemanticCommand,
+};
+pub use semantic_dlp::{
+    luhn_check, query_recent_semantic_events, record_semantic_dlp_event, safe_utf8_slice,
+    snapshot_semantic_dlp_events, PresidioGlinerPiiZeroGuard, RedactXStructuredValidator,
+    SemanticDlpEngine, SemanticDlpEntity, SemanticDlpRecord, SemanticDlpVerdict,
+    SemanticEntityKind, ZeroLeakageProof,
+};
+pub use sensitive_paths::{
+    classify_sensitive_system_path, is_sensitive_credential_store,
+    scan_for_sensitive_system_path, scan_json_for_sensitive_path,
+    SensitiveSystemPathGuard, SensitiveSystemStoreKind,
+};
+pub use siquery::{
+    register_lineage_file_events_hook, register_lineage_open_files_hook, FileEventRecord,
+    SiqueryEngine, SiqueryRow, LIVE_FILE_EVENTS, SIQUERY_LAST_TELEMETRY,
+};
+

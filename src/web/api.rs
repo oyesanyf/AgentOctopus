@@ -4048,7 +4048,7 @@ pub fn handle_killswitch_disarm_with_peer(
                     "REJECTED",
                 );
                 return (
-                    "401 Unauthorized",
+                    "403 Forbidden",
                     json_error_payload(
                         "CALLER_PID_SPOOF_DETECTED",
                         &format!(
@@ -4060,14 +4060,26 @@ pub fn handle_killswitch_disarm_with_peer(
             }
             Err(e) => {
                 return (
-                    "401 Unauthorized",
+                    "403 Forbidden",
                     json_error_payload(
                         "PEER_PID_VERIFICATION_FAILED",
                         &format!("Failed to authenticate loopback peer PID: {}", e),
                     ),
                 );
             }
-            Ok(_) => {}
+            Ok(actual_pid) => {
+                if state.tarpit.is_quarantined(&actual_pid.to_string())
+                    || parsed.operator.as_deref().map(|o| state.tarpit.is_quarantined(o)).unwrap_or(false)
+                {
+                    return (
+                        "403 Forbidden",
+                        json_error_payload(
+                            "CALLER_QUARANTINED",
+                            &format!("Caller PID {} or operator is quarantined", actual_pid),
+                        ),
+                    );
+                }
+            }
         }
     }
 
@@ -4114,6 +4126,222 @@ pub fn handle_killswitch_protocols() -> (&'static str, String) {
     (
         "200 OK",
         serde_json::to_string(&summary).unwrap_or_else(|_| "{}".to_string()),
+    )
+}
+
+// =============================================================================
+// Siquery Engine & Peer-PID Anti-Spoofing Endpoints (R4 & R8)
+// =============================================================================
+
+/// Helper to verify loopback peer PID anti-spoofing and fail-closed quarantine status.
+pub fn verify_control_plane_peer_pid(
+    state: &WebState,
+    peer_addr: Option<std::net::SocketAddr>,
+    local_port: u16,
+    claimed_pid: Option<u32>,
+    operator: Option<&str>,
+) -> Result<u32, (&'static str, String)> {
+    if let (Some(claimed), Some(addr)) = (claimed_pid, peer_addr) {
+        match crate::security::resolve_loopback_peer_pid(addr, local_port) {
+            Ok(actual_pid) if actual_pid != claimed => {
+                state.audit_log.record_event(
+                    "CONTROL_PLANE_SPOOF_BLOCKED",
+                    operator.unwrap_or("unknown"),
+                    &format!(
+                        "Rejected spoofed caller_pid {} (kernel TCP socket owner PID is {})",
+                        claimed, actual_pid
+                    ),
+                    "REJECTED",
+                );
+                return Err((
+                    "403 Forbidden",
+                    json_error_payload(
+                        "CALLER_PID_SPOOF_DETECTED",
+                        &format!(
+                            "Claimed caller_pid {} does not match authenticated kernel socket owner PID {}",
+                            claimed, actual_pid
+                        ),
+                    ),
+                ));
+            }
+            Err(e) => {
+                return Err((
+                    "403 Forbidden",
+                    json_error_payload(
+                        "PEER_PID_VERIFICATION_FAILED",
+                        &format!("Failed to authenticate loopback peer PID: {}", e),
+                    ),
+                ));
+            }
+            Ok(actual_pid) => {
+                if state.tarpit.is_quarantined(&actual_pid.to_string())
+                    || operator.map(|o| state.tarpit.is_quarantined(o)).unwrap_or(false)
+                {
+                    return Err((
+                        "403 Forbidden",
+                        json_error_payload(
+                            "CALLER_QUARANTINED",
+                            &format!("Caller PID {} or operator is quarantined", actual_pid),
+                        ),
+                    ));
+                }
+                return Ok(actual_pid);
+            }
+        }
+    } else if let Some(addr) = peer_addr {
+        if let Ok(actual_pid) = crate::security::resolve_loopback_peer_pid(addr, local_port) {
+            if state.tarpit.is_quarantined(&actual_pid.to_string())
+                || operator.map(|o| state.tarpit.is_quarantined(o)).unwrap_or(false)
+            {
+                return Err((
+                    "403 Forbidden",
+                    json_error_payload(
+                        "CALLER_QUARANTINED",
+                        &format!("Caller PID {} or operator is quarantined", actual_pid),
+                    ),
+                ));
+            }
+            return Ok(actual_pid);
+        }
+    }
+    Ok(0)
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct SiqueryApiRequest {
+    pub query: Option<String>,
+    pub sql: Option<String>,
+    pub format: Option<String>,
+    pub caller_pid: Option<u32>,
+    pub operator: Option<String>,
+}
+
+pub fn handle_siquery_query(
+    state: &WebState,
+    body: &str,
+    peer_addr: Option<std::net::SocketAddr>,
+    local_port: u16,
+) -> (&'static str, String) {
+    let parsed: SiqueryApiRequest = match serde_json::from_str(body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                "400 Bad Request",
+                json_error_payload(
+                    "INVALID_JSON",
+                    &format!("Invalid JSON payload for /api/siquery/query: {}", e),
+                ),
+            );
+        }
+    };
+
+    if let Err(rejection) = verify_control_plane_peer_pid(
+        state,
+        peer_addr,
+        local_port,
+        parsed.caller_pid,
+        parsed.operator.as_deref(),
+    ) {
+        return rejection;
+    }
+
+    let sql = match parsed.query.or(parsed.sql) {
+        Some(s) if !s.trim().is_empty() => s,
+        _ => {
+            return (
+                "400 Bad Request",
+                json_error_payload("MISSING_QUERY", "Missing SQL query in request body"),
+            );
+        }
+    };
+
+    let format_str = parsed.format.as_deref().unwrap_or("json");
+    let output_format = match format_str.to_ascii_lowercase().as_str() {
+        "csv" => crate::security::siquery::SiqueryOutputFormat::Csv,
+        "pretty" | "table" => crate::security::siquery::SiqueryOutputFormat::Pretty,
+        _ => crate::security::siquery::SiqueryOutputFormat::Json,
+    };
+
+    let engine = crate::security::siquery::SiqueryEngine::new();
+    match engine.execute_query_formatted(&sql, output_format) {
+        Ok(res) => (
+            "200 OK",
+            serde_json::json!({
+                "status": "success",
+                "query": sql,
+                "format": format_str,
+                "result": res,
+            })
+            .to_string(),
+        ),
+        Err(e) => ("400 Bad Request", json_error_payload("QUERY_EXECUTION_ERROR", &e)),
+    }
+}
+
+pub fn handle_siquery_tables(
+    state: &WebState,
+    peer_addr: Option<std::net::SocketAddr>,
+    local_port: u16,
+) -> (&'static str, String) {
+    if let Err(rejection) = verify_control_plane_peer_pid(state, peer_addr, local_port, None, None) {
+        return rejection;
+    }
+
+    let tables = crate::security::siquery::SiqueryEngine::list_tables();
+    (
+        "200 OK",
+        serde_json::json!({
+            "status": "success",
+            "count": tables.len(),
+            "tables": tables,
+        })
+        .to_string(),
+    )
+}
+
+pub fn handle_siquery_edr_status(
+    _state: &WebState,
+    _peer_addr: Option<std::net::SocketAddr>,
+    _local_port: u16,
+) -> (&'static str, String) {
+    let report = crate::security::siquery::get_last_siquery_telemetry();
+    (
+        "200 OK",
+        serde_json::json!({
+            "status": "success",
+            "telemetry": report,
+        })
+        .to_string(),
+    )
+}
+
+pub fn handle_siquery_protect_sweep(
+    state: &WebState,
+    body: &str,
+    peer_addr: Option<std::net::SocketAddr>,
+    local_port: u16,
+) -> (&'static str, String) {
+    let parsed: Option<SiqueryApiRequest> = serde_json::from_str(body).ok();
+    let (caller_pid, operator) = match parsed {
+        Some(ref p) => (p.caller_pid, p.operator.as_deref()),
+        None => (None, None),
+    };
+
+    if let Err(rejection) =
+        verify_control_plane_peer_pid(state, peer_addr, local_port, caller_pid, operator)
+    {
+        return rejection;
+    }
+
+    let engine = crate::security::siquery::SiqueryEngine::new();
+    let sweep_report = engine.run_siquery_edr_audit_sweep();
+    (
+        "200 OK",
+        serde_json::json!({
+            "status": "success",
+            "sweep_report": sweep_report,
+        })
+        .to_string(),
     )
 }
 

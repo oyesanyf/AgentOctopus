@@ -354,7 +354,7 @@ fn test_jcs_2_pow_63_trackers_request_guard_and_peer_pid_anti_spoofing() {
     .to_string();
     let (st_spoof, body_spoof) =
         handle_killswitch_disarm_with_peer(&state, &spoofed_body, Some(peer_addr), bound_port);
-    assert_eq!(st_spoof, "401 Unauthorized");
+    assert_eq!(st_spoof, "403 Forbidden");
     assert!(body_spoof.contains("CALLER_PID_SPOOF_DETECTED"));
 
     let authentic_body = json!({

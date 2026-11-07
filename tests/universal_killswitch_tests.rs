@@ -101,7 +101,7 @@ fn test_host_killswitch_manager_and_web_api_lifecycle() {
     assert_eq!(s0.universal_domains_count, 16);
     assert_eq!(s0.universal_protocols_count, 218);
     assert_eq!(s0.iana_ip_protocols_covered, 256);
-    assert_eq!(s0.wfp_kernel_layers_enforced, 22);
+    assert_eq!(s0.wfp_kernel_layers_enforced, 24);
     assert!(s0.zero_subprocess_enforced);
 
     let s1 = mgr

@@ -86,6 +86,220 @@ async fn main() {
                 );
                 std::process::exit(0);
             }
+            "hook" => {
+                let hook_sub = cli_args.get(2).map(|s| s.as_str()).unwrap_or("evaluate");
+                if hook_sub == "install" {
+                    use agent_octopus::security::agent_hooks::{install_agent_hooks, SupportedAgentKind};
+                    let mut workspace_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    let mut agents = Vec::new();
+                    let mut i = 3;
+                    while i < cli_args.len() {
+                        if cli_args[i] == "--workspace" || cli_args[i] == "-w" {
+                            if let Some(w) = cli_args.get(i + 1) {
+                                workspace_path = std::path::PathBuf::from(w);
+                                i += 1;
+                            }
+                        } else if cli_args[i] == "--agents" || cli_args[i] == "-a" {
+                            if let Some(a_list) = cli_args.get(i + 1) {
+                                for a in a_list.split(',') {
+                                    if let Some(kind) = SupportedAgentKind::from_str(a.trim()) {
+                                        agents.push(kind);
+                                    }
+                                }
+                                i += 1;
+                            }
+                        }
+                        i += 1;
+                    }
+                    if agents.is_empty() {
+                        agents = vec![
+                            SupportedAgentKind::Claude,
+                            SupportedAgentKind::Cursor,
+                            SupportedAgentKind::Copilot,
+                            SupportedAgentKind::OpenCode,
+                        ];
+                    }
+                    let current_exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("agent_octopus.exe"));
+                    match install_agent_hooks(&workspace_path, &agents, &current_exe) {
+                        Ok(configs) => {
+                            println!("✅ Successfully installed agent hooks across {} configs:", configs.len());
+                            for c in configs {
+                                println!("   - {}", c.display());
+                            }
+                            std::process::exit(0);
+                        }
+                        Err(e) => {
+                            eprintln!("❌ Failed to install agent hooks: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    // "evaluate"
+                    use agent_octopus::security::agent_hooks::{
+                        evaluate_hook_synchronously, format_claude_response, format_copilot_response,
+                        format_cursor_response, format_mcp_error_response, format_opencode_response,
+                        parse_claude_request, parse_copilot_request, parse_cursor_request,
+                        parse_mcp_call_request, parse_opencode_request, SupportedAgentKind,
+                    };
+                    use std::io::Read;
+
+                    let mut agent = SupportedAgentKind::Claude;
+                    let mut event_name = "PreToolUse".to_string();
+                    let mut is_post = false;
+                    let mut i = 2;
+                    while i < cli_args.len() {
+                        if cli_args[i] == "--agent" {
+                            if let Some(a) = cli_args.get(i + 1) {
+                                if let Some(k) = SupportedAgentKind::from_str(a) {
+                                    agent = k;
+                                }
+                                i += 1;
+                            }
+                        } else if cli_args[i] == "--event" {
+                            if let Some(ev) = cli_args.get(i + 1) {
+                                event_name = ev.clone();
+                                if ev.eq_ignore_ascii_case("post") || ev.to_ascii_lowercase().contains("after") {
+                                    is_post = true;
+                                }
+                                i += 1;
+                            }
+                        } else if cli_args[i] == "--post" {
+                            is_post = true;
+                        }
+                        i += 1;
+                    }
+
+                    let mut input = String::new();
+                    let _ = std::io::stdin().read_to_string(&mut input);
+
+                    let req = match agent {
+                        SupportedAgentKind::Claude => parse_claude_request(&input, is_post),
+                        SupportedAgentKind::Cursor => parse_cursor_request(&input, &event_name),
+                        SupportedAgentKind::Copilot => parse_copilot_request(&input, &event_name),
+                        SupportedAgentKind::OpenCode => parse_opencode_request(&input),
+                        SupportedAgentKind::Mcp => parse_mcp_call_request(&input),
+                    };
+
+                    let req = match req {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!("Error parsing hook input: {}", e);
+                            std::process::exit(1);
+                        }
+                    };
+
+                    let decision = evaluate_hook_synchronously(&req);
+                    let (exit_code, output) = match agent {
+                        SupportedAgentKind::Claude => format_claude_response(&decision),
+                        SupportedAgentKind::Cursor => format_cursor_response(&decision),
+                        SupportedAgentKind::Copilot => format_copilot_response(&decision),
+                        SupportedAgentKind::OpenCode => format_opencode_response(&decision),
+                        SupportedAgentKind::Mcp => {
+                            if decision.allowed {
+                                (0, String::new())
+                            } else {
+                                let rpc_id = req.rpc_id.clone().unwrap_or(serde_json::Value::Null);
+                                (0, format_mcp_error_response(&rpc_id, &decision))
+                            }
+                        }
+                    };
+
+                    if !output.is_empty() {
+                        println!("{}", output);
+                    }
+                    std::process::exit(exit_code);
+                }
+            }
+            "mcp-proxy" => {
+                use agent_octopus::security::agent_hooks::{
+                    evaluate_hook_synchronously, format_mcp_error_response, parse_mcp_call_request,
+                };
+                use std::io::{BufRead, Write};
+                let stdin = std::io::stdin();
+                let mut stdout = std::io::stdout();
+                for line in stdin.lock().lines() {
+                    let Ok(line) = line else { break; };
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    if let Ok(req) = parse_mcp_call_request(&line) {
+                        let decision = evaluate_hook_synchronously(&req);
+                        if !decision.allowed {
+                            let rpc_id = req.rpc_id.clone().unwrap_or(serde_json::Value::Null);
+                            let resp = format_mcp_error_response(&rpc_id, &decision);
+                            let _ = writeln!(stdout, "{}", resp);
+                            let _ = stdout.flush();
+                            continue;
+                        }
+                    }
+                    let _ = writeln!(stdout, "{}", line);
+                    let _ = stdout.flush();
+                }
+                std::process::exit(0);
+            }
+            "siquery" => {
+                use agent_octopus::security::siquery::{SiqueryEngine, SiqueryOutputFormat};
+                let mut sql_query = None;
+                let mut format = SiqueryOutputFormat::Pretty;
+                let mut list_tables = false;
+                let mut run_sweep = false;
+
+                let mut i = 2;
+                while i < cli_args.len() {
+                    let arg = &cli_args[i];
+                    if arg == "--tables" || arg == "-t" {
+                        list_tables = true;
+                    } else if arg == "--sweep" || arg == "-s" {
+                        run_sweep = true;
+                    } else if arg == "--format" || arg == "-f" {
+                        if let Some(f) = cli_args.get(i + 1) {
+                            format = match f.to_ascii_lowercase().as_str() {
+                                "json" => SiqueryOutputFormat::Json,
+                                "csv" => SiqueryOutputFormat::Csv,
+                                _ => SiqueryOutputFormat::Pretty,
+                            };
+                            i += 1;
+                        }
+                    } else if arg == "--query" || arg == "-q" {
+                        if let Some(q) = cli_args.get(i + 1) {
+                            sql_query = Some(q.clone());
+                            i += 1;
+                        }
+                    } else if !arg.starts_with('-') && sql_query.is_none() {
+                        sql_query = Some(arg.clone());
+                    }
+                    i += 1;
+                }
+
+                if list_tables {
+                    let tables = SiqueryEngine::list_tables();
+                    println!("Relational Siquery Tables ({} tables):", tables.len());
+                    for t in tables {
+                        println!("  - {}", t);
+                    }
+                    std::process::exit(0);
+                }
+
+                if run_sweep {
+                    let sweep = SiqueryEngine::new().run_siquery_edr_audit_sweep();
+                    println!("{}", serde_json::to_string_pretty(&sweep).unwrap_or_default());
+                    std::process::exit(0);
+                }
+
+                let query = sql_query.unwrap_or_else(|| {
+                    "SELECT pid, name, cmdline FROM processes LIMIT 10;".to_string()
+                });
+                match SiqueryEngine::new().execute_query_formatted(&query, format) {
+                    Ok(out) => {
+                        println!("{}", out);
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("Error executing query: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
             _ => {}
         }
     }

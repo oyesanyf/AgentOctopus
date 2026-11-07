@@ -67,6 +67,11 @@ ml-dsa = "0.1.1"
 p256 = { version = "0.13", features = ["ecdsa"] }
 base64 = "0.22"
 zeroize = { version = "1.8", features = ["derive"] }
+rusqlite = { version = "0.31", features = ["bundled", "serde_json", "hooks"] }
+subtle = "2.6"
+chrono = { version = "0.4", features = ["serde"] }
+sysinfo = "0.30"
+parking_lot = "0.12"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -79,6 +84,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_SystemServices",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
+    "Win32_System_Diagnostics_ToolHelp",
 ] }
 
 [dev-dependencies]

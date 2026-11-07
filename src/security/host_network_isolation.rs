@@ -94,6 +94,7 @@ impl std::error::Error for HostIsolationError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KernelIsolationBackend {
     WindowsWfpBfe22Layer,
+    WindowsWfpBfe24Layer,
     LinuxNetlinkBlackhole,
     MacOsPfIoctl,
     SimulatedNonElevatedTest,
@@ -102,8 +103,8 @@ pub enum KernelIsolationBackend {
 impl KernelIsolationBackend {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::WindowsWfpBfe22Layer => {
-                "Windows WFP 22-Layer + BFE Registry + IPHLPAPI TCP Reset"
+            Self::WindowsWfpBfe22Layer | Self::WindowsWfpBfe24Layer => {
+                "Windows WFP 24-Layer + BFE Registry + IPHLPAPI TCP Reset"
             }
             Self::LinuxNetlinkBlackhole => {
                 "Linux AF_NETLINK RTN_BLACKHOLE + INET_DIAG SOCK_DESTROY"
@@ -362,6 +363,22 @@ pub const FWPM_LAYER_OUTBOUND_MAC_FRAME_ETHERNET: WfpGuid = WfpGuid {
     data2: 0xd6db,
     data3: 0x4870,
     data4: [0xad, 0xee, 0x0a, 0xcd, 0xbd, 0xb7, 0xf4, 0xb2],
+};
+
+/// Official Microsoft Windows SDK GUID for FWPM_LAYER_IPFORWARD_V4: {444543b6-9046-4246-ab81-9b06227e243d}
+pub const FWPM_LAYER_IPFORWARD_V4: WfpGuid = WfpGuid {
+    data1: 0x444543b6,
+    data2: 0x9046,
+    data3: 0x4246,
+    data4: [0xab, 0x81, 0x9b, 0x06, 0x22, 0x7e, 0x24, 0x3d],
+};
+
+/// Official Microsoft Windows SDK GUID for FWPM_LAYER_IPFORWARD_V6: {12fe69b5-485a-40e7-912a-82b818121294}
+pub const FWPM_LAYER_IPFORWARD_V6: WfpGuid = WfpGuid {
+    data1: 0x12fe69b5,
+    data2: 0x485a,
+    data3: 0x40e7,
+    data4: [0x91, 0x2a, 0x82, 0xb8, 0x18, 0x12, 0x12, 0x94],
 };
 
 pub const FWPM_CONDITION_ETHER_TYPE: WfpGuid = WfpGuid {
@@ -1367,7 +1384,7 @@ impl WfpKernelSession {
             }
         }
 
-        // 4. Catch-All Block Across All 22 WFP Kernel Layers (Zero DNS/DHCP leaks)
+        // 4. Catch-All Block Across All 24 WFP Kernel Layers (Zero DNS/DHCP/WSL2 NAT leaks)
         let block_layers = [
             (FWPM_LAYER_ALE_AUTH_CONNECT_V4, "Block-All-ALE-Out-v4"),
             (FWPM_LAYER_ALE_AUTH_CONNECT_V6, "Block-All-ALE-Out-v6"),
@@ -1403,6 +1420,8 @@ impl WfpKernelSession {
                 FWPM_LAYER_INBOUND_MAC_FRAME_ETHERNET,
                 "Block-All-MAC-In-Eth",
             ),
+            (FWPM_LAYER_IPFORWARD_V4, "Block-All-Forward-v4"),
+            (FWPM_LAYER_IPFORWARD_V6, "Block-All-Forward-v6"),
         ];
         for (layer, name) in block_layers {
             if let Some(id) = add_one(name, layer, FWP_ACTION_BLOCK, 1, &mut []) {
@@ -2868,7 +2887,7 @@ impl HostKillSwitchManager {
             universal_domains_count: UniversalProtocolCatalog::all_domains().len(),
             universal_protocols_count: UniversalProtocolCatalog::total_protocols_count(),
             iana_ip_protocols_covered: 256,
-            wfp_kernel_layers_enforced: 22,
+            wfp_kernel_layers_enforced: 24,
             zero_subprocess_enforced: true,
             sequence: guard.sequence,
             state_hash: guard.state_hash.clone(),

@@ -39,7 +39,8 @@ use super::api::{
     handle_research_validate, handle_research_verify_accuracy, handle_resilience_metrics,
     handle_rl_defense_latest_cycle, handle_rl_defense_status, handle_rl_defense_train_cycle,
     handle_rl_evaluate_action, handle_runtime_activity_stream, handle_sentinel_reset_lockdown,
-    handle_sentinel_simulate_breach, handle_session_bootstrap_nonce, handle_status,
+    handle_sentinel_simulate_breach, handle_session_bootstrap_nonce, handle_siquery_edr_status,
+    handle_siquery_protect_sweep, handle_siquery_query, handle_siquery_tables, handle_status,
     handle_update_egress_domains, handle_validate_sisyphean, handle_vassilev_proof, WebState,
 };
 use super::static_files::INDEX_HTML;
@@ -2844,6 +2845,97 @@ async fn handle_connection(
                 super::request_guard::SECURITY_HEADERS,
                 body.len(),
                 body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/siquery/query") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| {
+                    handle_siquery_query(&state, body, Some(peer_addr), local_port)
+                }),
+            ) {
+                Ok(pair) => pair,
+                Err(_) => (
+                    "500 Internal Server Error",
+                    api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/siquery/query"),
+                ),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/siquery/tables") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| {
+                    handle_siquery_tables(&state, Some(peer_addr), local_port)
+                }),
+            ) {
+                Ok(pair) => pair,
+                Err(_) => (
+                    "500 Internal Server Error",
+                    api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/siquery/tables"),
+                ),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/siquery/edr-status") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| {
+                    handle_siquery_edr_status(&state, Some(peer_addr), local_port)
+                }),
+            ) {
+                Ok(pair) => pair,
+                Err(_) => (
+                    "500 Internal Server Error",
+                    api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/siquery/edr-status"),
+                ),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/siquery/protect-sweep") | ("POST", "/api/siquery/sweep") => {
+            let (status_code, json_body) = match std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| {
+                    handle_siquery_protect_sweep(&state, body, Some(peer_addr), local_port)
+                }),
+            ) {
+                Ok(pair) => pair,
+                Err(_) => (
+                    "500 Internal Server Error",
+                    api_error_payload(
+                        "INTERNAL_SERVER_ERROR",
+                        "Internal fault in /api/siquery/protect-sweep",
+                    ),
+                ),
+            };
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                super::request_guard::SECURITY_HEADERS,
+                json_body.len(),
+                json_body
             );
             stream.write_all(response.as_bytes()).await?;
         }

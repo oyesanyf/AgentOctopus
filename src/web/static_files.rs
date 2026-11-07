@@ -712,6 +712,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
   <div class="nav-tab" onclick="switchTab('dream-rsi-view')">💭 Open Dream-RSI (Arm 110)</div>
   <div class="nav-tab" onclick="switchTab('harness2-view')">🕸️ Harness² (Arm 111)</div>
   <div class="nav-tab" onclick="switchTab('agentmesh-runtime')">🌐 AgentMesh &amp; Wasm Sandbox</div>
+  <div class="nav-tab" onclick="switchTab('siquery-console')">📊 Siquery SQL Console (Tab 18)</div>
   <div class="nav-tab" onclick="switchTab('user-guide')">📖 Docs &amp; Integration Guide</div>
 </nav>
 
@@ -4145,6 +4146,62 @@ with urllib.request.urlopen(req) as resp:
     </div>
   </div>
 
+  <!-- TAB 18: SIQUERY SQL CONSOLE & 12-SWEEP EDR AUDIT -->
+  <div id="siquery-console" class="tab-content">
+    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+      <div class="breadcrumb-trail">
+        <a class="breadcrumb-link" href="javascript:void(0)" onclick="switchTab('test-runner')"><span>🏠</span> Dashboard</a>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-link" style="cursor: default; pointer-events: none;">Host Discovery &amp; EDR</span>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-current"><span>📊</span> Siquery SQL Console (Tab 18)</span>
+      </div>
+      <div class="breadcrumb-meta">
+        <span class="breadcrumb-badge">🛡️ 41 Relational Tables</span>
+        <span class="breadcrumb-badge purple">⚡ 12-Sweep Active EDR</span>
+        <span class="breadcrumb-badge green">🔒 Quadruple Read-Only Enforced</span>
+      </div>
+    </nav>
+
+    <div class="card" style="margin-bottom: 1.25rem;">
+      <div class="card-header">
+        <h2>📊 In-Process Siquery Relational SQL Engine</h2>
+      </div>
+      <div style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 1rem;">
+        Zero-external-CLI in-process relational SQL engine backed by bundled SQLite with quadruple read-only enforcement (string prefix, SQLite authorizer, <code>PRAGMA query_only = ON;</code>, VDBE <code>stmt.readonly()</code>) and 15s execution timeout. Exposes 35 OS host tables and 6 security telemetry tables.
+      </div>
+
+      <div style="margin-bottom: 1rem;">
+        <label style="display: block; font-size: 0.82rem; font-weight: 600; color: #7dd3fc; margin-bottom: 0.35rem;">Available Tables (Click to Query):</label>
+        <div id="siquery-tables-list" style="display: flex; flex-wrap: wrap; gap: 0.35rem; max-height: 120px; overflow-y: auto; padding: 0.5rem; background: #090d16; border: 1px solid #1e293b; border-radius: 6px;"></div>
+      </div>
+
+      <div style="margin-bottom: 1rem;">
+        <label for="siquery-query-input" style="display: block; font-size: 0.82rem; font-weight: 600; color: #7dd3fc; margin-bottom: 0.35rem;">SQL Query:</label>
+        <textarea id="siquery-query-input" rows="3" style="width: 100%; font-family: monospace; font-size: 0.85rem; background: #050811; color: #f3f4f6; border: 1px solid #1f293d; border-radius: 6px; padding: 0.6rem;" autocorrect="off" autocapitalize="off" spellcheck="false">SELECT pid, name, cmdline FROM processes LIMIT 10;</textarea>
+      </div>
+
+      <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem;">
+        <label for="siquery-format-select" style="font-size: 0.82rem; color: #94a3b8;">Format:</label>
+        <select id="siquery-format-select" style="background: #0f172a; color: #f3f4f6; border: 1px solid #1f293d; border-radius: 4px; padding: 0.35rem 0.6rem; font-size: 0.82rem;">
+          <option value="pretty">Pretty Table</option>
+          <option value="json">JSON</option>
+          <option value="csv">CSV</option>
+        </select>
+        <button id="btn-siquery-run" class="btn btn-primary" onclick="runSiqueryQuery()" style="padding: 0.35rem 0.85rem; font-size: 0.82rem; font-weight: 700;">▶️ Execute SQL Query</button>
+        <button id="btn-siquery-edr-sweep" class="btn" onclick="runSiqueryEdrAudit()" style="background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #6ee7b7; padding: 0.35rem 0.85rem; font-size: 0.82rem; font-weight: 700;">🛡️ Run 12-Sweep EDR Audit</button>
+        <span id="siquery-status-msg" style="font-size: 0.82rem; color: #94a3b8;"></span>
+      </div>
+
+      <div>
+        <label style="display: block; font-size: 0.82rem; font-weight: 600; color: #7dd3fc; margin-bottom: 0.35rem;">Query Output &amp; EDR Verification:</label>
+        <div id="siquery-results-container" style="min-height: 120px;">
+          <div style="color: #64748b; font-size: 0.82rem; font-style: italic; padding: 1rem; text-align: center; background: #090d16; border: 1px solid #1e293b; border-radius: 6px;">Execute an SQL query or run the 12-Sweep EDR Audit to view live relational host telemetry.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </main>
 
 <script>
@@ -4341,6 +4398,9 @@ with urllib.request.urlopen(req) as resp:
       } else if (tabId === 'universal-killswitch') {
         fetchKillSwitchStatus(true);
         loadUniversalProtocolCatalog();
+      } else if (tabId === 'siquery-console') {
+        listSiqueryTables();
+        fetchSiqueryEdrStatus();
       }
     } catch (err) {
       showDiagnosticToast({
@@ -8826,6 +8886,146 @@ def exfiltrate_credentials():
       }
     } catch (_) {}
   })();
+
+  // =========================================================================
+  // TAB 18: SIQUERY RELATIONAL SQL HOST DISCOVERY & ACTIVE EDR CONSOLE
+  // (Strict Zero innerHTML enforcement)
+  // =========================================================================
+  async function runSiqueryQuery() {
+    const queryInput = document.getElementById('siquery-query-input');
+    const formatSelect = document.getElementById('siquery-format-select');
+    const statusEl = document.getElementById('siquery-status-msg');
+    const resultContainer = document.getElementById('siquery-results-container');
+    if (!queryInput || !resultContainer) return;
+
+    const sql = queryInput.value.trim();
+    if (!sql) {
+      if (statusEl) statusEl.textContent = 'Please enter an SQL query.';
+      return;
+    }
+    const format = formatSelect ? formatSelect.value : 'pretty';
+    if (statusEl) statusEl.textContent = '⏳ Executing query...';
+
+    // Clear previous results safely
+    while (resultContainer.firstChild) {
+      resultContainer.removeChild(resultContainer.firstChild);
+    }
+
+    try {
+      const resp = await fetch('/api/siquery/query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: sql, format: format })
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        if (statusEl) statusEl.textContent = '❌ Error: ' + (data.message || data.error || 'Execution failed');
+        const errPre = document.createElement('pre');
+        errPre.style.color = '#ef4444';
+        errPre.style.background = '#1e1b2e';
+        errPre.style.padding = '0.75rem';
+        errPre.style.borderRadius = '6px';
+        errPre.textContent = data.message || JSON.stringify(data, null, 2);
+        resultContainer.appendChild(errPre);
+        return;
+      }
+
+      if (statusEl) statusEl.textContent = '✅ Query executed successfully.';
+      const resPre = document.createElement('pre');
+      resPre.style.fontFamily = 'monospace';
+      resPre.style.fontSize = '0.82rem';
+      resPre.style.color = '#e2e8f0';
+      resPre.style.background = '#090d16';
+      resPre.style.padding = '1rem';
+      resPre.style.borderRadius = '8px';
+      resPre.style.overflowX = 'auto';
+      resPre.style.whiteSpace = 'pre';
+      resPre.textContent = typeof data.result === 'string' ? data.result : JSON.stringify(data.result, null, 2);
+      resultContainer.appendChild(resPre);
+    } catch (e) {
+      if (statusEl) statusEl.textContent = '❌ Network error: ' + String(e);
+    }
+  }
+
+  async function listSiqueryTables() {
+    const listEl = document.getElementById('siquery-tables-list');
+    if (!listEl) return;
+    try {
+      const resp = await fetch('/api/siquery/tables');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      while (listEl.firstChild) {
+        listEl.removeChild(listEl.firstChild);
+      }
+      if (Array.isArray(data.tables)) {
+        for (const tbl of data.tables) {
+          const pill = document.createElement('button');
+          pill.className = 'btn';
+          pill.style.padding = '0.2rem 0.5rem';
+          pill.style.fontSize = '0.75rem';
+          pill.style.margin = '2px';
+          pill.style.background = 'rgba(6, 182, 212, 0.15)';
+          pill.style.border = '1px solid rgba(6, 182, 212, 0.4)';
+          pill.style.color = '#38bdf8';
+          pill.textContent = tbl;
+          pill.addEventListener('click', () => {
+            const queryInput = document.getElementById('siquery-query-input');
+            if (queryInput) {
+              queryInput.value = 'SELECT * FROM ' + tbl + ' LIMIT 10;';
+            }
+          });
+          listEl.appendChild(pill);
+        }
+      }
+    } catch (_) {}
+  }
+
+  async function runSiqueryEdrAudit() {
+    const statusEl = document.getElementById('siquery-status-msg');
+    const resultContainer = document.getElementById('siquery-results-container');
+    if (!resultContainer) return;
+    if (statusEl) statusEl.textContent = '⏳ Running 12-Sweep Active EDR Audit Sweep...';
+    while (resultContainer.firstChild) {
+      resultContainer.removeChild(resultContainer.firstChild);
+    }
+    try {
+      const resp = await fetch('/api/siquery/protect-sweep', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        if (statusEl) statusEl.textContent = '❌ EDR Audit failed: ' + (data.message || 'Execution error');
+        return;
+      }
+      if (statusEl) statusEl.textContent = '✅ 12-Sweep Active EDR Audit complete.';
+      const resPre = document.createElement('pre');
+      resPre.style.fontFamily = 'monospace';
+      resPre.style.fontSize = '0.82rem';
+      resPre.style.color = '#34d399';
+      resPre.style.background = '#090d16';
+      resPre.style.padding = '1rem';
+      resPre.style.borderRadius = '8px';
+      resPre.style.overflowX = 'auto';
+      resPre.textContent = JSON.stringify(data.sweep_report || data, null, 2);
+      resultContainer.appendChild(resPre);
+    } catch (e) {
+      if (statusEl) statusEl.textContent = '❌ Network error: ' + String(e);
+    }
+  }
+
+  async function fetchSiqueryEdrStatus() {
+    try {
+      const resp = await fetch('/api/siquery/edr-status');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const kpiEl = document.getElementById('siquery-kpi-anomalies');
+      if (kpiEl && data.telemetry) {
+        kpiEl.textContent = String(data.telemetry.anomalies_detected ?? 0);
+      }
+    } catch (_) {}
+  }
 </script>
 </body>
 </html>

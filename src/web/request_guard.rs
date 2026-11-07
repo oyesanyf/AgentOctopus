@@ -365,7 +365,11 @@ fn query_param<'a>(query: &'a str, name: &str) -> Option<&'a str> {
 }
 
 fn constant_time_str_eq(a: &str, b: &str) -> bool {
-    crate::security::constant_time_eq(a.as_bytes(), b.as_bytes())
+    use subtle::ConstantTimeEq;
+    if a.len() != b.len() {
+        return false;
+    }
+    a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 /// Enforces Host, Origin/Sec-Fetch-Site and token checks. Must run before any routing.
