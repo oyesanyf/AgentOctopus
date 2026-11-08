@@ -10,7 +10,101 @@ use tokio::sync::mpsc;
 async fn main() {
     let cli_args: Vec<String> = std::env::args().collect();
 
-    // 1. One-shot elevated WFP kernel helper delegation (`--wfp-kernel-apply engage|disarm`)
+    // 1. In-memory 7-phase self-diagnostics (--verify / --check / verify)
+    if cli_args.iter().any(|a| a == "--verify" || a == "--check" || a == "-v")
+        || cli_args.get(1).map(|s| s.as_str()) == Some("verify")
+    {
+        println!("🛡️  [AGENT_OCTOPUS] Executing 7-Phase Subsystem Self-Diagnostics (--verify)...");
+        match agent_octopus::verify::SubsystemVerifier::run_all().await {
+            Ok(report) => {
+                report.print_summary();
+                println!("✅ [AGENT_OCTOPUS] All Subsystems Verified Successfully! Self-check passed (exit 0).");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("❌ [AGENT_OCTOPUS] Verification failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // 2. Native OS background service management (--service <ACTION> | service <action>)
+    for i in 1..cli_args.len() {
+        if cli_args[i] == "--service" {
+            let action = cli_args.get(i + 1).map(|s| s.as_str()).unwrap_or("status");
+            match agent_octopus::service::handle_service_cli(action) {
+                Ok(()) => std::process::exit(0),
+                Err(_) => std::process::exit(1),
+            }
+        } else if let Some(action) = cli_args[i].strip_prefix("--service=") {
+            match agent_octopus::service::handle_service_cli(action) {
+                Ok(()) => std::process::exit(0),
+                Err(_) => std::process::exit(1),
+            }
+        }
+    }
+    if cli_args.get(1).map(|s| s.as_str()) == Some("service") {
+        let action = cli_args.get(2).map(|s| s.as_str()).unwrap_or("status");
+        match agent_octopus::service::handle_service_cli(action) {
+            Ok(()) => std::process::exit(0),
+            Err(_) => std::process::exit(1),
+        }
+    }
+
+    // 3. WebUI server boot (agent_octopus start | serve | ui): headless by default
+    let open_browser_requested = cli_args.iter().any(|a| a == "--open-browser" || a == "--browser");
+    if cli_args.get(1).map(|s| s.as_str()) == Some("start")
+        || cli_args.get(1).map(|s| s.as_str()) == Some("serve")
+        || cli_args.get(1).map(|s| s.as_str()) == Some("ui")
+        || cli_args.iter().any(|a| a == "--serve" || a == "--ui")
+    {
+        let mut preferred_port: u16 = 3030;
+        for i in 1..cli_args.len() {
+            if (cli_args[i] == "--port" || cli_args[i] == "-p") && i + 1 < cli_args.len() {
+                if let Ok(p) = cli_args[i + 1].parse::<u16>() {
+                    if p != 0 && p != 5000 {
+                        preferred_port = p;
+                    }
+                }
+            } else if let Some(val) = cli_args[i].strip_prefix("--port=") {
+                if let Ok(p) = val.parse::<u16>() {
+                    if p != 0 && p != 5000 {
+                        preferred_port = p;
+                    }
+                }
+            }
+        }
+        let selected_port = agent_octopus::web::select_available_loopback_port(preferred_port);
+        let addr = format!("127.0.0.1:{}", selected_port);
+
+        // Headless by default: only launch browser if explicitly passed --open-browser or --browser
+        if open_browser_requested {
+            let bootstrap_nonce = agent_octopus::web::request_guard::issue_bootstrap_nonce();
+            let url_for_browser = format!("http://127.0.0.1:{}/?bootstrap={}", selected_port, bootstrap_nonce);
+            tokio::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+                #[cfg(target_os = "windows")]
+                {
+                    let mut explorer = std::process::Command::new("explorer");
+                    explorer.arg(&url_for_browser);
+                    let _ = agent_octopus::security::spawn_hidden(&mut explorer, "cli: open dashboard");
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = std::process::Command::new("xdg-open").arg(&url_for_browser).spawn();
+                }
+            });
+        }
+
+        println!("🐙 Starting AgentOctopus Web Dashboard on {} (headless: {})...", addr, !open_browser_requested);
+        if let Err(e) = agent_octopus::web::start_web_server(&addr).await {
+            eprintln!("❌ Web server failed: {}", e);
+            std::process::exit(1);
+        }
+        std::process::exit(0);
+    }
+
+    // 4. One-shot elevated WFP kernel helper delegation (`--wfp-kernel-apply engage|disarm`)
     for i in 1..cli_args.len() {
         if cli_args[i] == "--wfp-kernel-apply" {
             let action = cli_args.get(i + 1).map(|s| s.as_str()).unwrap_or("");

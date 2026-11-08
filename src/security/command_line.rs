@@ -325,7 +325,7 @@ pub fn parse_powershell_args(args: &[String]) -> Vec<PsParameter> {
                         }
                     });
                     out.push(PsParameter::Command(val));
-                    if i + 1 <= args.len() {
+                    if i < args.len() {
                         // `-Command` consumes the rest of the line when unquoted, or the next arg.
                         break;
                     }

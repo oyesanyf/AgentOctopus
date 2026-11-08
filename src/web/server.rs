@@ -72,14 +72,14 @@ pub fn is_loopback_port_available(port: u16) -> bool {
 /// falling back across `5005..=5099`, `8080..=8099`, and finally an OS-assigned dynamic port.
 pub fn select_available_loopback_port(preferred_port: u16) -> u16 {
     let start_port = if preferred_port == 0 || preferred_port == 5000 {
-        5005
+        3030
     } else {
         preferred_port
     };
     if is_loopback_port_available(start_port) {
         return start_port;
     }
-    for port in (5005..=5099).chain(8080..=8099) {
+    for port in (3030..=3040).chain(5005..=5099).chain(8080..=8099) {
         if port != start_port && is_loopback_port_available(port) {
             return port;
         }
@@ -89,11 +89,11 @@ pub fn select_available_loopback_port(preferred_port: u16) -> u16 {
             return local.port();
         }
     }
-    5005
+    3030
 }
 
 /// Starts the Agent Octopus Web Server, listening across dual-stack loopback (IPv4 127.0.0.1 and IPv6 [::1])
-/// on the dynamically assigned or requested port (default 5005). If the requested port is in use,
+/// on the dynamically assigned or requested port (default 3030). If the requested port is in use,
 /// automatically tries the next available port. Never touches or binds port 5000.
 pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state = Arc::new(WebState::default());
@@ -110,13 +110,13 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
                 .and_then(|v| v.parse::<u16>().ok())
         })
         .filter(|&p| p != 0 && p != 5000)
-        .unwrap_or(5005);
+        .unwrap_or(3030);
 
     let ipv6_supported = TcpListener::bind("[::1]:0").await.is_ok();
 
-    let mut candidate_ports: Vec<u16> = Vec::with_capacity(120);
+    let mut candidate_ports: Vec<u16> = Vec::with_capacity(130);
     candidate_ports.push(requested_port);
-    for port in (5005..=5099).chain(8080..=8099) {
+    for port in (3030..=3040).chain(5005..=5099).chain(8080..=8099) {
         if port != requested_port && port != 5000 {
             candidate_ports.push(port);
         }

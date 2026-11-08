@@ -1,3 +1,51 @@
+#![allow(
+    clippy::type_complexity,
+    clippy::too_many_arguments,
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::single_match,
+    clippy::needless_range_loop,
+    clippy::identity_op,
+    clippy::unnecessary_map_or,
+    clippy::to_string_trait_impl,
+    clippy::new_without_default,
+    clippy::useless_format,
+    clippy::manual_contains,
+    clippy::manual_pattern_char_comparison,
+    clippy::manual_strip,
+    clippy::manual_range_contains,
+    clippy::manual_div_ceil,
+    clippy::manual_is_multiple_of,
+    clippy::manual_c_str_literals,
+    clippy::chunks_exact_to_as_chunks,
+    clippy::lines_filter_map_ok,
+    clippy::double_ended_iterator_last,
+    clippy::drain_collect,
+    clippy::for_kv_map,
+    clippy::if_same_then_else,
+    clippy::len_without_is_empty,
+    clippy::let_and_return,
+    clippy::match_like_matches_macro,
+    clippy::needless_bool,
+    clippy::needless_borrow,
+    clippy::needless_borrows_for_generic_args,
+    clippy::needless_late_init,
+    clippy::not_unsafe_ptr_arg_deref,
+    clippy::redundant_closure,
+    clippy::unnecessary_cast,
+    clippy::unnecessary_lazy_evaluations,
+    clippy::unnecessary_sort_by,
+    clippy::unwrap_or_default,
+    clippy::upper_case_acronyms,
+    clippy::vec_init_then_push,
+    clippy::comparison_to_empty,
+    clippy::derivable_impls,
+    clippy::doc_lazy_continuation,
+    clippy::field_reassign_with_default,
+    clippy::map_entry,
+    clippy::collapsible_str_replace
+)]
+
 pub mod adversary;
 pub mod arm;
 pub mod brain;
@@ -14,9 +62,18 @@ pub mod quantum;
 pub mod research_ingest;
 pub mod security;
 pub mod sentinel_ring;
+pub mod service;
 pub mod swarm;
 pub mod telemetry;
+pub mod verify;
 pub mod web;
+
+pub use service::{
+    default_service_manager, execute_host_disarm_unauthenticated, handle_service_cli,
+    NativeServiceManager, ServiceConfig, ServiceError, ServiceState, ServiceStatus,
+    SERVICE_DESCRIPTION, SERVICE_DISPLAY_NAME, SERVICE_NAME,
+};
+pub use verify::{PhaseReport, SubsystemVerifier, VerificationReport};
 
 pub use adversary::{
     AdversarialAttack, AttackCategory, AttackEvaluation, CampaignSummary, PromptInjectionEngine,

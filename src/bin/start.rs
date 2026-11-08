@@ -1,5 +1,3 @@
-#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
-
 use agent_octopus::web::start_web_server;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -53,7 +51,64 @@ mod win_console {
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args: Vec<String> = std::env::args().collect();
 
-    // One-shot elevated WFP kernel helper delegation (`ShellExecuteExW("runas")`):
+    // 1. In-memory 7-phase self-diagnostics (--verify / --check / verify)
+    if args.iter().any(|a| a == "--verify" || a == "--check" || a == "-v")
+        || args.get(1).map(|s| s.as_str()) == Some("verify")
+    {
+        println!("🛡️  [START.EXE] Executing 7-Phase Subsystem Self-Diagnostics (--verify)...");
+        match agent_octopus::verify::SubsystemVerifier::run_all().await {
+            Ok(report) => {
+                report.print_summary();
+                println!("✅ [START.EXE] All Subsystems Verified Successfully! Self-check passed (exit 0).");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("❌ [START.EXE] Verification failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // 1b. Help banner
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("Agent Octopus Unified Launcher (start)");
+        println!();
+        println!("Usage: start [OPTIONS]");
+        println!();
+        println!("Options:");
+        println!("  -v, --verify           Execute 7-phase subsystem in-memory self-diagnostics and exit 0");
+        println!("      --service <ACTION> Manage native OS service (install, delete, start, stop, restart, status, run)");
+        println!("      --no-browser       Suppress automatic WebUI browser launch");
+        println!("      --daemon           Run headless without browser or interactive console");
+        println!("      --port <PORT>      Specify loopback WebUI port (default: 3030)");
+        println!("  -h, --help             Print help information");
+        std::process::exit(0);
+    }
+
+    // 2. Native OS background service management (--service <ACTION> | service <action>)
+    for i in 1..args.len() {
+        if args[i] == "--service" {
+            let action = args.get(i + 1).map(|s| s.as_str()).unwrap_or("status");
+            match agent_octopus::service::handle_service_cli(action) {
+                Ok(()) => std::process::exit(0),
+                Err(_) => std::process::exit(1),
+            }
+        } else if let Some(action) = args[i].strip_prefix("--service=") {
+            match agent_octopus::service::handle_service_cli(action) {
+                Ok(()) => std::process::exit(0),
+                Err(_) => std::process::exit(1),
+            }
+        }
+    }
+    if args.get(1).map(|s| s.as_str()) == Some("service") {
+        let action = args.get(2).map(|s| s.as_str()).unwrap_or("status");
+        match agent_octopus::service::handle_service_cli(action) {
+            Ok(()) => std::process::exit(0),
+            Err(_) => std::process::exit(1),
+        }
+    }
+
+    // 3. One-shot elevated WFP kernel helper delegation (`ShellExecuteExW("runas")`):
     // Must execute before `relaunch_deelevated_or_fail` and exit immediately without starting
     // any agent arms or network listeners so Finding 7 remains strictly enforced for the runtime.
     for i in 1..args.len() {
@@ -126,12 +181,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         check_startup_dependencies_and_toolchains(console_requested);
     });
 
-    // Select port dynamically: default to 5005 (or --port / OCTOPUS_PORT), then probe 5005..=5099, 8080..=8099, or OS port 0
+    // Select port dynamically: default to 3030 (or --port / OCTOPUS_PORT), then probe 3030..=3040, 5005..=5099, 8080..=8099, or OS port 0
     let mut preferred_port: u16 = std::env::var("OCTOPUS_PORT")
         .ok()
         .and_then(|v| v.parse::<u16>().ok())
         .filter(|&p| p != 0 && p != 5000)
-        .unwrap_or(5005);
+        .unwrap_or(3030);
 
     for i in 0..args.len() {
         if (args[i] == "--port" || args[i] == "-p") && i + 1 < args.len() {
@@ -149,6 +204,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
+    let no_browser_cli = args.iter().any(|a| a == "--no-browser" || a == "--nobrowser" || a == "--daemon");
+
     let selected_port = agent_octopus::web::select_available_loopback_port(preferred_port);
     if selected_port != preferred_port && console_requested {
         println!(
@@ -162,7 +219,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     if console_requested {
         println!("  [+] Web Dashboard URL: {}", dashboard_url);
-        println!("  [+] Launching your web browser...");
+        if !no_browser_cli {
+            println!("  [+] Launching your web browser...");
+        }
         println!("  [+] Press Ctrl+C in this terminal to shut down the server.");
         println!(
             "================================================================================\n"
@@ -175,7 +234,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tokio::spawn(async move {
         sleep(Duration::from_millis(400)).await;
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if std::env::var("OCTOPUS_NO_BROWSER").is_ok() || std::env::var("HEADLESS").is_ok() {
+            if no_browser_cli
+                || std::env::var("OCTOPUS_NO_BROWSER").is_ok()
+                || std::env::var("HEADLESS").is_ok()
+            {
                 return;
             }
             let active_port = std::fs::read_to_string("logs/active_port.txt")

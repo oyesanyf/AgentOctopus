@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let obs = SentinelObservation::healthy_baseline(17, 1);
         match sentinel.evaluate_and_enforce(&obs).await {
             Ok(SentinelAction::Continue) => {
-                if cycle % 5 == 0 {
+                if cycle.is_multiple_of(5) {
                     println!(
                         "[SENTINEL] Cycle #{}: All 4 containment rings verified intact.",
                         cycle

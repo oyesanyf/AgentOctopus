@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             &secret_seed,
         );
 
-        if sequence % 3 == 0 || !is_daemon {
+        if sequence.is_multiple_of(3) || !is_daemon {
             println!(
                 "[SUPERVISOR -> SENTINEL] Heartbeat seq={} active_arms={} sig={:.16}...",
                 heartbeat.heartbeat_sequence, heartbeat.active_arms_count, heartbeat.signature_hex

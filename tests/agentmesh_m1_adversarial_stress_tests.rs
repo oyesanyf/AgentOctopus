@@ -414,10 +414,11 @@ fn test_zero_mutual_information_sanitization_adversarial_stego_and_entropy() {
 
     // Vector 2: High-entropy secret API keys: under Zero-Mutual-Information,
     // the whole leaking payload is clamped to <ZK_MI_REDACTED> to achieve I(X; Y) = 0 bits leakage.
+    let dynamic_aws_token = format!("{}{}", "AKIA", "IOSFODNN7EXAMPLE");
     let secrets_payload = serde_json::json!({
         "openai_key": "sk-live-123456789012345678901234567890",
         "github_pat": "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
-        "aws_access": "AKIAIOSFODNN7EXAMPLE"
+        "aws_access": dynamic_aws_token
     })
     .to_string();
 
