@@ -47,6 +47,26 @@ pub mod rasp;
 pub mod research_arms;
 pub mod rl_defense;
 pub mod windows_sandbox;
+pub mod atif_scan;
+pub mod cpu_pool;
+pub mod journal_watcher;
+pub mod safeagents_client;
+
+pub use atif_scan::{
+    extract_hosts_from_text, AtifScanner, AtifSeverity, AtifSignal, SafeAgentsHarnessEvaluator,
+    ToolInvocationContext, ToolVerdict,
+};
+pub use cpu_pool::{
+    global_cpu_pool, init_global_cpu_pool, spawn_cpu, CpuPoolError, CpuThreadPool,
+};
+pub use journal_watcher::{
+    AtifSignal as JournalSignal, JournalEntry, JournalWatcherConfig, SafeAgentsJournalWatcher,
+    SafeAgentsJournalWatcherHandle,
+};
+pub use safeagents_client::{
+    SafeAgentsClient, SafeAgentsClientConfig, SafeAgentsClientError, ToolCallEvaluator,
+    ToolEvaluationVerdict,
+};
 
 pub use linux_sandbox::{
     build_socket_filter_bpf, describe_tier2_host_confinement_posture, evaluate_bpf_filter,

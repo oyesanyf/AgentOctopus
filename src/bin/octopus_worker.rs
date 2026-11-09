@@ -10,7 +10,7 @@ use agent_octopus::containment_ring::ArmContainmentRing;
 use agent_octopus::core::types::ArmRole;
 use std::env;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args: Vec<String> = env::args().collect();
     let arm_id: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(17);

@@ -226,3 +226,11 @@ pub use security::{
     PepVaultTelemetry, ServingNodeStats, SyncHttpWireClient, AsyncHttpWireClient,
     WorkloadClaims,
 };
+
+pub use security::{
+    extract_hosts_from_text, global_cpu_pool, init_global_cpu_pool, spawn_cpu,
+    AtifScanner, AtifSeverity, AtifSignal, CpuPoolError, CpuThreadPool, JournalEntry,
+    JournalWatcherConfig, SafeAgentsClient, SafeAgentsClientConfig, SafeAgentsClientError,
+    SafeAgentsHarnessEvaluator, SafeAgentsJournalWatcher, SafeAgentsJournalWatcherHandle,
+    ToolCallEvaluator, ToolEvaluationVerdict, ToolInvocationContext, ToolVerdict,
+};

@@ -3,7 +3,7 @@ use crate::core::types::OctopusSecurityError;
 use crate::security::LogSanitizer;
 use rand::RngCore;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use url::Url;
@@ -40,6 +40,9 @@ pub struct EgressProxy {
     allowlist_enabled: Arc<AtomicBool>,
     audit_control_token: Arc<String>,
     dns_overrides: Arc<RwLock<std::collections::HashMap<String, Vec<std::net::IpAddr>>>>,
+    // Authenticated SafeAgents Sidecar Loopback Bypass (M1)
+    sidecar_loopback_token: Arc<RwLock<Option<String>>>,
+    sidecar_loopback_port: Arc<AtomicU16>,
 }
 
 impl Default for EgressProxy {
@@ -146,7 +149,43 @@ impl EgressProxy {
             allowlist_enabled: Arc::new(AtomicBool::new(true)),
             audit_control_token: audit_token,
             dns_overrides: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            sidecar_loopback_token: Arc::new(RwLock::new(None)),
+            sidecar_loopback_port: Arc::new(AtomicU16::new(8787)),
         }
+    }
+
+    /// Configures an authenticated loopback exception for the SafeAgents sidecar proxy (default port 8787).
+    /// Only requests presenting the matching cryptographic token can access this loopback endpoint.
+    pub async fn configure_sidecar_loopback(&self, port: u16, auth_token: &str) {
+        *self.sidecar_loopback_token.write().await = Some(auth_token.to_string());
+        self.sidecar_loopback_port.store(port, Ordering::SeqCst);
+    }
+
+    pub async fn disable_sidecar_loopback(&self) {
+        *self.sidecar_loopback_token.write().await = None;
+    }
+
+    /// Verifies whether the destination and presentation token match the authorized loopback sidecar.
+    pub async fn is_authorized_sidecar_target(&self, parsed_url: &Url, auth_token: Option<&str>) -> bool {
+        let sidecar_guard = self.sidecar_loopback_token.read().await;
+        let Some(expected_token) = sidecar_guard.as_ref() else {
+            return false;
+        };
+        let Some(token) = auth_token else {
+            return false;
+        };
+        if !crate::security::constant_time_eq(token.as_bytes(), expected_token.as_bytes()) {
+            return false;
+        }
+
+        let expected_port = self.sidecar_loopback_port.load(Ordering::SeqCst);
+        let port = parsed_url.port().unwrap_or(if parsed_url.scheme() == "https" { 443 } else { 80 });
+        if port != expected_port {
+            return false;
+        }
+
+        let host = parsed_url.host_str().unwrap_or("");
+        host == "127.0.0.1" || host == "localhost"
     }
 
     /// Returns whether the egress proxy domain allowlist is actively enforced.
@@ -215,6 +254,16 @@ impl EgressProxy {
         &self,
         req: &EgressRequest,
     ) -> Result<EgressResponse, OctopusSecurityError> {
+        self.dispatch_authenticated_egress(req, None).await
+    }
+
+    /// Evaluates and proxies an external egress request through the containment ring,
+    /// supporting optional authenticated loopback access for the SafeAgents sidecar.
+    pub async fn dispatch_authenticated_egress(
+        &self,
+        req: &EgressRequest,
+        sidecar_token: Option<&str>,
+    ) -> Result<EgressResponse, OctopusSecurityError> {
         let level = *self.security_level.read().await;
         if level == EgressSecurityLevel::QuarantineSinkhole {
             return Err(OctopusSecurityError::SsrfBlocked(format!(
@@ -256,12 +305,16 @@ impl EgressProxy {
             OctopusSecurityError::SsrfBlocked(format!("Malformed URL '{}': {}", req.target_url, e))
         })?;
 
-        // 1. Protocol Invariant: HTTPS Only
+        let is_sidecar = self.is_authorized_sidecar_target(&parsed_url, sidecar_token).await;
+
+        // 1. Protocol Invariant: HTTPS Only (except authenticated local sidecar)
         if parsed_url.scheme() != "https" {
-            return Err(OctopusSecurityError::SsrfBlocked(format!(
-                "Insecure egress protocol '{}': Only HTTPS is permitted by the Containment Ring",
-                parsed_url.scheme()
-            )));
+            if !(is_sidecar && parsed_url.scheme() == "http") {
+                return Err(OctopusSecurityError::SsrfBlocked(format!(
+                    "Insecure egress protocol '{}': Only HTTPS is permitted by the Containment Ring",
+                    parsed_url.scheme()
+                )));
+            }
         }
 
         // 1b. Reject embedded userinfo credentials
@@ -271,13 +324,16 @@ impl EgressProxy {
             ));
         }
 
-        // 1c. Port validation (standard HTTPS 443 or default None)
+        // 1c. Port validation (standard HTTPS 443 or default None, except authenticated sidecar on 8787)
         if let Some(port) = parsed_url.port() {
             if port != 443 {
-                return Err(OctopusSecurityError::SsrfBlocked(format!(
-                    "Non-standard egress port '{}' is prohibited: only port 443 is permitted",
-                    port
-                )));
+                let allowed_sidecar_port = self.sidecar_loopback_port.load(Ordering::SeqCst);
+                if !(is_sidecar && port == allowed_sidecar_port) {
+                    return Err(OctopusSecurityError::SsrfBlocked(format!(
+                        "Non-standard egress port '{}' is prohibited: only port 443 is permitted",
+                        port
+                    )));
+                }
             }
         }
 
@@ -307,9 +363,13 @@ impl EgressProxy {
             None => true,
         };
 
-        if is_prohibited_ip
-            || host_lower == "127.0.0.1"
-            || host_lower == "localhost"
+        let is_prohibited_loopback = if is_sidecar {
+            false
+        } else {
+            is_prohibited_ip || host_lower == "127.0.0.1" || host_lower == "localhost"
+        };
+
+        if is_prohibited_loopback
             || host_lower.ends_with(".localhost")
             || host_lower.ends_with(".internal")
             || host_lower.ends_with(".local")
@@ -332,7 +392,7 @@ impl EgressProxy {
         check_google_safe_browsing_v4_prefix(trimmed)?;
 
         // 3. Domain Allowlist Invariant
-        if self.is_allowlist_enabled() {
+        if self.is_allowlist_enabled() && !is_sidecar {
             let domains = self.allowed_domains.read().await;
             let is_allowed = match level {
                 EgressSecurityLevel::StrictGoogleOnly => domains.iter().any(|d| host_lower == *d),
@@ -351,7 +411,7 @@ impl EgressProxy {
 
         // 3b. DNS Anti-Rebinding Resolution & Verification (AO-FIND-03)
         // Verify that every A/AAAA record resolved for `host_lower` is a public, non-restricted IP.
-        {
+        if !is_sidecar {
             let overrides = self.dns_overrides.read().await;
             if let Some(addrs) = overrides.get(&host_lower) {
                 if addrs.is_empty() {

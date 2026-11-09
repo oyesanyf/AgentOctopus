@@ -10,7 +10,7 @@ use agent_octopus::containment_ring::sentinel::{
 };
 use std::time::Duration;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("============================================================");
     println!("👁️  OCTOPUS SENTINEL RING (RING 4) - OUT-OF-BAND SERVICE");

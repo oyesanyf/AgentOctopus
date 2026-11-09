@@ -9,7 +9,7 @@ use agent_octopus::containment_ring::ArmRingRegistry;
 use agent_octopus::security::CedarAuthorizationGateway;
 use std::time::Duration;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("============================================================");
     println!("🐙 AGENT OCTOPUS TRUSTED SUPERVISOR");
