@@ -2131,8 +2131,16 @@ mod tests {
         let client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
         let client_addr = client.local_addr().unwrap();
         let (_srv, _) = listener.accept().unwrap();
-        let pid = resolve_loopback_peer_pid(client_addr, port).unwrap();
-        assert_eq!(pid, std::process::id());
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            let pid = resolve_loopback_peer_pid(client_addr, port).unwrap();
+            assert_eq!(pid, std::process::id());
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            let res = resolve_loopback_peer_pid(client_addr, port);
+            assert!(res.is_err(), "Must fail closed on unsupported platforms");
+        }
     }
 
     #[test]
