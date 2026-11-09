@@ -55,3 +55,7 @@ Run the complete verification suite before completion:
 - [ ] `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` pass with zero warnings across workspaces.
 - [ ] `cargo test --workspace --all-features` passes with zero failures, including concurrent stress tests and the 562-case misuse simulation suite.
 - [ ] Windows builds and tests pass locally, and all GitHub Actions workflow runs for Linux, Windows, and macOS matrix runners pass with green status.
+
+## Follow-up — 2026-11-09T18:03:27Z
+
+Server restarted and stopped active subagents/tasks. Please check the status of your Milestone 2 Gate verification subagents (`reviewer_m2_2`, `challenger_m2_1`, `challenger_m2_2`, `auditor_m2_1`) and your orchestrator, revive any stopped subagents, complete Gate 2 sign-off, and proceed through Milestone 3 (Cross-Platform OS Builds, 562-case misuse simulation suite, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace --all-features`, and GitHub Actions workflow verification across Linux, Windows, and macOS).
