@@ -14,6 +14,7 @@ use agent_octopus::containment_ring::trusted_controller::{
 use agent_octopus::containment_ring::{CedarGate, EgressProxy};
 use agent_octopus::core::types::OctopusSecurityError;
 use agent_octopus::security::windows_sandbox::{WindowsAppContainerProfile, WindowsJobObject};
+#[allow(unused_imports)]
 use std::fs::File;
 use std::net::TcpStream;
 use std::sync::atomic::Ordering;
