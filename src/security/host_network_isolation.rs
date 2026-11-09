@@ -1712,6 +1712,7 @@ pub fn terminate_non_loopback_tcp_sockets(preserved_ports: &[u16]) -> usize {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn wfp_filter_ledger_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let _ = std::fs::create_dir_all("logs");
@@ -1725,6 +1726,7 @@ fn wfp_filter_ledger_paths() -> Vec<PathBuf> {
     paths
 }
 
+#[cfg(target_os = "windows")]
 fn persist_wfp_filter_ids(ids: &[u64]) {
     if ids.is_empty() {
         return;
@@ -1747,6 +1749,7 @@ fn persist_wfp_filter_ids(ids: &[u64]) {
     }
 }
 
+#[cfg(target_os = "windows")]
 pub fn load_persisted_wfp_filter_ids() -> Vec<u64> {
     let mut ids = Vec::new();
     for p in wfp_filter_ledger_paths() {
@@ -1766,6 +1769,12 @@ pub fn load_persisted_wfp_filter_ids() -> Vec<u64> {
     ids
 }
 
+#[cfg(not(target_os = "windows"))]
+pub fn load_persisted_wfp_filter_ids() -> Vec<u64> {
+    Vec::new()
+}
+
+#[cfg(target_os = "windows")]
 fn clear_persisted_wfp_filter_ids() {
     for p in wfp_filter_ledger_paths() {
         let _ = std::fs::remove_file(p);
@@ -2728,6 +2737,7 @@ pub struct HostKillSwitchManager {
 
 impl HostKillSwitchManager {
     pub fn new(custom_ledger_path: Option<PathBuf>) -> Self {
+        #[allow(unused_mut)]
         let mut loaded = Self::read_latest_ledger(custom_ledger_path.as_ref());
         // Boot-time reconciliation: if disk claims isolated=true on Windows, verify live BFE filters!
         #[cfg(windows)]

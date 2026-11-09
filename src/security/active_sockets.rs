@@ -282,7 +282,7 @@ fn query_kernel_tcp_table_by_pid() -> KernelTcpTableByPid {
         if cols.len() < 10 {
             continue;
         }
-        let Some((l_ip_hex, l_port_hex)) = cols[1].split_once(':') else {
+        let Some((_l_ip_hex, l_port_hex)) = cols[1].split_once(':') else {
             continue;
         };
         let Some((r_ip_hex, r_port_hex)) = cols[2].split_once(':') else {

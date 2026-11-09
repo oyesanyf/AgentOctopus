@@ -314,14 +314,14 @@ impl KernelSentinelArm {
     /// Intercepts and vetoes a rogue process execution attempt.
     pub fn veto_process_creation(
         &self,
-        pid: u32,
+        _pid: u32,
         _reason: &str,
     ) -> Result<(), OctopusSecurityError> {
         self.process_creation_vetos.fetch_add(1, Ordering::SeqCst);
 
         #[cfg(windows)]
         {
-            let proc_handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
+            let proc_handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, _pid) };
             if !proc_handle.is_null() && proc_handle != INVALID_HANDLE_VALUE {
                 unsafe {
                     TerminateProcess(proc_handle, 9);
@@ -390,7 +390,7 @@ impl KernelSentinelArm {
     }
 
     /// Adds a pre-execution binary path block rule into the Ring-0 kernel memory.
-    pub fn add_kernel_block_rule(&self, binary_path: &str) -> Result<(), OctopusSecurityError> {
+    pub fn add_kernel_block_rule(&self, _binary_path: &str) -> Result<(), OctopusSecurityError> {
         #[cfg(windows)]
         if self.tier2_connected.load(Ordering::SeqCst) {
             let wide_path: Vec<u16> = self
@@ -413,7 +413,7 @@ impl KernelSentinelArm {
             };
 
             if handle != INVALID_HANDLE_VALUE && !handle.is_null() {
-                let normalized = binary_path.replace('/', "\\");
+                let normalized = _binary_path.replace('/', "\\");
                 let mut req = RawAddPathRequest {
                     image_path: [0u16; 260],
                 };

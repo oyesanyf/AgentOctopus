@@ -107,15 +107,14 @@ impl PythonWorkerBridge {
     /// FAIL-CLOSED: Spawns in CREATE_SUSPENDED state, binds and verifies Job Object limits
     /// BEFORE resuming the primary thread. Zero pre-isolation execution window.
     pub fn start_worker() -> Result<Self, OctopusSecurityError> {
-        let worker_dir = Self::locate_worker_dir()?;
-        let identity_hash = Self::validate_worker_packaging(&worker_dir)?;
-        let script = worker_dir.join("mcp_server.py");
-
-        let max_memory_bytes = 64 * 1024 * 1024; // Strict 64 MB clamp
-        let job = WindowsJobObject::create("protocol_research_worker", 10, max_memory_bytes)?;
-
         #[cfg(windows)]
         {
+            let worker_dir = Self::locate_worker_dir()?;
+            let identity_hash = Self::validate_worker_packaging(&worker_dir)?;
+            let script = worker_dir.join("mcp_server.py");
+
+            let max_memory_bytes = 64 * 1024 * 1024; // Strict 64 MB clamp
+            let job = WindowsJobObject::create("protocol_research_worker", 10, max_memory_bytes)?;
             use crate::security::windows_sandbox::{create_or_open_appcontainer_profile, win32};
             use windows_sys::Win32::Foundation::CloseHandle;
             use windows_sys::Win32::System::JobObjects::{

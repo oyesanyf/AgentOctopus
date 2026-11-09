@@ -29,7 +29,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info, warn};
+#[allow(unused_imports)]
+use tracing::error;
+use tracing::{info, warn};
 
 pub const SERVICE_NAME: &str = "AgentOctopus";
 pub const SERVICE_DISPLAY_NAME: &str = "Agent Octopus Swarm Breakout Defense";

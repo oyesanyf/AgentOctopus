@@ -392,6 +392,7 @@ fn select_active_installed_or_calibrated_glm(
 }
 
 fn create_no_window_cmd(program: &str) -> Command {
+    #[allow(unused_mut)]
     let mut cmd = Command::new(program);
     #[cfg(windows)]
     {

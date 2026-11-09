@@ -382,13 +382,13 @@ impl WindowsJobObject {
     }
 
     /// Terminates all processes assigned to this Windows Job Object immediately at the kernel level.
-    pub fn terminate(&self, exit_code: u32) -> Result<(), OctopusSecurityError> {
+    pub fn terminate(&self, _exit_code: u32) -> Result<(), OctopusSecurityError> {
         self.is_terminated.store(true, Ordering::SeqCst);
 
         #[cfg(windows)]
         {
             if !self.handle.is_null() && self.handle != INVALID_HANDLE_VALUE {
-                let success = unsafe { TerminateJobObject(self.handle, exit_code) };
+                let success = unsafe { TerminateJobObject(self.handle, _exit_code) };
                 if success == 0 {
                     return Err(OctopusSecurityError::IsolationViolation(format!(
                         "Failed to terminate Windows Job Object '{}'",
@@ -611,17 +611,16 @@ impl WindowsAppContainerProfile {
     /// Creates a mandatory AppContainer profile in production with genuine Windows kernel isolation.
     /// FAIL-CLOSED: Fails with OctopusSecurityError if userenv profile creation cannot be completed.
     pub fn create_mandatory(
-        agent_id: &str,
-        is_lpac: bool,
-        allow_google_only: bool,
+        _agent_id: &str,
+        _is_lpac: bool,
+        _allow_google_only: bool,
     ) -> Result<Self, OctopusSecurityError> {
-        let container_name = format!("AgentOctopus.AppContainer.{}", agent_id);
-
         #[cfg(windows)]
         {
+            let container_name = format!("AgentOctopus.AppContainer.{}", _agent_id);
             let (sid, psid) = create_or_open_appcontainer_profile(
                 &container_name,
-                &format!("Agent Octopus {}", agent_id),
+                &format!("Agent Octopus {}", _agent_id),
                 "AppContainer profile for Agent Octopus agent",
             )?;
             unsafe {
@@ -629,15 +628,15 @@ impl WindowsAppContainerProfile {
             }
 
             let mut allowed_capabilities = Vec::new();
-            if allow_google_only {
+            if _allow_google_only {
                 allowed_capabilities.push("internetClient".to_string());
             }
 
             Ok(Self {
                 container_name,
                 package_sid: sid,
-                is_lpac,
-                allow_internet_client: allow_google_only,
+                is_lpac: _is_lpac,
+                allow_internet_client: _allow_google_only,
                 allowed_capabilities,
             })
         }

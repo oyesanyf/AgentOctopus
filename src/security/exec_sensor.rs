@@ -10,8 +10,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::{debug, info};
+#[allow(unused_imports)]
+use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
+#[allow(unused_imports)]
+use tracing::debug;
+use tracing::info;
 
 pub const EXEC_SENSOR_DEFAULT_CAPACITY: usize = 2048;
 
