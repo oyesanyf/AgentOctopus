@@ -52,7 +52,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args: Vec<String> = std::env::args().collect();
 
     // 1. In-memory 7-phase self-diagnostics (--verify / --check / verify)
-    if args.iter().any(|a| a == "--verify" || a == "--check" || a == "-v")
+    if args
+        .iter()
+        .any(|a| a == "--verify" || a == "--check" || a == "-v")
         || args.get(1).map(|s| s.as_str()) == Some("verify")
     {
         println!("🛡️  [START.EXE] Executing 7-Phase Subsystem Self-Diagnostics (--verify)...");
@@ -204,7 +206,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    let no_browser_cli = args.iter().any(|a| a == "--no-browser" || a == "--nobrowser" || a == "--daemon");
+    let no_browser_cli = args
+        .iter()
+        .any(|a| a == "--no-browser" || a == "--nobrowser" || a == "--daemon");
 
     let selected_port = agent_octopus::web::select_available_loopback_port(preferred_port);
     if selected_port != preferred_port && console_requested {

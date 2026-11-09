@@ -188,7 +188,12 @@ impl AgentMeshPolicyConfig {
                 if matches_pattern(member_pattern, bare)
                     || matches_pattern(member_pattern, &user_prefixed)
                 {
-                    if let Some(role) = self.policy_config.roles.iter().find(|r| r.name == binding.role) {
+                    if let Some(role) = self
+                        .policy_config
+                        .roles
+                        .iter()
+                        .find(|r| r.name == binding.role)
+                    {
                         matching_roles.push(role);
                     }
                     break;
@@ -383,7 +388,8 @@ impl BoundedActiveTokenStore {
     }
 
     pub fn advance_arm_epoch(&mut self, arm_id: &str, min_valid_epoch: u64) {
-        self.tokens.retain(|_, m| !(m.arm_id == arm_id && m.epoch < min_valid_epoch));
+        self.tokens
+            .retain(|_, m| !(m.arm_id == arm_id && m.epoch < min_valid_epoch));
         self.insertion_order.retain(|k| self.tokens.contains_key(k));
     }
 
@@ -723,7 +729,11 @@ impl AgentMeshServingNode {
         }
 
         // Check allowed services
-        if !meta.allowed_services.iter().any(|s| matches_pattern(s, resource)) {
+        if !meta
+            .allowed_services
+            .iter()
+            .any(|s| matches_pattern(s, resource))
+        {
             return Err(TokenVerificationError::ServiceDenied(resource.to_string()));
         }
 
@@ -831,7 +841,8 @@ async fn handle_connection(
     let mut body = buf[pos + 4..].to_vec();
     while body.len() < content_len {
         let to_read = (content_len - body.len()).min(chunk.len());
-        let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut chunk[..to_read])).await??;
+        let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut chunk[..to_read]))
+            .await??;
         if n == 0 {
             break;
         }
@@ -1028,13 +1039,19 @@ async fn route_request(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> H
                 "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
             }),
         ),
-        _ => HttpResponse::error(404, "Not Found", "not_found", "The requested path does not exist"),
+        _ => HttpResponse::error(
+            404,
+            "Not Found",
+            "not_found",
+            "The requested path does not exist",
+        ),
     };
 
     // 3. Inject mutual node response proof header if channel secret is active
     if let (Some(secret), Some(nonce)) = (&state.channel_secret, pep_nonce) {
         let node_proof = compute_node_response_proof(secret, resp.status_code, &nonce, &resp.body);
-        resp.headers.push((HEADER_NODE_PROOF.to_string(), node_proof));
+        resp.headers
+            .push((HEADER_NODE_PROOF.to_string(), node_proof));
     }
 
     resp
@@ -1063,7 +1080,12 @@ async fn handle_oauth_revoke(req: HttpRequest, state: &Arc<ConformanceNodeInner>
     };
 
     let Some(token) = token_to_revoke.filter(|t| !t.trim().is_empty()) else {
-        return HttpResponse::error(400, "Bad Request", "invalid_request", "token parameter is required");
+        return HttpResponse::error(
+            400,
+            "Bad Request",
+            "invalid_request",
+            "token parameter is required",
+        );
     };
 
     state.active_tokens.write().await.revoke_token(&token);
@@ -1076,7 +1098,10 @@ async fn handle_oauth_revoke(req: HttpRequest, state: &Arc<ConformanceNodeInner>
     )
 }
 
-async fn handle_service_discover(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {
+async fn handle_service_discover(
+    req: HttpRequest,
+    state: &Arc<ConformanceNodeInner>,
+) -> HttpResponse {
     let mut filter_type = None;
     let mut filter_name = None;
     if let Some(q) = &req.query {
@@ -1091,7 +1116,11 @@ async fn handle_service_discover(req: HttpRequest, state: &Arc<ConformanceNodeIn
         }
     }
 
-    if filter_type.as_deref().map(|t| t != "mcp" && !t.is_empty()).unwrap_or(false) {
+    if filter_type
+        .as_deref()
+        .map(|t| t != "mcp" && !t.is_empty())
+        .unwrap_or(false)
+    {
         return HttpResponse::json(200, "OK", &Vec::<serde_json::Value>::new());
     }
 
@@ -1110,9 +1139,21 @@ async fn handle_service_discover(req: HttpRequest, state: &Arc<ConformanceNodeIn
     let catalog = [
         ("calc", "mcp://calc", "Calculator MCP service"),
         ("payroll", "mcp://payroll", "Sensitive payroll MCP service"),
-        ("echo-headers", "mcp://echo-headers", "Header hygiene inspection MCP service"),
-        ("octopus-doc-extractor", "mcp://octopus-doc-extractor", "Wasmtime v49 document extractor"),
-        ("octopus-ledger-validator", "mcp://octopus-ledger-validator", "Wasmtime v49 ledger validator"),
+        (
+            "echo-headers",
+            "mcp://echo-headers",
+            "Header hygiene inspection MCP service",
+        ),
+        (
+            "octopus-doc-extractor",
+            "mcp://octopus-doc-extractor",
+            "Wasmtime v49 document extractor",
+        ),
+        (
+            "octopus-ledger-validator",
+            "mcp://octopus-ledger-validator",
+            "Wasmtime v49 ledger validator",
+        ),
     ];
 
     let mut entries = Vec::new();
@@ -1138,7 +1179,10 @@ async fn handle_service_discover(req: HttpRequest, state: &Arc<ConformanceNodeIn
     HttpResponse::json(200, "OK", &entries)
 }
 
-async fn handle_signed_revocation(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {
+async fn handle_signed_revocation(
+    req: HttpRequest,
+    state: &Arc<ConformanceNodeInner>,
+) -> HttpResponse {
     let signal: SignedEpochRevocationSignal = match serde_json::from_slice(&req.body) {
         Ok(s) => s,
         Err(e) => {
@@ -1166,7 +1210,10 @@ async fn handle_signed_revocation(req: HttpRequest, state: &Arc<ConformanceNodeI
         );
     }
 
-    let sig_input = format!("{}:{}:{}", signal.arm_id, signal.revocation_epoch, signal.timestamp);
+    let sig_input = format!(
+        "{}:{}:{}",
+        signal.arm_id, signal.revocation_epoch, signal.timestamp
+    );
     let sig_bytes = match hex::decode(&signal.signature) {
         Ok(b) => b,
         Err(_) => {
@@ -1192,9 +1239,10 @@ async fn handle_signed_revocation(req: HttpRequest, state: &Arc<ConformanceNodeI
         }
     };
 
-    let verified = jwks.keys.iter().any(|k| {
-        verify_es256_p256(sig_input.as_bytes(), &sig_bytes, &k.x, &k.y)
-    });
+    let verified = jwks
+        .keys
+        .iter()
+        .any(|k| verify_es256_p256(sig_input.as_bytes(), &sig_bytes, &k.x, &k.y));
 
     if !verified {
         return HttpResponse::error(
@@ -1229,7 +1277,10 @@ async fn handle_signed_revocation(req: HttpRequest, state: &Arc<ConformanceNodeI
     )
 }
 
-async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {
+async fn handle_token_exchange(
+    req: HttpRequest,
+    state: &Arc<ConformanceNodeInner>,
+) -> HttpResponse {
     let mut stats = state.stats.write().await;
     stats.sts_exchanges_requested += 1;
     drop(stats);
@@ -1245,7 +1296,12 @@ async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInne
             Ok(r) => r,
             Err(_) => {
                 state.stats.write().await.sts_exchanges_denied += 1;
-                return HttpResponse::error(400, "Bad Request", "invalid_request", "Malformed JSON body");
+                return HttpResponse::error(
+                    400,
+                    "Bad Request",
+                    "invalid_request",
+                    "Malformed JSON body",
+                );
             }
         }
     } else {
@@ -1294,7 +1350,12 @@ async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInne
 
     if parsed_req.subject_token.is_empty() {
         state.stats.write().await.sts_exchanges_denied += 1;
-        return HttpResponse::error(400, "Bad Request", "invalid_request", "subject_token is required");
+        return HttpResponse::error(
+            400,
+            "Bad Request",
+            "invalid_request",
+            "subject_token is required",
+        );
     }
 
     // 3. Verify JWS ES256 Signature and Claims
@@ -1313,34 +1374,59 @@ async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInne
         Ok(b) => b,
         Err(_) => {
             state.stats.write().await.sts_exchanges_denied += 1;
-            return HttpResponse::error(400, "Bad Request", "invalid_request", "Invalid header base64url");
+            return HttpResponse::error(
+                400,
+                "Bad Request",
+                "invalid_request",
+                "Invalid header base64url",
+            );
         }
     };
     let header_val: serde_json::Value = match serde_json::from_slice(&header_bytes) {
         Ok(v) => v,
         Err(_) => {
             state.stats.write().await.sts_exchanges_denied += 1;
-            return HttpResponse::error(400, "Bad Request", "invalid_request", "Invalid header JSON");
+            return HttpResponse::error(
+                400,
+                "Bad Request",
+                "invalid_request",
+                "Invalid header JSON",
+            );
         }
     };
 
     if header_val.get("alg").and_then(|a| a.as_str()) != Some("ES256") {
         state.stats.write().await.sts_exchanges_denied += 1;
-        return HttpResponse::error(400, "Bad Request", "invalid_request", "Algorithm must be ES256");
+        return HttpResponse::error(
+            400,
+            "Bad Request",
+            "invalid_request",
+            "Algorithm must be ES256",
+        );
     }
 
     let payload_bytes = match base64url_decode_no_pad(jws_parts[1]) {
         Ok(b) => b,
         Err(_) => {
             state.stats.write().await.sts_exchanges_denied += 1;
-            return HttpResponse::error(400, "Bad Request", "invalid_request", "Invalid payload base64url");
+            return HttpResponse::error(
+                400,
+                "Bad Request",
+                "invalid_request",
+                "Invalid payload base64url",
+            );
         }
     };
     let payload_val: serde_json::Value = match serde_json::from_slice(&payload_bytes) {
         Ok(v) => v,
         Err(_) => {
             state.stats.write().await.sts_exchanges_denied += 1;
-            return HttpResponse::error(400, "Bad Request", "invalid_request", "Invalid payload JSON");
+            return HttpResponse::error(
+                400,
+                "Bad Request",
+                "invalid_request",
+                "Invalid payload JSON",
+            );
         }
     };
 
@@ -1352,8 +1438,15 @@ async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInne
         }
     };
 
-    let arm_id = payload_val.get("arm_id").and_then(|a| a.as_str()).unwrap_or("").to_string();
-    let epoch = payload_val.get("epoch").and_then(|e| e.as_u64()).unwrap_or(0);
+    let arm_id = payload_val
+        .get("arm_id")
+        .and_then(|a| a.as_str())
+        .unwrap_or("")
+        .to_string();
+    let epoch = payload_val
+        .get("epoch")
+        .and_then(|e| e.as_u64())
+        .unwrap_or(0);
 
     // Dual-side #734 defense: Check active revocation and minimum epoch watermark
     {
@@ -1377,7 +1470,10 @@ async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInne
                     403,
                     "Forbidden",
                     "invalid_grant",
-                    &format!("Arm '{}' epoch {} is superseded by epoch watermark {}", arm_id, epoch, min_epoch),
+                    &format!(
+                        "Arm '{}' epoch {} is superseded by epoch watermark {}",
+                        arm_id, epoch, min_epoch
+                    ),
                 );
             }
         }
@@ -1417,7 +1513,12 @@ async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInne
         Ok(b) => b,
         Err(_) => {
             state.stats.write().await.sts_exchanges_denied += 1;
-            return HttpResponse::error(401, "Unauthorized", "invalid_grant", "Malformed signature encoding");
+            return HttpResponse::error(
+                401,
+                "Unauthorized",
+                "invalid_grant",
+                "Malformed signature encoding",
+            );
         }
     };
 
@@ -1490,7 +1591,10 @@ async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInne
                 403,
                 "Forbidden",
                 "invalid_target",
-                &format!("Subject '{}' role denies access to resource '{}'", subject, target_resource),
+                &format!(
+                    "Subject '{}' role denies access to resource '{}'",
+                    subject, target_resource
+                ),
             );
         }
     }
@@ -1563,35 +1667,66 @@ async fn handle_token_exchange(req: HttpRequest, state: &Arc<ConformanceNodeInne
 async fn handle_mcp_calc(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {
     let auth = match extract_bearer_token(&req) {
         Some(t) => t,
-        None => return HttpResponse::error(401, "Unauthorized", "unauthorized", "Missing Bearer token"),
+        None => {
+            return HttpResponse::error(401, "Unauthorized", "unauthorized", "Missing Bearer token")
+        }
     };
 
     let tokens = state.active_tokens.read().await;
     if tokens.is_token_revoked(&auth) {
-        return HttpResponse::error(403, "Forbidden", "access_denied", "Token was revoked via RFC 7009");
+        return HttpResponse::error(
+            403,
+            "Forbidden",
+            "access_denied",
+            "Token was revoked via RFC 7009",
+        );
     }
     let meta = match tokens.get(&auth) {
         Some(m) => m,
-        None => return HttpResponse::error(401, "Unauthorized", "invalid_token", "Exchanged token not found or expired"),
+        None => {
+            return HttpResponse::error(
+                401,
+                "Unauthorized",
+                "invalid_token",
+                "Exchanged token not found or expired",
+            )
+        }
     };
 
     // Check active revocation
     {
         let rev = state.revoked_arms.read().await;
         if rev.contains(&meta.arm_id) {
-            return HttpResponse::error(403, "Forbidden", "access_denied", "Arm is in active revocation list");
+            return HttpResponse::error(
+                403,
+                "Forbidden",
+                "access_denied",
+                "Arm is in active revocation list",
+            );
         }
     }
 
-    if !meta.allowed_services.iter().any(|s| matches_pattern(s, "mcp://calc")) {
-        return HttpResponse::error(403, "Forbidden", "access_denied", "Token lacks mcp://calc authority");
+    if !meta
+        .allowed_services
+        .iter()
+        .any(|s| matches_pattern(s, "mcp://calc"))
+    {
+        return HttpResponse::error(
+            403,
+            "Forbidden",
+            "access_denied",
+            "Token lacks mcp://calc authority",
+        );
     }
 
     state.stats.write().await.mcp_calc_calls += 1;
 
     // Parse simple calculation request: {"op": "add", "a": 10, "b": 20}
     let req_json: serde_json::Value = serde_json::from_slice(&req.body).unwrap_or_default();
-    let op = req_json.get("op").and_then(|v| v.as_str()).unwrap_or("echo");
+    let op = req_json
+        .get("op")
+        .and_then(|v| v.as_str())
+        .unwrap_or("echo");
     let a = req_json.get("a").and_then(|v| v.as_i64()).unwrap_or(0);
     let b = req_json.get("b").and_then(|v| v.as_i64()).unwrap_or(0);
 
@@ -1620,13 +1755,20 @@ async fn handle_mcp_payroll(req: HttpRequest, state: &Arc<ConformanceNodeInner>)
 
     let auth = match extract_bearer_token(&req) {
         Some(t) => t,
-        None => return HttpResponse::error(401, "Unauthorized", "unauthorized", "Missing Bearer token"),
+        None => {
+            return HttpResponse::error(401, "Unauthorized", "unauthorized", "Missing Bearer token")
+        }
     };
 
     let tokens = state.active_tokens.read().await;
     if tokens.is_token_revoked(&auth) {
         state.stats.write().await.mcp_payroll_denials += 1;
-        return HttpResponse::error(403, "Forbidden", "access_denied", "Token was revoked via RFC 7009");
+        return HttpResponse::error(
+            403,
+            "Forbidden",
+            "access_denied",
+            "Token was revoked via RFC 7009",
+        );
     }
     let meta = match tokens.get(&auth) {
         Some(m) => m,
@@ -1638,17 +1780,29 @@ async fn handle_mcp_payroll(req: HttpRequest, state: &Arc<ConformanceNodeInner>)
         let rev = state.revoked_arms.read().await;
         if rev.contains(&meta.arm_id) {
             state.stats.write().await.mcp_payroll_denials += 1;
-            return HttpResponse::error(403, "Forbidden", "access_denied", "Arm is in active revocation list");
+            return HttpResponse::error(
+                403,
+                "Forbidden",
+                "access_denied",
+                "Arm is in active revocation list",
+            );
         }
     }
 
-    if !meta.allowed_services.iter().any(|s| matches_pattern(s, "mcp://payroll")) {
+    if !meta
+        .allowed_services
+        .iter()
+        .any(|s| matches_pattern(s, "mcp://payroll"))
+    {
         state.stats.write().await.mcp_payroll_denials += 1;
         return HttpResponse::error(
             403,
             "Forbidden",
             "access_denied",
-            &format!("Role '{:?}' is denied access to sensitive payroll ledger", meta.roles),
+            &format!(
+                "Role '{:?}' is denied access to sensitive payroll ledger",
+                meta.roles
+            ),
         );
     }
 
@@ -1665,18 +1819,16 @@ async fn handle_mcp_payroll(req: HttpRequest, state: &Arc<ConformanceNodeInner>)
     )
 }
 
-async fn handle_mcp_echo_headers(req: HttpRequest, state: &Arc<ConformanceNodeInner>) -> HttpResponse {
+async fn handle_mcp_echo_headers(
+    req: HttpRequest,
+    state: &Arc<ConformanceNodeInner>,
+) -> HttpResponse {
     state.stats.write().await.header_echo_inspections += 1;
 
     let auth = match extract_bearer_token(&req) {
         Some(t) => t,
         None => {
-            return HttpResponse::error(
-                401,
-                "Unauthorized",
-                "unauthorized",
-                "Missing Bearer token",
-            )
+            return HttpResponse::error(401, "Unauthorized", "unauthorized", "Missing Bearer token")
         }
     };
 
@@ -1892,12 +2044,7 @@ async fn handle_published_wasm_tool(
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if state.revoked_arms.read().await.contains(arm_id) {
-            return HttpResponse::error(
-                403,
-                "Forbidden",
-                "access_denied",
-                "Caller arm is revoked",
-            );
+            return HttpResponse::error(403, "Forbidden", "access_denied", "Caller arm is revoked");
         }
         if !state.policy.read().await.is_service_allowed(&sub, tool_uri) {
             return HttpResponse::error(
@@ -1968,7 +2115,10 @@ async fn handle_published_wasm_tool(
                     409,
                     "Conflict",
                     "SEAL_ALREADY_CONSUMED",
-                    &format!("Single-use CAGE RoutingSeal '{}' was already consumed", seal_id),
+                    &format!(
+                        "Single-use CAGE RoutingSeal '{}' was already consumed",
+                        seal_id
+                    ),
                 )
             }
             other => HttpResponse::error(
@@ -2033,7 +2183,11 @@ async fn handle_echo_headers(req: HttpRequest, state: &Arc<ConformanceNodeInner>
 
     let auth_header_present = req.headers.contains_key("authorization");
     let mesh_auth_present = req.headers.contains_key("x-mesh-authentication");
-    let mesh_auth_val = req.headers.get("x-mesh-authentication").cloned().unwrap_or_default();
+    let mesh_auth_val = req
+        .headers
+        .get("x-mesh-authentication")
+        .cloned()
+        .unwrap_or_default();
 
     HttpResponse::json(
         200,
@@ -2155,23 +2309,37 @@ pub fn verify_es256_p256(data: &[u8], sig_bytes: &[u8], x_b64: &str, y_b64: &str
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::pep_bridge::AsyncHttpWireClient;
+    use super::*;
     use base64::Engine;
 
     #[tokio::test]
     async fn test_policy_json_resolution_and_matching() {
         let policy = AgentMeshPolicyConfig::default_serving_policy();
-        assert!(policy.is_service_allowed("spiffe://agentoctopus.local/arm/arm_calc/epoch/0", "mcp://calc"));
-        assert!(!policy.is_service_allowed("spiffe://agentoctopus.local/arm/arm_calc/epoch/0", "mcp://payroll"));
-        assert!(policy.is_service_allowed("spiffe://agentoctopus.local/arm/arm_payroll/epoch/1", "mcp://payroll"));
-        assert!(!policy.is_service_allowed("spiffe://agentoctopus.local/arm/arm_rogue/epoch/0", "mcp://calc"));
+        assert!(policy.is_service_allowed(
+            "spiffe://agentoctopus.local/arm/arm_calc/epoch/0",
+            "mcp://calc"
+        ));
+        assert!(!policy.is_service_allowed(
+            "spiffe://agentoctopus.local/arm/arm_calc/epoch/0",
+            "mcp://payroll"
+        ));
+        assert!(policy.is_service_allowed(
+            "spiffe://agentoctopus.local/arm/arm_payroll/epoch/1",
+            "mcp://payroll"
+        ));
+        assert!(!policy.is_service_allowed(
+            "spiffe://agentoctopus.local/arm/arm_rogue/epoch/0",
+            "mcp://calc"
+        ));
     }
 
     #[tokio::test]
     async fn test_conformance_node_ephemeral_port_lifecycle() {
         let policy = AgentMeshPolicyConfig::default_serving_policy();
-        let mut node = AgentMeshServingNode::start(policy, None, 0).await.expect("Bind failed");
+        let mut node = AgentMeshServingNode::start(policy, None, 0)
+            .await
+            .expect("Bind failed");
         assert!(node.port() > 0);
         assert!(node.url().starts_with("http://127.0.0.1:"));
 
@@ -2190,13 +2358,16 @@ mod tests {
             "grant_type": "client_credentials",
             "subject_token": "dummy",
             "subject_token_type": "urn:ietf:params:oauth:token-type:jwt"
-        })).unwrap();
+        }))
+        .unwrap();
 
         let (status, _headers, resp_bytes) = AsyncHttpWireClient::post(
             &format!("{}/oauth/token", node.url()),
             &[("Content-Type".to_string(), "application/json".to_string())],
             &payload,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status, 400);
         let body: serde_json::Value = serde_json::from_slice(&resp_bytes).unwrap();
@@ -2212,9 +2383,14 @@ mod tests {
 
         let (status, _headers, resp_bytes) = AsyncHttpWireClient::post(
             &format!("{}/mesh/echo_headers", node.url()),
-            &[("X-Mesh-Authentication".to_string(), "Bearer mesh_tok_valid123".to_string())],
+            &[(
+                "X-Mesh-Authentication".to_string(),
+                "Bearer mesh_tok_valid123".to_string(),
+            )],
             b"",
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status, 200);
         let body: serde_json::Value = serde_json::from_slice(&resp_bytes).unwrap();
@@ -2249,13 +2425,16 @@ mod tests {
             "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
             "subject_token": jws,
             "subject_token_type": "urn:ietf:params:oauth:token-type:jwt"
-        })).unwrap();
+        }))
+        .unwrap();
 
         let (status, _headers, resp_bytes) = AsyncHttpWireClient::post(
             &format!("{}/oauth/token", node.url()),
             &[("Content-Type".to_string(), "application/json".to_string())],
             &req_body,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         // Must reject with 403 Forbidden due to active revocation
         assert_eq!(status, 403);

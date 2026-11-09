@@ -4069,7 +4069,11 @@ pub fn handle_killswitch_disarm_with_peer(
             }
             Ok(actual_pid) => {
                 if state.tarpit.is_quarantined(&actual_pid.to_string())
-                    || parsed.operator.as_deref().map(|o| state.tarpit.is_quarantined(o)).unwrap_or(false)
+                    || parsed
+                        .operator
+                        .as_deref()
+                        .map(|o| state.tarpit.is_quarantined(o))
+                        .unwrap_or(false)
                 {
                     return (
                         "403 Forbidden",
@@ -4175,7 +4179,9 @@ pub fn verify_control_plane_peer_pid(
             }
             Ok(actual_pid) => {
                 if state.tarpit.is_quarantined(&actual_pid.to_string())
-                    || operator.map(|o| state.tarpit.is_quarantined(o)).unwrap_or(false)
+                    || operator
+                        .map(|o| state.tarpit.is_quarantined(o))
+                        .unwrap_or(false)
                 {
                     return Err((
                         "403 Forbidden",
@@ -4191,7 +4197,9 @@ pub fn verify_control_plane_peer_pid(
     } else if let Some(addr) = peer_addr {
         if let Ok(actual_pid) = crate::security::resolve_loopback_peer_pid(addr, local_port) {
             if state.tarpit.is_quarantined(&actual_pid.to_string())
-                || operator.map(|o| state.tarpit.is_quarantined(o)).unwrap_or(false)
+                || operator
+                    .map(|o| state.tarpit.is_quarantined(o))
+                    .unwrap_or(false)
             {
                 return Err((
                     "403 Forbidden",
@@ -4265,11 +4273,12 @@ pub fn handle_siquery_query(
     let engine = crate::security::siquery::SiqueryEngine::new();
     match engine.execute_query_formatted(&sql, output_format) {
         Ok(res) => {
-            let result_val: serde_json::Value = if output_format == crate::security::siquery::SiqueryOutputFormat::Json {
-                serde_json::from_str(&res).unwrap_or_else(|_| serde_json::Value::String(res))
-            } else {
-                serde_json::Value::String(res)
-            };
+            let result_val: serde_json::Value =
+                if output_format == crate::security::siquery::SiqueryOutputFormat::Json {
+                    serde_json::from_str(&res).unwrap_or_else(|_| serde_json::Value::String(res))
+                } else {
+                    serde_json::Value::String(res)
+                };
             (
                 "200 OK",
                 serde_json::json!({
@@ -4281,7 +4290,10 @@ pub fn handle_siquery_query(
                 .to_string(),
             )
         }
-        Err(e) => ("400 Bad Request", json_error_payload("QUERY_EXECUTION_ERROR", &e)),
+        Err(e) => (
+            "400 Bad Request",
+            json_error_payload("QUERY_EXECUTION_ERROR", &e),
+        ),
     }
 }
 
@@ -4290,7 +4302,8 @@ pub fn handle_siquery_tables(
     peer_addr: Option<std::net::SocketAddr>,
     local_port: u16,
 ) -> (&'static str, String) {
-    if let Err(rejection) = verify_control_plane_peer_pid(state, peer_addr, local_port, None, None) {
+    if let Err(rejection) = verify_control_plane_peer_pid(state, peer_addr, local_port, None, None)
+    {
         return rejection;
     }
 
@@ -4513,7 +4526,10 @@ pub async fn handle_agentmesh_wasm_call(state: &WebState, body: &str) -> (&'stat
             state.audit_log.record_event(
                 "AGENTMESH_WASM_CALL_BLOCKED_AUTOTOMY",
                 &arm_id,
-                &format!("KillSwitch active: rejected outbound Wasm call to {}", target_uri),
+                &format!(
+                    "KillSwitch active: rejected outbound Wasm call to {}",
+                    target_uri
+                ),
                 "DENIED",
             );
             (
@@ -4564,9 +4580,7 @@ pub async fn handle_agentmesh_mint_inbound_seal(
     let payload = req
         .payload
         .unwrap_or_else(|| "Extract quarterly contract posture for audit review.".to_string());
-    let arm_id = req
-        .arm_id
-        .unwrap_or_else(|| "arm_publisher".to_string());
+    let arm_id = req.arm_id.unwrap_or_else(|| "arm_publisher".to_string());
 
     let seal = match state
         .agentmesh_engine
@@ -4739,7 +4753,10 @@ pub async fn handle_agentmesh_killswitch_trip(
     };
     let arm_id = req.arm_id.unwrap_or_else(|| "arm_calc".to_string());
 
-    let elapsed = state.agentmesh_engine.trip_killswitch_autotomy(&arm_id).await;
+    let elapsed = state
+        .agentmesh_engine
+        .trip_killswitch_autotomy(&arm_id)
+        .await;
     let latency_ns = elapsed.as_nanos() as u64;
     let latency_us = (latency_ns as f64) / 1000.0;
     let status = state.agentmesh_engine.status().await;
@@ -4777,7 +4794,10 @@ pub async fn handle_agentmesh_killswitch_reset(state: &WebState) -> (&'static st
     state.audit_log.record_event(
         "AGENTMESH_KILLSWITCH_RESET",
         "dashboard_operator",
-        &format!("Restored AgentMesh execution under epoch {}", status.generation_epoch),
+        &format!(
+            "Restored AgentMesh execution under epoch {}",
+            status.generation_epoch
+        ),
         "RESTORED",
     );
     (
@@ -4825,7 +4845,8 @@ pub fn handle_agentmesh_mandate_attenuate(state: &WebState, body: &str) -> (&'st
         .unwrap_or_else(|| vec!["mcp://calc".to_string()])
         .into_iter()
         .collect();
-    let child_publish: BTreeSet<String> = req.child_publish.unwrap_or_default().into_iter().collect();
+    let child_publish: BTreeSet<String> =
+        req.child_publish.unwrap_or_default().into_iter().collect();
     let child_spiffe = req
         .child_spiffe_id
         .unwrap_or_else(|| "spiffe://octopus.local/arm/arm_calc_subworker".to_string());
@@ -4932,7 +4953,7 @@ mod tests {
         let serialized = serde_json::to_string(&payload).expect("Must serialize");
         let deserialized: ApiErrorPayload =
             serde_json::from_str(&serialized).expect("Must deserialize");
-        assert_eq!(deserialized.error, true);
+        assert!(deserialized.error);
         assert_eq!(deserialized.code, "TEST_CODE");
         assert_eq!(deserialized.message, "Test error message");
     }
@@ -4974,7 +4995,7 @@ mod tests {
         let json_str = res.unwrap();
         let resp: EvaluateCedarResponse =
             serde_json::from_str(&json_str).expect("Must parse response");
-        assert_eq!(resp.is_allowed, false);
+        assert!(!resp.is_allowed);
         assert_eq!(
             resp.breakout_verdict.as_deref(),
             Some("VETO_SCHEMA_TAMPERING")

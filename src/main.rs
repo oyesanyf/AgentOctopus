@@ -11,7 +11,9 @@ async fn main() {
     let cli_args: Vec<String> = std::env::args().collect();
 
     // 1. In-memory 7-phase self-diagnostics (--verify / --check / verify)
-    if cli_args.iter().any(|a| a == "--verify" || a == "--check" || a == "-v")
+    if cli_args
+        .iter()
+        .any(|a| a == "--verify" || a == "--check" || a == "-v")
         || cli_args.get(1).map(|s| s.as_str()) == Some("verify")
     {
         println!("🛡️  [AGENT_OCTOPUS] Executing 7-Phase Subsystem Self-Diagnostics (--verify)...");
@@ -52,7 +54,9 @@ async fn main() {
     }
 
     // 3. WebUI server boot (agent_octopus start | serve | ui): headless by default
-    let open_browser_requested = cli_args.iter().any(|a| a == "--open-browser" || a == "--browser");
+    let open_browser_requested = cli_args
+        .iter()
+        .any(|a| a == "--open-browser" || a == "--browser");
     if cli_args.get(1).map(|s| s.as_str()) == Some("start")
         || cli_args.get(1).map(|s| s.as_str()) == Some("serve")
         || cli_args.get(1).map(|s| s.as_str()) == Some("ui")
@@ -80,23 +84,32 @@ async fn main() {
         // Headless by default: only launch browser if explicitly passed --open-browser or --browser
         if open_browser_requested {
             let bootstrap_nonce = agent_octopus::web::request_guard::issue_bootstrap_nonce();
-            let url_for_browser = format!("http://127.0.0.1:{}/?bootstrap={}", selected_port, bootstrap_nonce);
+            let url_for_browser = format!(
+                "http://127.0.0.1:{}/?bootstrap={}",
+                selected_port, bootstrap_nonce
+            );
             tokio::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
                 #[cfg(target_os = "windows")]
                 {
                     let mut explorer = std::process::Command::new("explorer");
                     explorer.arg(&url_for_browser);
-                    let _ = agent_octopus::security::spawn_hidden(&mut explorer, "cli: open dashboard");
+                    let _ =
+                        agent_octopus::security::spawn_hidden(&mut explorer, "cli: open dashboard");
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = std::process::Command::new("xdg-open").arg(&url_for_browser).spawn();
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(&url_for_browser)
+                        .spawn();
                 }
             });
         }
 
-        println!("🐙 Starting AgentOctopus Web Dashboard on {} (headless: {})...", addr, !open_browser_requested);
+        println!(
+            "🐙 Starting AgentOctopus Web Dashboard on {} (headless: {})...",
+            addr, !open_browser_requested
+        );
         if let Err(e) = agent_octopus::web::start_web_server(&addr).await {
             eprintln!("❌ Web server failed: {}", e);
             std::process::exit(1);
@@ -183,8 +196,11 @@ async fn main() {
             "hook" => {
                 let hook_sub = cli_args.get(2).map(|s| s.as_str()).unwrap_or("evaluate");
                 if hook_sub == "install" {
-                    use agent_octopus::security::agent_hooks::{install_agent_hooks, SupportedAgentKind};
-                    let mut workspace_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    use agent_octopus::security::agent_hooks::{
+                        install_agent_hooks, SupportedAgentKind,
+                    };
+                    let mut workspace_path =
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                     let mut agents = Vec::new();
                     let mut i = 3;
                     while i < cli_args.len() {
@@ -213,10 +229,14 @@ async fn main() {
                             SupportedAgentKind::OpenCode,
                         ];
                     }
-                    let current_exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("agent_octopus.exe"));
+                    let current_exe = std::env::current_exe()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("agent_octopus.exe"));
                     match install_agent_hooks(&workspace_path, &agents, &current_exe) {
                         Ok(configs) => {
-                            println!("✅ Successfully installed agent hooks across {} configs:", configs.len());
+                            println!(
+                                "✅ Successfully installed agent hooks across {} configs:",
+                                configs.len()
+                            );
                             for c in configs {
                                 println!("   - {}", c.display());
                             }
@@ -230,10 +250,11 @@ async fn main() {
                 } else {
                     // "evaluate"
                     use agent_octopus::security::agent_hooks::{
-                        evaluate_hook_synchronously, format_claude_response, format_copilot_response,
-                        format_cursor_response, format_mcp_error_response, format_opencode_response,
-                        parse_claude_request, parse_copilot_request, parse_cursor_request,
-                        parse_mcp_call_request, parse_opencode_request, SupportedAgentKind,
+                        evaluate_hook_synchronously, format_claude_response,
+                        format_copilot_response, format_cursor_response, format_mcp_error_response,
+                        format_opencode_response, parse_claude_request, parse_copilot_request,
+                        parse_cursor_request, parse_mcp_call_request, parse_opencode_request,
+                        SupportedAgentKind,
                     };
                     use std::io::Read;
 
@@ -252,7 +273,9 @@ async fn main() {
                         } else if cli_args[i] == "--event" {
                             if let Some(ev) = cli_args.get(i + 1) {
                                 event_name = ev.clone();
-                                if ev.eq_ignore_ascii_case("post") || ev.to_ascii_lowercase().contains("after") {
+                                if ev.eq_ignore_ascii_case("post")
+                                    || ev.to_ascii_lowercase().contains("after")
+                                {
                                     is_post = true;
                                 }
                                 i += 1;
@@ -312,7 +335,9 @@ async fn main() {
                 let stdin = std::io::stdin();
                 let mut stdout = std::io::stdout();
                 for line in stdin.lock().lines() {
-                    let Ok(line) = line else { break; };
+                    let Ok(line) = line else {
+                        break;
+                    };
                     if line.trim().is_empty() {
                         continue;
                     }
@@ -376,7 +401,10 @@ async fn main() {
 
                 if run_sweep {
                     let sweep = SiqueryEngine::new().run_siquery_edr_audit_sweep();
-                    println!("{}", serde_json::to_string_pretty(&sweep).unwrap_or_default());
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&sweep).unwrap_or_default()
+                    );
                     std::process::exit(0);
                 }
 

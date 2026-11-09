@@ -283,7 +283,10 @@ mod tests {
             .expect("Should receive second entry");
         assert_eq!(entry2.id, 2);
         assert_eq!(entry2.verdict, "blocked");
-        assert_eq!(entry2.reason.as_deref(), Some("side_channel.harness_secret_read"));
+        assert_eq!(
+            entry2.reason.as_deref(),
+            Some("side_channel.harness_secret_read")
+        );
         assert_eq!(entry2.signals.len(), 1);
 
         handle.stop();

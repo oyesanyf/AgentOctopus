@@ -737,7 +737,13 @@ pub fn spawn_tier2_linux_command(
 ) -> Result<Tier2ConfinedChildResult, OctopusSecurityError> {
     #[cfg(target_os = "linux")]
     {
-        linux_impl::spawn_tier2_linux_command_impl(verified_exe, args, agent_id, scratchpad_root, job)
+        linux_impl::spawn_tier2_linux_command_impl(
+            verified_exe,
+            args,
+            agent_id,
+            scratchpad_root,
+            job,
+        )
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -872,13 +878,8 @@ mod tests {
                 locked_file: std::fs::File::open(&dummy_path).unwrap(),
             };
 
-            let res = spawn_tier2_linux_command(
-                &handle,
-                &[],
-                "agent_test",
-                &std::env::temp_dir(),
-                &job,
-            );
+            let res =
+                spawn_tier2_linux_command(&handle, &[], "agent_test", &std::env::temp_dir(), &job);
 
             assert!(res.is_err());
             let err = res.unwrap_err().to_string();

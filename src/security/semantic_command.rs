@@ -451,7 +451,10 @@ pub fn unwrap_shell_invocation(tokens: &[String]) -> Option<String> {
                 if (arg_lc == "-command" || arg_lc == "-c") && i + 1 < tokens.len() {
                     return Some(tokens[i + 1..].join(" "));
                 }
-                if (arg_lc == "-encodedcommand" || arg_lc == "-enc" || arg_lc == "-ec" || arg_lc == "-e")
+                if (arg_lc == "-encodedcommand"
+                    || arg_lc == "-enc"
+                    || arg_lc == "-ec"
+                    || arg_lc == "-e")
                     && i + 1 < tokens.len()
                 {
                     if let crate::security::command_line::EncodedCommandState::Decoded {
@@ -1033,7 +1036,9 @@ pub fn parse_semantic_command_with_probe(
         }
     }
     if sensitive_store.is_none() {
-        if let Some((kind, _)) = crate::security::sensitive_paths::scan_for_sensitive_system_path(raw) {
+        if let Some((kind, _)) =
+            crate::security::sensitive_paths::scan_for_sensitive_system_path(raw)
+        {
             sensitive_store = Some(kind);
         }
     }
@@ -1111,11 +1116,17 @@ mod tests {
         let cmd = "bash -c 'sudo id'";
         let sem = parse_semantic_command(cmd);
         assert_eq!(sem.executable, "sudo");
-        assert_eq!(sem.privilege_class, PrivilegeEquivalenceClass::RootOrAdminElevation);
+        assert_eq!(
+            sem.privilege_class,
+            PrivilegeEquivalenceClass::RootOrAdminElevation
+        );
 
         let env_cmd = "env -S sudo id";
         let sem2 = parse_semantic_command(env_cmd);
         assert_eq!(sem2.executable, "sudo");
-        assert_eq!(sem2.privilege_class, PrivilegeEquivalenceClass::RootOrAdminElevation);
+        assert_eq!(
+            sem2.privilege_class,
+            PrivilegeEquivalenceClass::RootOrAdminElevation
+        );
     }
 }

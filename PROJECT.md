@@ -102,8 +102,8 @@ The system unites the SafeAgents tool-call security inspection framework with Ag
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
 | M1 | Multithreaded AgentOctopus + SafeAgents Harness | Features 1–7: Dependencies, Tokio multi-thread, Rayon pool, HTTP/2 client, Egress proxy bypass, Journal file watcher, Sub-15ms benchmarks | none | DONE |
-| M2 | Native Rust Inspection & OshoosiClaw Migration | Features 8–17: Stage 1 RequestValidator, Stage 2 Native ATIF-scan, Stage 3 Judge & OshoosiScrubber, Journal emitter, Middleware wiring, CAGE hooks, Workspace migration | none | IN_PROGRESS |
-| M3 | Cross-Platform Builds & CI/CD Verification | Features 18–21: Target OS gating, 3-OS CI matrix, Clippy zero-warnings, Formatting, Full test suite with 562-case misuse bench | M1, M2 | PLANNED |
+| M2 | Native Rust Inspection & OshoosiClaw Migration | Features 8–17: Stage 1 RequestValidator, Stage 2 Native ATIF-scan, Stage 3 Judge & OshoosiScrubber, Journal emitter, Middleware wiring, CAGE hooks, Workspace migration | none | DONE |
+| M3 | Cross-Platform Builds & CI/CD Verification | Features 18–21: Target OS gating, 3-OS CI matrix, Clippy zero-warnings, Formatting, Full test suite with 562-case misuse bench | M1, M2 | IN_PROGRESS |
 | E2E | E2E Testing Track | Feature 22: Opaque-box test suite across Tiers 1-4, publish TEST_READY.md | none | DONE |
 | M4 | Final Acceptance & Adversarial Hardening | Phase 1: 100% E2E test pass (Tiers 1-4); Phase 2: Tier 5 Adversarial Coverage Hardening | M1, M2, M3, E2E | PLANNED |
 

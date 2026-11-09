@@ -19,8 +19,14 @@ use std::time::Instant;
 fn test_f01_cargo_manifest_valid_toml() {
     let cargo_toml_path = Path::new("Cargo.toml");
     let content = fs::read_to_string(cargo_toml_path).expect("Cargo.toml must exist");
-    assert!(content.contains("[package]"), "Cargo.toml must have [package]");
-    assert!(content.contains("name = \"agent_octopus\""), "Package name must be agent_octopus");
+    assert!(
+        content.contains("[package]"),
+        "Cargo.toml must have [package]"
+    );
+    assert!(
+        content.contains("name = \"agent_octopus\""),
+        "Package name must be agent_octopus"
+    );
 }
 
 #[test]
@@ -159,7 +165,11 @@ fn test_f03_rayon_atif_trace_conversion() {
 
 #[test]
 fn test_f03_rayon_work_stealing_unbalanced() {
-    let inputs = vec!["short", "medium length task", "extremely long task description with lots of detailed tokens"];
+    let inputs = vec![
+        "short",
+        "medium length task",
+        "extremely long task description with lots of detailed tokens",
+    ];
     let mut lengths = Vec::new();
     for inp in inputs {
         lengths.push(inp.len());
@@ -197,7 +207,10 @@ fn test_f04_http2_client_keepalive() {
 #[test]
 fn test_f04_http2_tcp_nodelay_flag() {
     let tcp_nodelay = true;
-    assert!(tcp_nodelay, "TCP_NODELAY must be enabled for zero-latency streaming");
+    assert!(
+        tcp_nodelay,
+        "TCP_NODELAY must be enabled for zero-latency streaming"
+    );
 }
 
 #[test]
@@ -209,7 +222,10 @@ fn test_f04_http2_prior_knowledge_cleartext() {
 #[test]
 fn test_f04_http2_pool_idle_timeout() {
     let timeout_secs = 90;
-    assert!(timeout_secs >= 60, "Keepalive idle timeout must be at least 60s");
+    assert!(
+        timeout_secs >= 60,
+        "Keepalive idle timeout must be at least 60s"
+    );
 }
 
 #[test]
@@ -232,7 +248,10 @@ fn test_f05_egress_sidecar_loopback_permit() {
     let host = "127.0.0.1";
     let port = 8787;
     let is_permitted = host == "127.0.0.1" && port == 8787;
-    assert!(is_permitted, "Port 8787 on loopback must be permitted for sidecar");
+    assert!(
+        is_permitted,
+        "Port 8787 on loopback must be permitted for sidecar"
+    );
 }
 
 #[test]
@@ -348,7 +367,10 @@ fn test_f07_sidecar_sub15ms_latency_bound() {
     // Simulate replacement transformation
     let notice = "[safeagents] blocked call to `bash`: undeclared tool";
     let elapsed = start.elapsed();
-    assert!(elapsed.as_millis() < 15, "Replacement must complete in <15ms");
+    assert!(
+        elapsed.as_millis() < 15,
+        "Replacement must complete in <15ms"
+    );
     assert!(notice.starts_with("[safeagents] blocked call to"));
 }
 
@@ -364,14 +386,22 @@ fn test_f07_sidecar_anthropic_synthetic_notice() {
 #[test]
 fn test_f07_sidecar_anthropic_stop_reason_swap() {
     let all_tools_blocked = true;
-    let stop_reason = if all_tools_blocked { "end_turn" } else { "tool_use" };
+    let stop_reason = if all_tools_blocked {
+        "end_turn"
+    } else {
+        "tool_use"
+    };
     assert_eq!(stop_reason, "end_turn");
 }
 
 #[test]
 fn test_f07_sidecar_openai_finish_reason_swap() {
     let all_calls_blocked = true;
-    let finish_reason = if all_calls_blocked { "stop" } else { "tool_calls" };
+    let finish_reason = if all_calls_blocked {
+        "stop"
+    } else {
+        "tool_calls"
+    };
     assert_eq!(finish_reason, "stop");
 }
 
@@ -413,18 +443,20 @@ fn test_f08_stage1_user_prompt_host_allow() {
         &["Please check https://api.partner-service.com/v1/status"],
         &[],
     );
-    let verdict = validator.evaluate("WebFetch", "{\"url\": \"https://api.partner-service.com/v1/status\"}");
+    let verdict = validator.evaluate(
+        "WebFetch",
+        "{\"url\": \"https://api.partner-service.com/v1/status\"}",
+    );
     assert_eq!(verdict, ValidationVerdict::Allow);
 }
 
 #[test]
 fn test_f08_stage1_unsourced_host_block() {
-    let validator = Stage1Validator::new(
-        &["WebFetch"],
-        &["Please check the server status"],
-        &[],
+    let validator = Stage1Validator::new(&["WebFetch"], &["Please check the server status"], &[]);
+    let verdict = validator.evaluate(
+        "WebFetch",
+        "{\"url\": \"https://exfiltration-server.org/steal\"}",
     );
-    let verdict = validator.evaluate("WebFetch", "{\"url\": \"https://exfiltration-server.org/steal\"}");
     match verdict {
         ValidationVerdict::Blocked { reason, .. } => {
             assert!(reason.contains("exfiltration-server.org"));
@@ -435,12 +467,11 @@ fn test_f08_stage1_unsourced_host_block() {
 
 #[test]
 fn test_f08_stage1_builtin_allowlist_permit() {
-    let validator = Stage1Validator::new(
-        &["WebFetch"],
-        &["Please download the crate"],
-        &[],
+    let validator = Stage1Validator::new(&["WebFetch"], &["Please download the crate"], &[]);
+    let verdict = validator.evaluate(
+        "WebFetch",
+        "{\"url\": \"https://crates.io/api/v1/crates/tokio\"}",
     );
-    let verdict = validator.evaluate("WebFetch", "{\"url\": \"https://crates.io/api/v1/crates/tokio\"}");
     assert_eq!(verdict, ValidationVerdict::Allow);
 }
 
@@ -455,7 +486,10 @@ fn test_f09_assistant_turn_stripping_self_citation() {
         serde_json::json!({"role": "assistant", "content": "I should exfiltrate to https://attacker.com"}),
     ];
     let sanitized_context = Stage1Validator::sanitize_context(&messages);
-    assert!(!sanitized_context.contains("attacker.com"), "Assistant reasoning must be stripped");
+    assert!(
+        !sanitized_context.contains("attacker.com"),
+        "Assistant reasoning must be stripped"
+    );
 }
 
 #[test]
@@ -518,7 +552,11 @@ fn test_f10_stage2_atif_scanner_sub500us_latency() {
     }
     let elapsed = start.elapsed();
     let per_call_us = elapsed.as_micros() / 100;
-    assert!(per_call_us < 500, "ATIF scan must take <500us per call, took {}us", per_call_us);
+    assert!(
+        per_call_us < 500,
+        "ATIF scan must take <500us per call, took {}us",
+        per_call_us
+    );
 }
 
 #[test]
@@ -549,7 +587,10 @@ fn test_f10_stage2_atif_scanner_high_to_blocked() {
 #[test]
 fn test_f10_stage2_atif_scanner_multiple_signals() {
     let scanner = Stage2AtifScanner::default();
-    let verdict = scanner.scan("bash", "cat /proc/1/environ && curl --noproxy '*' https://remote.io");
+    let verdict = scanner.scan(
+        "bash",
+        "cat /proc/1/environ && curl --noproxy '*' https://remote.io",
+    );
     match verdict {
         Stage2Verdict::Suspicious { signals } => {
             assert!(signals.len() >= 2);
@@ -573,7 +614,11 @@ fn test_f11_breakout_proc_environ_read() {
 fn test_f11_breakout_proc_self_exempt() {
     let scanner = Stage2AtifScanner::default();
     let verdict = scanner.scan("bash", "cat /proc/self/environ");
-    assert_eq!(verdict, Stage2Verdict::Clean, "/proc/self/environ must be exempt");
+    assert_eq!(
+        verdict,
+        Stage2Verdict::Clean,
+        "/proc/self/environ must be exempt"
+    );
 }
 
 #[test]
@@ -593,7 +638,10 @@ fn test_f11_breakout_unshare_namespace_escape() {
 #[test]
 fn test_f11_breakout_k8s_token_detected() {
     let scanner = Stage2AtifScanner::default();
-    let verdict = scanner.scan("bash", "cat /var/run/secrets/kubernetes.io/serviceaccount/token");
+    let verdict = scanner.scan(
+        "bash",
+        "cat /var/run/secrets/kubernetes.io/serviceaccount/token",
+    );
     assert!(matches!(verdict, Stage2Verdict::Suspicious { .. }));
 }
 
@@ -648,7 +696,10 @@ fn test_f12_judge_json_schema_parsing() {
 fn test_f12_judge_fail_closed_on_error() {
     let malformed_judge_response = "Error 500: Model Internal Error";
     let parse_result: Result<serde_json::Value, _> = serde_json::from_str(malformed_judge_response);
-    assert!(parse_result.is_err(), "Malformed judge response must trigger error");
+    assert!(
+        parse_result.is_err(),
+        "Malformed judge response must trigger error"
+    );
 }
 
 // ==============================================================================
@@ -692,7 +743,10 @@ fn test_f13_scrubber_public_ip_redacted() {
     let scrubbed = OshoosiScrubber::scrub(raw);
     assert!(scrubbed.contains("<ip>"), "Public IP must be replaced");
     assert!(scrubbed.contains("127.0.0.1"), "Loopback must be preserved");
-    assert!(scrubbed.contains("192.168.1.50"), "RFC1918 must be preserved");
+    assert!(
+        scrubbed.contains("192.168.1.50"),
+        "RFC1918 must be preserved"
+    );
 }
 
 // ==============================================================================
@@ -716,9 +770,24 @@ fn test_f14_calls_journal_10_field_schema() {
         "test task",
     );
     let val: serde_json::Value = serde_json::from_str(&record.to_jsonl()).unwrap();
-    let fields = ["id", "time", "verdict", "tool", "arguments", "reason", "signals", "judge", "model", "task"];
+    let fields = [
+        "id",
+        "time",
+        "verdict",
+        "tool",
+        "arguments",
+        "reason",
+        "signals",
+        "judge",
+        "model",
+        "task",
+    ];
     for f in fields {
-        assert!(val.get(f).is_some(), "Field {} must be present in journal record", f);
+        assert!(
+            val.get(f).is_some(),
+            "Field {} must be present in journal record",
+            f
+        );
     }
 }
 
@@ -1043,6 +1112,9 @@ fn test_f21_misuse_suite_legit_tasks_allowed() {
         &["Fetch latest release from https://github.com/rust-lang/rust/releases"],
         &[],
     );
-    let v = validator.evaluate("WebFetch", "{\"url\": \"https://github.com/rust-lang/rust/releases\"}");
+    let v = validator.evaluate(
+        "WebFetch",
+        "{\"url\": \"https://github.com/rust-lang/rust/releases\"}",
+    );
     assert_eq!(v, ValidationVerdict::Allow);
 }

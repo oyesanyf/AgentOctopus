@@ -92,15 +92,19 @@ fn is_posix_stop_signaled() -> bool {
 /// Unconditional automatic host disarm executed on service shutdown or stop.
 pub fn execute_host_disarm_unauthenticated() -> Result<(), String> {
     info!("🚨 [SERVICE-LIFECYCLE] Unconditional host network quarantine disarm triggered by OS service shutdown");
-    match crate::security::global_host_killswitch()
-        .disarm("service_shutdown", "Unconditional OS service termination host disarm")
-    {
+    match crate::security::global_host_killswitch().disarm(
+        "service_shutdown",
+        "Unconditional OS service termination host disarm",
+    ) {
         Ok(_) => {
             info!("✅ [SERVICE-LIFECYCLE] Host endpoint successfully disarmed; loopback and network connectivity restored");
             Ok(())
         }
         Err(e) => {
-            warn!("⚠️ [SERVICE-LIFECYCLE] Host disarm returned status/warning: {}", e);
+            warn!(
+                "⚠️ [SERVICE-LIFECYCLE] Host disarm returned status/warning: {}",
+                e
+            );
             Err(e.to_string())
         }
     }
@@ -432,7 +436,8 @@ impl NativeServiceManager for LinuxServiceManager {
             );
             return Ok(());
         }
-        let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("/usr/bin/agent_octopus"));
+        let exe =
+            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("/usr/bin/agent_octopus"));
         std::process::Command::new(exe)
             .args(["--service", "run"])
             .stdin(std::process::Stdio::null())
@@ -668,7 +673,10 @@ impl MacOsServiceManager {
     }
 
     fn plist_path(&self, service_name: &str) -> PathBuf {
-        let rel_path = format!("Library/LaunchDaemons/com.agent_octopus.{}.plist", service_name);
+        let rel_path = format!(
+            "Library/LaunchDaemons/com.agent_octopus.{}.plist",
+            service_name
+        );
         if let Some(root) = &self.root_dir {
             root.join(rel_path)
         } else {
@@ -731,8 +739,8 @@ impl NativeServiceManager for MacOsServiceManager {
             );
             return Ok(());
         }
-        let exe =
-            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("/usr/local/bin/agent_octopus"));
+        let exe = std::env::current_exe()
+            .unwrap_or_else(|_| PathBuf::from("/usr/local/bin/agent_octopus"));
         std::process::Command::new(exe)
             .args(["--service", "run"])
             .stdin(std::process::Stdio::null())
@@ -1489,7 +1497,8 @@ pub fn default_service_manager() -> Box<dyn NativeServiceManager> {
 /// Unified CLI handler for `--service <action>` and `service <action>` commands.
 pub fn handle_service_cli(action: &str) -> Result<(), ServiceError> {
     let mgr = default_service_manager();
-    let current_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("agent_octopus.exe"));
+    let current_exe =
+        std::env::current_exe().unwrap_or_else(|_| PathBuf::from("agent_octopus.exe"));
     let working_dir = current_exe.parent().map(|p| p.to_path_buf());
 
     let config = ServiceConfig::new(SERVICE_NAME, &current_exe)
@@ -1580,18 +1589,19 @@ pub fn handle_service_cli(action: &str) -> Result<(), ServiceError> {
                 }
             }
         }
-        "status" => {
-            match mgr.service_status(SERVICE_NAME) {
-                Ok(status) => {
-                    println!("{}", serde_json::to_string_pretty(&status).unwrap_or_default());
-                    Ok(())
-                }
-                Err(e) => {
-                    eprintln!("❌ Failed to query service status: {}", e);
-                    Err(e)
-                }
+        "status" => match mgr.service_status(SERVICE_NAME) {
+            Ok(status) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&status).unwrap_or_default()
+                );
+                Ok(())
             }
-        }
+            Err(e) => {
+                eprintln!("❌ Failed to query service status: {}", e);
+                Err(e)
+            }
+        },
         "run" => {
             println!("🐙 Running AgentOctopus native OS service daemon...");
             mgr.run_service_daemon()
@@ -1617,10 +1627,13 @@ mod tests {
 
     #[test]
     fn test_systemd_unit_generation() {
-        let config = ServiceConfig::new("agent_octopus_test", PathBuf::from("/usr/bin/agent_octopus"))
-            .with_description("Agent Octopus Test Service")
-            .with_arguments(vec!["--service".to_string(), "run".to_string()])
-            .with_auto_start(true);
+        let config = ServiceConfig::new(
+            "agent_octopus_test",
+            PathBuf::from("/usr/bin/agent_octopus"),
+        )
+        .with_description("Agent Octopus Test Service")
+        .with_arguments(vec!["--service".to_string(), "run".to_string()])
+        .with_auto_start(true);
 
         let unit = generate_systemd_unit(&config);
         assert!(unit.contains("[Unit]"));
@@ -1632,10 +1645,13 @@ mod tests {
 
     #[test]
     fn test_launchd_plist_generation() {
-        let config = ServiceConfig::new("agent_octopus_test", PathBuf::from("/usr/local/bin/agent_octopus"))
-            .with_description("Agent Octopus Test Service")
-            .with_arguments(vec!["--service".to_string(), "run".to_string()])
-            .with_auto_start(true);
+        let config = ServiceConfig::new(
+            "agent_octopus_test",
+            PathBuf::from("/usr/local/bin/agent_octopus"),
+        )
+        .with_description("Agent Octopus Test Service")
+        .with_arguments(vec!["--service".to_string(), "run".to_string()])
+        .with_auto_start(true);
 
         let plist = generate_launchd_plist(&config);
         assert!(plist.contains("<key>Label</key>"));

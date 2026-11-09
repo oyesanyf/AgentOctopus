@@ -143,9 +143,7 @@ async fn test_outbound_wasm_mesh_call_allowed_header_hygiene_and_zero_secret_mem
         .unwrap();
     assert!(echo.allowed);
     assert!(echo.linear_memory_zero_secret_verified);
-    assert!(echo
-        .sanitized_response
-        .contains("authorization_stripped"));
+    assert!(echo.sanitized_response.contains("authorization_stripped"));
     assert!(!echo.sanitized_response.contains("mesh_tok_"));
 
     engine.stop_serving_node().await.unwrap();

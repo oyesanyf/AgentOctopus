@@ -34,9 +34,7 @@ use agent_octopus::core::types::ArmRole;
 use agent_octopus::neural_mesh::{
     MeshCapabilityGrant, MeshError, MessageKind, NeuralMesh, MAX_CLOCK_SKEW_MS,
 };
-use agent_octopus::security::agentmesh::mandate_attenuation::{
-    AttenuatedMandate, MandateError,
-};
+use agent_octopus::security::agentmesh::mandate_attenuation::{AttenuatedMandate, MandateError};
 use agent_octopus::security::agentmesh::oidc_actor_issuer::{
     parse_ieee_p1363_signature, OctopusOidcActorIssuer, OidcError,
 };
@@ -61,8 +59,11 @@ fn test_sub_millisecond_killswitch_benchmark_under_500_entry_load() {
 
     for trial in 0..BENCHMARK_TRIALS {
         // Prepare fresh bridge with 500 entries to ensure exact high-load conditions on every trial
-        let trial_issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral("https://agentoctopus.local"));
-        let trial_bridge = AgentMeshPepBridge::new(trial_issuer, "http://127.0.0.1:8080".to_string());
+        let trial_issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral(
+            "https://agentoctopus.local",
+        ));
+        let trial_bridge =
+            AgentMeshPepBridge::new(trial_issuer, "http://127.0.0.1:8080".to_string());
 
         let target_arm = format!("arm_victim_{:03}", trial % NUM_ARMS);
         let target_ks = KillSwitch::new();
@@ -127,7 +128,9 @@ fn test_sub_millisecond_killswitch_benchmark_under_500_entry_load() {
 
 #[tokio::test]
 async fn test_post_killswitch_fail_closed_synchronous_and_asynchronous() {
-    let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral("https://agentoctopus.local"));
+    let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral(
+        "https://agentoctopus.local",
+    ));
     let bridge = AgentMeshPepBridge::new(issuer, "http://127.0.0.1:9999".to_string());
 
     let arm_id = "arm_financial_compromised";
@@ -158,12 +161,7 @@ async fn test_post_killswitch_fail_closed_synchronous_and_asynchronous() {
 
     // 3. Asynchronous token exchange fails closed immediately with KillSwitchTripped
     let async_tok_res = bridge
-        .get_or_exchange_token_async(
-            arm_id,
-            1,
-            &ArmRole::AccountingLedgerWrite,
-            "mcp://payroll",
-        )
+        .get_or_exchange_token_async(arm_id, 1, &ArmRole::AccountingLedgerWrite, "mcp://payroll")
         .await;
     assert_eq!(
         async_tok_res,
@@ -210,13 +208,12 @@ async fn test_post_killswitch_fail_closed_synchronous_and_asynchronous() {
 
 #[tokio::test]
 async fn test_global_killswitch_trips_all_arms_closed() {
-    let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral("https://agentoctopus.local"));
+    let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral(
+        "https://agentoctopus.local",
+    ));
     let global_ks = Arc::new(KillSwitch::new());
-    let bridge = AgentMeshPepBridge::new_with_config(
-        PepBridgeConfig::default(),
-        issuer,
-        global_ks.clone(),
-    );
+    let bridge =
+        AgentMeshPepBridge::new_with_config(PepBridgeConfig::default(), issuer, global_ks.clone());
 
     let arm_a = "arm_alpha";
     let arm_b = "arm_beta";
@@ -236,13 +233,8 @@ async fn test_global_killswitch_trips_all_arms_closed() {
     assert!(bridge.is_arm_tripped(arm_a));
     assert!(bridge.is_arm_tripped(arm_b));
 
-    let res_a = bridge.dispatch_mesh_call_sync(
-        arm_a,
-        1,
-        &ArmRole::UntrustedDocIngest,
-        "mcp://calc",
-        b"{}",
-    );
+    let res_a =
+        bridge.dispatch_mesh_call_sync(arm_a, 1, &ArmRole::UntrustedDocIngest, "mcp://calc", b"{}");
     assert!(matches!(res_a, Err(MeshCallError::KillSwitchTripped(_))));
 
     let res_b = bridge
@@ -272,15 +264,36 @@ async fn test_header_smuggling_shadowing_resistance_and_echo_verification() {
 
     // Adversarial dirty headers containing spoofed bearer tokens, session cookies, and mesh headers
     let dirty_caller_headers = vec![
-        ("Authorization".to_string(), "Bearer stolen_attacker_token_666".to_string()),
-        ("authorization".to_string(), "Bearer lower_case_smuggle".to_string()),
-        ("AUTHORIZATION".to_string(), "Bearer upper_case_smuggle".to_string()),
-        ("Cookie".to_string(), "admin_session=stolen_hash; role=superuser".to_string()),
+        (
+            "Authorization".to_string(),
+            "Bearer stolen_attacker_token_666".to_string(),
+        ),
+        (
+            "authorization".to_string(),
+            "Bearer lower_case_smuggle".to_string(),
+        ),
+        (
+            "AUTHORIZATION".to_string(),
+            "Bearer upper_case_smuggle".to_string(),
+        ),
+        (
+            "Cookie".to_string(),
+            "admin_session=stolen_hash; role=superuser".to_string(),
+        ),
         ("cookie".to_string(), "oauth_tracking=victim".to_string()),
         ("COOKIE".to_string(), "secret_token=abcd".to_string()),
-        ("X-Mesh-Custom-Actor".to_string(), "spiffe://attacker.domain/arm/0".to_string()),
-        ("x-mesh-override-role".to_string(), "SystemAdmin".to_string()),
-        ("X-MESH-AUTHENTICATION".to_string(), "Bearer forged_internal_credential".to_string()),
+        (
+            "X-Mesh-Custom-Actor".to_string(),
+            "spiffe://attacker.domain/arm/0".to_string(),
+        ),
+        (
+            "x-mesh-override-role".to_string(),
+            "SystemAdmin".to_string(),
+        ),
+        (
+            "X-MESH-AUTHENTICATION".to_string(),
+            "Bearer forged_internal_credential".to_string(),
+        ),
         ("X-Mesh-Forwarded-Identity".to_string(), "admin".to_string()),
         ("Content-Type".to_string(), "application/json".to_string()),
         ("X-Trace-Context".to_string(), "trace_valid_001".to_string()),
@@ -294,7 +307,11 @@ async fn test_header_smuggling_shadowing_resistance_and_echo_verification() {
     // Ensure all variants of Authorization, Cookie, and X-Mesh-* (except the authoritative one) are eradicated
     for (k, _) in &sanitized_headers {
         let lower = k.to_ascii_lowercase();
-        assert_ne!(lower, "authorization", "Authorization header was not stripped: {}", k);
+        assert_ne!(
+            lower, "authorization",
+            "Authorization header was not stripped: {}",
+            k
+        );
         assert_ne!(lower, "cookie", "Cookie header was not stripped: {}", k);
         if lower.starts_with("x-mesh-") {
             assert_eq!(
@@ -322,9 +339,10 @@ async fn test_header_smuggling_shadowing_resistance_and_echo_verification() {
 
     // 4. End-to-End wire verification against /mesh/echo_headers using AsyncHttpWireClient
     let echo_endpoint = format!("{}/mesh/echo_headers", node_url);
-    let (status, _resp_hdrs, body_bytes) = AsyncHttpWireClient::post(&echo_endpoint, &sanitized_headers, b"{}")
-        .await
-        .expect("Failed to post to echo_headers endpoint");
+    let (status, _resp_hdrs, body_bytes) =
+        AsyncHttpWireClient::post(&echo_endpoint, &sanitized_headers, b"{}")
+            .await
+            .expect("Failed to post to echo_headers endpoint");
 
     assert_eq!(status, 200);
 
@@ -383,9 +401,9 @@ fn test_zero_mutual_information_sanitization_adversarial_stego_and_entropy() {
     // Vector 1: Payload with zero-width characters (steganographic channel leak)
     let stego_payload = "{\"status\": \"ok\", \"agent_msg\": \"Normal\u{200B}text\u{200C}with\u{200D}hidden\u{FEFF}stego\u{2060}bits\"}";
 
-    let sanitized_bytes =
-        AgentMeshPepBridge::sanitize_upstream_payload(stego_payload.as_bytes());
-    let sanitized_str = String::from_utf8(sanitized_bytes).expect("Sanitized output must be valid UTF-8");
+    let sanitized_bytes = AgentMeshPepBridge::sanitize_upstream_payload(stego_payload.as_bytes());
+    let sanitized_str =
+        String::from_utf8(sanitized_bytes).expect("Sanitized output must be valid UTF-8");
 
     assert!(
         !sanitized_str.contains('\u{200B}'),
@@ -445,7 +463,10 @@ fn test_zero_mutual_information_sanitization_adversarial_stego_and_entropy() {
     let payload_b = "{\"status\": \"ok\", \"count\": 42}";
     let out_a = AgentMeshPepBridge::sanitize_upstream_payload(payload_a.as_bytes());
     let out_b = AgentMeshPepBridge::sanitize_upstream_payload(payload_b.as_bytes());
-    assert_eq!(out_a, out_b, "Zero-Mutual-Information output projection must be deterministic");
+    assert_eq!(
+        out_a, out_b,
+        "Zero-Mutual-Information output projection must be deterministic"
+    );
 }
 
 // ============================================================================
@@ -459,7 +480,9 @@ async fn test_dual_side_734_serving_node_active_revocation_and_epoch_watermark()
         .unwrap()
         .as_secs();
 
-    let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral("spiffe://agentoctopus.local"));
+    let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral(
+        "spiffe://agentoctopus.local",
+    ));
     let jwks = issuer.get_jwks(now);
     let policy = AgentMeshPolicyConfig::default_serving_policy();
 
@@ -608,7 +631,10 @@ async fn test_neural_mesh_anti_replay_and_tamper_resistance() {
     let mesh = NeuralMesh::new([(String::from("sensor_arm"), String::from("actuator_arm"))]);
 
     let (sensor, _) = mesh.enroll("sensor_arm", 10).await.expect("Enroll sensor");
-    let (_, mut actuator_rx) = mesh.enroll("actuator_arm", 10).await.expect("Enroll actuator");
+    let (_, mut actuator_rx) = mesh
+        .enroll("actuator_arm", 10)
+        .await
+        .expect("Enroll actuator");
 
     // 1. Send normal valid message
     sensor
@@ -770,7 +796,10 @@ fn test_mandate_monotonic_attenuation_and_escalation_denial() {
     );
 
     assert!(
-        matches!(escalation_res, Err(MandateError::PrivilegeEscalationService { .. })),
+        matches!(
+            escalation_res,
+            Err(MandateError::PrivilegeEscalationService { .. })
+        ),
         "Privilege escalation in services must be denied with PrivilegeEscalationService"
     );
 
@@ -790,7 +819,10 @@ fn test_mandate_monotonic_attenuation_and_escalation_denial() {
     );
 
     assert!(
-        matches!(recovery_res, Err(MandateError::PrivilegeEscalationService { .. })),
+        matches!(
+            recovery_res,
+            Err(MandateError::PrivilegeEscalationService { .. })
+        ),
         "Subsequent hop cannot recover previously attenuated capabilities"
     );
 }
@@ -804,15 +836,12 @@ fn test_ieee_p1363_strict_signature_parsing_and_der_rejection() {
     // ASN.1 DER ECDSA signature starts with 0x30 (SEQUENCE tag)
     let der_signature = vec![
         0x30, 0x44, 0x02, 0x20, // SEQUENCE of 68 bytes, INTEGER of 32 bytes
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
-        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-        0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
-        0x02, 0x20, // INTEGER of 32 bytes
-        0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
-        0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30,
-        0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
-        0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
+        0x1F, 0x20, 0x02, 0x20, // INTEGER of 32 bytes
+        0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F,
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E,
+        0x3F, 0x40,
     ];
 
     let der_res = parse_ieee_p1363_signature(&der_signature);
@@ -838,7 +867,10 @@ fn test_ieee_p1363_strict_signature_parsing_and_der_rejection() {
     // Valid 64-byte raw IEEE P1363 signature (R || S)
     let valid_p1363_sig = vec![0x01; 64];
     let p1363_res = parse_ieee_p1363_signature(&valid_p1363_sig);
-    assert!(p1363_res.is_ok(), "Valid 64-byte P1363 signature must be accepted");
+    assert!(
+        p1363_res.is_ok(),
+        "Valid 64-byte P1363 signature must be accepted"
+    );
 }
 
 // ============================================================================
@@ -847,10 +879,11 @@ fn test_ieee_p1363_strict_signature_parsing_and_der_rejection() {
 
 #[tokio::test]
 async fn test_signed_epoch_revocation_signal_post_endpoint() {
-    use agent_octopus::security::agentmesh::serving_node::SignedEpochRevocationSignal;
     use agent_octopus::security::agentmesh::key_broker::{MeshKeyBroker, OsProtectedKeyBroker};
+    use agent_octopus::security::agentmesh::serving_node::SignedEpochRevocationSignal;
 
-    let broker = Arc::new(OsProtectedKeyBroker::new_in_memory("https://agentoctopus.local").unwrap());
+    let broker =
+        Arc::new(OsProtectedKeyBroker::new_in_memory("https://agentoctopus.local").unwrap());
     let jwks = broker.get_jwks(0);
 
     let serving_node = AgentMeshServingNode::start(
@@ -862,7 +895,10 @@ async fn test_signed_epoch_revocation_signal_post_endpoint() {
     .expect("Failed to start serving node");
 
     let arm_id = "arm_signed_revocation_target";
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     // 1. Legitimate revocation signal signed by broker
     let sig_input = format!("{}:{}:{}", arm_id, 42, now);
@@ -938,9 +974,13 @@ async fn test_mutual_pep_to_node_channel_authentication() {
     .expect("Failed to start serving node with channel secret");
 
     let nonce = "unique_pep_nonce_12345";
-    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
 
-    let valid_proof = compute_pep_channel_proof(&channel_secret, "POST", "/health", now_ms, nonce, &[], None);
+    let valid_proof =
+        compute_pep_channel_proof(&channel_secret, "POST", "/health", now_ms, nonce, &[], None);
 
     // 1. Request with valid channel proof headers succeeds and contains x-octopus-node-proof
     let headers = vec![
@@ -949,35 +989,28 @@ async fn test_mutual_pep_to_node_channel_authentication() {
         (HEADER_PEP_TIMESTAMP.to_string(), now_ms.to_string()),
     ];
 
-    let (status, resp_headers, _) = AsyncHttpWireClient::post(
-        &format!("{}/health", serving_node.url()),
-        &headers,
-        &[],
-    )
-    .await
-    .unwrap();
+    let (status, resp_headers, _) =
+        AsyncHttpWireClient::post(&format!("{}/health", serving_node.url()), &headers, &[])
+            .await
+            .unwrap();
 
     assert_eq!(status, 200);
-    assert!(resp_headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(HEADER_NODE_PROOF)));
+    assert!(resp_headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case(HEADER_NODE_PROOF)));
 
     // 2. Request missing channel proof fails with 403 Forbidden
-    let (no_auth_status, _, _) = AsyncHttpWireClient::post(
-        &format!("{}/health", serving_node.url()),
-        &[],
-        &[],
-    )
-    .await
-    .unwrap();
+    let (no_auth_status, _, _) =
+        AsyncHttpWireClient::post(&format!("{}/health", serving_node.url()), &[], &[])
+            .await
+            .unwrap();
     assert_eq!(no_auth_status, 403);
 
     // 3. Replayed nonce fails with 403 Forbidden
-    let (replay_status, _, _) = AsyncHttpWireClient::post(
-        &format!("{}/health", serving_node.url()),
-        &headers,
-        &[],
-    )
-    .await
-    .unwrap();
+    let (replay_status, _, _) =
+        AsyncHttpWireClient::post(&format!("{}/health", serving_node.url()), &headers, &[])
+            .await
+            .unwrap();
     assert_eq!(replay_status, 403);
 }
 
@@ -1001,7 +1034,8 @@ fn test_privilege_separated_os_protected_key_broker() {
     assert_eq!(&*recovered, plaintext);
 
     // 2. Broker signing and rotation
-    let broker = Arc::new(OsProtectedKeyBroker::new_in_memory("https://agentoctopus.local").unwrap());
+    let broker =
+        Arc::new(OsProtectedKeyBroker::new_in_memory("https://agentoctopus.local").unwrap());
     let kid1 = broker.active_key_id();
     let sig1 = broker.sign_es256(b"message_to_sign_1").unwrap();
     assert_eq!(sig1.len(), 64);
@@ -1016,7 +1050,6 @@ fn test_privilege_separated_os_protected_key_broker() {
     assert_eq!(sig_worker.len(), 64);
 }
 
-
 // ============================================================================
 // 12. CONCURRENT KILLSWITCH EVICTION STRESS BENCHMARK
 // ============================================================================
@@ -1024,8 +1057,13 @@ fn test_privilege_separated_os_protected_key_broker() {
 #[tokio::test]
 async fn test_concurrent_killswitch_eviction_stress_benchmark() {
     const NUM_CONCURRENT: usize = 100;
-    let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral("https://agentoctopus.local"));
-    let bridge = Arc::new(AgentMeshPepBridge::new(issuer, "http://127.0.0.1:8080".to_string()));
+    let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral(
+        "https://agentoctopus.local",
+    ));
+    let bridge = Arc::new(AgentMeshPepBridge::new(
+        issuer,
+        "http://127.0.0.1:8080".to_string(),
+    ));
 
     // Register 100 distinct arms
     let mut killswitches = Vec::with_capacity(NUM_CONCURRENT);
@@ -1063,7 +1101,11 @@ async fn test_concurrent_killswitch_eviction_stress_benchmark() {
 
     for (arm_id, ks) in &killswitches {
         assert!(ks.is_tripped(), "Arm {} must be tripped", arm_id);
-        assert!(bridge.is_arm_tripped(arm_id), "Bridge must report {} tripped", arm_id);
+        assert!(
+            bridge.is_arm_tripped(arm_id),
+            "Bridge must report {} tripped",
+            arm_id
+        );
     }
 
     latencies_micros.sort_unstable();
@@ -1111,7 +1153,9 @@ async fn test_active_in_flight_stream_cancellation_on_killswitch_trip() {
         }
     });
 
-    let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral("spiffe://agentoctopus.local"));
+    let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral(
+        "spiffe://agentoctopus.local",
+    ));
     let jwks = issuer.get_jwks(0);
     let policy = AgentMeshPolicyConfig::default_serving_policy();
     let mut serving_node = AgentMeshServingNode::start(policy, Some(jwks), 0)
@@ -1161,9 +1205,7 @@ async fn test_active_in_flight_stream_cancellation_on_killswitch_trip() {
     );
 
     // 6. Assert dispatch call aborted immediately without waiting for the 3-second server delay
-    let call_result = dispatch_handle
-        .await
-        .expect("Dispatch task panicked");
+    let call_result = dispatch_handle.await.expect("Dispatch task panicked");
     let call_elapsed = call_start.elapsed();
 
     assert!(
@@ -1271,8 +1313,14 @@ fn test_bounded_token_vault_capacity_and_phantom_key_removal() {
 #[tokio::test]
 async fn test_neural_mesh_multi_message_replay_and_bounded_capacity_rollover() {
     let mesh = NeuralMesh::new([(String::from("sender_node"), String::from("receiver_node"))]);
-    let (sender, _) = mesh.enroll("sender_node", 500).await.expect("Enroll sender");
-    let (_, mut receiver_rx) = mesh.enroll("receiver_node", 500).await.expect("Enroll receiver");
+    let (sender, _) = mesh
+        .enroll("sender_node", 500)
+        .await
+        .expect("Enroll sender");
+    let (_, mut receiver_rx) = mesh
+        .enroll("receiver_node", 500)
+        .await
+        .expect("Enroll receiver");
 
     // 1. Send 5 distinct messages and verify all are initially accepted
     let mut messages = Vec::new();

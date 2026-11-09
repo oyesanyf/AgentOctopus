@@ -160,11 +160,12 @@ impl SiqueryEngine {
                     return Ok(String::new());
                 }
                 let mut out = String::new();
-                let keys: Vec<String> = if let Some(first) = rows.first().and_then(|r| r.as_object()) {
-                    first.keys().cloned().collect()
-                } else {
-                    Vec::new()
-                };
+                let keys: Vec<String> =
+                    if let Some(first) = rows.first().and_then(|r| r.as_object()) {
+                        first.keys().cloned().collect()
+                    } else {
+                        Vec::new()
+                    };
                 out.push_str(&keys.join(","));
                 out.push('\n');
                 for r in &rows {
@@ -189,11 +190,12 @@ impl SiqueryEngine {
                 if rows.is_empty() {
                     return Ok("0 rows returned.".to_string());
                 }
-                let keys: Vec<String> = if let Some(first) = rows.first().and_then(|r| r.as_object()) {
-                    first.keys().cloned().collect()
-                } else {
-                    Vec::new()
-                };
+                let keys: Vec<String> =
+                    if let Some(first) = rows.first().and_then(|r| r.as_object()) {
+                        first.keys().cloned().collect()
+                    } else {
+                        Vec::new()
+                    };
                 let mut col_widths: Vec<usize> = keys.iter().map(|k| k.len().max(8)).collect();
                 for r in &rows {
                     if let Some(obj) = r.as_object() {
@@ -2565,7 +2567,9 @@ mod tests {
         let engine = SiqueryEngine::new();
         let res = engine.execute_query("INSERT INTO processes (pid) VALUES (1);");
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("Mutating SQL statements are forbidden"));
+        assert!(res
+            .unwrap_err()
+            .contains("Mutating SQL statements are forbidden"));
 
         let res_drop = engine.execute_query("DROP TABLE processes;");
         assert!(res_drop.is_err());

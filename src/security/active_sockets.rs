@@ -299,7 +299,11 @@ fn query_kernel_tcp_table_by_pid() -> KernelTcpTableByPid {
         };
 
         let direction = if r_port > 0 { "OUTGOING" } else { "LISTEN" };
-        let state = if cols[3] == "01" { "ESTABLISHED" } else { "OTHER" };
+        let state = if cols[3] == "01" {
+            "ESTABLISHED"
+        } else {
+            "OTHER"
+        };
 
         inode_map.insert(
             inode,

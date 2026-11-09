@@ -47,9 +47,18 @@ fn test_adv_hook_synonym_permutations_and_malformed_json_rpc() {
 
     // 1.1b Remediated: Non-object JSON roots (null, primitive, array) must fail object check
     // JSON-RPC 2.0 §4 states requests MUST be objects.
-    assert!(parse_mcp_call_request("null").is_err(), "Non-object 'null' must be rejected");
-    assert!(parse_mcp_call_request("12345").is_err(), "Non-object '12345' must be rejected");
-    assert!(parse_mcp_call_request("[\"array\"]").is_err(), "Non-object '[\"array\"]' must be rejected");
+    assert!(
+        parse_mcp_call_request("null").is_err(),
+        "Non-object 'null' must be rejected"
+    );
+    assert!(
+        parse_mcp_call_request("12345").is_err(),
+        "Non-object '12345' must be rejected"
+    );
+    assert!(
+        parse_mcp_call_request("[\"array\"]").is_err(),
+        "Non-object '[\"array\"]' must be rejected"
+    );
 
     // 1.2 JSON-RPC 2.0 Request ID Preservation across types (Number, String, Null, Notification)
     // A: Numeric ID
@@ -61,7 +70,8 @@ fn test_adv_hook_synonym_permutations_and_malformed_json_rpc() {
             "name": "bash",
             "arguments": { "command": "sudo rm -rf /" }
         }
-    }).to_string();
+    })
+    .to_string();
     let parsed_num = parse_mcp_call_request(&json_num_id).expect("Should parse valid JSON-RPC");
     assert_eq!(parsed_num.rpc_id, Some(json!(424242)));
     let dec_num = evaluate_hook_synchronously(&parsed_num);
@@ -80,7 +90,8 @@ fn test_adv_hook_synonym_permutations_and_malformed_json_rpc() {
             "name": "read_file",
             "arguments": { "file_path": "/etc/shadow" }
         }
-    }).to_string();
+    })
+    .to_string();
     let parsed_str = parse_mcp_call_request(&json_str_id).expect("Should parse string ID");
     assert_eq!(parsed_str.rpc_id, Some(json!("req-uuid-987654321")));
     let dec_str = evaluate_hook_synchronously(&parsed_str);
@@ -98,7 +109,8 @@ fn test_adv_hook_synonym_permutations_and_malformed_json_rpc() {
             "tool": "file_reader",
             "args": { "path": "C:\\Windows\\System32\\config\\SAM" }
         }
-    }).to_string();
+    })
+    .to_string();
     let parsed_null = parse_mcp_call_request(&json_null_id).expect("Should parse null ID");
     assert_eq!(parsed_null.rpc_id, Some(serde_json::Value::Null));
     let dec_null = evaluate_hook_synchronously(&parsed_null);
@@ -112,7 +124,8 @@ fn test_adv_hook_synonym_permutations_and_malformed_json_rpc() {
         "jsonrpc": "2.0",
         "method": "notifications/progress",
         "params": { "token": "abc" }
-    }).to_string();
+    })
+    .to_string();
     let parsed_notify = parse_mcp_call_request(&json_notify).expect("Should parse notification");
     assert!(parsed_notify.rpc_id.is_none());
 
@@ -129,7 +142,11 @@ fn test_adv_hook_synonym_permutations_and_malformed_json_rpc() {
     ] {
         let payload = json!({ syn_key: syn_val }).to_string();
         let cursor_req = parse_cursor_request(&payload, "beforeShellExecution").unwrap();
-        assert!(cursor_req.command.is_some(), "Failed for syn_key: {}", syn_key);
+        assert!(
+            cursor_req.command.is_some(),
+            "Failed for syn_key: {}",
+            syn_key
+        );
         assert!(cursor_req.command.unwrap().contains("whoami"));
     }
 
@@ -150,19 +167,35 @@ fn test_adv_hook_synonym_permutations_and_malformed_json_rpc() {
 
     // Group 4: file_path: "file_path", "path", "filePath", "uri", "working_file", "editor_context", "file", "context_paths"
     for syn_key in [
-        "file_path", "path", "filePath", "uri", "working_file", "editor_context", "file",
+        "file_path",
+        "path",
+        "filePath",
+        "uri",
+        "working_file",
+        "editor_context",
+        "file",
     ] {
         let payload = json!({ syn_key: "src/security/mod.rs" }).to_string();
         let req = parse_cursor_request(&payload, "beforeReadFile").unwrap();
         assert_eq!(req.file_path, Some("src/security/mod.rs".to_string()));
     }
     // context_paths as array:
-    let payload_ctx_arr = json!({ "context_paths": ["src/security/agent_hooks.rs", "src/lib.rs"] }).to_string();
+    let payload_ctx_arr =
+        json!({ "context_paths": ["src/security/agent_hooks.rs", "src/lib.rs"] }).to_string();
     let req_ctx_arr = parse_cursor_request(&payload_ctx_arr, "beforeReadFile").unwrap();
-    assert_eq!(req_ctx_arr.file_path, Some("src/security/agent_hooks.rs".to_string()));
+    assert_eq!(
+        req_ctx_arr.file_path,
+        Some("src/security/agent_hooks.rs".to_string())
+    );
 
     // Group 5: session_id: "session_id", "sessionId", "conversation_id", "cursor_trace_id", "tool_use_id"
-    for syn_key in ["session_id", "sessionId", "conversation_id", "cursor_trace_id", "tool_use_id"] {
+    for syn_key in [
+        "session_id",
+        "sessionId",
+        "conversation_id",
+        "cursor_trace_id",
+        "tool_use_id",
+    ] {
         let payload = json!({ syn_key: "session-xyz-123" }).to_string();
         let req = parse_claude_request(&payload, false).unwrap();
         assert_eq!(req.session_id, Some("session-xyz-123".to_string()));
@@ -190,7 +223,8 @@ fn test_adv_hook_synonym_permutations_and_malformed_json_rpc() {
     }
 
     // 1.4 Output Formatters for Claude, Cursor, Copilot, OpenCode
-    let allow_decision = agent_octopus::security::agent_hooks::HookEvaluationDecision::allow("Allowed by test", 15);
+    let allow_decision =
+        agent_octopus::security::agent_hooks::HookEvaluationDecision::allow("Allowed by test", 15);
     let deny_decision = agent_octopus::security::agent_hooks::HookEvaluationDecision::deny(
         "Blocked by test",
         Some("TestLayer"),
@@ -240,20 +274,40 @@ fn test_adv_toctou_stem_checks_and_pid_boundaries() {
     assert!(is_immutable_os_kernel_pid(0, "System Idle Process"));
     assert!(is_immutable_os_kernel_pid(1, "init"));
     assert!(is_immutable_os_kernel_pid(4, "System"));
-    assert!(is_immutable_os_kernel_pid(std::process::id(), "agent_octopus.exe"));
+    assert!(is_immutable_os_kernel_pid(
+        std::process::id(),
+        "agent_octopus.exe"
+    ));
 
     // 2.2 Non-colliding synthetic PIDs >= 4_000_001
     for synth_pid in [4_000_101, 4_000_202, 4_000_303, 4_000_999] {
         assert!(synth_pid >= 4_000_001);
         let v = inspect_process_lineage(synth_pid, Some("worker_task.exe"));
-        assert!(!v.is_immune(), "Synthetic PID {} must not receive immunity", synth_pid);
+        assert!(
+            !v.is_immune(),
+            "Synthetic PID {} must not receive immunity",
+            synth_pid
+        );
     }
 
     // 2.3 Elimination of blanket process immunity
     let blanket_runtimes = [
-        "wsl.exe", "wslservice.exe", "wslhost.exe", "vmmem", "vmmemwsl",
-        "sudo", "su", "bash", "powershell.exe", "pwsh.exe", "cmd.exe",
-        "python.exe", "python3.exe", "node.exe", "cursor.exe", "code.exe",
+        "wsl.exe",
+        "wslservice.exe",
+        "wslhost.exe",
+        "vmmem",
+        "vmmemwsl",
+        "sudo",
+        "su",
+        "bash",
+        "powershell.exe",
+        "pwsh.exe",
+        "cmd.exe",
+        "python.exe",
+        "python3.exe",
+        "node.exe",
+        "cursor.exe",
+        "code.exe",
     ];
     for rt in blanket_runtimes {
         assert!(
@@ -271,7 +325,10 @@ fn test_adv_toctou_stem_checks_and_pid_boundaries() {
     }
 
     // 2.4 Stem Extraction Robustness & Empirical Findings
-    assert_eq!(extract_proc_stem(r#"C:\Windows\System32\csrss.exe"#), "csrss");
+    assert_eq!(
+        extract_proc_stem(r#"C:\Windows\System32\csrss.exe"#),
+        "csrss"
+    );
     assert_eq!(extract_proc_stem("/usr/bin/bash -c id"), "bash");
     assert_eq!(extract_proc_stem("'cmd.exe'"), "cmd");
     assert_eq!(extract_proc_stem(r#""python.exe""#), "python");
@@ -279,13 +336,22 @@ fn test_adv_toctou_stem_checks_and_pid_boundaries() {
 
     // Remediated: Quoted executables and paths containing spaces are tokenized cleanly
     let single_quoted_cmd = extract_proc_stem("'cmd.exe' /c dir");
-    assert_eq!(single_quoted_cmd, "cmd", "Quoted executable stem should be 'cmd'");
+    assert_eq!(
+        single_quoted_cmd, "cmd",
+        "Quoted executable stem should be 'cmd'"
+    );
 
     let double_quoted_cmd = extract_proc_stem(r#""cmd.exe" /c dir"#);
-    assert_eq!(double_quoted_cmd, "cmd", "Double-quoted executable stem should be 'cmd'");
+    assert_eq!(
+        double_quoted_cmd, "cmd",
+        "Double-quoted executable stem should be 'cmd'"
+    );
 
     let space_stem = extract_proc_stem(r#""D:\Program Files\Python310\python.exe" -m http.server"#);
-    assert_eq!(space_stem, "python", "Space-in-path stem should be 'python'");
+    assert_eq!(
+        space_stem, "python",
+        "Space-in-path stem should be 'python'"
+    );
 
     // 2.5 Live TOCTOU Stem Mismatch Verification
     // Current test process is live. If we query inspect_process_lineage with the real current PID,
@@ -293,7 +359,10 @@ fn test_adv_toctou_stem_checks_and_pid_boundaries() {
     let current_pid = std::process::id();
     let toctou_verdict = inspect_process_lineage(current_pid, Some("mismatched_target_name.exe"));
     // Even though current_pid is self, the direct stem TOCTOU verification handles it
-    eprintln!("[EMPIRICAL TOCTOU] Verdict for self PID: {:?}", toctou_verdict);
+    eprintln!(
+        "[EMPIRICAL TOCTOU] Verdict for self PID: {:?}",
+        toctou_verdict
+    );
 }
 
 // ------------------------------------------------------------------------------
@@ -304,9 +373,8 @@ fn test_adv_toctou_stem_checks_and_pid_boundaries() {
 fn test_adv_obfuscated_command_parsing_and_shell_unwrapping() {
     use agent_octopus::security::command_line::encode_utf16le_base64;
     use agent_octopus::security::semantic_command::{
-        classify_action_class, parse_semantic_command, tokenize_command,
-        unwrap_env_invocation, unwrap_shell_and_env_nesting, unwrap_shell_invocation,
-        PrivilegeEquivalenceClass,
+        classify_action_class, parse_semantic_command, tokenize_command, unwrap_env_invocation,
+        unwrap_shell_and_env_nesting, unwrap_shell_invocation, PrivilegeEquivalenceClass,
     };
 
     // 3.1 Tokenization with complex escaping, quotes, whitespace
@@ -488,10 +556,15 @@ fn test_adv_semantic_dlp_deal_values_and_hipaa_checksums() {
     assert!(RedactXStructuredValidator::npi_valid(valid_npi_2));
     assert!(!RedactXStructuredValidator::npi_valid(invalid_npi));
 
-    let npi_clinical = format!("Attending physician Dr. Smith authorized prescription NPI {}", valid_npi);
+    let npi_clinical = format!(
+        "Attending physician Dr. Smith authorized prescription NPI {}",
+        valid_npi
+    );
     let npi_matches = engine.scan_payload(&npi_clinical);
     assert!(
-        npi_matches.iter().any(|m| m.kind == SemanticEntityKind::PhiMedicalRecord),
+        npi_matches
+            .iter()
+            .any(|m| m.kind == SemanticEntityKind::PhiMedicalRecord),
         "Valid NPI in clinical context must be detected as PHI"
     );
 
@@ -504,7 +577,9 @@ fn test_adv_semantic_dlp_deal_values_and_hipaa_checksums() {
     let mrn_clinical = format!("Hospital inpatient clinical chart MRN-{}", valid_mrn);
     let mrn_matches = engine.scan_payload(&mrn_clinical);
     assert!(
-        mrn_matches.iter().any(|m| m.kind == SemanticEntityKind::PhiMedicalRecord),
+        mrn_matches
+            .iter()
+            .any(|m| m.kind == SemanticEntityKind::PhiMedicalRecord),
         "Valid MRN in clinical context must be detected as PHI"
     );
 
@@ -560,18 +635,28 @@ fn test_adv_siquery_15s_timeout_and_host_discovery() {
         "ATTACH DATABASE 'evil.db' AS evil;",
     ] {
         let res = engine.execute_query(forbidden);
-        assert!(res.is_err(), "Forbidden statement must be rejected: '{}'", forbidden);
+        assert!(
+            res.is_err(),
+            "Forbidden statement must be rejected: '{}'",
+            forbidden
+        );
     }
 
     // Comment bypass attempts caught by authorizer
     let comment_create = "/* comment bypass */ CREATE TABLE evil(x);";
     let res_comment = engine.execute_query(comment_create);
-    assert!(res_comment.is_err(), "Comment-prefixed CREATE must be rejected by authorizer");
+    assert!(
+        res_comment.is_err(),
+        "Comment-prefixed CREATE must be rejected by authorizer"
+    );
 
     // CTE mutation bypass attempts caught by authorizer
     let cte_insert = "WITH cte AS (SELECT 1 AS x) INSERT INTO processes (pid) SELECT x FROM cte;";
     let res_cte = engine.execute_query(cte_insert);
-    assert!(res_cte.is_err(), "CTE INSERT must be rejected by authorizer");
+    assert!(
+        res_cte.is_err(),
+        "CTE INSERT must be rejected by authorizer"
+    );
 
     // Read-only recursive CTE allowed via AuthAction::Recursive
     let rec_res = engine.execute_query_formatted(
@@ -589,7 +674,10 @@ fn test_adv_siquery_15s_timeout_and_host_discovery() {
     );
     let elapsed = start.elapsed();
     eprintln!("[EMPIRICAL SIQUERY] Infinite query elapsed: {:?}", elapsed);
-    assert!(infinite_res.is_err(), "Infinite query must be interrupted by timeout");
+    assert!(
+        infinite_res.is_err(),
+        "Infinite query must be interrupted by timeout"
+    );
     let err_str = infinite_res.unwrap_err();
     assert!(
         err_str.contains("interrupted"),
@@ -604,7 +692,11 @@ fn test_adv_siquery_15s_timeout_and_host_discovery() {
 
     // 5.3 41 Tables Verification
     let tables = SiqueryEngine::list_tables();
-    assert!(tables.len() >= 41, "Must expose at least 41 tables, got {}", tables.len());
+    assert!(
+        tables.len() >= 41,
+        "Must expose at least 41 tables, got {}",
+        tables.len()
+    );
 
     // Security telemetry tables exist and query without error
     let telemetry_tables = [
@@ -618,7 +710,12 @@ fn test_adv_siquery_15s_timeout_and_host_discovery() {
     for tbl in telemetry_tables {
         let query = format!("SELECT count(*) FROM {};", tbl);
         let res = engine.execute_query(&query);
-        assert!(res.is_ok(), "Table {} must be queryable: {:?}", tbl, res.err());
+        assert!(
+            res.is_ok(),
+            "Table {} must be queryable: {:?}",
+            tbl,
+            res.err()
+        );
     }
 }
 
@@ -657,23 +754,32 @@ async fn test_adv_wfp_24_layer_isolation_and_peer_pid_spoofing() {
 
     // Verify active port discovery strictly excludes port 5000
     let active_ports = discover_active_octopus_ports();
-    assert!(!active_ports.contains(&5000), "Port 5000 must never be preserved");
+    assert!(
+        !active_ports.contains(&5000),
+        "Port 5000 must never be preserved"
+    );
 
     // Verify Hardware Layer-2 EtherTypes
     assert_eq!(BLOCKED_L2_ETHERTYPES, [0x88E5, 0x88F7, 0x8809, 0xAEFE]);
 
     // Simulated Non-Elevated Host Kill Switch Lifecycle
-    let tmp_ledger = std::env::temp_dir().join(format!("octopus_adv_m4_2_ks_{}.json", std::process::id()));
+    let tmp_ledger =
+        std::env::temp_dir().join(format!("octopus_adv_m4_2_ks_{}.json", std::process::id()));
     let _ = std::fs::remove_file(&tmp_ledger);
     let ks_mgr = HostKillSwitchManager::new(Some(tmp_ledger.clone()));
     let status = ks_mgr.status();
     assert_eq!(status.wfp_kernel_layers_enforced, 24);
 
-    let rcpt = ks_mgr.engage("m4_2_adversary", "Adversarial 24-layer shield check against RFC 5737 198.51.100.1")
+    let rcpt = ks_mgr
+        .engage(
+            "m4_2_adversary",
+            "Adversarial 24-layer shield check against RFC 5737 198.51.100.1",
+        )
         .expect("Engage must succeed in simulated mode");
     assert!(rcpt.isolated);
 
-    let disarmed = ks_mgr.disarm("m4_2_adversary", "Restoring network state")
+    let disarmed = ks_mgr
+        .disarm("m4_2_adversary", "Restoring network state")
         .expect("Disarm must succeed");
     assert!(!disarmed.isolated);
     let _ = std::fs::remove_file(&tmp_ledger);
@@ -694,7 +800,10 @@ async fn test_adv_wfp_24_layer_isolation_and_peer_pid_spoofing() {
         method: "POST",
         path: "/api/siquery/query",
         query: "",
-        headers: &format!("POST /api/siquery/query HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n", local_port),
+        headers: &format!(
+            "POST /api/siquery/query HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
+            local_port
+        ),
         local_port,
     };
     let unauth_res = authorize_request(&req_no_tok, "expected_secret_token_123");
@@ -706,9 +815,11 @@ async fn test_adv_wfp_24_layer_isolation_and_peer_pid_spoofing() {
         "query": "SELECT 1;",
         "caller_pid": spoofed_pid,
         "operator": "adversary_actor"
-    }).to_string();
+    })
+    .to_string();
 
-    let (st_spoof, body_spoof) = handle_siquery_query(&state, &spoof_body, Some(peer_addr), local_port);
+    let (st_spoof, body_spoof) =
+        handle_siquery_query(&state, &spoof_body, Some(peer_addr), local_port);
     assert_eq!(st_spoof, "403 Forbidden");
     assert!(body_spoof.contains("CALLER_PID_SPOOF_DETECTED"));
 
@@ -718,15 +829,20 @@ async fn test_adv_wfp_24_layer_isolation_and_peer_pid_spoofing() {
         "query": "SELECT 1;",
         "caller_pid": actual_pid,
         "operator": "clean_operator"
-    }).to_string();
+    })
+    .to_string();
 
-    let (st_unres, body_unres) = handle_siquery_query(&state, &unres_body, Some(bogus_addr), local_port);
+    let (st_unres, body_unres) =
+        handle_siquery_query(&state, &unres_body, Some(bogus_addr), local_port);
     assert_eq!(st_unres, "403 Forbidden");
     assert!(body_unres.contains("PEER_PID_VERIFICATION_FAILED"));
 
     // Quarantined caller or operator -> 403 Forbidden
     for _ in 0..3 {
-        state.tarpit.engage_adversary("quarantined_bad_guy", "attack_vector", "payload").await;
+        state
+            .tarpit
+            .engage_adversary("quarantined_bad_guy", "attack_vector", "payload")
+            .await;
     }
     assert!(state.tarpit.is_quarantined("quarantined_bad_guy"));
 
@@ -734,7 +850,8 @@ async fn test_adv_wfp_24_layer_isolation_and_peer_pid_spoofing() {
         "query": "SELECT 1;",
         "caller_pid": actual_pid,
         "operator": "quarantined_bad_guy"
-    }).to_string();
+    })
+    .to_string();
     let (st_q, body_q) = handle_siquery_query(&state, &q_body, Some(peer_addr), local_port);
     assert_eq!(st_q, "403 Forbidden");
     assert!(body_q.contains("CALLER_QUARANTINED"));
@@ -744,8 +861,11 @@ async fn test_adv_wfp_24_layer_isolation_and_peer_pid_spoofing() {
         "query": "SELECT 42 AS answer;",
         "caller_pid": actual_pid,
         "operator": "clean_actor"
-    }).to_string();
+    })
+    .to_string();
     let (st_ok, body_ok) = handle_siquery_query(&state, &ok_body, Some(peer_addr), local_port);
     assert_eq!(st_ok, "200 OK");
-    assert!(body_ok.contains("\"status\":\"success\"") || body_ok.contains("\"status\": \"success\""));
+    assert!(
+        body_ok.contains("\"status\":\"success\"") || body_ok.contains("\"status\": \"success\"")
+    );
 }

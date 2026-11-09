@@ -121,7 +121,10 @@ impl Stage1Validator {
         if !self.declared_tools.contains(tool_name) {
             return ValidationVerdict::Blocked {
                 reason: "undeclared tool".to_string(),
-                notice: format!("[safeagents] blocked call to `{}`: undeclared tool", tool_name),
+                notice: format!(
+                    "[safeagents] blocked call to `{}`: undeclared tool",
+                    tool_name
+                ),
             };
         }
 
@@ -203,8 +206,13 @@ impl Default for Stage2AtifScanner {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stage2Verdict {
     Clean,
-    Suspicious { signals: Vec<AtifSignal> },
-    Blocked { signals: Vec<AtifSignal>, notice: String },
+    Suspicious {
+        signals: Vec<AtifSignal>,
+    },
+    Blocked {
+        signals: Vec<AtifSignal>,
+        notice: String,
+    },
 }
 
 impl Stage2AtifScanner {
@@ -217,7 +225,8 @@ impl Stage2AtifScanner {
                 signals.push(AtifSignal {
                     id: "side_channel.harness_secret_read".to_string(),
                     severity: AtifSeverity::Medium,
-                    title: "Reading another process's environment via /proc/<pid>/environ".to_string(),
+                    title: "Reading another process's environment via /proc/<pid>/environ"
+                        .to_string(),
                 });
                 break;
             }
@@ -235,7 +244,8 @@ impl Stage2AtifScanner {
             signals.push(AtifSignal {
                 id: "safeagents.namespace_escape".to_string(),
                 severity: AtifSeverity::Medium,
-                title: "Entering or unsharing Linux namespaces to escape container sandbox".to_string(),
+                title: "Entering or unsharing Linux namespaces to escape container sandbox"
+                    .to_string(),
             });
         }
 
@@ -323,7 +333,10 @@ impl Stage3JudgePromptBuilder {
 
         let mut findings = String::new();
         for sig in signals {
-            findings.push_str(&format!("- {} ({:?}): {}\n", sig.id, sig.severity, sig.title));
+            findings.push_str(&format!(
+                "- {} ({:?}): {}\n",
+                sig.id, sig.severity, sig.title
+            ));
         }
 
         format!(
@@ -340,7 +353,10 @@ impl OshoosiScrubber {
         let mut s = input.to_string();
 
         // 1. Private keys
-        let pk_re = Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----").unwrap();
+        let pk_re = Regex::new(
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+        )
+        .unwrap();
         s = pk_re.replace_all(&s, "[private key]").to_string();
 
         // 2. API Keys
@@ -387,7 +403,17 @@ impl OshoosiScrubber {
 
         // 6. Home Directories
         let home_re = Regex::new(r#"(?:/home/|/Users/|C:\\Users\\)([a-zA-Z0-9_-]+)"#).unwrap();
-        let generic_users = ["ubuntu", "runner", "user", "admin", "linuxbrew", "node", "app", "public", "shared"];
+        let generic_users = [
+            "ubuntu",
+            "runner",
+            "user",
+            "admin",
+            "linuxbrew",
+            "node",
+            "app",
+            "public",
+            "shared",
+        ];
         s = home_re
             .replace_all(&s, |caps: &regex::Captures| {
                 let full = &caps[0];

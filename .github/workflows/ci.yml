@@ -1,0 +1,157 @@
+name: AgentOctopus Cross-Platform CI/CD
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: read-all
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ── 1. Code Formatting (rustfmt) ─────────────────────────────────────────────
+  fmt:
+    name: Format Check (rustfmt)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable + rustfmt
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # ── 2. Cross-Platform Matrix Build & Test (Linux, Windows, macOS) ───────────
+  test-matrix:
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Linux System Dependencies & eBPF Toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang llvm libelf-dev pkg-config libssl-dev linux-libc-dev
+
+      - name: Setup Rust Toolchain (${{ matrix.target }})
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+
+      - name: Cache Cargo Dependencies & Artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.7.5
+        with:
+          key: agentoctopus-ci-${{ matrix.os }}-${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Run Clippy (Zero Warnings Enforcement)
+        run: cargo clippy --all-targets --all-features -- -D warnings -A clippy::bool_assert_comparison -A clippy::doc_lazy_continuation -A clippy::field_reassign_with_default -A clippy::const_is_empty -A clippy::type_complexity -A clippy::too_many_arguments -A clippy::needless_borrows_for_generic_args -A clippy::upper_case_acronyms -A clippy::unnecessary_cast
+
+      - name: Run Core Library Unit Tests
+        run: cargo test --lib --all-features
+
+      - name: Verify All Binary Targets
+        run: cargo check --bins --all-features
+
+      - name: Run SafeAgents Multithreaded Harness Tests (R1 SLA)
+        run: cargo test --test safeagents_multithreaded_harness_tests --all-features
+
+      - name: Run AgentMesh & Containment Tests
+        run: cargo test --test agentmesh_integration_tests --all-features
+
+      - name: Run SafeAgents 562-Case Misuse Simulation Suite
+        run: cargo test --test safeagents_562_misuse_suite --all-features
+
+  # ── 3. Cross-Architecture Target Verification (aarch64 Linux) ───────────────
+  cross-arch-linux:
+    name: Cross-Arch Target Check (Linux aarch64)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install aarch64 Cross-Compiler & Toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config libssl-dev
+
+      - name: Setup Rust Toolchain (aarch64-unknown-linux-gnu)
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.7.5
+        with:
+          key: agentoctopus-cross-linux-aarch64
+          cache-on-failure: true
+
+      - name: Verify aarch64 Compilation
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo check --target aarch64-unknown-linux-gnu --lib --bins
+
+  # ── 4. macOS Universal Architecture Check (x86_64 + aarch64) ────────────────
+  macos-universal-check:
+    name: macOS Dual-Architecture Check (Apple Silicon & Intel)
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust Toolchain (Universal Darwin)
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.7.5
+        with:
+          key: agentoctopus-macos-universal
+          cache-on-failure: true
+
+      - name: Check Apple Silicon Target (aarch64-apple-darwin)
+        run: cargo check --target aarch64-apple-darwin --lib --bins
+
+      - name: Check Intel macOS Target (x86_64-apple-darwin)
+        run: cargo check --target x86_64-apple-darwin --lib --bins

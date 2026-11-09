@@ -149,9 +149,7 @@ pub enum RelayMessage {
         payload: Vec<u8>,
     },
     /// Tear down relay circuit
-    CloseCircuit {
-        circuit_id: u64,
-    },
+    CloseCircuit { circuit_id: u64 },
 }
 
 // ============================================================================
@@ -189,13 +187,9 @@ pub enum DcutrMessage {
         external_candidate: Option<SocketAddr>,
     },
     /// Coordinate microsecond hole-punch execution
-    Sync {
-        target_timestamp_ms: u64,
-    },
+    Sync { target_timestamp_ms: u64 },
     /// Acknowledge direct upgrade success
-    Upgraded {
-        success: bool,
-    },
+    Upgraded { success: bool },
 }
 
 // ============================================================================
@@ -213,10 +207,14 @@ impl Drop for PqcSessionKeys {
     fn drop(&mut self) {
         // Volatile scrub symmetric session keys
         for byte in self.send_key.iter_mut() {
-            unsafe { std::ptr::write_volatile(byte, 0u8); }
+            unsafe {
+                std::ptr::write_volatile(byte, 0u8);
+            }
         }
         for byte in self.recv_key.iter_mut() {
-            unsafe { std::ptr::write_volatile(byte, 0u8); }
+            unsafe {
+                std::ptr::write_volatile(byte, 0u8);
+            }
         }
         std::sync::atomic::compiler_fence(Ordering::SeqCst);
     }
@@ -348,14 +346,20 @@ impl AgentMeshWanTransport {
             TcpStream::connect(probe_target),
         )
         .await
-        .map_err(|_| WanTransportError::AutoNatFailed("Timeout connecting to probe peer".to_string()))?
+        .map_err(|_| {
+            WanTransportError::AutoNatFailed("Timeout connecting to probe peer".to_string())
+        })?
         .map_err(WanTransportError::IoError)?;
 
         let req = AutoNatMessage::DialRequest {
             peer_id: self.peer_id.clone(),
-            listen_addrs: vec![SocketAddr::new("0.0.0.0".parse().unwrap(), local_listen_port)],
+            listen_addrs: vec![SocketAddr::new(
+                "0.0.0.0".parse().unwrap(),
+                local_listen_port,
+            )],
         };
-        let req_bytes = serde_json::to_vec(&req).map_err(|e| WanTransportError::AutoNatFailed(e.to_string()))?;
+        let req_bytes = serde_json::to_vec(&req)
+            .map_err(|e| WanTransportError::AutoNatFailed(e.to_string()))?;
         stream.write_u32(req_bytes.len() as u32).await?;
         stream.write_all(&req_bytes).await?;
 
@@ -367,7 +371,10 @@ impl AgentMeshWanTransport {
             .map_err(|e| WanTransportError::AutoNatFailed(e.to_string()))?;
 
         match resp {
-            AutoNatMessage::DialResponse { status, observed_addr } => {
+            AutoNatMessage::DialResponse {
+                status,
+                observed_addr,
+            } => {
                 let status_result = if status == AutoNatStatus::Ok {
                     NatReachability::Public(observed_addr)
                 } else {
@@ -379,7 +386,9 @@ impl AgentMeshWanTransport {
                 *self.reachability.write().await = status_result.clone();
                 Ok(status_result)
             }
-            _ => Err(WanTransportError::AutoNatFailed("Unexpected response message".to_string())),
+            _ => Err(WanTransportError::AutoNatFailed(
+                "Unexpected response message".to_string(),
+            )),
         }
     }
 
@@ -436,15 +445,16 @@ impl AgentMeshWanTransport {
 
         let sig = Signature::from_slice(&init.ed25519_signature)
             .map_err(|e| WanTransportError::CryptoError(e.to_string()))?;
-        initiator_vk
-            .verify(&payload, &sig)
-            .map_err(|e| WanTransportError::CryptoError(format!("Initiator signature invalid: {e}")))?;
+        initiator_vk.verify(&payload, &sig).map_err(|e| {
+            WanTransportError::CryptoError(format!("Initiator signature invalid: {e}"))
+        })?;
 
         // 2. Encapsulate against initiator ML-KEM-768 EK
         let ek_array = Array::try_from(init.ml_kem_ek_bytes.as_slice())
             .map_err(|_| WanTransportError::CryptoError("Invalid EK length".to_string()))?;
-        let ek = EncapsulationKey::<MlKem768>::new(&ek_array)
-            .map_err(|_| WanTransportError::CryptoError("Failed to decode ML-KEM-768 EK".to_string()))?;
+        let ek = EncapsulationKey::<MlKem768>::new(&ek_array).map_err(|_| {
+            WanTransportError::CryptoError("Failed to decode ML-KEM-768 EK".to_string())
+        })?;
         let (ct, shared_secret) = ek.encapsulate();
         let ct_bytes = ct.as_slice().to_vec();
 
@@ -503,9 +513,9 @@ impl AgentMeshWanTransport {
 
         let sig = Signature::from_slice(&resp.ed25519_signature)
             .map_err(|e| WanTransportError::CryptoError(e.to_string()))?;
-        responder_vk
-            .verify(&payload, &sig)
-            .map_err(|e| WanTransportError::CryptoError(format!("Responder signature invalid: {e}")))?;
+        responder_vk.verify(&payload, &sig).map_err(|e| {
+            WanTransportError::CryptoError(format!("Responder signature invalid: {e}"))
+        })?;
 
         let ct_array = Array::try_from(resp.ml_kem_ct_bytes.as_slice())
             .map_err(|_| WanTransportError::CryptoError("Invalid ciphertext length".to_string()))?;

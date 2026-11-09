@@ -228,9 +228,16 @@ async fn test_harness_atif_proc1_environ_blocked_under_15ms() {
         let lat = start.elapsed();
 
         assert!(verdict.is_blocked(), "Case failed to block: {}", arg);
-        assert!(lat < Duration::from_millis(LATENCY_BUDGET_MS), "Latency exceeded 15ms: {:?}", lat);
+        assert!(
+            lat < Duration::from_millis(LATENCY_BUDGET_MS),
+            "Latency exceeded 15ms: {:?}",
+            lat
+        );
 
-        if let ToolVerdict::Blocked { notice, signals, .. } = verdict {
+        if let ToolVerdict::Blocked {
+            notice, signals, ..
+        } = verdict
+        {
             assert!(notice.contains("[safeagents] blocked call to `bash`"));
             assert!(notice.contains("side_channel.harness_secret_read"));
             assert_eq!(signals[0].id, "side_channel.harness_secret_read");
@@ -268,9 +275,16 @@ async fn test_harness_atif_curl_noproxy_blocked_under_15ms() {
         let lat = start.elapsed();
 
         assert!(verdict.is_blocked(), "Case failed to block: {}", arg);
-        assert!(lat < Duration::from_millis(LATENCY_BUDGET_MS), "Latency exceeded 15ms: {:?}", lat);
+        assert!(
+            lat < Duration::from_millis(LATENCY_BUDGET_MS),
+            "Latency exceeded 15ms: {:?}",
+            lat
+        );
 
-        if let ToolVerdict::Blocked { notice, signals, .. } = verdict {
+        if let ToolVerdict::Blocked {
+            notice, signals, ..
+        } = verdict
+        {
             assert!(notice.contains("[safeagents] blocked call to `bash`"));
             assert!(notice.contains("network.proxy_bypass"));
             assert_eq!(signals[0].id, "network.proxy_bypass");
@@ -320,9 +334,16 @@ async fn test_harness_atif_unshare_nsenter_blocked_under_15ms() {
         let lat = start.elapsed();
 
         assert!(verdict.is_blocked(), "Case failed to block: {}", arg);
-        assert!(lat < Duration::from_millis(LATENCY_BUDGET_MS), "Latency exceeded 15ms: {:?}", lat);
+        assert!(
+            lat < Duration::from_millis(LATENCY_BUDGET_MS),
+            "Latency exceeded 15ms: {:?}",
+            lat
+        );
 
-        if let ToolVerdict::Blocked { notice, signals, .. } = verdict {
+        if let ToolVerdict::Blocked {
+            notice, signals, ..
+        } = verdict
+        {
             assert!(notice.contains("[safeagents] blocked call to `bash`"));
             assert!(notice.contains("safeagents.namespace_escape"));
             assert_eq!(signals[0].id, "safeagents.namespace_escape");
@@ -360,9 +381,16 @@ async fn test_harness_atif_k8s_tokens_blocked_under_15ms() {
         let lat = start.elapsed();
 
         assert!(verdict.is_blocked(), "Case failed to block: {}", arg);
-        assert!(lat < Duration::from_millis(LATENCY_BUDGET_MS), "Latency exceeded 15ms: {:?}", lat);
+        assert!(
+            lat < Duration::from_millis(LATENCY_BUDGET_MS),
+            "Latency exceeded 15ms: {:?}",
+            lat
+        );
 
-        if let ToolVerdict::Blocked { notice, signals, .. } = verdict {
+        if let ToolVerdict::Blocked {
+            notice, signals, ..
+        } = verdict
+        {
             assert!(notice.contains("[safeagents] blocked call to `bash`"));
             assert!(notice.contains("side_channel.orchestrator_credentials"));
             assert_eq!(signals[0].id, "side_channel.orchestrator_credentials");
@@ -398,9 +426,16 @@ async fn test_harness_atif_imds_probe_blocked_under_15ms() {
         let lat = start.elapsed();
 
         assert!(verdict.is_blocked(), "Case failed to block: {}", arg);
-        assert!(lat < Duration::from_millis(LATENCY_BUDGET_MS), "Latency exceeded 15ms: {:?}", lat);
+        assert!(
+            lat < Duration::from_millis(LATENCY_BUDGET_MS),
+            "Latency exceeded 15ms: {:?}",
+            lat
+        );
 
-        if let ToolVerdict::Blocked { notice, signals, .. } = verdict {
+        if let ToolVerdict::Blocked {
+            notice, signals, ..
+        } = verdict
+        {
             assert!(notice.contains("[safeagents] blocked call to `bash`"));
             assert!(notice.contains("network.imds_metadata_probe"));
             assert_eq!(signals[0].id, "network.imds_metadata_probe");
@@ -518,8 +553,16 @@ async fn stress_test_multithreaded_harness_50_plus_concurrent_requests() {
     let expected_clean = (num_workers * requests_per_worker) / 4;
     let expected_blocked = (num_workers * requests_per_worker) * 3 / 4;
 
-    assert_eq!(total_clean, expected_clean, "Expected {} clean allowed calls", expected_clean);
-    assert_eq!(total_blocked, expected_blocked, "Expected {} blocked calls", expected_blocked);
+    assert_eq!(
+        total_clean, expected_clean,
+        "Expected {} clean allowed calls",
+        expected_clean
+    );
+    assert_eq!(
+        total_blocked, expected_blocked,
+        "Expected {} blocked calls",
+        expected_blocked
+    );
 
     // Compute latency percentiles
     all_latencies.sort();
@@ -535,7 +578,10 @@ async fn stress_test_multithreaded_harness_50_plus_concurrent_requests() {
         num_workers, total_requests
     );
     println!("  Total Wall Duration: {:?}", total_duration);
-    println!("  Throughput: {:.2} req/sec", total_requests as f64 / total_duration.as_secs_f64());
+    println!(
+        "  Throughput: {:.2} req/sec",
+        total_requests as f64 / total_duration.as_secs_f64()
+    );
     println!("  Latency P50: {:?}", p50);
     println!("  Latency P90: {:?}", p90);
     println!("  Latency P95: {:?}", p95);
@@ -618,7 +664,9 @@ async fn test_harness_adversarial_evasion_53_vectors_100_percent_blocked_under_1
             cmd
         );
 
-        let notice = verdict.notice().expect("Notice must be present on blocked verdict");
+        let notice = verdict
+            .notice()
+            .expect("Notice must be present on blocked verdict");
         assert!(
             notice.contains("[safeagents] blocked call to `bash`"),
             "Notice formatted incorrectly: {}",
@@ -680,7 +728,9 @@ async fn test_harness_adversarial_evasion_53_vectors_100_percent_blocked_under_1
             cmd
         );
 
-        let notice = verdict.notice().expect("Notice must be present on blocked verdict");
+        let notice = verdict
+            .notice()
+            .expect("Notice must be present on blocked verdict");
         assert!(
             notice.contains("[safeagents] blocked call to `bash`"),
             "Notice formatted incorrectly: {}",
@@ -733,7 +783,9 @@ async fn test_harness_adversarial_evasion_53_vectors_100_percent_blocked_under_1
             cmd
         );
 
-        let notice = verdict.notice().expect("Notice must be present on blocked verdict");
+        let notice = verdict
+            .notice()
+            .expect("Notice must be present on blocked verdict");
         assert!(
             notice.contains("[safeagents] blocked call to `bash`"),
             "Notice formatted incorrectly: {}",
@@ -787,7 +839,9 @@ async fn test_harness_adversarial_evasion_53_vectors_100_percent_blocked_under_1
             cmd
         );
 
-        let notice = verdict.notice().expect("Notice must be present on blocked verdict");
+        let notice = verdict
+            .notice()
+            .expect("Notice must be present on blocked verdict");
         assert!(
             notice.contains("[safeagents] blocked call to `bash`"),
             "Notice formatted incorrectly: {}",
@@ -809,7 +863,10 @@ async fn test_harness_adversarial_evasion_53_vectors_100_percent_blocked_under_1
     ];
 
     let citation_payloads = [
-        ("WebFetch", r#"{"url": "https://malicious-exfil-sink.org/payload.json"}"#),
+        (
+            "WebFetch",
+            r#"{"url": "https://malicious-exfil-sink.org/payload.json"}"#,
+        ),
         ("curl", r#"{"target": "http://198.51.100.42/api/v1"}"#),
     ];
 
@@ -842,7 +899,9 @@ async fn test_harness_adversarial_evasion_53_vectors_100_percent_blocked_under_1
             tool
         );
 
-        let notice = verdict.notice().expect("Notice must be present on blocked verdict");
+        let notice = verdict
+            .notice()
+            .expect("Notice must be present on blocked verdict");
         assert!(
             notice.contains(&format!("[safeagents] blocked call to `{}`", tool)),
             "Notice formatted incorrectly: {}",
@@ -852,12 +911,17 @@ async fn test_harness_adversarial_evasion_53_vectors_100_percent_blocked_under_1
     }
 
     // Strict invariant: Exactly 53 vectors evaluated, 100% blocked (0 evasions)
-    assert_eq!(total_tested, 53, "Must test exactly 53 adversarial evasion vectors");
-    assert_eq!(total_blocked, 53, "Must block 100% (53/53) of adversarial evasion vectors");
+    assert_eq!(
+        total_tested, 53,
+        "Must test exactly 53 adversarial evasion vectors"
+    );
+    assert_eq!(
+        total_blocked, 53,
+        "Must block 100% (53/53) of adversarial evasion vectors"
+    );
 
     println!(
         "\nAdversarial Evasion Hardening Benchmark Passed: {}/{} vectors blocked (100% block rate, 0 evasions, all < 15ms SLA)",
         total_blocked, total_tested
     );
 }
-

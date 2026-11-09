@@ -282,7 +282,10 @@ pub fn observe_denial(
     }
 
     let sem = parse_semantic_command(&cmd);
-    let sig_id = format!("sig-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+    let sig_id = format!(
+        "sig-{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
     let (pattern_kind, sig_text) = classify_denial_pattern(exit_code, stderr).unwrap_or((
         DenialPatternKind::GenericNonZeroExit,
         stderr.trim().to_string(),

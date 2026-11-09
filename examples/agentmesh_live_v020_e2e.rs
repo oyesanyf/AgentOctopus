@@ -634,7 +634,10 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
         .await
         .map_err(|e| format!("Failed to start OidcLoopbackServer: {}", e))?;
     let issuer = Arc::clone(oidc_server.issuer());
-    println!("  [boot] OIDC workload issuer ready at {}", issuer.issuer_url());
+    println!(
+        "  [boot] OIDC workload issuer ready at {}",
+        issuer.issuer_url()
+    );
 
     // 2. Start Wasmtime v49.0.4 executor + local Streamable HTTP MCP backend (`127.0.0.1:0`)
     let killswitch = Arc::new(KillSwitch::new());
@@ -741,14 +744,12 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
         .await
         {
             Ok((code, _, resp)) if (200..300).contains(&code) => {
-                serde_json::from_slice::<Value>(&resp)
-                    .ok()
-                    .and_then(|v| {
-                        v.get("token")
-                            .or_else(|| v.get("secret"))
-                            .and_then(|t| t.as_str())
-                            .map(String::from)
-                    })
+                serde_json::from_slice::<Value>(&resp).ok().and_then(|v| {
+                    v.get("token")
+                        .or_else(|| v.get("secret"))
+                        .and_then(|t| t.as_str())
+                        .map(String::from)
+                })
             }
             _ => None,
         };
@@ -767,8 +768,14 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
     office_cmd
         .arg("run")
         .arg(format!("--control-plane={}", cp_url))
-        .arg(format!("--bootstrap-token-path={}", office_boot_path.display()))
-        .arg(format!("--api-token-path={}", office_api_token_path.display()))
+        .arg(format!(
+            "--bootstrap-token-path={}",
+            office_boot_path.display()
+        ))
+        .arg(format!(
+            "--api-token-path={}",
+            office_api_token_path.display()
+        ))
         .arg(format!("--data-dir={}", office_dir.display()))
         .arg(format!("--bind-addr=127.0.0.1:{}", office_port))
         .arg(format!("--metrics-addr=127.0.0.1:{}", office_metrics_port))
@@ -808,8 +815,14 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
     edge_cmd
         .arg("run")
         .arg(format!("--control-plane={}", cp_url))
-        .arg(format!("--bootstrap-token-path={}", edge_boot_path.display()))
-        .arg(format!("--api-token-path={}", edge_api_token_path.display()))
+        .arg(format!(
+            "--bootstrap-token-path={}",
+            edge_boot_path.display()
+        ))
+        .arg(format!(
+            "--api-token-path={}",
+            edge_api_token_path.display()
+        ))
         .arg(format!("--data-dir={}", edge_dir.display()))
         .arg(format!("--bind-addr=127.0.0.1:{}", edge_port))
         .arg(format!("--metrics-addr=127.0.0.1:{}", edge_metrics_port))
@@ -831,7 +844,10 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
         &edge_log_path,
     )
     .await?;
-    println!("  [boot] edge-node (v0.2.0) enrolled & ready at {}", edge_url);
+    println!(
+        "  [boot] edge-node (v0.2.0) enrolled & ready at {}",
+        edge_url
+    );
 
     // 7. Construct `AgentMeshPepBridge` pointed at `edge-node`
     let pep_bridge = Arc::new(AgentMeshPepBridge::new_with_config(
@@ -944,7 +960,10 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
                     "Authorization".to_string(),
                     "Bearer caller_secret_must_never_reach_backend".to_string(),
                 ),
-                ("Cookie".to_string(), "session=caller_cookie_secret".to_string()),
+                (
+                    "Cookie".to_string(),
+                    "session=caller_cookie_secret".to_string(),
+                ),
                 (
                     "X-Mesh-Authentication".to_string(),
                     "Bearer spoofed_caller_header".to_string(),
@@ -965,7 +984,9 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
     let echo_json: Value = serde_json::from_slice(&echo_bytes)
         .map_err(|e| format!("Case 2 JSON parse error: {}", e))?;
     assert_eq!(
-        echo_json.get("authorization_present").and_then(|v| v.as_bool()),
+        echo_json
+            .get("authorization_present")
+            .and_then(|v| v.as_bool()),
         Some(false),
         "Upstream backend must never observe caller Authorization header: {}",
         echo_json
@@ -977,7 +998,9 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
         echo_json
     );
     assert_eq!(
-        echo_json.get("x_mesh_auth_present").and_then(|v| v.as_bool()),
+        echo_json
+            .get("x_mesh_auth_present")
+            .and_then(|v| v.as_bool()),
         Some(false),
         "office-node must strip X-Mesh-Authentication before forwarding to backend: {}",
         echo_json
@@ -1047,38 +1070,40 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
     // =========================================================================
     let (scoped_biscuit, ok_calc_bytes, denied_scoped_echo) = {
         let b = Arc::clone(&pep_bridge);
-        tokio::task::spawn_blocking(move || -> Result<(String, Vec<u8>, Result<Vec<u8>, MeshCallError>), String> {
-            let tok = b
-                .exchange_scoped_task_token_sync(
-                    "arm_calc",
-                    0,
-                    &ArmRole::NetworkEgress,
-                    None,
-                    Some("mcp://calc"),
-                    true,
-                )
-                .map_err(|e| format!("Scoped token exchange failed: {}", e))?;
+        tokio::task::spawn_blocking(
+            move || -> Result<(String, Vec<u8>, Result<Vec<u8>, MeshCallError>), String> {
+                let tok = b
+                    .exchange_scoped_task_token_sync(
+                        "arm_calc",
+                        0,
+                        &ArmRole::NetworkEgress,
+                        None,
+                        Some("mcp://calc"),
+                        true,
+                    )
+                    .map_err(|e| format!("Scoped token exchange failed: {}", e))?;
 
-            let ok_calc = b
-                .dispatch_mesh_call_with_token_sync(
+                let ok_calc = b
+                    .dispatch_mesh_call_with_token_sync(
+                        "arm_calc",
+                        "mcp://calc",
+                        &tok,
+                        &[],
+                        br#"{"op":"mul","a":6,"b":7}"#,
+                    )
+                    .map_err(|e| format!("Scoped calc call failed: {}", e))?;
+
+                let echo_res = b.dispatch_mesh_call_with_token_sync(
                     "arm_calc",
-                    "mcp://calc",
+                    "mcp://echo-headers",
                     &tok,
                     &[],
-                    br#"{"op":"mul","a":6,"b":7}"#,
-                )
-                .map_err(|e| format!("Scoped calc call failed: {}", e))?;
+                    br#"{"probe":"should_be_blocked_by_tar_block"}"#,
+                );
 
-            let echo_res = b.dispatch_mesh_call_with_token_sync(
-                "arm_calc",
-                "mcp://echo-headers",
-                &tok,
-                &[],
-                br#"{"probe":"should_be_blocked_by_tar_block"}"#,
-            );
-
-            Ok((tok, ok_calc, echo_res))
-        })
+                Ok((tok, ok_calc, echo_res))
+            },
+        )
         .await
         .map_err(|e| e.to_string())??
     };
@@ -1152,10 +1177,13 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
             ),
             ("Accept".to_string(), "application/json".to_string()),
         ];
-        let (status, _, resp_body) =
-            AsyncHttpWireClient::post(&format!("{}/oauth/token", edge_url), &headers, form.as_bytes())
-                .await
-                .map_err(|e| format!("{} POST /oauth/token error: {}", label, e))?;
+        let (status, _, resp_body) = AsyncHttpWireClient::post(
+            &format!("{}/oauth/token", edge_url),
+            &headers,
+            form.as_bytes(),
+        )
+        .await
+        .map_err(|e| format!("{} POST /oauth/token error: {}", label, e))?;
         assert!(
             status == 400 || status == 401 || status == 403,
             "Expected 400/401/403 for {}, got {} ({})",
@@ -1195,7 +1223,11 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
         br#"{"document":"Invoice\u0007\u001b #9042\nTotal: 420.00"}"#,
     )
     .await?;
-    assert!(exit_doc_ok > 0, "Expected positive exit_code for doc_extractor, got {}", exit_doc_ok);
+    assert!(
+        exit_doc_ok > 0,
+        "Expected positive exit_code for doc_extractor, got {}",
+        exit_doc_ok
+    );
     assert!(zero_secret_doc);
     let doc_json: Value = serde_json::from_str(&out_doc)
         .map_err(|e| format!("Case 7 JSON parse error ({}): {}", e, out_doc))?;
@@ -1257,7 +1289,13 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
         limits.fuel_budget = u64::MAX / 2;
         let ctx = WasmMeshBridgeContext::new("arm_calc", 0, ArmRole::NetworkEgress, pep_spin)
             .with_killswitch((*ks_spin).clone());
-        wasm_spin.execute_wat_with_context("infinite_spin_guest", INFINITE_SPIN_WAT, b"", limits, Some(ctx))
+        wasm_spin.execute_wat_with_context(
+            "infinite_spin_guest",
+            INFINITE_SPIN_WAT,
+            b"",
+            limits,
+            Some(ctx),
+        )
     });
 
     tokio::time::sleep(Duration::from_millis(25)).await;
@@ -1296,7 +1334,9 @@ pub async fn run_live_v020_suite(one_bin: &Path, node_bin: &Path) -> Result<(), 
         cp_logs
     );
     assert!(
-        office_logs.contains("AuthZ Denied") || office_logs.contains("denied") || office_logs.contains("403"),
+        office_logs.contains("AuthZ Denied")
+            || office_logs.contains("denied")
+            || office_logs.contains("403"),
         "Expected authorization denial audit event in office-node log:\n{}",
         office_logs
     );

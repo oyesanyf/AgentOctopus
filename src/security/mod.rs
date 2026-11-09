@@ -9,13 +9,12 @@ pub mod capabilities;
 
 pub use agentmesh::{
     validate_mesh_uri, AgentMeshBindingDef, AgentMeshConfig, AgentMeshEngine,
-    AgentMeshPolicyConfig, AgentMeshPolicyRoot, AgentMeshReferenceNode,
-    AgentMeshRoleDef, AgentMeshServingNode, AgentMeshStatus, AsyncHttpWireClient,
-    AttenuatedMandate, CachedMeshToken, ConformanceNodeStats, DelegationLink, EcJwk,
-    ExchangedTokenMetadata, InboundMeshCallReport, JwksDocument, JwsHeader, MandateError,
-    MeshCallError, MeshCallReceipt, OctopusOidcActorIssuer, OidcError, OpenIdConfiguration,
-    PepBridgeConfig, PepVaultTelemetry, SandboxMeshCallReport, ServingNodeStats,
-    SyncHttpWireClient, WorkloadClaims, ALLOWED_SCHEMES, MAX_DELEGATION_DEPTH,
+    AgentMeshPolicyConfig, AgentMeshPolicyRoot, AgentMeshReferenceNode, AgentMeshRoleDef,
+    AgentMeshServingNode, AgentMeshStatus, AsyncHttpWireClient, AttenuatedMandate, CachedMeshToken,
+    ConformanceNodeStats, DelegationLink, EcJwk, ExchangedTokenMetadata, InboundMeshCallReport,
+    JwksDocument, JwsHeader, MandateError, MeshCallError, MeshCallReceipt, OctopusOidcActorIssuer,
+    OidcError, OpenIdConfiguration, PepBridgeConfig, PepVaultTelemetry, SandboxMeshCallReport,
+    ServingNodeStats, SyncHttpWireClient, WorkloadClaims, ALLOWED_SCHEMES, MAX_DELEGATION_DEPTH,
 };
 
 pub use cage_governance::{
@@ -29,14 +28,17 @@ pub use cage_governance::{
     SubstrateTranslator, TheoremProofResult, UnsafeControlAction,
 };
 
+pub mod atif_scan;
 pub mod cedar_arm;
 pub mod continuous_eval;
+pub mod cpu_pool;
 pub mod delegation;
 pub mod differential_protocol;
 pub mod governor;
 pub mod guard_arms;
 pub mod identity;
 pub mod isolation;
+pub mod journal_watcher;
 pub mod linux_sandbox;
 pub mod log_sanitizer;
 pub mod math_validator;
@@ -46,19 +48,14 @@ pub mod osv_scanner_arm;
 pub mod rasp;
 pub mod research_arms;
 pub mod rl_defense;
-pub mod windows_sandbox;
-pub mod atif_scan;
-pub mod cpu_pool;
-pub mod journal_watcher;
 pub mod safeagents_client;
+pub mod windows_sandbox;
 
 pub use atif_scan::{
     extract_hosts_from_text, AtifScanner, AtifSeverity, AtifSignal, SafeAgentsHarnessEvaluator,
     ToolInvocationContext, ToolVerdict,
 };
-pub use cpu_pool::{
-    global_cpu_pool, init_global_cpu_pool, spawn_cpu, CpuPoolError, CpuThreadPool,
-};
+pub use cpu_pool::{global_cpu_pool, init_global_cpu_pool, spawn_cpu, CpuPoolError, CpuThreadPool};
 pub use journal_watcher::{
     AtifSignal as JournalSignal, JournalEntry, JournalWatcherConfig, SafeAgentsJournalWatcher,
     SafeAgentsJournalWatcherHandle,
@@ -193,13 +190,13 @@ pub use rl_defense::{
     ConfidenceInterval95, CyberBattleBenchmarkReport, PolicyBenchmarkMetrics, PolicyBenchmarkReport,
 };
 pub use spider_physics::{OrbWebContainmentEngine, OrbWebEvaluationResult, SilkRegime};
+#[cfg(windows)]
+pub use windows_sandbox::verify_process_appcontainer_token;
 pub use windows_sandbox::{
     evaluate_pre_resume_confinement_gate, spawn_tier2_appcontainer_command,
     verify_windows_confinement_invariants, AppContainerTokenVerification, Tier2ConfinedChildResult,
     WindowsConfinementPolicy,
 };
-#[cfg(windows)]
-pub use windows_sandbox::verify_process_appcontainer_token;
 
 pub mod executable_identity;
 pub use executable_identity::{
@@ -302,8 +299,8 @@ pub use exec_sensor::{
 };
 pub use process_immunity::{
     inspect_process_lineage, is_immutable_os_kernel_anchor, is_process_immune,
-    observe_process_token_delta, probe_binary_capabilities, stem_matches_exact,
-    AgentRuntimeChild, BinaryCapabilities, LineageInspectionResult, TokenDeltaObservation,
+    observe_process_token_delta, probe_binary_capabilities, stem_matches_exact, AgentRuntimeChild,
+    BinaryCapabilities, LineageInspectionResult, TokenDeltaObservation,
 };
 pub use semantic_command::{
     classify_action_class, parse_semantic_command, tokenize_command, unwrap_env_invocation,
@@ -314,17 +311,14 @@ pub use semantic_dlp::{
     is_dlp_deal_delimiter, is_dlp_structural_delimiter, luhn_check, query_recent_semantic_events,
     record_semantic_dlp_event, safe_utf8_slice, snapshot_semantic_dlp_events,
     tokenize_dlp_deal_payload, tokenize_dlp_payload, GlinerSpanMatch, GlinerSpanNerEngine,
-    PresidioGlinerPiiZeroGuard, RedactXStructuredValidator, SemanticDlpEngine,
-    SemanticDlpEntity, SemanticDlpRecord, SemanticDlpVerdict, SemanticEntityKind,
-    ZeroLeakageProof,
+    PresidioGlinerPiiZeroGuard, RedactXStructuredValidator, SemanticDlpEngine, SemanticDlpEntity,
+    SemanticDlpRecord, SemanticDlpVerdict, SemanticEntityKind, ZeroLeakageProof,
 };
 pub use sensitive_paths::{
-    classify_sensitive_system_path, is_sensitive_credential_store,
-    scan_for_sensitive_system_path, scan_json_for_sensitive_path,
-    SensitiveSystemPathGuard, SensitiveSystemStoreKind,
+    classify_sensitive_system_path, is_sensitive_credential_store, scan_for_sensitive_system_path,
+    scan_json_for_sensitive_path, SensitiveSystemPathGuard, SensitiveSystemStoreKind,
 };
 pub use siquery::{
     register_lineage_file_events_hook, register_lineage_open_files_hook, FileEventRecord,
     SiqueryEngine, SiqueryRow, LIVE_FILE_EVENTS, SIQUERY_LAST_TELEMETRY,
 };
-

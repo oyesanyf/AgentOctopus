@@ -560,8 +560,22 @@ mod tests {
             seen_clone.lock().push(evt.pid);
         }));
 
-        buffer.push(ExecEvent::new_start(101, 1, "p1".into(), "c1".into(), None, None));
-        buffer.push(ExecEvent::new_start(102, 1, "p2".into(), "c2".into(), None, None));
+        buffer.push(ExecEvent::new_start(
+            101,
+            1,
+            "p1".into(),
+            "c1".into(),
+            None,
+            None,
+        ));
+        buffer.push(ExecEvent::new_start(
+            102,
+            1,
+            "p2".into(),
+            "c2".into(),
+            None,
+            None,
+        ));
 
         let s = seen.lock();
         assert_eq!(*s, vec![101, 102]);

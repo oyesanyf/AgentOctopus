@@ -396,7 +396,10 @@ pub fn extract_wire_cwd(val: &serde_json::Value) -> Option<String> {
 // Wire Protocol Parsers
 // =============================================================================
 
-pub fn parse_claude_request(json_str: &str, is_post: bool) -> Result<NormalizedHookRequest, String> {
+pub fn parse_claude_request(
+    json_str: &str,
+    is_post: bool,
+) -> Result<NormalizedHookRequest, String> {
     let val: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON for Claude: {e}"))?;
 
@@ -412,12 +415,10 @@ pub fn parse_claude_request(json_str: &str, is_post: bool) -> Result<NormalizedH
 
     let tool_name = extract_wire_tool_name(&val);
     let arguments = extract_wire_arguments(&val);
-    let command = extract_wire_command(&val).or_else(|| {
-        arguments.as_ref().and_then(extract_wire_command)
-    });
-    let file_path = extract_wire_file_path(&val).or_else(|| {
-        arguments.as_ref().and_then(extract_wire_file_path)
-    });
+    let command =
+        extract_wire_command(&val).or_else(|| arguments.as_ref().and_then(extract_wire_command));
+    let file_path = extract_wire_file_path(&val)
+        .or_else(|| arguments.as_ref().and_then(extract_wire_file_path));
     let session_id = extract_wire_session_id(&val);
     let exit_code = extract_wire_exit_code(&val);
     let stderr = extract_wire_stderr(&val);
@@ -438,7 +439,10 @@ pub fn parse_claude_request(json_str: &str, is_post: bool) -> Result<NormalizedH
     })
 }
 
-pub fn parse_cursor_request(json_str: &str, event_name: &str) -> Result<NormalizedHookRequest, String> {
+pub fn parse_cursor_request(
+    json_str: &str,
+    event_name: &str,
+) -> Result<NormalizedHookRequest, String> {
     let val: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON for Cursor: {e}"))?;
 
@@ -477,7 +481,10 @@ pub fn parse_cursor_request(json_str: &str, event_name: &str) -> Result<Normaliz
     })
 }
 
-pub fn parse_copilot_request(json_str: &str, event_name: &str) -> Result<NormalizedHookRequest, String> {
+pub fn parse_copilot_request(
+    json_str: &str,
+    event_name: &str,
+) -> Result<NormalizedHookRequest, String> {
     let val: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON for Copilot: {e}"))?;
 
@@ -552,12 +559,15 @@ pub fn parse_mcp_call_request(json_str: &str) -> Result<NormalizedHookRequest, S
     }
 
     let rpc_id = val.get("id").cloned();
-    let params = val.get("params").cloned().unwrap_or(serde_json::Value::Null);
+    let params = val
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
 
     let tool_name = extract_wire_tool_name(&params).or_else(|| extract_wire_tool_name(&val));
     let arguments = extract_wire_arguments(&params).or_else(|| extract_wire_arguments(&val));
-    let command = extract_wire_command(&params)
-        .or_else(|| arguments.as_ref().and_then(extract_wire_command));
+    let command =
+        extract_wire_command(&params).or_else(|| arguments.as_ref().and_then(extract_wire_command));
     let file_path = extract_wire_file_path(&params)
         .or_else(|| arguments.as_ref().and_then(extract_wire_file_path));
 
@@ -717,7 +727,8 @@ pub fn evaluate_hook_synchronously(req: &NormalizedHookRequest) -> HookEvaluatio
         }
 
         let duration_us = start_instant.elapsed().as_micros() as u64;
-        let decision = HookEvaluationDecision::allow("PostToolUse completed and recorded", duration_us);
+        let decision =
+            HookEvaluationDecision::allow("PostToolUse completed and recorded", duration_us);
         record_decision(req, &decision);
         return decision;
     }
@@ -728,14 +739,18 @@ pub fn evaluate_hook_synchronously(req: &NormalizedHookRequest) -> HookEvaluatio
     if let Some(path) = &req.file_path {
         if let Some(kind) = crate::security::sensitive_paths::classify_sensitive_system_path(path) {
             detected_sensitive_store = Some((kind, path.clone()));
-        } else if let Some(found) = crate::security::sensitive_paths::scan_for_sensitive_system_path(path) {
+        } else if let Some(found) =
+            crate::security::sensitive_paths::scan_for_sensitive_system_path(path)
+        {
             detected_sensitive_store = Some(found);
         }
     }
 
     if detected_sensitive_store.is_none() {
         if let Some(args) = &req.arguments {
-            if let Some(found) = crate::security::sensitive_paths::scan_json_for_sensitive_path(args) {
+            if let Some(found) =
+                crate::security::sensitive_paths::scan_json_for_sensitive_path(args)
+            {
                 detected_sensitive_store = Some(found);
             }
         }
@@ -743,7 +758,9 @@ pub fn evaluate_hook_synchronously(req: &NormalizedHookRequest) -> HookEvaluatio
 
     if detected_sensitive_store.is_none() {
         if let Some(cmd) = &req.command {
-            if let Some(found) = crate::security::sensitive_paths::scan_for_sensitive_system_path(cmd) {
+            if let Some(found) =
+                crate::security::sensitive_paths::scan_for_sensitive_system_path(cmd)
+            {
                 detected_sensitive_store = Some(found);
             }
         }
@@ -822,7 +839,14 @@ pub fn evaluate_hook_synchronously(req: &NormalizedHookRequest) -> HookEvaluatio
     if let Some(args) = &req.arguments {
         let s = args.to_string();
         for ch in s.chars() {
-            if ch == '{' || ch == '}' || ch == '[' || ch == ']' || ch == ':' || ch == ',' || ch == '"' {
+            if ch == '{'
+                || ch == '}'
+                || ch == '['
+                || ch == ']'
+                || ch == ':'
+                || ch == ','
+                || ch == '"'
+            {
                 payload_to_inspect.push(' ');
                 payload_to_inspect.push(ch);
                 payload_to_inspect.push(' ');
@@ -911,7 +935,12 @@ pub fn install_agent_hooks(
                         "PostToolUse": format!("\"{}\" hook evaluate --agent claude --post", bin_str)
                     }
                 });
-                if std::fs::write(&cfg_file, serde_json::to_string_pretty(&hook_content).unwrap()).is_ok() {
+                if std::fs::write(
+                    &cfg_file,
+                    serde_json::to_string_pretty(&hook_content).unwrap(),
+                )
+                .is_ok()
+                {
                     installed.push(cfg_file);
                 }
             }
@@ -926,7 +955,12 @@ pub fn install_agent_hooks(
                         "afterShellExecution": format!("\"{}\" hook evaluate --agent cursor --event afterShellExecution --post", bin_str)
                     }
                 });
-                if std::fs::write(&cfg_file, serde_json::to_string_pretty(&hook_content).unwrap()).is_ok() {
+                if std::fs::write(
+                    &cfg_file,
+                    serde_json::to_string_pretty(&hook_content).unwrap(),
+                )
+                .is_ok()
+                {
                     installed.push(cfg_file);
                 }
             }
@@ -949,7 +983,12 @@ pub fn install_agent_hooks(
                 let hook_content = serde_json::json!({
                     "pre_hook": format!("\"{}\" hook evaluate --agent opencode", bin_str)
                 });
-                if std::fs::write(&cfg_file, serde_json::to_string_pretty(&hook_content).unwrap()).is_ok() {
+                if std::fs::write(
+                    &cfg_file,
+                    serde_json::to_string_pretty(&hook_content).unwrap(),
+                )
+                .is_ok()
+                {
                     installed.push(cfg_file);
                 }
             }
@@ -975,7 +1014,10 @@ mod tests {
         });
 
         assert_eq!(extract_wire_command(&v), Some("echo hello".to_string()));
-        assert_eq!(extract_wire_file_path(&v), Some("/workspace/test.txt".to_string()));
+        assert_eq!(
+            extract_wire_file_path(&v),
+            Some("/workspace/test.txt".to_string())
+        );
         assert_eq!(extract_wire_session_id(&v), Some("sess-123".to_string()));
         assert!(extract_wire_arguments(&v).is_some());
         assert!(extract_wire_tool_response(&v).is_some());
@@ -984,7 +1026,8 @@ mod tests {
     #[test]
     fn test_mcp_error_response_preserves_id() {
         let req_id = serde_json::json!(42);
-        let decision = HookEvaluationDecision::deny("Root access forbidden", Some("AST"), None, 100);
+        let decision =
+            HookEvaluationDecision::deny("Root access forbidden", Some("AST"), None, 100);
         let resp_str = format_mcp_error_response(&req_id, &decision);
         let parsed: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
 
@@ -1011,6 +1054,8 @@ mod tests {
 
         let decision = evaluate_hook_synchronously(&req);
         assert!(!decision.allowed);
-        assert!(decision.rationale.contains("sensitive system credential store blocked"));
+        assert!(decision
+            .rationale
+            .contains("sensitive system credential store blocked"));
     }
 }

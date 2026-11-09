@@ -1,12 +1,6 @@
 //! Empirical Challenge Test Suite for Milestone 2 Migration (R1-R6, R8) in AgentOctopus.
 //! Stress-testing DLP, Safe Slicing, Path Normalization, WFP 24 Layers, and Process Lineage Immunity.
 
-use agent_octopus::security::semantic_dlp::{
-    safe_utf8_slice, RedactXStructuredValidator, SemanticDlpEngine,
-};
-use agent_octopus::security::sensitive_paths::{
-    classify_sensitive_system_path, normalize_path_for_inspection, SensitiveCredentialStoreKind,
-};
 use agent_octopus::security::host_network_isolation::{
     discover_active_octopus_ports, HostKillSwitchManager, FWPM_LAYER_IPFORWARD_V4,
     FWPM_LAYER_IPFORWARD_V6,
@@ -14,27 +8,36 @@ use agent_octopus::security::host_network_isolation::{
 use agent_octopus::security::process_immunity::{
     inspect_process_lineage, is_developer_or_agent_runtime, is_immutable_os_kernel_pid,
 };
-
+use agent_octopus::security::semantic_dlp::{
+    safe_utf8_slice, RedactXStructuredValidator, SemanticDlpEngine,
+};
+use agent_octopus::security::sensitive_paths::{
+    classify_sensitive_system_path, normalize_path_for_inspection, SensitiveCredentialStoreKind,
+};
 
 #[test]
 fn test_semantic_dlp_deal_values_empirical() {
     let engine = SemanticDlpEngine::new();
 
     // Case 1: Formatted "$1,500,000 acquisition" (>= $1M) -> MUST BE QUARANTINE / CROWN JEWEL
-    let v_1_5m = engine.evaluate_verdict_fail_closed("The acquisition deal value is $1,500,000 for AlphaCorp");
+    let v_1_5m = engine
+        .evaluate_verdict_fail_closed("The acquisition deal value is $1,500,000 for AlphaCorp");
     eprintln!("[EMPIRICAL] v_1_5m: {:?}", v_1_5m);
 
     // Case 2: ISO Currency "EUR 2,000,000" (>= $1M) -> MUST BE DETECTED AND QUARANTINED
-    let v_eur = engine.evaluate_verdict_fail_closed("Target valuation EUR 2,000,000 in acquisition");
+    let v_eur =
+        engine.evaluate_verdict_fail_closed("Target valuation EUR 2,000,000 in acquisition");
     eprintln!("[EMPIRICAL] v_eur: {:?}", v_eur);
 
     // Case 3: Compact "$1.5M acquisition" (>= $1M) -> QUARANTINE / CROWN JEWEL
-    let v_compact = engine.evaluate_verdict_fail_closed("The acquisition deal value is $1.5M for AlphaCorp");
+    let v_compact =
+        engine.evaluate_verdict_fail_closed("The acquisition deal value is $1.5M for AlphaCorp");
     eprintln!("[EMPIRICAL] v_compact: {:?}", v_compact);
     assert!(v_compact.is_deny());
 
     // Case 4: Formatted "$500,000 contract" (< $1M) -> BLOCK / CONFIDENTIAL
-    let v_500k = engine.evaluate_verdict_fail_closed("The contract deal value is $500,000 for BetaCorp");
+    let v_500k =
+        engine.evaluate_verdict_fail_closed("The contract deal value is $500,000 for BetaCorp");
     eprintln!("[EMPIRICAL] v_500k: {:?}", v_500k);
     assert!(v_500k.is_restricted());
 
@@ -67,8 +70,13 @@ fn test_hipaa_redactx_validators_empirical() {
     let engine = SemanticDlpEngine::new();
     let npi_payload = "Attending physician Dr. Alice Smith NPI 1234567893 authorized treatment";
     let matches = engine.scan_payload(npi_payload);
-    let npi_detected = matches.iter().any(|m| m.kind == agent_octopus::security::semantic_dlp::SemanticEntityKind::PhiMedicalRecord);
-    eprintln!("[EMPIRICAL] NPI in clinical payload detected: {}", npi_detected);
+    let npi_detected = matches.iter().any(|m| {
+        m.kind == agent_octopus::security::semantic_dlp::SemanticEntityKind::PhiMedicalRecord
+    });
+    eprintln!(
+        "[EMPIRICAL] NPI in clinical payload detected: {}",
+        npi_detected
+    );
     assert!(npi_detected, "FAIL: Valid NPI 1234567893 in clinical context was NOT detected by SemanticDlpEngine::scan_payload");
 
     // 2. Mod-11 MRN
@@ -207,18 +215,24 @@ fn test_wfp_24_layer_guids_and_rfc5737_isolation() {
     assert!(!ports.contains(&5000));
 
     // Verify simulated mode execution preserves runner TCP sockets
-    let tmp_ledger = std::env::temp_dir().join(format!("octopus_ks_test_{}.json", std::process::id()));
+    let tmp_ledger =
+        std::env::temp_dir().join(format!("octopus_ks_test_{}.json", std::process::id()));
     let _ = std::fs::remove_file(&tmp_ledger);
     let mgr = HostKillSwitchManager::new(Some(tmp_ledger.clone()));
     let status = mgr.status();
     assert_eq!(status.wfp_kernel_layers_enforced, 24);
 
-    let receipt = mgr.engage("empirical_challenger", "Testing 24-layer forward shield against RFC 5737 198.51.100.1")
+    let receipt = mgr
+        .engage(
+            "empirical_challenger",
+            "Testing 24-layer forward shield against RFC 5737 198.51.100.1",
+        )
         .expect("Engage must succeed in simulated mode");
     assert!(receipt.isolated);
 
     // Disarm to restore state
-    let disarmed = mgr.disarm("empirical_challenger", "Restoring network state")
+    let disarmed = mgr
+        .disarm("empirical_challenger", "Restoring network state")
         .expect("Disarm must succeed");
     assert!(!disarmed.isolated);
     let _ = std::fs::remove_file(&tmp_ledger);
@@ -230,7 +244,15 @@ fn test_process_immunity_synthetic_pids_empirical() {
     let synth_pid = 4_000_101;
 
     // Developer / agent runtimes must NEVER get immunity
-    for name in &["node", "node.exe", "python", "python3.exe", "powershell.exe", "wsl.exe", "bash"] {
+    for name in &[
+        "node",
+        "node.exe",
+        "python",
+        "python3.exe",
+        "powershell.exe",
+        "wsl.exe",
+        "bash",
+    ] {
         assert!(
             is_developer_or_agent_runtime(name),
             "Expected {} to be developer runtime",
@@ -248,7 +270,10 @@ fn test_process_immunity_synthetic_pids_empirical() {
     // Immutable OS kernel anchors
     assert!(is_immutable_os_kernel_pid(0, "System Idle Process"));
     assert!(is_immutable_os_kernel_pid(4, "System"));
-    assert!(is_immutable_os_kernel_pid(std::process::id(), "agent_octopus.exe"));
+    assert!(is_immutable_os_kernel_pid(
+        std::process::id(),
+        "agent_octopus.exe"
+    ));
     assert!(is_immutable_os_kernel_pid(1234, "csrss.exe"));
     assert!(is_immutable_os_kernel_pid(1235, "smss.exe"));
 
@@ -259,23 +284,29 @@ fn test_process_immunity_synthetic_pids_empirical() {
 
 #[test]
 fn test_privilege_equivalence_and_command_ast_r3() {
+    use agent_octopus::security::command_line::encode_utf16le_base64;
     use agent_octopus::security::semantic_command::{
         classify_action_class, parse_semantic_command, PrivilegeEquivalenceClass,
     };
-    use agent_octopus::security::command_line::encode_utf16le_base64;
 
     // 1. Nested env invocation: env -S sudo bash -c "whoami"
     let cmd1 = r#"env -S sudo bash -c "whoami""#;
     let sem1 = parse_semantic_command(cmd1);
     eprintln!("[EMPIRICAL] cmd1 sem: {:?}", sem1);
-    assert_eq!(sem1.privilege_class, PrivilegeEquivalenceClass::RootOrAdminElevation);
+    assert_eq!(
+        sem1.privilege_class,
+        PrivilegeEquivalenceClass::RootOrAdminElevation
+    );
     assert_eq!(classify_action_class(cmd1), "PRIVILEGED_EXECUTION");
 
     // 2. WSL invocation: wsl -u root
     let cmd2 = "wsl -u root";
     let sem2 = parse_semantic_command(cmd2);
     eprintln!("[EMPIRICAL] cmd2 sem: {:?}", sem2);
-    assert_eq!(sem2.privilege_class, PrivilegeEquivalenceClass::RootOrAdminElevation);
+    assert_eq!(
+        sem2.privilege_class,
+        PrivilegeEquivalenceClass::RootOrAdminElevation
+    );
     assert!(sem2.is_cross_boundary);
     assert_eq!(classify_action_class(cmd2), "PRIVILEGED_EXECUTION");
 
@@ -283,7 +314,10 @@ fn test_privilege_equivalence_and_command_ast_r3() {
     let cmd3 = r#"powershell.exe -Command "wsl -u root id""#;
     let sem3 = parse_semantic_command(cmd3);
     eprintln!("[EMPIRICAL] cmd3 sem: {:?}", sem3);
-    assert_eq!(sem3.privilege_class, PrivilegeEquivalenceClass::RootOrAdminElevation);
+    assert_eq!(
+        sem3.privilege_class,
+        PrivilegeEquivalenceClass::RootOrAdminElevation
+    );
     assert_eq!(classify_action_class(cmd3), "PRIVILEGED_EXECUTION");
 
     // 4. powershell.exe -EncodedCommand observation
@@ -302,35 +336,59 @@ fn test_siquery_quadruple_read_only_and_timeout_r8() {
     // 1. Guard 1: String prefix rejection
     let r_create = engine.execute_query("CREATE TABLE test(x INTEGER);");
     assert!(r_create.is_err(), "CREATE TABLE must be rejected");
-    assert!(r_create.unwrap_err().contains("Mutating SQL statements are forbidden"));
+    assert!(r_create
+        .unwrap_err()
+        .contains("Mutating SQL statements are forbidden"));
 
     let r_drop = engine.execute_query("DROP TABLE processes;");
     assert!(r_drop.is_err(), "DROP TABLE must be rejected");
-    assert!(r_drop.unwrap_err().contains("Mutating SQL statements are forbidden"));
+    assert!(r_drop
+        .unwrap_err()
+        .contains("Mutating SQL statements are forbidden"));
 
     let r_insert = engine.execute_query("INSERT INTO processes (pid) VALUES (1);");
     assert!(r_insert.is_err(), "INSERT INTO must be rejected");
-    assert!(r_insert.unwrap_err().contains("Mutating SQL statements are forbidden"));
+    assert!(r_insert
+        .unwrap_err()
+        .contains("Mutating SQL statements are forbidden"));
 
     // 2. Guard 2: Authorizer callback catching CTE mutations that bypass prefix check
-    let r_cte_insert = engine.execute_query("WITH cte AS (SELECT 1 AS x) INSERT INTO processes (pid) SELECT x FROM cte;");
-    assert!(r_cte_insert.is_err(), "CTE INSERT must be rejected by authorizer");
+    let r_cte_insert = engine.execute_query(
+        "WITH cte AS (SELECT 1 AS x) INSERT INTO processes (pid) SELECT x FROM cte;",
+    );
+    assert!(
+        r_cte_insert.is_err(),
+        "CTE INSERT must be rejected by authorizer"
+    );
     let err_cte = r_cte_insert.unwrap_err();
     eprintln!("[EMPIRICAL] CTE insert error: {}", err_cte);
-    assert!(err_cte.contains("not authorized"), "Expected 'not authorized', got: {}", err_cte);
+    assert!(
+        err_cte.contains("not authorized"),
+        "Expected 'not authorized', got: {}",
+        err_cte
+    );
 
     // 3. Recursive CTE read-only permission (AuthAction::Recursive)
     let r_recursive = engine.execute_query_formatted(
         "WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM cnt WHERE x < 5) SELECT x FROM cnt;",
         SiqueryOutputFormat::Json,
     );
-    assert!(r_recursive.is_ok(), "Read-only recursive CTE must be allowed via AuthAction::Recursive");
+    assert!(
+        r_recursive.is_ok(),
+        "Read-only recursive CTE must be allowed via AuthAction::Recursive"
+    );
     let json_rec = r_recursive.unwrap();
-    assert!(json_rec.contains("\"x\": 5") || json_rec.contains("\"x\":5"), "Recursive CTE output must contain 5");
+    assert!(
+        json_rec.contains("\"x\": 5") || json_rec.contains("\"x\":5"),
+        "Recursive CTE output must contain 5"
+    );
 
     // 4. Comment-prefixed write statements bypassing prefix filter
     let r_comment_create = engine.execute_query("/* bypass */ CREATE TABLE evil(x);");
-    assert!(r_comment_create.is_err(), "Comment-prefixed CREATE must be rejected by authorizer");
+    assert!(
+        r_comment_create.is_err(),
+        "Comment-prefixed CREATE must be rejected by authorizer"
+    );
     assert!(r_comment_create.unwrap_err().contains("not authorized"));
 
     // 5. 15-second execution timeout via progress handler
@@ -340,20 +398,44 @@ fn test_siquery_quadruple_read_only_and_timeout_r8() {
     eprintln!("[EMPIRICAL] Infinite query elapsed: {:?}", elapsed);
     let err_inf = r_infinite.unwrap_err();
     eprintln!("[EMPIRICAL] err_inf: {}", err_inf);
-    assert!(err_inf.contains("interrupted"), "Expected 'interrupted', got: {}", err_inf);
-    assert!(elapsed.as_secs() >= 14 && elapsed.as_secs() <= 20, "Timeout should occur at ~15s, got: {:?}", elapsed);
+    assert!(
+        err_inf.contains("interrupted"),
+        "Expected 'interrupted', got: {}",
+        err_inf
+    );
+    assert!(
+        elapsed.as_secs() >= 14 && elapsed.as_secs() <= 20,
+        "Timeout should occur at ~15s, got: {:?}",
+        elapsed
+    );
 
     // 6. 41+ tables exist and telemetry tables queryable
     let tables = SiqueryEngine::list_tables();
     eprintln!("[EMPIRICAL] Table count: {}", tables.len());
-    assert!(tables.len() >= 41, "Must expose at least 41 tables, got {}", tables.len());
+    assert!(
+        tables.len() >= 41,
+        "Must expose at least 41 tables, got {}",
+        tables.len()
+    );
 
-    assert!(engine.execute_query("SELECT count(*) FROM processes;").is_ok());
-    assert!(engine.execute_query("SELECT count(*) FROM listening_ports;").is_ok());
-    assert!(engine.execute_query("SELECT count(*) FROM agent_interceptions;").is_ok());
-    assert!(engine.execute_query("SELECT count(*) FROM exec_events;").is_ok());
-    assert!(engine.execute_query("SELECT count(*) FROM circumvention_events;").is_ok());
-    assert!(engine.execute_query("SELECT count(*) FROM dlp_semantic_events;").is_ok());
+    assert!(engine
+        .execute_query("SELECT count(*) FROM processes;")
+        .is_ok());
+    assert!(engine
+        .execute_query("SELECT count(*) FROM listening_ports;")
+        .is_ok());
+    assert!(engine
+        .execute_query("SELECT count(*) FROM agent_interceptions;")
+        .is_ok());
+    assert!(engine
+        .execute_query("SELECT count(*) FROM exec_events;")
+        .is_ok());
+    assert!(engine
+        .execute_query("SELECT count(*) FROM circumvention_events;")
+        .is_ok());
+    assert!(engine
+        .execute_query("SELECT count(*) FROM dlp_semantic_events;")
+        .is_ok());
 }
 
 #[tokio::test]
@@ -378,7 +460,10 @@ async fn test_peer_pid_anti_spoofing_and_auth_r4() {
         method: "POST",
         path: "/api/siquery/query",
         query: "",
-        headers: &format!("POST /api/siquery/query HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n", local_port),
+        headers: &format!(
+            "POST /api/siquery/query HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
+            local_port
+        ),
         local_port,
     };
     let rej_unauth = authorize_request(&req_unauth, "master_token_12345");
@@ -402,10 +487,15 @@ async fn test_peer_pid_anti_spoofing_and_auth_r4() {
         "query": "SELECT 1;",
         "caller_pid": spoofed_pid,
         "operator": "spoofed_actor"
-    }).to_string();
+    })
+    .to_string();
 
-    let (st_spoof, body_spoof) = handle_siquery_query(&state, &spoof_body, Some(peer_addr), local_port);
-    eprintln!("[EMPIRICAL] Siquery spoof status: {}, body: {}", st_spoof, body_spoof);
+    let (st_spoof, body_spoof) =
+        handle_siquery_query(&state, &spoof_body, Some(peer_addr), local_port);
+    eprintln!(
+        "[EMPIRICAL] Siquery spoof status: {}, body: {}",
+        st_spoof, body_spoof
+    );
     assert_eq!(st_spoof, "403 Forbidden");
     assert!(body_spoof.contains("CALLER_PID_SPOOF_DETECTED"));
 
@@ -415,16 +505,24 @@ async fn test_peer_pid_anti_spoofing_and_auth_r4() {
         "query": "SELECT 1;",
         "caller_pid": actual_pid,
         "operator": "unres_actor"
-    }).to_string();
+    })
+    .to_string();
 
-    let (st_unres, body_unres) = handle_siquery_query(&state, &unres_body, Some(bogus_peer), local_port);
-    eprintln!("[EMPIRICAL] Unresolvable status: {}, body: {}", st_unres, body_unres);
+    let (st_unres, body_unres) =
+        handle_siquery_query(&state, &unres_body, Some(bogus_peer), local_port);
+    eprintln!(
+        "[EMPIRICAL] Unresolvable status: {}, body: {}",
+        st_unres, body_unres
+    );
     assert_eq!(st_unres, "403 Forbidden");
     assert!(body_unres.contains("PEER_PID_VERIFICATION_FAILED"));
 
     // 5. Quarantined Operator check
     for _ in 0..3 {
-        state.tarpit.engage_adversary("quarantined_operator", "test_vector", "test_payload").await;
+        state
+            .tarpit
+            .engage_adversary("quarantined_operator", "test_vector", "test_payload")
+            .await;
     }
     assert!(state.tarpit.is_quarantined("quarantined_operator"));
 
@@ -432,7 +530,8 @@ async fn test_peer_pid_anti_spoofing_and_auth_r4() {
         "query": "SELECT 1;",
         "caller_pid": actual_pid,
         "operator": "quarantined_operator"
-    }).to_string();
+    })
+    .to_string();
 
     let (st_q, body_q) = handle_siquery_query(&state, &q_body, Some(peer_addr), local_port);
     eprintln!("[EMPIRICAL] Quarantined status: {}, body: {}", st_q, body_q);
@@ -444,9 +543,11 @@ async fn test_peer_pid_anti_spoofing_and_auth_r4() {
         "query": "SELECT 1 AS num;",
         "caller_pid": actual_pid,
         "operator": "clean_operator"
-    }).to_string();
+    })
+    .to_string();
     let (st_ok, body_ok) = handle_siquery_query(&state, &valid_body, Some(peer_addr), local_port);
     assert_eq!(st_ok, "200 OK");
-    assert!(body_ok.contains("\"status\":\"success\"") || body_ok.contains("\"status\": \"success\""));
+    assert!(
+        body_ok.contains("\"status\":\"success\"") || body_ok.contains("\"status\": \"success\"")
+    );
 }
-

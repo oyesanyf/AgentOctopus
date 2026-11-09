@@ -166,7 +166,11 @@ impl EgressProxy {
     }
 
     /// Verifies whether the destination and presentation token match the authorized loopback sidecar.
-    pub async fn is_authorized_sidecar_target(&self, parsed_url: &Url, auth_token: Option<&str>) -> bool {
+    pub async fn is_authorized_sidecar_target(
+        &self,
+        parsed_url: &Url,
+        auth_token: Option<&str>,
+    ) -> bool {
         let sidecar_guard = self.sidecar_loopback_token.read().await;
         let Some(expected_token) = sidecar_guard.as_ref() else {
             return false;
@@ -179,7 +183,13 @@ impl EgressProxy {
         }
 
         let expected_port = self.sidecar_loopback_port.load(Ordering::SeqCst);
-        let port = parsed_url.port().unwrap_or(if parsed_url.scheme() == "https" { 443 } else { 80 });
+        let port = parsed_url
+            .port()
+            .unwrap_or(if parsed_url.scheme() == "https" {
+                443
+            } else {
+                80
+            });
         if port != expected_port {
             return false;
         }
@@ -305,7 +315,9 @@ impl EgressProxy {
             OctopusSecurityError::SsrfBlocked(format!("Malformed URL '{}': {}", req.target_url, e))
         })?;
 
-        let is_sidecar = self.is_authorized_sidecar_target(&parsed_url, sidecar_token).await;
+        let is_sidecar = self
+            .is_authorized_sidecar_target(&parsed_url, sidecar_token)
+            .await;
 
         // 1. Protocol Invariant: HTTPS Only (except authenticated local sidecar)
         if parsed_url.scheme() != "https" {

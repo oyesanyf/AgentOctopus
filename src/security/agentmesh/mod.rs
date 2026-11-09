@@ -27,7 +27,7 @@ pub use mandate_attenuation::{
     MAX_DELEGATION_DEPTH,
 };
 pub use oidc_actor_issuer::{
-    parse_ieee_p1363_signature, verifying_key_to_jwk_coords, EcJwk, JwsHeader, JwksDocument,
+    parse_ieee_p1363_signature, verifying_key_to_jwk_coords, EcJwk, JwksDocument, JwsHeader,
     OctopusOidcActorIssuer, OidcError, OidcLoopbackServer, OpenIdConfiguration, WorkloadClaims,
     AUDIENCE_DEFAULT, SPIFFE_ISSUER_DEFAULT,
 };
@@ -314,7 +314,10 @@ impl AgentMeshEngine {
     }
 
     pub fn serving_node_port(&self) -> Option<u16> {
-        self.status_tracker.try_read().ok().and_then(|s| s.serving_node_port)
+        self.status_tracker
+            .try_read()
+            .ok()
+            .and_then(|s| s.serving_node_port)
     }
 
     pub fn conformance_node_port(&self) -> Option<u16> {
@@ -322,7 +325,8 @@ impl AgentMeshEngine {
     }
 
     pub fn serving_node_url(&self) -> Option<String> {
-        self.serving_node_port().map(|p| format!("http://127.0.0.1:{}", p))
+        self.serving_node_port()
+            .map(|p| format!("http://127.0.0.1:{}", p))
     }
 
     pub fn conformance_node_url(&self) -> Option<String> {
@@ -349,7 +353,9 @@ impl AgentMeshEngine {
         &self.cage_engine
     }
 
-    fn resolve_published_wasm_tool_name(uri: &str) -> Result<(&'static str, &'static str), OctopusSecurityError> {
+    fn resolve_published_wasm_tool_name(
+        uri: &str,
+    ) -> Result<(&'static str, &'static str), OctopusSecurityError> {
         match uri {
             "mcp://octopus/doc_extractor" | "/mesh/mcp/octopus/doc_extractor" => {
                 Ok(("mcp://octopus/doc_extractor", "wasm_doc_extractor"))
@@ -442,8 +448,9 @@ impl AgentMeshEngine {
         combined_input.push(b'\n');
         combined_input.extend_from_slice(payload);
 
-        let ctx = WasmMeshBridgeContext::new(arm_id, epoch, role.clone(), Arc::clone(&self.pep_bridge))
-            .with_killswitch((*self.killswitch).clone());
+        let ctx =
+            WasmMeshBridgeContext::new(arm_id, epoch, role.clone(), Arc::clone(&self.pep_bridge))
+                .with_killswitch((*self.killswitch).clone());
         let limits = WasmSandboxLimits::default();
 
         let wasm_executor = Arc::clone(&self.wasm_executor);
@@ -581,7 +588,11 @@ impl AgentMeshEngine {
                         )),
                     ));
                 }
-                if !self.config.policy.is_service_allowed(&claims.sub, canonical_uri) {
+                if !self
+                    .config
+                    .policy
+                    .is_service_allowed(&claims.sub, canonical_uri)
+                {
                     return Err((
                         403,
                         OctopusSecurityError::CapabilityDenied(format!(
@@ -610,7 +621,11 @@ impl AgentMeshEngine {
                     )),
                 ));
             }
-            if !self.config.policy.is_service_allowed(&claims.sub, canonical_uri) {
+            if !self
+                .config
+                .policy
+                .is_service_allowed(&claims.sub, canonical_uri)
+            {
                 return Err((
                     403,
                     OctopusSecurityError::CapabilityDenied(format!(
@@ -640,11 +655,10 @@ impl AgentMeshEngine {
             expected_digest
         };
 
-        if let Err(rej) = self.cage_engine.verify_and_consume_seal(
-            cage_seal,
-            wasm_tool_name,
-            &digest_to_verify,
-        ) {
+        if let Err(rej) =
+            self.cage_engine
+                .verify_and_consume_seal(cage_seal, wasm_tool_name, &digest_to_verify)
+        {
             return match rej {
                 SealRejection::AlreadyConsumed(seal_id) => Err((
                     409,
@@ -655,10 +669,7 @@ impl AgentMeshEngine {
                 )),
                 other => Err((
                     403,
-                    OctopusSecurityError::CapabilityDenied(format!(
-                        "INVALID_CAGE_SEAL: {}",
-                        other
-                    )),
+                    OctopusSecurityError::CapabilityDenied(format!("INVALID_CAGE_SEAL: {}", other)),
                 )),
             };
         }
@@ -800,7 +811,11 @@ mod tests {
         assert!(ks.is_tripped());
 
         // Assert sub-millisecond execution (< 1,000,000 nanoseconds = 1 millisecond)
-        assert!(latency < Duration::from_millis(1), "Autotomy latency was {:?}", latency);
+        assert!(
+            latency < Duration::from_millis(1),
+            "Autotomy latency was {:?}",
+            latency
+        );
 
         let status = engine.status().await;
         assert!(status.killswitch_tripped);

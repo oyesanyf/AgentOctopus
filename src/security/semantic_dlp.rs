@@ -120,7 +120,13 @@ pub fn snapshot_semantic_dlp_events() -> Vec<SemanticDlpRecord> {
 }
 
 pub fn query_recent_semantic_events(limit: usize) -> Vec<SemanticDlpRecord> {
-    LIVE_SEMANTIC_DLP_EVENTS.read().iter().rev().take(limit).cloned().collect()
+    LIVE_SEMANTIC_DLP_EVENTS
+        .read()
+        .iter()
+        .rev()
+        .take(limit)
+        .cloned()
+        .collect()
 }
 
 pub fn clear_semantic_dlp_events() {
@@ -276,7 +282,10 @@ impl RedactXStructuredValidator {
 
             // 3. Hex decoding
             let hex_trimmed = current.trim();
-            if hex_trimmed.len() >= 8 && hex_trimmed.len() % 2 == 0 && hex_trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+            if hex_trimmed.len() >= 8
+                && hex_trimmed.len() % 2 == 0
+                && hex_trimmed.chars().all(|c| c.is_ascii_hexdigit())
+            {
                 if let Ok(bytes) = hex::decode(hex_trimmed) {
                     if let Ok(utf8) = String::from_utf8(bytes) {
                         if !utf8.trim().is_empty() && utf8 != current {
@@ -315,7 +324,8 @@ fn urlencoding_decode(s: &str) -> Result<String, ()> {
 }
 
 fn is_base64_charset(s: &str) -> bool {
-    s.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
 }
 
 pub fn luhn_check(s: &str) -> bool {
@@ -398,7 +408,10 @@ impl GlinerSpanNerEngine {
                 }
             }
             "deal_value" | "monetary_amount" => {
-                let is_sym = clean.starts_with('$') || clean.starts_with('€') || clean.starts_with('£') || clean.starts_with('¥');
+                let is_sym = clean.starts_with('$')
+                    || clean.starts_with('€')
+                    || clean.starts_with('£')
+                    || clean.starts_with('¥');
                 let is_iso = ["USD", "EUR", "GBP", "CAD", "AUD", "CHF", "JPY"]
                     .iter()
                     .any(|&code| clean.to_ascii_uppercase().starts_with(code));
@@ -446,7 +459,10 @@ impl GlinerSpanNerEngine {
                 });
             }
 
-            let is_sym = (trimmed.starts_with('$') || trimmed.starts_with('€') || trimmed.starts_with('£') || trimmed.starts_with('¥'))
+            let is_sym = (trimmed.starts_with('$')
+                || trimmed.starts_with('€')
+                || trimmed.starts_with('£')
+                || trimmed.starts_with('¥'))
                 && trimmed.chars().skip(1).any(|c| c.is_ascii_digit());
             let is_iso = ["USD", "EUR", "GBP", "CAD", "AUD", "CHF", "JPY"]
                 .iter()
@@ -1076,8 +1092,16 @@ impl SemanticDlpEngine {
         }
     }
 
-    fn detect_person_names(&self, payload: &str, lower: &str, matches: &mut Vec<SemanticDlpEntity>) {
-        let has_patient_context = lower.contains("patient") || lower.contains("subject") || lower.contains("doctor") || lower.contains("dr.");
+    fn detect_person_names(
+        &self,
+        payload: &str,
+        lower: &str,
+        matches: &mut Vec<SemanticDlpEntity>,
+    ) {
+        let has_patient_context = lower.contains("patient")
+            || lower.contains("subject")
+            || lower.contains("doctor")
+            || lower.contains("dr.");
         if has_patient_context {
             let gliner = GlinerSpanNerEngine::new();
             for m in gliner.extract_spans(payload) {
@@ -1112,7 +1136,13 @@ impl SemanticDlpEngine {
     }
 
     fn detect_secret_keys(&self, payload: &str, matches: &mut Vec<SemanticDlpEntity>) {
-        let targets = ["BEGIN PRIVATE KEY", "BEGIN RSA PRIVATE KEY", "sk_live_", "AKIA", "ghp_"];
+        let targets = [
+            "BEGIN PRIVATE KEY",
+            "BEGIN RSA PRIVATE KEY",
+            "sk_live_",
+            "AKIA",
+            "ghp_",
+        ];
         for needle in targets {
             if let Some(pos) = payload.find(needle) {
                 matches.push(SemanticDlpEntity {
@@ -1128,9 +1158,18 @@ impl SemanticDlpEngine {
         }
     }
 
-    fn detect_unclassified_sensitive(&self, payload: &str, lower: &str, matches: &mut Vec<SemanticDlpEntity>) {
+    fn detect_unclassified_sensitive(
+        &self,
+        payload: &str,
+        lower: &str,
+        matches: &mut Vec<SemanticDlpEntity>,
+    ) {
         if matches.is_empty() {
-            let keywords = ["top secret", "strictly confidential", "proprietary information"];
+            let keywords = [
+                "top secret",
+                "strictly confidential",
+                "proprietary information",
+            ];
             for kw in keywords {
                 if let Some(pos) = lower.find(kw) {
                     matches.push(SemanticDlpEntity {
@@ -1220,14 +1259,16 @@ mod tests {
         let engine = SemanticDlpEngine::new();
 
         // >= $1M -> CrownJewel / Quarantine
-        let v1 = engine.evaluate_verdict_fail_closed("The acquisition deal value is $15M for TargetCorp");
+        let v1 = engine
+            .evaluate_verdict_fail_closed("The acquisition deal value is $15M for TargetCorp");
         assert!(v1.is_deny());
         let e1 = v1.entities();
         assert_eq!(e1[0].classification, ClassificationLattice::CrownJewel);
         assert_eq!(e1[0].policy, PolicyLattice::Quarantine);
 
         // < $1M -> Confidential / Block
-        let v2 = engine.evaluate_verdict_fail_closed("The acquisition deal value is $500K for SmallCo");
+        let v2 =
+            engine.evaluate_verdict_fail_closed("The acquisition deal value is $500K for SmallCo");
         assert!(v2.is_restricted());
         let e2 = v2.entities();
         assert_eq!(e2[0].classification, ClassificationLattice::Confidential);

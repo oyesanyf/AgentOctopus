@@ -23,15 +23,15 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
 
-use crate::core::circuit_breaker::KillSwitch;
-use crate::core::types::{ArmRole, OctopusSecurityError};
-use crate::security::breakouts::ZeroMutualInformationProjector;
 use super::mandate_attenuation::validate_mesh_uri;
 use super::oidc_actor_issuer::OctopusOidcActorIssuer;
 use super::serving_node::{
     compute_node_response_proof, compute_pep_channel_proof, SignedEpochRevocationSignal,
     HEADER_NODE_PROOF, HEADER_PEP_CHANNEL_PROOF, HEADER_PEP_NONCE, HEADER_PEP_TIMESTAMP,
 };
+use crate::core::circuit_breaker::KillSwitch;
+use crate::core::types::{ArmRole, OctopusSecurityError};
+use crate::security::breakouts::ZeroMutualInformationProjector;
 use tokio_util::sync::CancellationToken;
 
 /// Tolerance window in seconds: if remaining lifetime is <= this buffer, refresh token proactively.
@@ -376,26 +376,44 @@ impl SyncHttpWireClient {
         headers: &[(String, String)],
         body: &[u8],
     ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), MeshCallError> {
-        let parsed = Url::parse(target_url)
-            .map_err(|e| MeshCallError::NetworkError(format!("Malformed URL '{}': {}", target_url, e)))?;
+        let parsed = Url::parse(target_url).map_err(|e| {
+            MeshCallError::NetworkError(format!("Malformed URL '{}': {}", target_url, e))
+        })?;
 
         let host = parsed.host_str().unwrap_or("127.0.0.1");
         let port = parsed.port_or_known_default().unwrap_or(80);
-        let path = if parsed.path().is_empty() { "/" } else { parsed.path() };
-        let query = parsed.query().map(|q| format!("?{}", q)).unwrap_or_default();
+        let path = if parsed.path().is_empty() {
+            "/"
+        } else {
+            parsed.path()
+        };
+        let query = parsed
+            .query()
+            .map(|q| format!("?{}", q))
+            .unwrap_or_default();
         let request_target = format!("{}{}", path, query);
 
         let addrs: Vec<SocketAddr> = format!("{}:{}", host, port)
             .to_socket_addrs()
-            .map_err(|e| MeshCallError::NetworkError(format!("DNS resolution failed for {}:{}: {}", host, port, e)))?
+            .map_err(|e| {
+                MeshCallError::NetworkError(format!(
+                    "DNS resolution failed for {}:{}: {}",
+                    host, port, e
+                ))
+            })?
             .collect();
 
         if addrs.is_empty() {
-            return Err(MeshCallError::NetworkError(format!("No resolved addresses for {}:{}", host, port)));
+            return Err(MeshCallError::NetworkError(format!(
+                "No resolved addresses for {}:{}",
+                host, port
+            )));
         }
 
-        let mut stream = TcpStream::connect_timeout(&addrs[0], self.connect_timeout)
-            .map_err(|e| MeshCallError::NetworkError(format!("TCP connect to {} failed: {}", addrs[0], e)))?;
+        let mut stream =
+            TcpStream::connect_timeout(&addrs[0], self.connect_timeout).map_err(|e| {
+                MeshCallError::NetworkError(format!("TCP connect to {} failed: {}", addrs[0], e))
+            })?;
 
         stream
             .set_read_timeout(Some(self.read_timeout))
@@ -417,7 +435,10 @@ impl SyncHttpWireClient {
         } else {
             format!(
                 "{} {} HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
-                method, request_target, host_hdr, body.len()
+                method,
+                request_target,
+                host_hdr,
+                body.len()
             )
         };
 
@@ -455,10 +476,13 @@ impl SyncHttpWireClient {
                 .windows(2)
                 .position(|w| w == b"\r\n")
                 .ok_or_else(|| {
-                    MeshCallError::NetworkError("Malformed chunked body: missing CRLF after chunk size".into())
+                    MeshCallError::NetworkError(
+                        "Malformed chunked body: missing CRLF after chunk size".into(),
+                    )
                 })?;
-            let size_line = std::str::from_utf8(&raw_body[idx..idx + line_end])
-                .map_err(|e| MeshCallError::NetworkError(format!("Invalid chunk size UTF-8: {e}")))?;
+            let size_line = std::str::from_utf8(&raw_body[idx..idx + line_end]).map_err(|e| {
+                MeshCallError::NetworkError(format!("Invalid chunk size UTF-8: {e}"))
+            })?;
             let hex_part = size_line.split(';').next().unwrap_or("").trim();
             let chunk_size = usize::from_str_radix(hex_part, 16).map_err(|e| {
                 MeshCallError::NetworkError(format!("Invalid hex chunk size '{}': {}", hex_part, e))
@@ -482,11 +506,17 @@ impl SyncHttpWireClient {
     }
 
     /// Parses a raw HTTP/1.1 response buffer into status code, headers, and body.
-    pub fn parse_http_response(raw: &[u8]) -> Result<(u16, Vec<(String, String)>, Vec<u8>), MeshCallError> {
+    pub fn parse_http_response(
+        raw: &[u8],
+    ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), MeshCallError> {
         let header_end = raw
             .windows(4)
             .position(|w| w == b"\r\n\r\n")
-            .ok_or_else(|| MeshCallError::NetworkError("Malformed HTTP response: missing header terminator".into()))?;
+            .ok_or_else(|| {
+                MeshCallError::NetworkError(
+                    "Malformed HTTP response: missing header terminator".into(),
+                )
+            })?;
 
         let header_bytes = &raw[..header_end];
         let body_bytes = &raw[header_end + 4..];
@@ -501,12 +531,18 @@ impl SyncHttpWireClient {
 
         let parts: Vec<&str> = status_line.split_whitespace().collect();
         if parts.len() < 2 {
-            return Err(MeshCallError::NetworkError(format!("Invalid HTTP status line: '{}'", status_line)));
+            return Err(MeshCallError::NetworkError(format!(
+                "Invalid HTTP status line: '{}'",
+                status_line
+            )));
         }
 
-        let status_code: u16 = parts[1]
-            .parse()
-            .map_err(|e| MeshCallError::NetworkError(format!("Failed to parse HTTP status '{}': {}", parts[1], e)))?;
+        let status_code: u16 = parts[1].parse().map_err(|e| {
+            MeshCallError::NetworkError(format!(
+                "Failed to parse HTTP status '{}': {}",
+                parts[1], e
+            ))
+        })?;
 
         let mut headers = Vec::new();
         let mut is_chunked = false;
@@ -560,13 +596,21 @@ impl AsyncHttpWireClient {
     ) -> Result<(u16, Vec<(String, String)>, Vec<u8>), MeshCallError> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let parsed = Url::parse(target_url)
-            .map_err(|e| MeshCallError::NetworkError(format!("Malformed URL '{}': {}", target_url, e)))?;
+        let parsed = Url::parse(target_url).map_err(|e| {
+            MeshCallError::NetworkError(format!("Malformed URL '{}': {}", target_url, e))
+        })?;
 
         let host = parsed.host_str().unwrap_or("127.0.0.1");
         let port = parsed.port_or_known_default().unwrap_or(80);
-        let path = if parsed.path().is_empty() { "/" } else { parsed.path() };
-        let query = parsed.query().map(|q| format!("?{}", q)).unwrap_or_default();
+        let path = if parsed.path().is_empty() {
+            "/"
+        } else {
+            parsed.path()
+        };
+        let query = parsed
+            .query()
+            .map(|q| format!("?{}", q))
+            .unwrap_or_default();
         let request_target = format!("{}{}", path, query);
 
         let mut stream = tokio::time::timeout(
@@ -574,7 +618,9 @@ impl AsyncHttpWireClient {
             tokio::net::TcpStream::connect(format!("{}:{}", host, port)),
         )
         .await
-        .map_err(|_| MeshCallError::NetworkError(format!("Async connect timeout to {}:{}", host, port)))?
+        .map_err(|_| {
+            MeshCallError::NetworkError(format!("Async connect timeout to {}:{}", host, port))
+        })?
         .map_err(|e| MeshCallError::NetworkError(format!("Async connect failed: {}", e)))?;
 
         let host_hdr = if port == 80 {
@@ -590,7 +636,10 @@ impl AsyncHttpWireClient {
         } else {
             format!(
                 "{} {} HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
-                method, request_target, host_hdr, body.len()
+                method,
+                request_target,
+                host_hdr,
+                body.len()
             )
         };
 
@@ -599,15 +648,13 @@ impl AsyncHttpWireClient {
         }
         wire_req.push_str("\r\n");
 
-        stream
-            .write_all(wire_req.as_bytes())
-            .await
-            .map_err(|e| MeshCallError::NetworkError(format!("Async write headers error: {}", e)))?;
+        stream.write_all(wire_req.as_bytes()).await.map_err(|e| {
+            MeshCallError::NetworkError(format!("Async write headers error: {}", e))
+        })?;
         if !body.is_empty() {
-            stream
-                .write_all(body)
-                .await
-                .map_err(|e| MeshCallError::NetworkError(format!("Async write body error: {}", e)))?;
+            stream.write_all(body).await.map_err(|e| {
+                MeshCallError::NetworkError(format!("Async write body error: {}", e))
+            })?;
         }
         stream
             .flush()
@@ -654,7 +701,9 @@ impl AgentMeshPepBridge {
     pub fn new(issuer: Arc<OctopusOidcActorIssuer>, default_mesh_node_url: String) -> Self {
         Self {
             issuer,
-            token_vault: Arc::new(RwLock::new(BoundedTokenVault::new(MAX_CACHED_TOKENS_CAPACITY))),
+            token_vault: Arc::new(RwLock::new(BoundedTokenVault::new(
+                MAX_CACHED_TOKENS_CAPACITY,
+            ))),
             killswitch_registry: Arc::new(RwLock::new(HashMap::new())),
             global_killswitch: Arc::new(RwLock::new(None)),
             mesh_node_url: Arc::new(RwLock::new(default_mesh_node_url)),
@@ -663,7 +712,9 @@ impl AgentMeshPepBridge {
             channel_secret: Arc::new(RwLock::new(None)),
             peer_directory_cache: Arc::new(RwLock::new(HashMap::new())),
             default_provider_peer_id: Arc::new(RwLock::new(
-                std::env::var("AGENTMESH_PROVIDER_PEER_ID").ok().filter(|s| !s.trim().is_empty()),
+                std::env::var("AGENTMESH_PROVIDER_PEER_ID")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty()),
             )),
             total_token_exchanges: Arc::new(AtomicU64::new(0)),
             total_cache_hits: Arc::new(AtomicU64::new(0)),
@@ -807,7 +858,8 @@ impl AgentMeshPepBridge {
         let elapsed = t0.elapsed();
 
         // Update telemetry
-        self.total_killswitch_evictions.fetch_add(1, Ordering::Relaxed);
+        self.total_killswitch_evictions
+            .fetch_add(1, Ordering::Relaxed);
         self.last_eviction_duration_us
             .store(elapsed.as_micros() as u64, Ordering::Relaxed);
 
@@ -844,7 +896,10 @@ impl AgentMeshPepBridge {
     /// Dispatches an RFC 7009 OAuth 2.0 Token Revocation (`POST /oauth/revoke`) with
     /// `Content-Type: application/x-www-form-urlencoded` (`token=<biscuit>`) to an `agentmesh-node`.
     pub fn revoke_token_rfc7009_sync(&self, access_token: &str) -> Result<(), MeshCallError> {
-        let endpoint = format!("{}/oauth/revoke", self.get_mesh_node_url().trim_end_matches('/'));
+        let endpoint = format!(
+            "{}/oauth/revoke",
+            self.get_mesh_node_url().trim_end_matches('/')
+        );
         let form_body = format!("token={}", url_encode_form_component(access_token)).into_bytes();
         let headers = vec![
             (
@@ -869,8 +924,14 @@ impl AgentMeshPepBridge {
     }
 
     /// Asynchronous counterpart for RFC 7009 Token Revocation (`POST /oauth/revoke`).
-    pub async fn revoke_token_rfc7009_async(&self, access_token: &str) -> Result<(), MeshCallError> {
-        let endpoint = format!("{}/oauth/revoke", self.get_mesh_node_url().trim_end_matches('/'));
+    pub async fn revoke_token_rfc7009_async(
+        &self,
+        access_token: &str,
+    ) -> Result<(), MeshCallError> {
+        let endpoint = format!(
+            "{}/oauth/revoke",
+            self.get_mesh_node_url().trim_end_matches('/')
+        );
         let form_body = format!("token={}", url_encode_form_component(access_token)).into_bytes();
         let headers = vec![
             (
@@ -901,21 +962,26 @@ impl AgentMeshPepBridge {
         signal: SignedEpochRevocationSignal,
     ) -> Result<(), MeshCallError> {
         let endpoint = format!("{}/mesh/revoke", node_url.trim_end_matches('/'));
-        let body = serde_json::to_vec(&signal)
-            .map_err(|e| MeshCallError::Internal(format!("Failed to serialize revocation signal: {e}")))?;
+        let body = serde_json::to_vec(&signal).map_err(|e| {
+            MeshCallError::Internal(format!("Failed to serialize revocation signal: {e}"))
+        })?;
 
         let headers = vec![
             ("Content-Type".to_string(), "application/json".to_string()),
             ("Accept".to_string(), "application/json".to_string()),
         ];
 
-        let (status, _resp_headers, resp_bytes) = AsyncHttpWireClient::post(&endpoint, &headers, &body).await?;
+        let (status, _resp_headers, resp_bytes) =
+            AsyncHttpWireClient::post(&endpoint, &headers, &body).await?;
         if status == 200 {
             Ok(())
         } else {
             Err(MeshCallError::UpstreamCallFailed {
                 status,
-                message: format!("Revocation dispatch failed: {}", String::from_utf8_lossy(&resp_bytes)),
+                message: format!(
+                    "Revocation dispatch failed: {}",
+                    String::from_utf8_lossy(&resp_bytes)
+                ),
             })
         }
     }
@@ -977,7 +1043,10 @@ impl AgentMeshPepBridge {
         ));
 
         if !has_user_agent {
-            sanitized.push(("User-Agent".to_string(), "AgentOctopus-HostPep/1.0".to_string()));
+            sanitized.push((
+                "User-Agent".to_string(),
+                "AgentOctopus-HostPep/1.0".to_string(),
+            ));
         }
         if !has_content_type {
             sanitized.push(("Content-Type".to_string(), "application/json".to_string()));
@@ -1048,7 +1117,10 @@ impl AgentMeshPepBridge {
     }
 
     /// Resolves logical mesh URIs into the local HTTP endpoint on the mesh node without a peer prefix.
-    pub fn resolve_mesh_endpoint(node_url: &str, logical_uri: &str) -> Result<String, MeshCallError> {
+    pub fn resolve_mesh_endpoint(
+        node_url: &str,
+        logical_uri: &str,
+    ) -> Result<String, MeshCallError> {
         Self::resolve_mesh_endpoint_with_peer(node_url, logical_uri, None)
     }
 
@@ -1254,7 +1326,10 @@ impl AgentMeshPepBridge {
 
         let req_body = token_req.to_form_urlencoded();
 
-        let token_endpoint = format!("{}/oauth/token", self.get_mesh_node_url().trim_end_matches('/'));
+        let token_endpoint = format!(
+            "{}/oauth/token",
+            self.get_mesh_node_url().trim_end_matches('/')
+        );
         let headers = vec![
             (
                 "Content-Type".to_string(),
@@ -1264,13 +1339,17 @@ impl AgentMeshPepBridge {
         ];
 
         // 5. Transmit token exchange request to STS endpoint
-        let (status, _resp_headers, resp_bytes) = self.wire_client.post(&token_endpoint, &headers, &req_body)?;
+        let (status, _resp_headers, resp_bytes) =
+            self.wire_client
+                .post(&token_endpoint, &headers, &req_body)?;
 
         if status == 200 {
-            let token_resp: Rfc8693TokenResponse = serde_json::from_slice(&resp_bytes)
-                .map_err(|e| MeshCallError::TokenExchangeFailed {
-                    status,
-                    message: format!("Malformed RFC 8693 token response: {}", e),
+            let token_resp: Rfc8693TokenResponse =
+                serde_json::from_slice(&resp_bytes).map_err(|e| {
+                    MeshCallError::TokenExchangeFailed {
+                        status,
+                        message: format!("Malformed RFC 8693 token response: {}", e),
+                    }
                 })?;
 
             let cached = CachedMeshToken {
@@ -1352,7 +1431,10 @@ impl AgentMeshPepBridge {
 
         let req_body = token_req.to_form_urlencoded();
 
-        let token_endpoint = format!("{}/oauth/token", self.get_mesh_node_url().trim_end_matches('/'));
+        let token_endpoint = format!(
+            "{}/oauth/token",
+            self.get_mesh_node_url().trim_end_matches('/')
+        );
         let headers = vec![
             (
                 "Content-Type".to_string(),
@@ -1361,13 +1443,16 @@ impl AgentMeshPepBridge {
             ("Accept".to_string(), "application/json".to_string()),
         ];
 
-        let (status, _resp_headers, resp_bytes) = AsyncHttpWireClient::post(&token_endpoint, &headers, &req_body).await?;
+        let (status, _resp_headers, resp_bytes) =
+            AsyncHttpWireClient::post(&token_endpoint, &headers, &req_body).await?;
 
         if status == 200 {
-            let token_resp: Rfc8693TokenResponse = serde_json::from_slice(&resp_bytes)
-                .map_err(|e| MeshCallError::TokenExchangeFailed {
-                    status,
-                    message: format!("Malformed RFC 8693 token response: {}", e),
+            let token_resp: Rfc8693TokenResponse =
+                serde_json::from_slice(&resp_bytes).map_err(|e| {
+                    MeshCallError::TokenExchangeFailed {
+                        status,
+                        message: format!("Malformed RFC 8693 token response: {}", e),
+                    }
                 })?;
 
             let cached = CachedMeshToken {
@@ -1434,8 +1519,10 @@ impl AgentMeshPepBridge {
             seal: if seal { Some(true) } else { None },
         };
 
-        let token_endpoint =
-            format!("{}/oauth/token", self.get_mesh_node_url().trim_end_matches('/'));
+        let token_endpoint = format!(
+            "{}/oauth/token",
+            self.get_mesh_node_url().trim_end_matches('/')
+        );
         let headers = vec![
             (
                 "Content-Type".to_string(),
@@ -1502,8 +1589,10 @@ impl AgentMeshPepBridge {
             seal: if seal { Some(true) } else { None },
         };
 
-        let token_endpoint =
-            format!("{}/oauth/token", self.get_mesh_node_url().trim_end_matches('/'));
+        let token_endpoint = format!(
+            "{}/oauth/token",
+            self.get_mesh_node_url().trim_end_matches('/')
+        );
         let headers = vec![
             (
                 "Content-Type".to_string(),
@@ -1511,12 +1600,9 @@ impl AgentMeshPepBridge {
             ),
             ("Accept".to_string(), "application/json".to_string()),
         ];
-        let (status, _resp_headers, resp_bytes) = AsyncHttpWireClient::post(
-            &token_endpoint,
-            &headers,
-            &token_req.to_form_urlencoded(),
-        )
-        .await?;
+        let (status, _resp_headers, resp_bytes) =
+            AsyncHttpWireClient::post(&token_endpoint, &headers, &token_req.to_form_urlencoded())
+                .await?;
 
         if status == 200 {
             let token_resp: Rfc8693TokenResponse =
@@ -1644,9 +1730,9 @@ impl AgentMeshPepBridge {
                 {
                     let peer_endpoint =
                         Self::resolve_mesh_endpoint_with_peer(&base_url, uri, Some(&peer_id))?;
-                    let retry = self
-                        .wire_client
-                        .post(&peer_endpoint, &sanitized_headers, req_bytes)?;
+                    let retry =
+                        self.wire_client
+                            .post(&peer_endpoint, &sanitized_headers, req_bytes)?;
                     status = retry.0;
                     resp_headers = retry.1;
                     resp_bytes = retry.2;
@@ -1682,8 +1768,7 @@ impl AgentMeshPepBridge {
             return Err(MeshCallError::KillSwitchTripped(arm_id.to_string()));
         }
 
-        validate_mesh_uri(uri)
-            .map_err(|e| MeshCallError::InvalidUri(format!("{}: {}", uri, e)))?;
+        validate_mesh_uri(uri).map_err(|e| MeshCallError::InvalidUri(format!("{}: {}", uri, e)))?;
 
         let token = self.get_or_exchange_token_sync(arm_id, epoch, role, uri)?;
         self.dispatch_mesh_call_with_token_sync(arm_id, uri, &token, &[], req_bytes)
@@ -1703,12 +1788,7 @@ impl AgentMeshPepBridge {
         }
 
         let base_url = self.get_mesh_node_url();
-        let has_channel_secret = self
-            .channel_secret
-            .read()
-            .ok()
-            .and_then(|g| *g)
-            .is_some();
+        let has_channel_secret = self.channel_secret.read().ok().and_then(|g| *g).is_some();
         let initial_peer = if has_channel_secret {
             None
         } else {
@@ -1717,7 +1797,9 @@ impl AgentMeshPepBridge {
         };
         let endpoint_url =
             Self::resolve_mesh_endpoint_with_peer(&base_url, uri, initial_peer.as_deref())?;
-        let token = self.get_or_exchange_token_async(arm_id, epoch, role, uri).await?;
+        let token = self
+            .get_or_exchange_token_async(arm_id, epoch, role, uri)
+            .await?;
 
         let mut default_headers = vec![
             ("Content-Type".to_string(), "application/json".to_string()),
@@ -1735,16 +1817,11 @@ impl AgentMeshPepBridge {
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
-                let parsed_url = Url::parse(&endpoint_url).unwrap_or_else(|_| Url::parse("http://127.0.0.1/").unwrap());
+                let parsed_url = Url::parse(&endpoint_url)
+                    .unwrap_or_else(|_| Url::parse("http://127.0.0.1/").unwrap());
                 let path = parsed_url.path();
                 let proof = compute_pep_channel_proof(
-                    &secret,
-                    "POST",
-                    path,
-                    now_ms,
-                    &nonce,
-                    req_bytes,
-                    None,
+                    &secret, "POST", path, now_ms, &nonce, req_bytes, None,
                 );
                 default_headers.push((HEADER_PEP_CHANNEL_PROOF.to_string(), proof));
                 default_headers.push((HEADER_PEP_NONCE.to_string(), nonce.clone()));
@@ -1763,7 +1840,9 @@ impl AgentMeshPepBridge {
         let cancel_token = CancellationToken::new();
         {
             let mut map = self.active_cancellations.write().await;
-            map.entry(arm_id.to_string()).or_default().push(cancel_token.clone());
+            map.entry(arm_id.to_string())
+                .or_default()
+                .push(cancel_token.clone());
         }
 
         let cancel_child = cancel_token.clone();
@@ -1813,11 +1892,13 @@ impl AgentMeshPepBridge {
                 .map(|(_, v)| v.as_str());
             match node_proof {
                 Some(proof) => {
-                    let expected_proof = compute_node_response_proof(&secret, status, &nonce, &resp_bytes);
+                    let expected_proof =
+                        compute_node_response_proof(&secret, status, &nonce, &resp_bytes);
                     if !crate::security::constant_time_eq_hex(proof, &expected_proof) {
                         return Err(MeshCallError::UpstreamCallFailed {
                             status: 403,
-                            message: "Node mutual authentication response proof mismatch".to_string(),
+                            message: "Node mutual authentication response proof mismatch"
+                                .to_string(),
                         });
                     }
                 }
@@ -1834,7 +1915,9 @@ impl AgentMeshPepBridge {
             let unwrapped = Self::unwrap_sse_json_if_needed(&resp_headers, &resp_bytes);
             Ok(Self::sanitize_upstream_payload(&unwrapped))
         } else if status == 403 {
-            Err(MeshCallError::AccessDenied(String::from_utf8_lossy(&resp_bytes).to_string()))
+            Err(MeshCallError::AccessDenied(
+                String::from_utf8_lossy(&resp_bytes).to_string(),
+            ))
         } else {
             Err(MeshCallError::UpstreamCallFailed {
                 status,
@@ -1850,7 +1933,11 @@ impl AgentMeshPepBridge {
     /// Returns active PEP vault telemetry for WebUI dashboard (Tab 17) and audit.
     pub fn telemetry(&self) -> PepVaultTelemetry {
         let cached_count = self.token_vault.read().map(|v| v.len()).unwrap_or(0);
-        let killswitch_count = self.killswitch_registry.read().map(|k| k.len()).unwrap_or(0);
+        let killswitch_count = self
+            .killswitch_registry
+            .read()
+            .map(|k| k.len())
+            .unwrap_or(0);
 
         PepVaultTelemetry {
             cached_tokens_count: cached_count,
@@ -1874,22 +1961,42 @@ mod tests {
     #[test]
     fn test_header_hygiene_stripping_and_injection() {
         let dirty_headers = vec![
-            ("Authorization".to_string(), "Bearer stolen_token_12345".to_string()),
-            ("authorization".to_string(), "Bearer lower_case_attempt".to_string()),
-            ("Cookie".to_string(), "session_id=abcd1234secret".to_string()),
+            (
+                "Authorization".to_string(),
+                "Bearer stolen_token_12345".to_string(),
+            ),
+            (
+                "authorization".to_string(),
+                "Bearer lower_case_attempt".to_string(),
+            ),
+            (
+                "Cookie".to_string(),
+                "session_id=abcd1234secret".to_string(),
+            ),
             ("cookie".to_string(), "tracked_cookie=xyz".to_string()),
-            ("X-Mesh-Custom-Actor".to_string(), "spoofed_admin".to_string()),
+            (
+                "X-Mesh-Custom-Actor".to_string(),
+                "spoofed_admin".to_string(),
+            ),
             ("x-mesh-forwarded-for".to_string(), "10.0.0.1".to_string()),
             ("Content-Type".to_string(), "application/json".to_string()),
             ("X-Custom-Tracing".to_string(), "trace_99".to_string()),
         ];
 
-        let sanitized = AgentMeshPepBridge::sanitize_and_inject_headers(&dirty_headers, "valid_mesh_token_xyz");
+        let sanitized =
+            AgentMeshPepBridge::sanitize_and_inject_headers(&dirty_headers, "valid_mesh_token_xyz");
 
         // 1. Verify Authorization, Cookie, and X-Mesh-* are completely removed
-        assert!(!sanitized.iter().any(|(k, _)| k.eq_ignore_ascii_case("authorization")));
-        assert!(!sanitized.iter().any(|(k, _)| k.eq_ignore_ascii_case("cookie")));
-        assert!(!sanitized.iter().any(|(k, _)| k.to_ascii_lowercase().starts_with("x-mesh-") && k != "X-Mesh-Authentication"));
+        assert!(!sanitized
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("authorization")));
+        assert!(!sanitized
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("cookie")));
+        assert!(!sanitized
+            .iter()
+            .any(|(k, _)| k.to_ascii_lowercase().starts_with("x-mesh-")
+                && k != "X-Mesh-Authentication"));
 
         // 2. Verify X-Mesh-Authentication is injected
         let auth_hdr = sanitized.iter().find(|(k, _)| k == "X-Mesh-Authentication");
@@ -1897,8 +2004,12 @@ mod tests {
         assert_eq!(auth_hdr.unwrap().1, "Bearer valid_mesh_token_xyz");
 
         // 3. Verify non-sensitive headers are preserved
-        assert!(sanitized.iter().any(|(k, v)| k == "Content-Type" && v == "application/json"));
-        assert!(sanitized.iter().any(|(k, v)| k == "X-Custom-Tracing" && v == "trace_99"));
+        assert!(sanitized
+            .iter()
+            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        assert!(sanitized
+            .iter()
+            .any(|(k, v)| k == "X-Custom-Tracing" && v == "trace_99"));
     }
 
     #[test]
@@ -1937,7 +2048,8 @@ mod tests {
             "http://127.0.0.1:8080/v1/chat/completions"
         );
         assert_eq!(
-            AgentMeshPepBridge::resolve_mesh_endpoint(base_url, "egress://api.service.com").unwrap(),
+            AgentMeshPepBridge::resolve_mesh_endpoint(base_url, "egress://api.service.com")
+                .unwrap(),
             "http://127.0.0.1:8080/egress/api.service.com"
         );
 
@@ -1978,7 +2090,8 @@ mod tests {
             seal: Some(true),
         };
         let encoded = String::from_utf8(req.to_form_urlencoded()).unwrap();
-        assert!(encoded.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange"));
+        assert!(encoded
+            .contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange"));
         assert!(encoded.contains("audience=agentmesh"));
         assert!(encoded.contains("scope=mcp%3A%2F%2Fcalc"));
         assert!(encoded.contains("seal=true"));
@@ -1986,7 +2099,9 @@ mod tests {
 
     #[test]
     fn test_sub_millisecond_killswitch_eviction_benchmark() {
-        let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral("https://agentoctopus.local"));
+        let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral(
+            "https://agentoctopus.local",
+        ));
         let bridge = AgentMeshPepBridge::new(issuer, "http://127.0.0.1:8080".to_string());
 
         let arm_calc = "arm_calc";
@@ -2067,7 +2182,13 @@ mod tests {
         assert_eq!(vault.len(), 1);
 
         // Subsequent call for arm_calc fails closed immediately
-        let res = bridge.dispatch_mesh_call_sync(arm_calc, 2, &ArmRole::UntrustedDocIngest, "mcp://calc", b"{}");
+        let res = bridge.dispatch_mesh_call_sync(
+            arm_calc,
+            2,
+            &ArmRole::UntrustedDocIngest,
+            "mcp://calc",
+            b"{}",
+        );
         assert!(matches!(res, Err(MeshCallError::KillSwitchTripped(_))));
     }
 
@@ -2075,7 +2196,8 @@ mod tests {
     fn test_zero_mutual_information_sanitization() {
         let dirty_payload = "{\"zebra\": 1, \"alpha\": 2, \"key\": \"ghp_99887766554433221100aabbccddeeff\u{200B}\u{FEFF}\"}";
 
-        let sanitized_bytes = AgentMeshPepBridge::sanitize_upstream_payload(dirty_payload.as_bytes());
+        let sanitized_bytes =
+            AgentMeshPepBridge::sanitize_upstream_payload(dirty_payload.as_bytes());
         let sanitized_str = String::from_utf8(sanitized_bytes).unwrap();
 
         // Zero-width characters must be completely stripped
@@ -2143,7 +2265,9 @@ mod tests {
             }
         });
 
-        let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral("https://agentoctopus.local"));
+        let issuer = Arc::new(OctopusOidcActorIssuer::new_ephemeral(
+            "https://agentoctopus.local",
+        ));
         let bridge = AgentMeshPepBridge::new(issuer, mock_url);
 
         let token = bridge

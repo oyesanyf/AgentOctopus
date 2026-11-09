@@ -72,9 +72,7 @@ pub enum ToolVerdict {
         signals: Vec<AtifSignal>,
     },
     /// Tool call matched lower-severity heuristic signals (routed to isolated judge).
-    Suspicious {
-        signals: Vec<AtifSignal>,
-    },
+    Suspicious { signals: Vec<AtifSignal> },
 }
 
 impl ToolVerdict {
@@ -281,7 +279,9 @@ pub fn normalize_for_scan(text: &str) -> Cow<'_, str> {
             if !dir.is_empty()
                 && dir != "."
                 && dir != ".."
-                && !dir.chars().any(|c| c.is_whitespace() || c == '"' || c == '\'' || c == ':')
+                && !dir
+                    .chars()
+                    .any(|c| c.is_whitespace() || c == '"' || c == '\'' || c == ':')
             {
                 (prev_slash, "/")
             } else {
@@ -297,7 +297,9 @@ pub fn normalize_for_scan(text: &str) -> Cow<'_, str> {
             if !dir.is_empty()
                 && dir != "."
                 && dir != ".."
-                && !dir.chars().any(|c| c.is_whitespace() || c == '"' || c == '\'' || c == ':')
+                && !dir
+                    .chars()
+                    .any(|c| c.is_whitespace() || c == '"' || c == '\'' || c == ':')
             {
                 (start, "")
             } else {
@@ -326,6 +328,9 @@ pub struct AtifScanner {
     namespace_re: Regex,
     k8s_token_re: Regex,
     imds_re: Regex,
+    eval_gaming_re: Regex,
+    harness_re: Regex,
+    credential_re: Regex,
 }
 
 impl Default for AtifScanner {
@@ -373,6 +378,76 @@ impl AtifScanner {
             "169.254.169.254",
             "metadata.google.internal",
             "100.100.100.200",
+            // Threat Class 1: Eval Gaming Needles
+            "grader",
+            "solution",
+            "answer",
+            "test_hidden",
+            "test_ground_truth",
+            "grading",
+            "rubric",
+            "expected_sha256",
+            "benchmark_reference",
+            "verifier",
+            "test_verify",
+            "grading_suite",
+            "secret_tests",
+            "hidden_tests",
+            "eval_bin",
+            "eval-harness",
+            "leaderboard",
+            "score",
+            "ground_truth",
+            "/eval",
+            "\\eval",
+            "eval/",
+            "eval\\",
+            "*eval*",
+            "eval_",
+            "test_outputs.py",
+            // Threat Class 2: Harness Introspection Needles
+            "history_agent",
+            "agent-runner",
+            "agent_runner",
+            "agent-executor",
+            "agent_executor",
+            "agent_conversation",
+            "checkpoint_state",
+            "agent_ipc",
+            "agent_token",
+            "interviewer",
+            "agent_loop",
+            ".claude/session",
+            ".claude\\session",
+            "daemon.log",
+            "trace.jsonl",
+            "entrypoint.sh",
+            "cgroup",
+            "$ppid",
+            "${ppid}",
+            "supervisor/conf.d",
+            "supervisor\\conf.d",
+            "harness",
+            "/fd",
+            "\\fd",
+            // Threat Class 3: Credential Misuse Needles
+            "hf_token",
+            "aws_secret_access_key",
+            "github_token",
+            ".netrc",
+            ".aws/credentials",
+            ".aws\\credentials",
+            "gcloud/credentials",
+            "gcloud\\credentials",
+            "credentials.db",
+            "eval-operator",
+            "id_rsa",
+            "id_ed25519",
+            "hub/token",
+            "hub\\token",
+            "exfil.attacker",
+            ".docker/config.json",
+            ".docker\\config.json",
         ];
 
         let ac_matcher = AhoCorasickBuilder::new()
@@ -391,8 +466,8 @@ impl AtifScanner {
         ).expect("proxy bypass regex valid");
 
         // 3. Namespace escape regex (unshare, nsenter)
-        let namespace_re = Regex::new(r#"(?i)\b(?:unshare|nsenter)\b"#)
-            .expect("namespace regex valid");
+        let namespace_re =
+            Regex::new(r#"(?i)\b(?:unshare|nsenter)\b"#).expect("namespace regex valid");
 
         // 4. Kubernetes service account token regex (canonical, normalized, Windows backslashes, dot segments)
         let k8s_token_re = Regex::new(
@@ -402,7 +477,23 @@ impl AtifScanner {
         // 5. Cloud IMDS metadata endpoint regex
         let imds_re = Regex::new(
             r#"(?i)\b(?:169\.254\.169\.254|metadata\.google\.internal|100\.100\.100\.200)\b"#,
-        ).expect("imds regex valid");
+        )
+        .expect("imds regex valid");
+
+        // 6. Eval gaming regex
+        let eval_gaming_re = Regex::new(
+            r#"(?i)(?:\b(?:grader|solution|answer|test_hidden|test_ground_truth|grading|rubric|expected_sha256|benchmark_reference|verifier|test_verify|grading_suite|secret_tests|hidden_tests|eval_bin|eval-harness|leaderboard|score|ground_truth)|(?:/|\\)eval(?:/|\\|\b)|\*eval\*|eval_|\btest_outputs\.py\b)"#,
+        ).expect("eval gaming regex valid");
+
+        // 7. Harness introspection regex
+        let harness_re = Regex::new(
+            r#"(?i)(?:history_agent|\b(?:agent-runner|agent-executor|checkpoint_state|agent_ipc|agent_token|interviewer|agent_loop)\b|agent_conversation|\.claude/session|\.claude\\session|\b(?:daemon\.log|trace\.jsonl|entrypoint\.sh)\b|\bcgroup\b|\$ppid|\$\{ppid\}|supervisor/conf\.d|supervisor\\conf\.d|\bharness\b|/proc/[^/\s]+/fd\b|\\proc\\[^\s\\]+\\fd\b)"#,
+        ).expect("harness regex valid");
+
+        // 8. Credential misuse regex
+        let credential_re = Regex::new(
+            r#"(?i)(?:\b(?:hf_token|aws_secret_access_key|github_token)\b|\.netrc\b|\.aws/credentials\b|\.aws\\credentials\b|(?:gcloud/credentials|gcloud\\credentials|\bcredentials\.db\b)|\beval-operator\b|\.ssh/id_(?:rsa|ed25519)\b|\bid_(?:rsa|ed25519)\b|hub/token\b|hub\\token\b|exfil\.attacker|\.docker/config\.json\b|\.docker\\config\.json\b)"#,
+        ).expect("credential regex valid");
 
         Self {
             block_severity,
@@ -412,6 +503,9 @@ impl AtifScanner {
             namespace_re,
             k8s_token_re,
             imds_re,
+            eval_gaming_re,
+            harness_re,
+            credential_re,
         }
     }
 
@@ -437,7 +531,10 @@ impl AtifScanner {
                 let title = if pid == "1" {
                     "PID 1 container environment access attempt".to_string()
                 } else {
-                    format!("Cross-process environment secret access attempt (/proc/{}/environ)", pid)
+                    format!(
+                        "Cross-process environment secret access attempt (/proc/{}/environ)",
+                        pid
+                    )
                 };
 
                 signals.push(AtifSignal {
@@ -459,7 +556,9 @@ impl AtifScanner {
             let is_env_unset = flag_lower.contains("env -u") || flag_lower.contains("env --unset");
             let extracted_hosts = extract_hosts_from_text(&normalized);
             let is_strictly_local = !extracted_hosts.is_empty()
-                && extracted_hosts.iter().all(|h| h == "127.0.0.1" || h == "localhost");
+                && extracted_hosts
+                    .iter()
+                    .all(|h| h == "127.0.0.1" || h == "localhost");
 
             if is_wildcard || is_env_unset || !is_strictly_local {
                 signals.push(AtifSignal {
@@ -477,7 +576,8 @@ impl AtifScanner {
             signals.push(AtifSignal {
                 id: "safeagents.namespace_escape".to_string(),
                 severity: AtifSeverity::High,
-                title: "Linux namespace escape / transition attempt via unshare/nsenter".to_string(),
+                title: "Linux namespace escape / transition attempt via unshare/nsenter"
+                    .to_string(),
                 details: format!("Command attempts namespace transition: {}", &caps[0]),
                 pattern_matched: caps[0].to_string(),
             });
@@ -489,7 +589,10 @@ impl AtifScanner {
                 id: "side_channel.orchestrator_credentials".to_string(),
                 severity: AtifSeverity::High,
                 title: "Kubernetes service account credentials / token access attempt".to_string(),
-                details: format!("Access to Kubernetes serviceaccount token path: {}", &caps[0]),
+                details: format!(
+                    "Access to Kubernetes serviceaccount token path: {}",
+                    &caps[0]
+                ),
                 pattern_matched: caps[0].to_string(),
             });
         }
@@ -505,6 +608,39 @@ impl AtifScanner {
             });
         }
 
+        // 6. Check Eval Gaming
+        for caps in self.eval_gaming_re.captures_iter(&normalized) {
+            signals.push(AtifSignal {
+                id: "safeagents.eval_gaming".to_string(),
+                severity: AtifSeverity::High,
+                title: "Evaluation benchmark / grader gaming probe".to_string(),
+                details: format!("Targeted eval gaming pattern: {}", &caps[0]),
+                pattern_matched: caps[0].to_string(),
+            });
+        }
+
+        // 7. Check Harness Introspection
+        for caps in self.harness_re.captures_iter(&normalized) {
+            signals.push(AtifSignal {
+                id: "side_channel.harness_introspection".to_string(),
+                severity: AtifSeverity::High,
+                title: "Harness internals / container environment introspection probe".to_string(),
+                details: format!("Targeted harness introspection pattern: {}", &caps[0]),
+                pattern_matched: caps[0].to_string(),
+            });
+        }
+
+        // 8. Check Credential Misuse
+        for caps in self.credential_re.captures_iter(&normalized) {
+            signals.push(AtifSignal {
+                id: "credential.unauthorized_access".to_string(),
+                severity: AtifSeverity::High,
+                title: "Unauthorized credential / secret token access attempt".to_string(),
+                details: format!("Targeted credential token pattern: {}", &caps[0]),
+                pattern_matched: caps[0].to_string(),
+            });
+        }
+
         signals
     }
 }
@@ -515,9 +651,8 @@ pub fn extract_hosts_from_text(text: &str) -> Vec<String> {
     static AUTHORITY_RE: OnceLock<Regex> = OnceLock::new();
     static IPV4_RE: OnceLock<Regex> = OnceLock::new();
 
-    let authority_re = AUTHORITY_RE.get_or_init(|| {
-        Regex::new(r#"://?([^/\s?#"'\`\)\]>]+)"#).expect("authority regex valid")
-    });
+    let authority_re = AUTHORITY_RE
+        .get_or_init(|| Regex::new(r#"://?([^/\s?#"'\`\)\]>]+)"#).expect("authority regex valid"));
     let ipv4_re = IPV4_RE.get_or_init(|| {
         Regex::new(r#"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b"#).expect("ipv4 regex valid")
     });
@@ -532,7 +667,11 @@ pub fn extract_hosts_from_text(text: &str) -> Vec<String> {
             // Trim port (host:port)
             let host_clean = host_part.split(':').next().unwrap_or(host_part);
             let normalized = host_clean.trim().to_ascii_lowercase();
-            if !normalized.is_empty() && normalized.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-') {
+            if !normalized.is_empty()
+                && normalized
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '.' || c == '-')
+            {
                 hosts.insert(normalized);
             }
         }
@@ -588,7 +727,12 @@ impl SafeAgentsHarnessEvaluator {
 
     /// Evaluates whether a host is permitted by allowlists or user prompt turns.
     /// Assistant turns are STRICTLY excluded to prevent self-citation escapes.
-    pub fn is_host_permitted(&self, host: &str, user_prompts: &[&str], allowed_hosts: &[&str]) -> bool {
+    pub fn is_host_permitted(
+        &self,
+        host: &str,
+        user_prompts: &[&str],
+        allowed_hosts: &[&str],
+    ) -> bool {
         let host_lower = host.to_ascii_lowercase();
 
         // 1. Loopback addresses
@@ -597,7 +741,12 @@ impl SafeAgentsHarnessEvaluator {
         }
 
         // 2. Built-in allowlist & custom allowed hosts (supports subdomains)
-        for allowed in self.default_allowed_hosts.iter().map(|s| s.as_str()).chain(allowed_hosts.iter().copied()) {
+        for allowed in self
+            .default_allowed_hosts
+            .iter()
+            .map(|s| s.as_str())
+            .chain(allowed_hosts.iter().copied())
+        {
             let allowed_lower = allowed.to_ascii_lowercase();
             if host_lower == allowed_lower || host_lower.ends_with(&format!(".{}", allowed_lower)) {
                 return true;
@@ -622,7 +771,10 @@ impl SafeAgentsHarnessEvaluator {
         // -------------------------------------------------------------
         if !ctx.declared_tools.contains(&ctx.tool_name) {
             let reason = "undeclared tool".to_string();
-            let notice = format!("[safeagents] blocked call to `{}`: {}", ctx.tool_name, reason);
+            let notice = format!(
+                "[safeagents] blocked call to `{}`: {}",
+                ctx.tool_name, reason
+            );
             return ToolVerdict::Blocked {
                 reason,
                 notice,
@@ -634,9 +786,15 @@ impl SafeAgentsHarnessEvaluator {
         // Stage 2: ATIF static pattern scanning (high-severity breakout defense)
         // -------------------------------------------------------------
         let signals = self.atif_scanner.scan_text(ctx.arguments_json);
-        if let Some(high_sig) = signals.iter().find(|s| s.severity >= self.atif_scanner.block_severity) {
+        if let Some(high_sig) = signals
+            .iter()
+            .find(|s| s.severity >= self.atif_scanner.block_severity)
+        {
             let reason = format!("{}: {}", high_sig.id, high_sig.title);
-            let notice = format!("[safeagents] blocked call to `{}`: {}", ctx.tool_name, reason);
+            let notice = format!(
+                "[safeagents] blocked call to `{}`: {}",
+                ctx.tool_name, reason
+            );
             return ToolVerdict::Blocked {
                 reason,
                 notice,
@@ -651,7 +809,10 @@ impl SafeAgentsHarnessEvaluator {
         for host in extracted_hosts {
             if !self.is_host_permitted(&host, ctx.user_prompt_turns, ctx.allowed_hosts) {
                 let reason = format!("host `{}` appears nowhere in the conversation", host);
-                let notice = format!("[safeagents] blocked call to `{}`: {}", ctx.tool_name, reason);
+                let notice = format!(
+                    "[safeagents] blocked call to `{}`: {}",
+                    ctx.tool_name, reason
+                );
                 return ToolVerdict::Blocked {
                     reason,
                     notice,
@@ -669,7 +830,11 @@ impl SafeAgentsHarnessEvaluator {
 }
 
 impl crate::security::safeagents_client::ToolCallEvaluator for SafeAgentsHarnessEvaluator {
-    fn evaluate(&self, tool_name: &str, arguments_json: &str) -> crate::security::safeagents_client::ToolEvaluationVerdict {
+    fn evaluate(
+        &self,
+        tool_name: &str,
+        arguments_json: &str,
+    ) -> crate::security::safeagents_client::ToolEvaluationVerdict {
         let default_tools = &["bash", "read_file", "write_file", "WebFetch", "grep_search"][..];
         let ctx = ToolInvocationContext {
             tool_name,
@@ -681,8 +846,12 @@ impl crate::security::safeagents_client::ToolCallEvaluator for SafeAgentsHarness
         };
         match self.evaluate(&ctx) {
             ToolVerdict::Allow => crate::security::safeagents_client::ToolEvaluationVerdict::Allow,
-            ToolVerdict::Blocked { reason, .. } => crate::security::safeagents_client::ToolEvaluationVerdict::Block { reason },
-            ToolVerdict::Suspicious { .. } => crate::security::safeagents_client::ToolEvaluationVerdict::Allow,
+            ToolVerdict::Blocked { reason, .. } => {
+                crate::security::safeagents_client::ToolEvaluationVerdict::Block { reason }
+            }
+            ToolVerdict::Suspicious { .. } => {
+                crate::security::safeagents_client::ToolEvaluationVerdict::Allow
+            }
         }
     }
 }

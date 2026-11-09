@@ -370,9 +370,7 @@ pub struct ArmContainmentRing {
         Arc<std::sync::RwLock<Option<Arc<crate::security::cage_governance::CageGovernanceEngine>>>>,
     /// Optional attached AgentMesh PEP bridge for automatic epoch token eviction on autotomy.
     pub(crate) pep_bridge: Arc<
-        std::sync::RwLock<
-            Option<Arc<crate::security::agentmesh::pep_bridge::AgentMeshPepBridge>>,
-        >,
+        std::sync::RwLock<Option<Arc<crate::security::agentmesh::pep_bridge::AgentMeshPepBridge>>>,
     >,
 }
 

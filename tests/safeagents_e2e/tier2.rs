@@ -31,7 +31,10 @@ fn test_f01_boundary_malformed_version_string() {
 fn test_f01_boundary_duplicate_dependency_rejection() {
     let mut deps = HashSet::new();
     assert!(deps.insert("reqwest"));
-    assert!(!deps.insert("reqwest"), "Duplicate dependency must be rejected");
+    assert!(
+        !deps.insert("reqwest"),
+        "Duplicate dependency must be rejected"
+    );
 }
 
 #[test]
@@ -273,7 +276,7 @@ fn test_f07_boundary_zero_delay_replacement() {
     let notice = "[safeagents] blocked call to `sh`: undeclared tool";
     let elapsed = start.elapsed();
     assert!(elapsed.as_micros() < 15000);
-    assert!(!notice.is_empty());
+    assert!(notice.contains("blocked"));
 }
 
 #[test]
@@ -437,7 +440,10 @@ fn test_f10_boundary_redos_probe_nested_quantifiers() {
     let redos = "a".repeat(1000) + "!@#$%^&*()";
     let start = Instant::now();
     let _ = scanner.scan("bash", &redos);
-    assert!(start.elapsed().as_millis() < 50, "Scanner must be immune to ReDoS");
+    assert!(
+        start.elapsed().as_millis() < 50,
+        "Scanner must be immune to ReDoS"
+    );
 }
 
 #[test]
@@ -730,7 +736,8 @@ fn test_f17_boundary_unknown_skill_route_404() {
 
 #[test]
 fn test_f18_boundary_unknown_os_target() {
-    let is_unknown = !cfg!(target_os = "windows") && !cfg!(target_os = "linux") && !cfg!(target_os = "macos");
+    let is_unknown =
+        !cfg!(target_os = "windows") && !cfg!(target_os = "linux") && !cfg!(target_os = "macos");
     assert!(!is_unknown || is_unknown);
 }
 
@@ -738,7 +745,10 @@ fn test_f18_boundary_unknown_os_target() {
 fn test_f18_boundary_dual_target_contradiction() {
     let is_win = cfg!(target_os = "windows");
     let is_linux = cfg!(target_os = "linux");
-    assert!(!(is_win && is_linux), "Cannot be both Windows and Linux simultaneously");
+    assert!(
+        !(is_win && is_linux),
+        "Cannot be both Windows and Linux simultaneously"
+    );
 }
 
 #[test]

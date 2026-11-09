@@ -82,7 +82,9 @@ async fn test_challenge_asn1_der_signature_injection_rejected() {
     assert_eq!(parts.len(), 3);
 
     // Extract valid 64-byte raw signature and convert to real ASN.1 DER
-    let raw_sig = URL_SAFE_NO_PAD.decode(parts[2]).expect("Base64 decode failed");
+    let raw_sig = URL_SAFE_NO_PAD
+        .decode(parts[2])
+        .expect("Base64 decode failed");
     assert_eq!(raw_sig.len(), 64);
 
     let der_sig = raw_to_der_signature(&raw_sig);
@@ -172,13 +174,34 @@ async fn test_challenge_algorithm_confusion_rejected() {
 
     // Attack Vectors: alg="none", "HS256", "RS256", "es256", "", missing alg, numeric alg
     let attack_headers = vec![
-        ("none", json!({ "alg": "none", "typ": "JWT", "kid": issuer.active_key_id() })),
-        ("HS256", json!({ "alg": "HS256", "typ": "JWT", "kid": issuer.active_key_id() })),
-        ("RS256", json!({ "alg": "RS256", "typ": "JWT", "kid": issuer.active_key_id() })),
-        ("es256", json!({ "alg": "es256", "typ": "JWT", "kid": issuer.active_key_id() })),
-        ("empty", json!({ "alg": "", "typ": "JWT", "kid": issuer.active_key_id() })),
-        ("missing", json!({ "typ": "JWT", "kid": issuer.active_key_id() })),
-        ("numeric", json!({ "alg": 256, "typ": "JWT", "kid": issuer.active_key_id() })),
+        (
+            "none",
+            json!({ "alg": "none", "typ": "JWT", "kid": issuer.active_key_id() }),
+        ),
+        (
+            "HS256",
+            json!({ "alg": "HS256", "typ": "JWT", "kid": issuer.active_key_id() }),
+        ),
+        (
+            "RS256",
+            json!({ "alg": "RS256", "typ": "JWT", "kid": issuer.active_key_id() }),
+        ),
+        (
+            "es256",
+            json!({ "alg": "es256", "typ": "JWT", "kid": issuer.active_key_id() }),
+        ),
+        (
+            "empty",
+            json!({ "alg": "", "typ": "JWT", "kid": issuer.active_key_id() }),
+        ),
+        (
+            "missing",
+            json!({ "typ": "JWT", "kid": issuer.active_key_id() }),
+        ),
+        (
+            "numeric",
+            json!({ "alg": 256, "typ": "JWT", "kid": issuer.active_key_id() }),
+        ),
     ];
 
     let fake_sig_b64 = URL_SAFE_NO_PAD.encode(&[0x11u8; 64]);
@@ -276,19 +299,23 @@ fn test_challenge_clock_skew_boundary_precision() {
     // Mint distinct tokens for each verification to avoid JTI replay triggering
 
     // 10300: exactly at expiration -> PASS
-    let t_10300 = mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, t0);
+    let t_10300 =
+        mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, t0);
     assert!(issuer.verify_arm_token(&t_10300, 10_300).is_ok());
 
     // 10304: exp + 4s (within 5s tolerance) -> PASS
-    let t_10304 = mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, t0);
+    let t_10304 =
+        mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, t0);
     assert!(issuer.verify_arm_token(&t_10304, 10_304).is_ok());
 
     // 10305: exp + 5s (exact edge of tolerance: 10305 <= 10300 + 5) -> PASS
-    let t_10305 = mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, t0);
+    let t_10305 =
+        mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, t0);
     assert!(issuer.verify_arm_token(&t_10305, 10_305).is_ok());
 
     // 10306: exp + 6s (drift exceeded: 10306 > 10300 + 5) -> FAIL with TokenExpired
-    let t_10306 = mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, t0);
+    let t_10306 =
+        mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, t0);
     let res = issuer.verify_arm_token(&t_10306, 10_306);
     assert_eq!(
         res,
@@ -300,12 +327,14 @@ fn test_challenge_clock_skew_boundary_precision() {
     );
 
     // NOT BEFORE (nbf) BOUNDARIES
-    let token_nbf2 = mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, t0);
+    let token_nbf2 =
+        mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, t0);
 
     // 9995: nbf - 5s (exact lower edge: 9995 + 5 >= 10000) -> PASS
     assert!(issuer.verify_arm_token(&token_nbf2, 9_995).is_ok());
 
-    let token_nbf3 = mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, t0);
+    let token_nbf3 =
+        mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, t0);
 
     // 9994: nbf - 6s (not yet valid: 9994 + 5 < 10000) -> FAIL with TokenNotYetValid
     let res_nbf = issuer.verify_arm_token(&token_nbf3, 9_994);
@@ -361,9 +390,7 @@ fn test_challenge_key_rotation_boundaries_and_multi_generation_purge() {
     let res_purged = issuer.verify_arm_token(&token_k0, 10_450);
     assert_eq!(
         res_purged,
-        Err(OidcError::KeyNotFound {
-            kid: k0_id.clone()
-        })
+        Err(OidcError::KeyNotFound { kid: k0_id.clone() })
     );
 
     // Verify JWKS contains only k2 and k1, with k0 completely purged
@@ -389,7 +416,9 @@ fn test_challenge_jti_replay_attack_and_cache_boundary() {
         .expect("Mint failed");
 
     // 1st presentation: PASS
-    let claims1 = issuer.verify_arm_token(&token, now).expect("First verification failed");
+    let claims1 = issuer
+        .verify_arm_token(&token, now)
+        .expect("First verification failed");
     let target_jti = claims1.jti.clone();
 
     // 2nd presentation: FAIL with ReplayDetected
@@ -410,7 +439,13 @@ fn test_challenge_jti_replay_attack_and_cache_boundary() {
 
     // Verify bounded replay cache operations: insert 50 distinct tokens
     for i in 0..50 {
-        let t = mint_non_der_tagged_token(&issuer, "arm_calc", 1, &ArmRole::UntrustedDocIngest, now + i);
+        let t = mint_non_der_tagged_token(
+            &issuer,
+            "arm_calc",
+            1,
+            &ArmRole::UntrustedDocIngest,
+            now + i,
+        );
         assert!(issuer.verify_arm_token(&t, now + i).is_ok());
     }
 }
@@ -579,7 +614,10 @@ fn test_challenge_mandate_privilege_escalation_attacks() {
     tampered.delegation_chain[3].signature[10] ^= 0xAA;
     let verify_res = tampered.verify_chain(&k0.verifying_key().to_bytes(), 2_500);
     assert!(
-        matches!(verify_res, Err(MandateError::SignatureFailure { depth: 3, .. })),
+        matches!(
+            verify_res,
+            Err(MandateError::SignatureFailure { depth: 3, .. })
+        ),
         "Tampered signature at depth 3 must fail chain verification"
     );
 }
@@ -620,12 +658,18 @@ fn test_challenge_scheme_injection_and_uri_parser_boundaries() {
         ("mcp://127.0.0.1/calc", "127.0.0.1 forbidden"),
         ("mcp://[::1]/calc", "[::1] forbidden"),
         ("mcp://0.0.0.0/calc", "0.0.0.0 forbidden"),
-        ("mcp://169.254.169.254/metadata", "169.254 link-local forbidden"),
+        (
+            "mcp://169.254.169.254/metadata",
+            "169.254 link-local forbidden",
+        ),
         ("mcp://calc/../admin", "directory traversal .. forbidden"),
         ("mcp://calc\\admin", "backslash forbidden"),
         ("mcp://calc\0admin", "null byte forbidden"),
         ("mcp://calc\x07admin", "control char forbidden"),
-        ("mcp://calc\x1fadmin", "unit separator control char forbidden"),
+        (
+            "mcp://calc\x1fadmin",
+            "unit separator control char forbidden",
+        ),
         ("mcp://192.168.1.1/calc", "raw IPv4 literal forbidden"),
         ("mcp://10.0.0.1/calc", "raw IPv4 literal forbidden"),
     ];
@@ -710,7 +754,10 @@ async fn test_challenge_serving_node_revocation_and_epoch_watermark_adversarial(
     let (calc_status, _headers, calc_resp_bytes) = AsyncHttpWireClient::post(
         &calc_url,
         &[
-            ("X-Mesh-Authentication".to_string(), format!("Bearer {}", access_token)),
+            (
+                "X-Mesh-Authentication".to_string(),
+                format!("Bearer {}", access_token),
+            ),
             ("Content-Type".to_string(), "application/json".to_string()),
         ],
         &calc_req,
@@ -727,7 +774,10 @@ async fn test_challenge_serving_node_revocation_and_epoch_watermark_adversarial(
     let (payroll_status, _headers, _payroll_resp) = AsyncHttpWireClient::post(
         &payroll_url,
         &[
-            ("X-Mesh-Authentication".to_string(), format!("Bearer {}", access_token)),
+            (
+                "X-Mesh-Authentication".to_string(),
+                format!("Bearer {}", access_token),
+            ),
             ("Content-Type".to_string(), "application/json".to_string()),
         ],
         b"{}",
@@ -747,7 +797,10 @@ async fn test_challenge_serving_node_revocation_and_epoch_watermark_adversarial(
     let (revoked_status, _headers, _rev_bytes) = AsyncHttpWireClient::post(
         &calc_url,
         &[
-            ("X-Mesh-Authentication".to_string(), format!("Bearer {}", access_token)),
+            (
+                "X-Mesh-Authentication".to_string(),
+                format!("Bearer {}", access_token),
+            ),
             ("Content-Type".to_string(), "application/json".to_string()),
         ],
         &calc_req,
@@ -947,7 +1000,9 @@ fn test_challenge_vulnerability_der_check_false_positive_on_legitimate_signature
 
     // Verify signature validates against verifying key
     assert!(
-        verifying_key.verify(verified_msg.as_bytes(), &parsed_sig).is_ok(),
+        verifying_key
+            .verify(verified_msg.as_bytes(), &parsed_sig)
+            .is_ok(),
         "Parsed signature must verify against public key"
     );
 }
@@ -1059,17 +1114,23 @@ fn test_challenge_root_key_binding_and_delegation_tampering() {
 
     // 12.5: Intermediate caveat block tampering (modify attenuated_services) -> MUST FAIL
     let mut tampered_services = child2_mandate.clone();
-    tampered_services.delegation_chain[1].attenuated_services.insert("mcp://payroll".to_string());
+    tampered_services.delegation_chain[1]
+        .attenuated_services
+        .insert("mcp://payroll".to_string());
     let res_tampered_services = tampered_services.verify_chain(&root_vk, 2_000);
     assert!(
-        matches!(res_tampered_services, Err(MandateError::SignatureFailure { depth: 1, .. })),
+        matches!(
+            res_tampered_services,
+            Err(MandateError::SignatureFailure { depth: 1, .. })
+        ),
         "Tampered caveat block in intermediate link must fail signature verification: got {:?}",
         res_tampered_services
     );
 
     // 12.6: Inter-hop SPIFFE ID mismatch attack -> MUST FAIL
     let mut spiffe_mismatch = child2_mandate.clone();
-    spiffe_mismatch.delegation_chain[1].delegator_spiffe_id = "spiffe://agentoctopus.local/arm/attacker".to_string();
+    spiffe_mismatch.delegation_chain[1].delegator_spiffe_id =
+        "spiffe://agentoctopus.local/arm/attacker".to_string();
     let res_spiffe = spiffe_mismatch.verify_chain(&root_vk, 2_000);
     assert!(
         matches!(res_spiffe, Err(MandateError::SignatureFailure { depth: 1, ref reason }) if reason.contains("SPIFFE ID continuity broken at hop 1")),
@@ -1079,7 +1140,8 @@ fn test_challenge_root_key_binding_and_delegation_tampering() {
 
     // 12.7: Root link delegator SPIFFE ID mismatch -> MUST FAIL
     let mut root_spiffe_mismatch = child2_mandate.clone();
-    root_spiffe_mismatch.delegation_chain[0].delegator_spiffe_id = "spiffe://agentoctopus.local/fake_root".to_string();
+    root_spiffe_mismatch.delegation_chain[0].delegator_spiffe_id =
+        "spiffe://agentoctopus.local/fake_root".to_string();
     let res_root_spiffe = root_spiffe_mismatch.verify_chain(&root_vk, 2_000);
     assert!(
         matches!(res_root_spiffe, Err(MandateError::SignatureFailure { depth: 0, ref reason }) if reason.contains("Link 0 delegator SPIFFE ID does not match root issuer SPIFFE ID")),
@@ -1089,7 +1151,8 @@ fn test_challenge_root_key_binding_and_delegation_tampering() {
 
     // 12.8: Leaf delegatee SPIFFE ID mismatch with declared current holder -> MUST FAIL
     let mut leaf_spiffe_mismatch = child2_mandate.clone();
-    leaf_spiffe_mismatch.current_holder_spiffe_id = "spiffe://agentoctopus.local/arm/attacker".to_string();
+    leaf_spiffe_mismatch.current_holder_spiffe_id =
+        "spiffe://agentoctopus.local/arm/attacker".to_string();
     let res_leaf_spiffe = leaf_spiffe_mismatch.verify_chain(&root_vk, 2_000);
     assert!(
         matches!(res_leaf_spiffe, Err(MandateError::SignatureFailure { depth: 1, ref reason }) if reason.contains("Current holder SPIFFE ID")),
@@ -1149,7 +1212,11 @@ async fn test_challenge_inbound_mesh_token_verification_adversarial_matrix() {
             b"hello data",
         )
         .await;
-    assert!(baseline_res.is_ok(), "Genuine inbound call must succeed: {:?}", baseline_res);
+    assert!(
+        baseline_res.is_ok(),
+        "Genuine inbound call must succeed: {:?}",
+        baseline_res
+    );
 
     // Attack 13.1: Missing Auth Header (None) -> MUST FAIL
     let res_none = engine
@@ -1223,7 +1290,8 @@ async fn test_challenge_inbound_mesh_token_verification_adversarial_matrix() {
         "exp": now + 300,
         "jti": "jti_tampered_claims"
     });
-    let tampered_payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&tampered_claims).unwrap());
+    let tampered_payload_b64 =
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&tampered_claims).unwrap());
     let tampered_token = format!("{}.{}.{}", parts[0], tampered_payload_b64, parts[2]);
     let res_tampered = engine
         .execute_inbound_mesh_call(
@@ -1233,7 +1301,10 @@ async fn test_challenge_inbound_mesh_token_verification_adversarial_matrix() {
             b"hello data",
         )
         .await;
-    assert!(res_tampered.is_err(), "Tampered JWT payload must be rejected");
+    assert!(
+        res_tampered.is_err(),
+        "Tampered JWT payload must be rejected"
+    );
 
     // Attack 13.7: Expired JWT (exp < now) -> MUST FAIL
     let expired_token = engine
@@ -1263,14 +1334,19 @@ async fn test_challenge_inbound_mesh_token_verification_adversarial_matrix() {
             b"hello data",
         )
         .await;
-    assert!(res_future.is_err(), "Future token (> 5s clock skew) must be rejected");
+    assert!(
+        res_future.is_err(),
+        "Future token (> 5s clock skew) must be rejected"
+    );
 
     // Attack 13.9: Revoked Arm Workload -> MUST FAIL
     let revoked_arm_token = engine
         .issuer()
         .mint_arm_token_with_time("arm_revoked_target", 1, &ArmRole::UntrustedDocIngest, now)
         .expect("Mint failed");
-    engine.pep_bridge().trip_arm_killswitch("arm_revoked_target");
+    engine
+        .pep_bridge()
+        .trip_arm_killswitch("arm_revoked_target");
     let res_revoked = engine
         .execute_inbound_mesh_call(
             "mcp://octopus/doc_extractor",
@@ -1279,7 +1355,10 @@ async fn test_challenge_inbound_mesh_token_verification_adversarial_matrix() {
             b"hello data",
         )
         .await;
-    assert!(res_revoked.is_err(), "Revoked arm must be denied access to inbound mesh tool");
+    assert!(
+        res_revoked.is_err(),
+        "Revoked arm must be denied access to inbound mesh tool"
+    );
 
     // Attack 13.10: Forged Exchanged Mesh Token (`mesh_tok_...`) -> MUST FAIL
     let res_fake_mesh_tok = engine
@@ -1290,7 +1369,10 @@ async fn test_challenge_inbound_mesh_token_verification_adversarial_matrix() {
             b"hello data",
         )
         .await;
-    assert!(res_fake_mesh_tok.is_err(), "Forged mesh token must be rejected");
+    assert!(
+        res_fake_mesh_tok.is_err(),
+        "Forged mesh token must be rejected"
+    );
 
     // Attack 13.11: Expired CAGE Routing Seal -> MUST FAIL
     let expired_seal = CageRoutingSeal {
@@ -1310,10 +1392,16 @@ async fn test_challenge_inbound_mesh_token_verification_adversarial_matrix() {
             b"hello data",
         )
         .await;
-    assert!(res_expired_seal.is_err(), "Expired CAGE Routing Seal must be rejected");
+    assert!(
+        res_expired_seal.is_err(),
+        "Expired CAGE Routing Seal must be rejected"
+    );
 
     // Clean shutdown
-    engine.stop_serving_node().await.expect("Stop serving node failed");
+    engine
+        .stop_serving_node()
+        .await
+        .expect("Stop serving node failed");
 }
 
 // ============================================================================
@@ -1356,24 +1444,34 @@ fn test_challenge_asn1_der_header_fuzzing_and_boundary_safety() {
     der_64_exact[0] = 0x30;
     der_64_exact[1] = 62;
     der_64_exact[2] = 0x02;
-    assert_eq!(parse_ieee_p1363_signature(&der_64_exact), Err(OidcError::DerSignatureForbidden));
+    assert_eq!(
+        parse_ieee_p1363_signature(&der_64_exact),
+        Err(OidcError::DerSignatureForbidden)
+    );
 
     // Pattern 2: [0x30, 60, 0x02, ...] -> 64-byte padded DER sequence
     let mut der_64_padded = vec![0x42u8; 64];
     der_64_padded[0] = 0x30;
     der_64_padded[1] = 60;
     der_64_padded[2] = 0x02;
-    assert_eq!(parse_ieee_p1363_signature(&der_64_padded), Err(OidcError::DerSignatureForbidden));
+    assert_eq!(
+        parse_ieee_p1363_signature(&der_64_padded),
+        Err(OidcError::DerSignatureForbidden)
+    );
 
     // 14.6: Pseudo-random fuzzing (10,000 iterations: test zero panics)
     let mut seed: u64 = 0xDEADBEEFCAFE;
     for _ in 0..10_000 {
         // LCG PRNG
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let len = ((seed >> 32) as usize) % 200;
         let mut buf = Vec::with_capacity(len);
         for _ in 0..len {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             buf.push((seed >> 24) as u8);
         }
 
@@ -1463,4 +1561,3 @@ fn test_challenge_ssrf_port_and_comprehensive_ip_matrix() {
         );
     }
 }
-

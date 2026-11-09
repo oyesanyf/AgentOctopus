@@ -57,9 +57,8 @@ impl CpuThreadPool {
 
     /// Access the global shared `CpuThreadPool`. Initializes with default thread count if uninitialized.
     pub fn global() -> &'static Self {
-        GLOBAL_CPU_POOL.get_or_init(|| {
-            Self::new(None).expect("Failed to initialize global CpuThreadPool")
-        })
+        GLOBAL_CPU_POOL
+            .get_or_init(|| Self::new(None).expect("Failed to initialize global CpuThreadPool"))
     }
 
     /// Initialize the global `CpuThreadPool` with custom parameters before first use.
@@ -87,7 +86,9 @@ impl CpuThreadPool {
     }
 
     /// Asynchronously serializes a value to a JSON string using the Rayon pool.
-    pub async fn serialize_json<T: Serialize + Send + 'static>(value: T) -> Result<String, CpuPoolError> {
+    pub async fn serialize_json<T: Serialize + Send + 'static>(
+        value: T,
+    ) -> Result<String, CpuPoolError> {
         Self::global()
             .spawn_cpu(move || serde_json::to_string(&value))
             .await?
@@ -95,7 +96,9 @@ impl CpuThreadPool {
     }
 
     /// Asynchronously serializes a value to pretty-printed JSON using the Rayon pool.
-    pub async fn serialize_json_pretty<T: Serialize + Send + 'static>(value: T) -> Result<String, CpuPoolError> {
+    pub async fn serialize_json_pretty<T: Serialize + Send + 'static>(
+        value: T,
+    ) -> Result<String, CpuPoolError> {
         Self::global()
             .spawn_cpu(move || serde_json::to_string_pretty(&value))
             .await?
@@ -103,7 +106,9 @@ impl CpuThreadPool {
     }
 
     /// Asynchronously deserializes a JSON string into a structured type using the Rayon pool.
-    pub async fn deserialize_json<T: DeserializeOwned + Send + 'static>(json_str: String) -> Result<T, CpuPoolError> {
+    pub async fn deserialize_json<T: DeserializeOwned + Send + 'static>(
+        json_str: String,
+    ) -> Result<T, CpuPoolError> {
         Self::global()
             .spawn_cpu(move || serde_json::from_str::<T>(&json_str))
             .await?
@@ -148,7 +153,9 @@ pub fn global_cpu_pool() -> &'static CpuThreadPool {
 }
 
 /// Shorthand helper to initialize the global CPU pool.
-pub fn init_global_cpu_pool(num_threads: Option<usize>) -> Result<&'static CpuThreadPool, CpuPoolError> {
+pub fn init_global_cpu_pool(
+    num_threads: Option<usize>,
+) -> Result<&'static CpuThreadPool, CpuPoolError> {
     CpuThreadPool::init_global(num_threads)
 }
 
@@ -216,14 +223,14 @@ mod tests {
 
         let mut set = JoinSet::new();
         for i in 0..50 {
-            set.spawn(async move {
-                spawn_cpu(move || i * 2).await
-            });
+            set.spawn(async move { spawn_cpu(move || i * 2).await });
         }
 
         let mut count = 0;
         while let Some(res) = set.join_next().await {
-            let val = res.expect("join should succeed").expect("cpu task should succeed");
+            let val = res
+                .expect("join should succeed")
+                .expect("cpu task should succeed");
             assert_eq!(val % 2, 0);
             count += 1;
         }

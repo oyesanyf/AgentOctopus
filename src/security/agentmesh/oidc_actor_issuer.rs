@@ -37,25 +37,13 @@ pub enum OidcError {
     CryptoError(String),
 
     #[error("Token expired: exp={exp}, now={now} (drift exceeded {max_drift}s)")]
-    TokenExpired {
-        exp: u64,
-        now: u64,
-        max_drift: u64,
-    },
+    TokenExpired { exp: u64, now: u64, max_drift: u64 },
 
     #[error("Token not yet valid: nbf={nbf}, now={now} (drift exceeded {max_drift}s)")]
-    TokenNotYetValid {
-        nbf: u64,
-        now: u64,
-        max_drift: u64,
-    },
+    TokenNotYetValid { nbf: u64, now: u64, max_drift: u64 },
 
     #[error("Token issued in future: iat={iat}, now={now} (drift exceeded {max_drift}s)")]
-    TokenIssuedInFuture {
-        iat: u64,
-        now: u64,
-        max_drift: u64,
-    },
+    TokenIssuedInFuture { iat: u64, now: u64, max_drift: u64 },
 
     #[error("Key not found in JWKS: kid='{kid}'")]
     KeyNotFound { kid: String },
@@ -345,8 +333,14 @@ impl OctopusOidcActorIssuer {
 
     /// Performs key rotation with deterministic timestamp.
     pub fn rotate_key_with_time(&self, now: u64) -> String {
-        let mut curr_guard = self.current_key.write().expect("current_key write lock poisoned");
-        let mut ret_guard = self.retired_key.write().expect("retired_key write lock poisoned");
+        let mut curr_guard = self
+            .current_key
+            .write()
+            .expect("current_key write lock poisoned");
+        let mut ret_guard = self
+            .retired_key
+            .write()
+            .expect("retired_key write lock poisoned");
 
         let old_key = curr_guard.clone();
         *ret_guard = Some(RetiredKeyEntry {
@@ -373,10 +367,16 @@ impl OctopusOidcActorIssuer {
     pub fn get_jwks(&self, now: u64) -> JwksDocument {
         let mut keys = Vec::with_capacity(2);
 
-        let curr_guard = self.current_key.read().expect("current_key read lock poisoned");
+        let curr_guard = self
+            .current_key
+            .read()
+            .expect("current_key read lock poisoned");
         keys.push(key_entry_to_jwk(&curr_guard));
 
-        let ret_guard = self.retired_key.read().expect("retired_key read lock poisoned");
+        let ret_guard = self
+            .retired_key
+            .read()
+            .expect("retired_key read lock poisoned");
         if let Some(ref retired) = *ret_guard {
             if now.saturating_sub(retired.retired_at) <= retired.grace_period_secs {
                 keys.push(key_entry_to_jwk(&retired.key));
@@ -418,7 +418,9 @@ impl OctopusOidcActorIssuer {
             token_endpoint: format!("{base}/oauth/token"),
             response_types_supported: vec!["token".to_string()],
             id_token_signing_alg_values_supported: vec!["ES256".to_string()],
-            grant_types_supported: vec!["urn:ietf:params:oauth:grant-type:token-exchange".to_string()],
+            grant_types_supported: vec![
+                "urn:ietf:params:oauth:grant-type:token-exchange".to_string()
+            ],
             subject_types_supported: vec!["public".to_string()],
         }
     }
@@ -430,7 +432,12 @@ impl OctopusOidcActorIssuer {
 
     /// Mints a workload JWT token for an arm under RFC 7515 Compact Serialization.
     /// Signature is strictly 64-byte IEEE P1363 encoded in Base64url without padding.
-    pub fn mint_arm_token(&self, arm_id: &str, epoch: u64, role: &ArmRole) -> Result<String, OidcError> {
+    pub fn mint_arm_token(
+        &self,
+        arm_id: &str,
+        epoch: u64,
+        role: &ArmRole,
+    ) -> Result<String, OidcError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -469,7 +476,10 @@ impl OctopusOidcActorIssuer {
         audience_override: Option<&str>,
         ttl_override_secs: Option<u64>,
     ) -> Result<String, OidcError> {
-        let curr_guard = self.current_key.read().expect("current_key read lock poisoned");
+        let curr_guard = self
+            .current_key
+            .read()
+            .expect("current_key read lock poisoned");
 
         let header = JwsHeader {
             alg: "ES256".to_string(),
@@ -482,7 +492,11 @@ impl OctopusOidcActorIssuer {
             .as_deref()
             .unwrap_or_else(|| self.issuer_url.trim_end_matches('/'));
         let sub = format!("{}/arm/{}/epoch/{}", sub_base, arm_id, epoch);
-        let jti = format!("{:016x}{:016x}", rand::random::<u64>(), rand::random::<u64>());
+        let jti = format!(
+            "{:016x}{:016x}",
+            rand::random::<u64>(),
+            rand::random::<u64>()
+        );
         let ttl = ttl_override_secs.unwrap_or(self.token_ttl_secs);
 
         let claims = WorkloadClaims {
@@ -498,8 +512,10 @@ impl OctopusOidcActorIssuer {
             jti,
         };
 
-        let header_json = serde_json::to_vec(&header).map_err(|e| OidcError::JsonError(e.to_string()))?;
-        let payload_json = serde_json::to_vec(&claims).map_err(|e| OidcError::JsonError(e.to_string()))?;
+        let header_json =
+            serde_json::to_vec(&header).map_err(|e| OidcError::JsonError(e.to_string()))?;
+        let payload_json =
+            serde_json::to_vec(&claims).map_err(|e| OidcError::JsonError(e.to_string()))?;
 
         let header_b64 = URL_SAFE_NO_PAD.encode(&header_json);
         let payload_b64 = URL_SAFE_NO_PAD.encode(&payload_json);
@@ -528,15 +544,15 @@ impl OctopusOidcActorIssuer {
 
         let (header_b64, payload_b64, sig_b64) = (parts[0], parts[1], parts[2]);
 
-        let header_bytes = URL_SAFE_NO_PAD
-            .decode(header_b64)
-            .map_err(|e| OidcError::InvalidTokenFormat(format!("Header base64 decode failed: {e}")))?;
-        let payload_bytes = URL_SAFE_NO_PAD
-            .decode(payload_b64)
-            .map_err(|e| OidcError::InvalidTokenFormat(format!("Payload base64 decode failed: {e}")))?;
-        let sig_bytes = URL_SAFE_NO_PAD
-            .decode(sig_b64)
-            .map_err(|e| OidcError::InvalidTokenFormat(format!("Signature base64 decode failed: {e}")))?;
+        let header_bytes = URL_SAFE_NO_PAD.decode(header_b64).map_err(|e| {
+            OidcError::InvalidTokenFormat(format!("Header base64 decode failed: {e}"))
+        })?;
+        let payload_bytes = URL_SAFE_NO_PAD.decode(payload_b64).map_err(|e| {
+            OidcError::InvalidTokenFormat(format!("Payload base64 decode failed: {e}"))
+        })?;
+        let sig_bytes = URL_SAFE_NO_PAD.decode(sig_b64).map_err(|e| {
+            OidcError::InvalidTokenFormat(format!("Signature base64 decode failed: {e}"))
+        })?;
 
         let header: JwsHeader = serde_json::from_slice(&header_bytes)
             .map_err(|e| OidcError::JsonError(format!("Malformed header JSON: {e}")))?;
@@ -609,12 +625,18 @@ impl OctopusOidcActorIssuer {
     }
 
     fn resolve_verifying_key(&self, kid: &str, now: u64) -> Result<VerifyingKey, OidcError> {
-        let curr_guard = self.current_key.read().expect("current_key read lock poisoned");
+        let curr_guard = self
+            .current_key
+            .read()
+            .expect("current_key read lock poisoned");
         if curr_guard.kid == kid {
             return Ok(curr_guard.verifying_key);
         }
 
-        let ret_guard = self.retired_key.read().expect("retired_key read lock poisoned");
+        let ret_guard = self
+            .retired_key
+            .read()
+            .expect("retired_key read lock poisoned");
         if let Some(ref retired) = *ret_guard {
             if retired.key.kid == kid {
                 let elapsed = now.saturating_sub(retired.retired_at);
@@ -794,7 +816,10 @@ mod tests {
         assert_eq!(claims.role, "UntrustedDocIngest");
         assert_eq!(claims.iss, "https://agentoctopus.local");
         assert_eq!(claims.aud, "agentmesh.local");
-        assert_eq!(claims.sub, "https://agentoctopus.local/arm/arm_calc/epoch/1");
+        assert_eq!(
+            claims.sub,
+            "https://agentoctopus.local/arm/arm_calc/epoch/1"
+        );
     }
 
     #[test]
@@ -831,7 +856,10 @@ mod tests {
 
         // Rotate key at t0
         let new_kid = issuer.rotate_key_with_time(t0);
-        assert_ne!(new_kid, issuer.retired_key.read().unwrap().as_ref().unwrap().key.kid);
+        assert_ne!(
+            new_kid,
+            issuer.retired_key.read().unwrap().as_ref().unwrap().key.kid
+        );
 
         // Verification within grace period (t0 + 100 <= t0 + 300) succeeds
         let claims = issuer.verify_arm_token(&token_old, t0 + 100);
@@ -884,7 +912,9 @@ mod tests {
         assert_eq!(meta.issuer, "https://agentoctopus.local");
         assert_eq!(meta.jwks_uri, "http://127.0.0.1:8080/.well-known/jwks.json");
         assert_eq!(meta.token_endpoint, "http://127.0.0.1:8080/oauth/token");
-        assert!(meta.id_token_signing_alg_values_supported.contains(&"ES256".to_string()));
+        assert!(meta
+            .id_token_signing_alg_values_supported
+            .contains(&"ES256".to_string()));
     }
 
     #[test]
@@ -924,6 +954,9 @@ mod tests {
         let claims = issuer.verify_arm_token(&tok, now).unwrap();
         assert_eq!(claims.iss, "http://127.0.0.1:18081");
         assert_eq!(claims.aud, "agentmesh");
-        assert_eq!(claims.sub, "spiffe://agentoctopus.local/arm/arm_calc/epoch/3");
+        assert_eq!(
+            claims.sub,
+            "spiffe://agentoctopus.local/arm/arm_calc/epoch/3"
+        );
     }
 }

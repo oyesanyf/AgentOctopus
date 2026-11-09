@@ -12,7 +12,9 @@ use std::sync::{Arc, RwLock};
 
 use base64::Engine;
 use ed25519_dalek::{Signer as EdSigner, SigningKey as EdSigningKey};
-use p256::ecdsa::{Signature as P256Signature, SigningKey as P256SigningKey, VerifyingKey as P256VerifyingKey};
+use p256::ecdsa::{
+    Signature as P256Signature, SigningKey as P256SigningKey, VerifyingKey as P256VerifyingKey,
+};
 use rand::rngs::OsRng;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
@@ -65,9 +67,12 @@ pub struct DpapiProtector;
 
 #[cfg(windows)]
 impl DpapiProtector {
-    pub fn protect(plaintext: &[u8], optional_entropy: Option<&[u8]>) -> Result<Vec<u8>, KeyBrokerError> {
+    pub fn protect(
+        plaintext: &[u8],
+        optional_entropy: Option<&[u8]>,
+    ) -> Result<Vec<u8>, KeyBrokerError> {
         use windows_sys::Win32::Security::Cryptography::{
-            CryptProtectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+            CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
         };
 
         let data_in = CRYPT_INTEGER_BLOB {
@@ -121,9 +126,12 @@ impl DpapiProtector {
         Ok(ciphertext)
     }
 
-    pub fn unprotect(ciphertext: &[u8], optional_entropy: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>, KeyBrokerError> {
+    pub fn unprotect(
+        ciphertext: &[u8],
+        optional_entropy: Option<&[u8]>,
+    ) -> Result<Zeroizing<Vec<u8>>, KeyBrokerError> {
         use windows_sys::Win32::Security::Cryptography::{
-            CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+            CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
         };
 
         let data_in = CRYPT_INTEGER_BLOB {
@@ -184,7 +192,10 @@ pub struct DpapiProtector;
 
 #[cfg(not(windows))]
 impl DpapiProtector {
-    pub fn protect(plaintext: &[u8], _optional_entropy: Option<&[u8]>) -> Result<Vec<u8>, KeyBrokerError> {
+    pub fn protect(
+        plaintext: &[u8],
+        _optional_entropy: Option<&[u8]>,
+    ) -> Result<Vec<u8>, KeyBrokerError> {
         let mut obfuscated = plaintext.to_vec();
         for b in &mut obfuscated {
             *b ^= 0xA5;
@@ -192,7 +203,10 @@ impl DpapiProtector {
         Ok(obfuscated)
     }
 
-    pub fn unprotect(ciphertext: &[u8], _optional_entropy: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>, KeyBrokerError> {
+    pub fn unprotect(
+        ciphertext: &[u8],
+        _optional_entropy: Option<&[u8]>,
+    ) -> Result<Zeroizing<Vec<u8>>, KeyBrokerError> {
         let mut deobfuscated = ciphertext.to_vec();
         for b in &mut deobfuscated {
             *b ^= 0xA5;
@@ -229,7 +243,10 @@ impl OsProtectedKeyBroker {
         Self::new(300, None)
     }
 
-    pub fn new(rotation_grace_secs: u64, optional_entropy: Option<&[u8]>) -> Result<Self, KeyBrokerError> {
+    pub fn new(
+        rotation_grace_secs: u64,
+        optional_entropy: Option<&[u8]>,
+    ) -> Result<Self, KeyBrokerError> {
         let p256_key = P256SigningKey::random(&mut OsRng);
         let vk = *p256_key.verifying_key();
         let p256_bytes = p256_key.to_bytes();
@@ -271,7 +288,10 @@ impl OsProtectedKeyBroker {
 
 impl MeshKeyBroker for OsProtectedKeyBroker {
     fn active_key_id(&self) -> String {
-        self.active_kid.read().map(|g| g.clone()).unwrap_or_default()
+        self.active_kid
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default()
     }
 
     fn get_jwks(&self, now: u64) -> JwksDocument {
@@ -348,7 +368,9 @@ impl MeshKeyBroker for OsProtectedKeyBroker {
         let decrypted = DpapiProtector::unprotect(&enc_bytes, self.entropy.as_deref())?;
 
         if decrypted.len() != 32 {
-            return Err(KeyBrokerError::SigningFailed("Invalid Ed25519 key length".to_string()));
+            return Err(KeyBrokerError::SigningFailed(
+                "Invalid Ed25519 key length".to_string(),
+            ));
         }
 
         let mut key_bytes = [0u8; 32];
@@ -424,13 +446,15 @@ mod tests {
         let ciphertext = DpapiProtector::protect(secret, Some(entropy)).expect("Protect failed");
         assert_ne!(ciphertext, secret);
 
-        let plaintext = DpapiProtector::unprotect(&ciphertext, Some(entropy)).expect("Unprotect failed");
+        let plaintext =
+            DpapiProtector::unprotect(&ciphertext, Some(entropy)).expect("Unprotect failed");
         assert_eq!(&*plaintext, secret);
     }
 
     #[test]
     fn test_os_protected_broker_signing_and_rotation() {
-        let broker = OsProtectedKeyBroker::new(300, Some(b"test_entropy")).expect("Broker init failed");
+        let broker =
+            OsProtectedKeyBroker::new(300, Some(b"test_entropy")).expect("Broker init failed");
 
         let msg = b"canonical_header.canonical_claims";
         let sig = broker.sign_es256(msg).expect("ES256 signing failed");
@@ -449,7 +473,9 @@ mod tests {
         assert_eq!(jwks_rotated.keys.len(), 2);
 
         // Ed25519 signing
-        let ed_sig = broker.sign_ed25519(b"mandate_payload").expect("Ed25519 sign failed");
+        let ed_sig = broker
+            .sign_ed25519(b"mandate_payload")
+            .expect("Ed25519 sign failed");
         assert_eq!(ed_sig.len(), 64);
     }
 }

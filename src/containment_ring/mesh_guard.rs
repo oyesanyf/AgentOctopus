@@ -324,8 +324,7 @@ impl MeshGuard {
     /// Authorizes an arm for inbound tool publishing matching a URI pattern.
     pub async fn allow_publish_pattern(&self, arm_id: usize, pattern: &str) {
         let mut pubs = self.allowed_publishes.write().await;
-        pubs
-            .entry(arm_id)
+        pubs.entry(arm_id)
             .or_insert_with(Vec::new)
             .push(pattern.to_string());
     }
@@ -334,9 +333,9 @@ impl MeshGuard {
     pub async fn is_call_permitted(&self, arm_id: usize, uri: &str) -> bool {
         let calls = self.allowed_calls.read().await;
         if let Some(patterns) = calls.get(&arm_id) {
-            patterns
-                .iter()
-                .any(|p| p == "*" || p == uri || (p.ends_with('*') && uri.starts_with(&p[..p.len() - 1])))
+            patterns.iter().any(|p| {
+                p == "*" || p == uri || (p.ends_with('*') && uri.starts_with(&p[..p.len() - 1]))
+            })
         } else {
             false
         }
@@ -346,9 +345,9 @@ impl MeshGuard {
     pub async fn is_publish_permitted(&self, arm_id: usize, uri: &str) -> bool {
         let pubs = self.allowed_publishes.read().await;
         if let Some(patterns) = pubs.get(&arm_id) {
-            patterns
-                .iter()
-                .any(|p| p == "*" || p == uri || (p.ends_with('*') && uri.starts_with(&p[..p.len() - 1])))
+            patterns.iter().any(|p| {
+                p == "*" || p == uri || (p.ends_with('*') && uri.starts_with(&p[..p.len() - 1]))
+            })
         } else {
             false
         }

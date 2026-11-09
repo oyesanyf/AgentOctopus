@@ -284,7 +284,8 @@ impl ArmEndpoint {
         correlation_id: &str,
         content: &str,
     ) -> Result<(), MeshError> {
-        self.send_mesh(recipient, kind, correlation_id, content, None, None).await
+        self.send_mesh(recipient, kind, correlation_id, content, None, None)
+            .await
     }
 
     /// Production-matured dispatch supporting AgentMesh URI schemes and dual capability grants
@@ -307,7 +308,9 @@ impl ArmEndpoint {
 
         // Validate URI scheme if provided
         if let Some(target_uri) = uri {
-            let valid_scheme = ALLOWED_MESH_SCHEMES.iter().any(|s| target_uri.starts_with(s));
+            let valid_scheme = ALLOWED_MESH_SCHEMES
+                .iter()
+                .any(|s| target_uri.starts_with(s));
             if !valid_scheme {
                 return Err(MeshError::InvalidUriScheme);
             }
@@ -510,7 +513,8 @@ mod tests {
         assert!(mesh.verify_message(&received).await.is_ok());
 
         // Calling with ungranted publish capability fails
-        let ungranted_publish = MeshCapabilityGrant::Publish("mcp://octopus/ledger_validator".to_string());
+        let ungranted_publish =
+            MeshCapabilityGrant::Publish("mcp://octopus/ledger_validator".to_string());
         let res = worker
             .send_mesh(
                 "service",
@@ -531,7 +535,14 @@ mod tests {
         let (_, _) = mesh.enroll("b", 2).await.unwrap();
 
         let res = a
-            .send_mesh("b", MessageKind::Alert, "c", "msg", Some("http://evil.com"), None)
+            .send_mesh(
+                "b",
+                MessageKind::Alert,
+                "c",
+                "msg",
+                Some("http://evil.com"),
+                None,
+            )
             .await;
         assert_eq!(res, Err(MeshError::InvalidUriScheme));
     }

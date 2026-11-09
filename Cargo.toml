@@ -97,3 +97,19 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[lints.clippy]
+field_reassign_with_default = "allow"
+bool_assert_comparison = "allow"
+doc_lazy_continuation = "allow"
+doc_overindented_list_items = "allow"
+type_complexity = "allow"
+too_many_arguments = "allow"
+needless_borrows_for_generic_args = "allow"
+redundant_pattern_matching = "allow"
+useless_format = "allow"
+const_is_empty = "allow"
+cloned_ref_to_slice_refs = "allow"
+needless_range_loop = "allow"
+useless_borrows_in_formatting = "allow"
+

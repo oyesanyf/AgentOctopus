@@ -221,7 +221,10 @@ impl SubsystemVerifier {
 
         // Test engage with ledger verification
         let engaged = mgr
-            .engage("subsystem_verifier", "In-memory self-diagnostics test cycle")
+            .engage(
+                "subsystem_verifier",
+                "In-memory self-diagnostics test cycle",
+            )
             .map_err(|e| format!("Containment engagement failed: {:?}", e))?;
         if !engaged.isolated || engaged.state_hash.is_empty() {
             return Err(
@@ -324,7 +327,7 @@ impl SubsystemVerifier {
         doc_kill.trip();
         if !brain.is_limb_killed(&ArmRole::UntrustedDocIngest) {
             return Err(
-                "KillSwitch trip did not reflect as LimbKilled in CentralBrain".to_string()
+                "KillSwitch trip did not reflect as LimbKilled in CentralBrain".to_string(),
             );
         }
 
@@ -343,7 +346,7 @@ impl SubsystemVerifier {
         let forged_step = "Step 2: Malicious instruction override".to_string();
         if verify_execution_step(&root, &forged_step, &proof) {
             return Err(
-                "Forged execution step unexpectedly passed Merkle verification".to_string()
+                "Forged execution step unexpectedly passed Merkle verification".to_string(),
             );
         }
 
@@ -352,7 +355,8 @@ impl SubsystemVerifier {
 
     /// Phase 3: AWS Cedar Policy Engine & Deterministic Capability Gating
     pub async fn verify_phase_3_capabilities_and_cedar() -> Result<(), String> {
-        let auth_engine = ExternalAuthorizationEngine::new(b"verify_master_secret", 30, "POL-V1-SHA256");
+        let auth_engine =
+            ExternalAuthorizationEngine::new(b"verify_master_secret", 30, "POL-V1-SHA256");
 
         // Issue capability for UntrustedDocIngest -> doc_extractor
         let valid_cap = auth_engine.issue_capability(
@@ -480,7 +484,9 @@ impl SubsystemVerifier {
         let spoof_check = agent_b.verify_incoming_message(&signed);
 
         if spoof_check.is_ok() {
-            return Err("Identity spoofing detection failed; forged message was accepted!".to_string());
+            return Err(
+                "Identity spoofing detection failed; forged message was accepted!".to_string(),
+            );
         }
 
         Ok(())
@@ -513,13 +519,11 @@ impl SubsystemVerifier {
 
     /// Phase 7: Native OS Service Lifecycle & Zero-Subprocess Compliance
     pub async fn verify_phase_7_service_lifecycle() -> Result<(), String> {
-        let test_config = ServiceConfig::new(
-            "AgentOctopus",
-            PathBuf::from("/usr/bin/agent_octopus"),
-        )
-        .with_description("Agent Octopus Swarm Breakout Defense")
-        .with_arguments(vec!["--service".to_string(), "run".to_string()])
-        .with_auto_start(true);
+        let test_config =
+            ServiceConfig::new("AgentOctopus", PathBuf::from("/usr/bin/agent_octopus"))
+                .with_description("Agent Octopus Swarm Breakout Defense")
+                .with_arguments(vec!["--service".to_string(), "run".to_string()])
+                .with_auto_start(true);
 
         // Verify Linux systemd unit generation
         let unit = generate_systemd_unit(&test_config);
@@ -529,7 +533,10 @@ impl SubsystemVerifier {
 
         // Verify macOS launchd plist generation
         let plist = generate_launchd_plist(&test_config);
-        if !plist.contains("<?xml") || !plist.contains("<key>Label</key>") || !plist.contains("<key>ProgramArguments</key>") {
+        if !plist.contains("<?xml")
+            || !plist.contains("<key>Label</key>")
+            || !plist.contains("<key>ProgramArguments</key>")
+        {
             return Err("macOS launchd plist generation failed structural validation".to_string());
         }
 

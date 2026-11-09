@@ -63,7 +63,10 @@ impl LatencyStats {
         println!("\n=== {} ===", title);
         println!("  Total Payloads:     {}", self.total_count);
         println!("  Total Wall Time:    {:?}", self.total_wall_time);
-        println!("  Throughput:         {:.2} req/sec", self.throughput_req_sec);
+        println!(
+            "  Throughput:         {:.2} req/sec",
+            self.throughput_req_sec
+        );
         println!("  Min Latency:        {:?}", self.min);
         println!("  Mean Latency:       {:?}", self.mean);
         println!("  P50 (Median):       {:?}", self.p50);
@@ -293,7 +296,9 @@ fn test_stress_normalized_path_latency_10000_evasive_payloads() {
             verdict
         );
 
-        let notice = verdict.notice().expect("Blocked verdict must contain text notice");
+        let notice = verdict
+            .notice()
+            .expect("Blocked verdict must contain text notice");
         assert!(
             notice.contains("[safeagents] blocked call to `bash`"),
             "Notice improperly formatted: {}",
@@ -308,7 +313,10 @@ fn test_stress_normalized_path_latency_10000_evasive_payloads() {
     stats.print_summary("NORMALIZED PATH STRESS TEST (10,000 Evasive Payloads)");
 
     // Invariant: 100% block rate across all 10,000 evasive samples
-    assert_eq!(blocked_count, num_samples, "All 10,000 evasive payloads must be blocked");
+    assert_eq!(
+        blocked_count, num_samples,
+        "All 10,000 evasive payloads must be blocked"
+    );
 
     // Invariant: Sub-millisecond execution (< 1,000µs)
     assert!(
@@ -456,8 +464,14 @@ async fn test_stress_64_workers_high_concurrency_multi_agent_throughput() {
     let expected_clean = total_expected_requests / 4;
     let expected_blocked = total_expected_requests * 3 / 4;
 
-    assert_eq!(clean_count, expected_clean, "Mismatch in clean allowed count");
-    assert_eq!(blocked_count, expected_blocked, "Mismatch in threats blocked count");
+    assert_eq!(
+        clean_count, expected_clean,
+        "Mismatch in clean allowed count"
+    );
+    assert_eq!(
+        blocked_count, expected_blocked,
+        "Mismatch in threats blocked count"
+    );
 
     // Invariant 1: Throughput exceeds 1,000 req/sec under 64 workers
     assert!(

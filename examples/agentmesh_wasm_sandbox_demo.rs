@@ -258,7 +258,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spin_handle = std::thread::spawn(move || {
         let mut high_fuel = WasmSandboxLimits::default();
         high_fuel.fuel_budget = u64::MAX / 2;
-        wasm_exec.execute_wat_with_context("infinite_spin_guest", INFINITE_LOOP_WAT, b"", high_fuel, None)
+        wasm_exec.execute_wat_with_context(
+            "infinite_spin_guest",
+            INFINITE_LOOP_WAT,
+            b"",
+            high_fuel,
+            None,
+        )
     });
 
     tokio::time::sleep(Duration::from_millis(25)).await;

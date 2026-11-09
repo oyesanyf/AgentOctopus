@@ -28,10 +28,7 @@ pub enum MandateError {
     },
 
     #[error("Prohibited target in URI '{uri}': {reason}")]
-    ProhibitedTarget {
-        uri: String,
-        reason: String,
-    },
+    ProhibitedTarget { uri: String, reason: String },
 
     #[error("Privilege escalation in allowed_services: requested '{requested}' not in parent services {parent_services:?}")]
     PrivilegeEscalationService {
@@ -46,44 +43,25 @@ pub enum MandateError {
     },
 
     #[error("Mandate delegation depth {depth} exceeds maximum allowable depth {max}")]
-    MaxDelegationDepthExceeded {
-        depth: usize,
-        max: usize,
-    },
+    MaxDelegationDepthExceeded { depth: usize, max: usize },
 
     #[error("Mandate expired: exp={exp}, now={now}")]
-    MandateExpired {
-        exp: u64,
-        now: u64,
-    },
+    MandateExpired { exp: u64, now: u64 },
 
     #[error("Mandate not yet valid: nbf={nbf}, now={now}")]
-    MandateNotYetValid {
-        nbf: u64,
-        now: u64,
-    },
+    MandateNotYetValid { nbf: u64, now: u64 },
 
     #[error("Cryptographic signature failure at delegation depth {depth}: {reason}")]
-    SignatureFailure {
-        depth: usize,
-        reason: String,
-    },
+    SignatureFailure { depth: usize, reason: String },
 
     #[error("Holder mismatch: mandate is held by '{holder}', but invoked by '{invoker}'")]
-    HolderMismatch {
-        holder: String,
-        invoker: String,
-    },
+    HolderMismatch { holder: String, invoker: String },
 
     #[error("Service call unauthorized: URI '{uri}' is not in mandate allowed_services")]
-    ServiceCallUnauthorized {
-        uri: String,
-    },
+    ServiceCallUnauthorized { uri: String },
 
     #[error("Publish unauthorized: URI '{uri}' is not in mandate allowed_publish")]
-    PublishUnauthorized {
-        uri: String,
-    },
+    PublishUnauthorized { uri: String },
 
     #[error("Holder-supplied Datalog/script rules strictly forbidden by AgentOctopus security invariant")]
     HolderRulesForbidden,
@@ -149,16 +127,21 @@ pub fn validate_mesh_uri(uri: &str) -> Result<(), MandateError> {
 
     // Case A: IPv6 in bracket notation [addr] or [addr]:port
     if authority.starts_with('[') {
-        let closing = authority.find(']').ok_or_else(|| MandateError::ProhibitedTarget {
-            uri: uri.to_string(),
-            reason: "Malformed IPv6 bracket notation".to_string(),
-        })?;
+        let closing = authority
+            .find(']')
+            .ok_or_else(|| MandateError::ProhibitedTarget {
+                uri: uri.to_string(),
+                reason: "Malformed IPv6 bracket notation".to_string(),
+            })?;
         let ip_str = &authority[1..closing];
         let port_part = &authority[closing + 1..];
 
         if !port_part.is_empty() {
             if let Some(port_num) = port_part.strip_prefix(':') {
-                if port_num.is_empty() || !port_num.chars().all(|c| c.is_ascii_digit()) || port_num.parse::<u16>().is_err() {
+                if port_num.is_empty()
+                    || !port_num.chars().all(|c| c.is_ascii_digit())
+                    || port_num.parse::<u16>().is_err()
+                {
                     return Err(MandateError::ProhibitedTarget {
                         uri: uri.to_string(),
                         reason: "Malformed port in IPv6 URI".to_string(),
@@ -175,7 +158,9 @@ pub fn validate_mesh_uri(uri: &str) -> Result<(), MandateError> {
         if let Ok(ipv6) = Ipv6Addr::from_str(ip_str) {
             return Err(MandateError::ProhibitedTarget {
                 uri: uri.to_string(),
-                reason: format!("Raw IPv6 literal address forbidden; logical names required ({ipv6})"),
+                reason: format!(
+                    "Raw IPv6 literal address forbidden; logical names required ({ipv6})"
+                ),
             });
         }
     }
@@ -446,7 +431,8 @@ impl AttenuatedMandate {
             if delegator_vk != parent_link.delegatee_verifying_key {
                 return Err(MandateError::SignatureFailure {
                     depth: self.depth,
-                    reason: "Delegator signing key does not match parent delegatee verifying key".to_string(),
+                    reason: "Delegator signing key does not match parent delegatee verifying key"
+                        .to_string(),
                 });
             }
             if self.current_holder_spiffe_id != parent_link.delegatee_spiffe_id {
@@ -548,7 +534,8 @@ impl AttenuatedMandate {
         if self.delegation_chain[0].delegator_spiffe_id != self.root_issuer_spiffe_id {
             return Err(MandateError::SignatureFailure {
                 depth: 0,
-                reason: "Link 0 delegator SPIFFE ID does not match root issuer SPIFFE ID".to_string(),
+                reason: "Link 0 delegator SPIFFE ID does not match root issuer SPIFFE ID"
+                    .to_string(),
             });
         }
 
@@ -560,7 +547,10 @@ impl AttenuatedMandate {
             if link.depth != i {
                 return Err(MandateError::SignatureFailure {
                     depth: i,
-                    reason: format!("Link depth {} does not match chain position {}", link.depth, i),
+                    reason: format!(
+                        "Link depth {} does not match chain position {}",
+                        link.depth, i
+                    ),
                 });
             }
 
@@ -763,7 +753,9 @@ mod tests {
 
         assert_eq!(mandate.depth, 0);
         assert_eq!(mandate.delegation_chain.len(), 1);
-        assert!(mandate.verify_chain(&root_key.verifying_key().to_bytes(), 1500).is_ok());
+        assert!(mandate
+            .verify_chain(&root_key.verifying_key().to_bytes(), 1500)
+            .is_ok());
     }
 
     #[test]
@@ -811,7 +803,9 @@ mod tests {
         assert_eq!(child_mandate.delegation_chain.len(), 2);
         assert!(child_mandate.allowed_services.contains("mcp://calc"));
         assert!(!child_mandate.allowed_services.contains("mcp://payroll"));
-        assert!(child_mandate.verify_chain(&root_key.verifying_key().to_bytes(), 2000).is_ok());
+        assert!(child_mandate
+            .verify_chain(&root_key.verifying_key().to_bytes(), 2000)
+            .is_ok());
     }
 
     #[test]
@@ -850,7 +844,10 @@ mod tests {
             1500,
         );
 
-        assert!(matches!(res, Err(MandateError::PrivilegeEscalationService { .. })));
+        assert!(matches!(
+            res,
+            Err(MandateError::PrivilegeEscalationService { .. })
+        ));
     }
 
     #[test]
@@ -910,7 +907,9 @@ mod tests {
         let caller = "spiffe://agentoctopus.local/arm/publisher";
 
         // Publishing is authorized
-        assert!(mandate.authorize_publish(caller, "mcp://octopus/doc_extractor", now).is_ok());
+        assert!(mandate
+            .authorize_publish(caller, "mcp://octopus/doc_extractor", now)
+            .is_ok());
 
         // Calling is rejected (publishing does NOT confer calling right)
         assert!(matches!(
@@ -967,7 +966,9 @@ mod tests {
 
         assert_eq!(m2.depth, 2);
         assert_eq!(m2.delegation_chain.len(), 3);
-        assert!(m2.verify_chain(&k0.verifying_key().to_bytes(), 4000).is_ok());
+        assert!(m2
+            .verify_chain(&k0.verifying_key().to_bytes(), 4000)
+            .is_ok());
     }
 
     #[test]

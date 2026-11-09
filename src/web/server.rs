@@ -2850,17 +2850,19 @@ async fn handle_connection(
         }
 
         ("POST", "/api/siquery/query") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(
-                std::panic::AssertUnwindSafe(|| {
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     handle_siquery_query(&state, body, Some(peer_addr), local_port)
-                }),
-            ) {
-                Ok(pair) => pair,
-                Err(_) => (
-                    "500 Internal Server Error",
-                    api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/siquery/query"),
-                ),
-            };
+                })) {
+                    Ok(pair) => pair,
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/siquery/query",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -2872,17 +2874,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/siquery/tables") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(
-                std::panic::AssertUnwindSafe(|| {
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     handle_siquery_tables(&state, Some(peer_addr), local_port)
-                }),
-            ) {
-                Ok(pair) => pair,
-                Err(_) => (
-                    "500 Internal Server Error",
-                    api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/siquery/tables"),
-                ),
-            };
+                })) {
+                    Ok(pair) => pair,
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/siquery/tables",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -2894,17 +2898,19 @@ async fn handle_connection(
         }
 
         ("GET", "/api/siquery/edr-status") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(
-                std::panic::AssertUnwindSafe(|| {
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     handle_siquery_edr_status(&state, Some(peer_addr), local_port)
-                }),
-            ) {
-                Ok(pair) => pair,
-                Err(_) => (
-                    "500 Internal Server Error",
-                    api_error_payload("INTERNAL_SERVER_ERROR", "Internal fault in /api/siquery/edr-status"),
-                ),
-            };
+                })) {
+                    Ok(pair) => pair,
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/siquery/edr-status",
+                        ),
+                    ),
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
@@ -2916,20 +2922,19 @@ async fn handle_connection(
         }
 
         ("POST", "/api/siquery/protect-sweep") | ("POST", "/api/siquery/sweep") => {
-            let (status_code, json_body) = match std::panic::catch_unwind(
-                std::panic::AssertUnwindSafe(|| {
+            let (status_code, json_body) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     handle_siquery_protect_sweep(&state, body, Some(peer_addr), local_port)
-                }),
-            ) {
-                Ok(pair) => pair,
-                Err(_) => (
-                    "500 Internal Server Error",
-                    api_error_payload(
-                        "INTERNAL_SERVER_ERROR",
-                        "Internal fault in /api/siquery/protect-sweep",
+                })) {
+                    Ok(pair) => pair,
+                    Err(_) => (
+                        "500 Internal Server Error",
+                        api_error_payload(
+                            "INTERNAL_SERVER_ERROR",
+                            "Internal fault in /api/siquery/protect-sweep",
+                        ),
                     ),
-                ),
-            };
+                };
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
