@@ -27,6 +27,7 @@ use agent_octopus::security::mercury_guard::MercuryContainmentEngine;
 use agent_octopus::security::wasm_tier1::{
     WasmSandboxLimits, WasmTier1Executor, WASM_DOC_EXTRACTOR_WAT,
 };
+#[cfg(target_os = "windows")]
 use agent_octopus::security::windows_sandbox::{
     verify_process_appcontainer_token, WindowsJobObject,
 };
