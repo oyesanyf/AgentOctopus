@@ -1781,6 +1781,9 @@ fn clear_persisted_wfp_filter_ids() {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
+fn clear_persisted_wfp_filter_ids() {}
+
 /// Queries live Windows Base Filtering Engine (BFE) or verified filter ledger to check if
 /// real kernel quarantine filters are currently active. Prevents split-brain stale ledgers
 /// from short-circuiting `/api/killswitch/engage`.
