@@ -1,8 +1,9 @@
+#[cfg(target_arch = "x86_64")]
+use agent_octopus::security::FwpmFilter0;
 use agent_octopus::security::{
     build_linux_blackhole_route_msg, discover_active_octopus_ports,
-    generate_macos_pf_quarantine_rules, handle_wfp_kernel_apply_cli, FwpmFilter0,
-    HostIsolationError, HostKillSwitchManager, UniversalProtocolCatalog, BLOCKED_L2_ETHERTYPES,
-    FORBIDDEN_PORT_5000,
+    generate_macos_pf_quarantine_rules, handle_wfp_kernel_apply_cli, HostIsolationError,
+    HostKillSwitchManager, UniversalProtocolCatalog, BLOCKED_L2_ETHERTYPES, FORBIDDEN_PORT_5000,
 };
 use agent_octopus::web::api::{
     handle_killswitch_disarm, handle_killswitch_engage, handle_killswitch_protocols,
