@@ -874,3 +874,25 @@ async fn test_tier5_safeagents_client_sse_chunk_rewriter_stress() {
     let res6 = client.transform_openai_chunk(malformed);
     assert_eq!(res6, malformed);
 }
+
+// ============================================================================
+// 7. DOMAIN SUBSTRING CONFUSION & HOST SOURCING VERIFICATION
+// ============================================================================
+
+#[test]
+fn test_tier5_domain_substring_confusion_prevention() {
+    let evaluator = SafeAgentsHarnessEvaluator::new();
+    let user_prompts = &["Check the repository at https://github.com"];
+
+    // Attacker calls "hub.com" - must be rejected!
+    let permitted = evaluator.is_host_permitted("hub.com", user_prompts, &[]);
+    assert!(
+        !permitted,
+        "'hub.com' must be rejected when user prompt only contains 'https://github.com'"
+    );
+
+    // Legitimate github.com is permitted
+    assert!(evaluator.is_host_permitted("github.com", user_prompts, &[]));
+    // Subdomain api.github.com is permitted
+    assert!(evaluator.is_host_permitted("api.github.com", user_prompts, &[]));
+}
