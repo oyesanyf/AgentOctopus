@@ -578,11 +578,8 @@ mod tests {
             String::from_utf8_lossy(&allow_out.stdout),
             String::from_utf8_lossy(&allow_out.stderr)
         );
-        assert_eq!(
-            std::fs::read_to_string(&allowed_file).as_deref(),
-            Ok("confined"),
-            "allowed write should persist in allowed_dir"
-        );
+        let actual = std::fs::read_to_string(&allowed_file).expect("read allowed_file");
+        assert_eq!(actual, "confined");
 
         let escape_file = forbidden_dir.join("escape.txt");
         let esc = escape_file.display();
