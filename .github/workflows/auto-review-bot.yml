@@ -1,0 +1,118 @@
+name: Automated Security Invariant & Code Review Bot
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions: read-all
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  auto-review:
+    name: Security Invariant Verification & Auto-Approve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: Checkout base repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Verify Invariants and Approve PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PR_NUMBER}" ]; then
+            echo "workflow_dispatch without PR context; nothing to review."
+            exit 0
+          fi
+
+          post_pr_comment() {
+            local msg_file
+            msg_file=$(mktemp)
+            printf '%s\n' "$1" > "${msg_file}"
+            gh pr comment "${PR_NUMBER}" --repo "${REPO}" --body-file "${msg_file}" || true
+            rm -f "${msg_file}"
+          }
+
+          approve_pr_with_file() {
+            local msg_file
+            msg_file=$(mktemp)
+            printf '%s\n' "$1" > "${msg_file}"
+            gh pr review "${PR_NUMBER}" --repo "${REPO}" --approve --body-file "${msg_file}" || true
+            rm -f "${msg_file}"
+          }
+
+          echo "Inspecting PR #${PR_NUMBER} by @${PR_AUTHOR} (${PR_ASSOCIATION}) head=${PR_HEAD_SHA} ref=${PR_HEAD_REF}"
+          FILES_JSON=$(gh api "/repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100")
+          FILE_COUNT=$(echo "${FILES_JSON}" | jq 'length')
+
+          # Invariant 1: Block forbidden binary blobs and private key material
+          FORBIDDEN_ASSETS=$(echo "${FILES_JSON}" | jq -r '.[].filename' | grep -E '\.(exe|dll|sys|msi|pem|pfx|key|p12)$' || true)
+          if [ -n "${FORBIDDEN_ASSETS}" ]; then
+            echo "::error::Forbidden binary or private key material detected: ${FORBIDDEN_ASSETS}"
+            post_pr_comment "❌ **Security Invariant Check Failed**: Forbidden binary or private key file detected: \`${FORBIDDEN_ASSETS}\`."
+            exit 1
+          fi
+
+          # Invariant 2: WiX and Windows PATH immutability
+          WIX_PATCHES=$(echo "${FILES_JSON}" | jq -r '.[] | select(.filename | endswith(".wxs") or endswith(".wxi")) | .patch // empty')
+          if echo "${WIX_PATCHES}" | grep -E '\+.*(<Environment[^>]*Id="PATH"|Environment.*PATH.*Permanent="no")' >/dev/null 2>&1; then
+            echo "::error::WiX PATH immutability violation detected."
+            post_pr_comment "❌ **Security Invariant Check Failed**: WiX manifest contains prohibited \`PATH\` environment mutation."
+            exit 1
+          fi
+
+          NON_DOC_PATCHES=$(echo "${FILES_JSON}" | jq -r '.[] | select((.filename | startswith("tests/") or endswith(".md") or startswith(".github/workflows/")) | not) | .patch // empty')
+          if echo "${NON_DOC_PATCHES}" | grep -E '^\+.*(HKCU\\Environment|setx\s+)' >/dev/null 2>&1; then
+            echo "::error::Unauthorized persistent user/system PATH mutation detected."
+            post_pr_comment "❌ **Security Invariant Check Failed**: Detected prohibited \`HKCU\\Environment\` or \`setx\` registry mutation."
+            exit 1
+          fi
+
+          # Invariant 3: Hermetic build.rs guard
+          BUILD_RS_PATCHES=$(echo "${FILES_JSON}" | jq -r '.[] | select(.filename | endswith("build.rs")) | .patch // empty')
+          if echo "${BUILD_RS_PATCHES}" | grep -E '^\+.*(TcpStream::connect|reqwest::|Invoke-WebRequest|curl\s+http|169\.254\.169\.254)' >/dev/null 2>&1; then
+            echo "::error::Unauthorized network or IMDS call detected in build.rs patch."
+            post_pr_comment "❌ **Supply-Chain Guard Failed**: Unauthorized network/IMDS call detected in \`build.rs\`."
+            exit 1
+          fi
+
+          # Invariant 4: Fail closed on workflow privilege escalation patterns
+          WORKFLOW_PATCHES=$(echo "${FILES_JSON}" | jq -r '.[] | select(.filename | startswith(".github/workflows/")) | .patch // empty')
+          if echo "${WORKFLOW_PATCHES}" | grep -E '^\+.*(permissions:\s*write-all|persist-credentials:\s*true|curl.*SECRETS|wget.*GITHUB_TOKEN)' >/dev/null 2>&1; then
+            echo "::error::Unauthorized workflow privilege escalation detected."
+            post_pr_comment "❌ **Workflow Security Guard Failed**: Detected unauthorized workflow privilege escalation or token exfiltration pattern."
+            exit 1
+          fi
+
+          # Invariant 5: Guard critical security/workflow changes from unverified forks/authors
+          CRITICAL_MODS=$(echo "${FILES_JSON}" | jq -r '.[].filename' | grep -E '^(\.github/workflows/|src/security/)' || true)
+          if [ -n "${CRITICAL_MODS}" ]; then
+            if [ "${PR_AUTHOR}" != "oyesanyf" ] || [ "${PR_ASSOCIATION}" != "OWNER" ] || [ "${PR_HEAD_REPO}" != "${REPO}" ] || [[ "${PR_HEAD_REF}" != pr/solo-* ]]; then
+              echo "::notice::Manual human peer review required for critical path edits: ${CRITICAL_MODS}"
+              post_pr_comment "🛡️ **Security Invariant Guard**: Automated bot approval skipped because PR touches critical security/workflow paths (\`${CRITICAL_MODS}\`) outside the authorized \`pr/solo-*\` owner pipeline."
+              exit 0
+            fi
+          fi
+
+          if [ "${PR_AUTHOR}" = "oyesanyf" ] || [ "${PR_AUTHOR}" = "dependabot[bot]" ] || [ "${PR_ASSOCIATION}" = "OWNER" ] || [ "${PR_ASSOCIATION}" = "MEMBER" ] || [ "${PR_ASSOCIATION}" = "COLLABORATOR" ]; then
+            approve_pr_with_file "✅ **AgentOctopus Auto-Review Bot**: Verified contributor (\`@${PR_AUTHOR}\`, ${PR_ASSOCIATION}), commit \`${PR_HEAD_SHA}\` (${FILE_COUNT} file(s)), and repository security invariants (zero binaries/private keys, PATH immutability, hermetic build.rs). Merge remains gated on full PR CI checks."
+          else
+            post_pr_comment "✅ **AgentOctopus Security Invariant Gate**: Verified commit \`${PR_HEAD_SHA}\` (${FILE_COUNT} file(s)). Ready for maintainer peer review."
+          fi
