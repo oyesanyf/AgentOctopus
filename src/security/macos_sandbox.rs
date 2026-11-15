@@ -22,7 +22,7 @@ use crate::core::types::OctopusSecurityError;
 #[cfg(target_os = "macos")]
 use std::collections::{HashSet, VecDeque};
 #[cfg(target_os = "macos")]
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 
 /// Configuration for spawning a macOS Seatbelt-confined process.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,20 +102,45 @@ pub fn resolve_macos_program_path(program: &Path) -> PathBuf {
 /// - Grants access strictly to minimal OS shared libraries, `/dev/{null,zero,random,urandom}`,
 ///   and declared `read_only_dirs` / `read_write_dirs` / `working_dir`.
 pub fn generate_macos_seatbelt_profile(config: &SandboxedMacosConfig) -> String {
-    let mut profile = String::with_capacity(1024);
+    let mut profile = String::with_capacity(2048);
     profile.push_str("(version 1)\n");
     profile.push_str("(deny default)\n");
-    profile.push_str("(allow process-fork)\n");
+    profile.push_str("(import \"system.sb\")\n");
+    profile.push_str("(allow process-exec* process-fork sysctl-read)\n");
     profile.push_str("(allow process-info* (target self))\n");
-    profile.push_str("(allow signal (target self))\n");
-    profile.push_str("(allow sysctl-read)\n");
+    profile.push_str("(allow signal (target same-sandbox))\n");
     profile.push_str("(allow file-read-metadata)\n");
-    profile.push_str(
-        "(allow file-read*\n    (subpath \"/usr/lib\")\n    (subpath \"/usr/share\")\n    (subpath \"/System/Library\")\n    (subpath \"/Library/Apple\")\n    (literal \"/dev/null\")\n    (literal \"/dev/zero\")\n    (literal \"/dev/random\")\n    (literal \"/dev/urandom\")\n    (literal \"/private/var/run/syslog\"))\n",
-    );
-    profile.push_str(
-        "(allow file-write*\n    (literal \"/dev/null\")\n    (literal \"/dev/zero\"))\n",
-    );
+    profile.push_str("(allow mach-lookup\n");
+    profile.push_str("    (global-name \"com.apple.system.logger\")\n");
+    profile.push_str("    (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n");
+    profile.push_str("(allow file-read* file-write*\n");
+    profile.push_str("    (literal \"/dev/null\")\n");
+    profile.push_str("    (literal \"/dev/zero\")\n");
+    profile.push_str("    (literal \"/dev/dtracehelper\"))\n");
+    profile.push_str("(allow file-ioctl\n");
+    profile.push_str("    (literal \"/dev/null\")\n");
+    profile.push_str("    (literal \"/dev/tty\")\n");
+    profile.push_str("    (literal \"/dev/dtracehelper\"))\n");
+    profile.push_str("(allow file-read* file-map-executable\n");
+    for base_path in [
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/System",
+        "/Library",
+        "/opt",
+        "/Applications",
+        "/private/preboot",
+        "/private/var/db/dyld",
+        "/private/var/db/xcode_select_link",
+        "/private/var/select",
+        "/private/etc",
+        "/etc",
+        "/dev",
+    ] {
+        profile.push_str(&format!("    (subpath \"{}\")\n", base_path));
+    }
+    profile.push_str(")\n");
 
     let mut exec_paths = Vec::new();
     let resolved_prog = resolve_macos_program_path(&config.program);
@@ -124,7 +149,10 @@ pub fn generate_macos_seatbelt_profile(config: &SandboxedMacosConfig) -> String 
     for exec_path in &exec_paths {
         let escaped = escape_sbpl_path(exec_path);
         profile.push_str(&format!("(allow process-exec (literal \"{}\"))\n", escaped));
-        profile.push_str(&format!("(allow file-read* (literal \"{}\"))\n", escaped));
+        profile.push_str(&format!(
+            "(allow file-read* file-map-executable (literal \"{}\"))\n",
+            escaped
+        ));
     }
 
     let mut ro_paths = Vec::new();
@@ -419,6 +447,21 @@ impl SandboxedMacosProcess {
         })
     }
 
+    /// Waits for the confined child process to exit and captures stdout/stderr output.
+    pub fn wait_with_output(&mut self) -> Result<Output, OctopusSecurityError> {
+        let child = self.child.take().ok_or_else(|| {
+            OctopusSecurityError::IsolationViolation(
+                "SandboxedMacosProcess child handle already consumed".to_string(),
+            )
+        })?;
+        child.wait_with_output().map_err(|e| {
+            OctopusSecurityError::IsolationViolation(format!(
+                "Failed capturing output from macOS sandbox-exec child: {}",
+                e
+            ))
+        })
+    }
+
     /// Takes ownership of the underlying `std::process::Child` if still active.
     pub fn take_child(&mut self) -> Option<Child> {
         self.child.take()
@@ -458,12 +501,16 @@ mod tests {
             read_write_dirs: vec![PathBuf::from("/tmp/agent_rw")],
             working_dir: Some(PathBuf::from("/tmp/agent_work")),
             allow_loopback: true,
-            control_ports: vec![0, 53, 67, 68, 135, 445, 1080, 3128, 5000, 5005, 8080, 8888, 9050],
+            control_ports: vec![
+                0, 53, 67, 68, 135, 445, 1080, 3128, 5000, 5005, 8080, 8888, 9050,
+            ],
         };
 
         let sbpl = generate_macos_seatbelt_profile(&cfg);
         assert!(sbpl.contains("(version 1)"));
         assert!(sbpl.contains("(deny default)"));
+        assert!(sbpl.contains("(import \"system.sb\")"));
+        assert!(sbpl.contains("(allow file-read* file-map-executable"));
         assert!(sbpl.contains("(deny network*)"));
         assert!(sbpl.contains("(allow file-read* (subpath \"/opt/agent_ro\"))"));
         assert!(sbpl.contains("(allow file-read* file-write* (subpath \"/tmp/agent_rw\"))"));
@@ -471,7 +518,9 @@ mod tests {
         assert!(sbpl.contains("(allow network-outbound (remote tcp \"localhost:5005\"))"));
         assert!(sbpl.contains("(allow network-inbound (local tcp \"localhost:5005\"))"));
 
-        for blocked in [0u16, 53, 67, 68, 135, 445, 1080, 3128, 5000, 8080, 8888, 9050] {
+        for blocked in [
+            0u16, 53, 67, 68, 135, 445, 1080, 3128, 5000, 8080, 8888, 9050,
+        ] {
             assert!(
                 !sbpl.contains(&format!("localhost:{}\"", blocked)),
                 "SBPL must never allow blocked port {}",
@@ -501,23 +550,66 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn test_macos_sandboxed_agent_enforces_seatbelt_isolation() {
-        let tmp = std::env::temp_dir().join(format!("octo_sbpl_test_{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&tmp);
-        let cfg = SandboxedMacosConfig {
+        let pid = std::process::id();
+        let base = std::env::temp_dir().join(format!("octo_sbpl_test_{}", pid));
+        let allowed_dir = base.join("allowed");
+        let forbidden_dir = base.join("forbidden");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&allowed_dir).expect("create allowed_dir");
+        std::fs::create_dir_all(&forbidden_dir).expect("create forbidden_dir");
+
+        let allowed_file = allowed_dir.join("ok.txt");
+        let allow_cmd = format!("printf confined > '{}'", allowed_file.display());
+        let allow_cfg = SandboxedMacosConfig {
             program: PathBuf::from("/bin/sh"),
-            args: vec![
-                "-c".to_string(),
-                "ls /Users >/dev/null 2>&1 && exit 42 || exit 0".to_string(),
-            ],
+            args: vec!["-c".to_string(), allow_cmd],
             read_only_dirs: vec![PathBuf::from("/bin")],
-            read_write_dirs: vec![tmp.clone()],
-            working_dir: Some(tmp.clone()),
+            read_write_dirs: vec![allowed_dir.clone()],
+            working_dir: Some(allowed_dir.clone()),
             allow_loopback: false,
             control_ports: vec![],
         };
-        let mut proc_handle = spawn_macos_seatbelt_process(&cfg).expect("spawn sandbox-exec");
-        let status = proc_handle.wait().expect("wait sandbox-exec");
-        let _ = std::fs::remove_dir_all(&tmp);
-        assert!(status.success(), "Seatbelt must deny /Users read: {:?}", status);
+        let mut allow_proc = spawn_macos_seatbelt_process(&allow_cfg).expect("spawn allowed");
+        let allow_out = allow_proc.wait_with_output().expect("wait allowed");
+        assert!(
+            allow_out.status.success(),
+            "Seatbelt allowed write failed: {:?} stdout={} stderr={}",
+            allow_out.status,
+            String::from_utf8_lossy(&allow_out.stdout),
+            String::from_utf8_lossy(&allow_out.stderr)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&allowed_file).as_deref(),
+            Ok("confined"),
+            "allowed write should persist in allowed_dir"
+        );
+
+        let escape_file = forbidden_dir.join("escape.txt");
+        let esc = escape_file.display();
+        let deny_cmd = format!("ls /Users >/dev/null 2>&1 || touch '{esc}' 2>/dev/null");
+        let deny_cfg = SandboxedMacosConfig {
+            program: PathBuf::from("/bin/sh"),
+            args: vec!["-c".to_string(), deny_cmd],
+            read_only_dirs: vec![PathBuf::from("/bin")],
+            read_write_dirs: vec![allowed_dir.clone()],
+            working_dir: Some(allowed_dir),
+            allow_loopback: false,
+            control_ports: vec![],
+        };
+        let mut deny_proc = spawn_macos_seatbelt_process(&deny_cfg).expect("spawn deny");
+        let deny_out = deny_proc.wait_with_output().expect("wait deny");
+        let escape_exists = escape_file.exists();
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            !deny_out.status.success() && deny_out.status.code().is_some(),
+            "Seatbelt must deny escape cleanly: {:?} stdout={} stderr={}",
+            deny_out.status,
+            String::from_utf8_lossy(&deny_out.stdout),
+            String::from_utf8_lossy(&deny_out.stderr)
+        );
+        assert!(
+            !escape_exists,
+            "Seatbelt must prevent creating escape file outside read_write_dirs"
+        );
     }
 }

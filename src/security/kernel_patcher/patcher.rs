@@ -263,8 +263,9 @@ impl KernelPatcher {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        let child = crate::security::spawn_hidden_tokio(&mut cmd, "kernel_patcher: native OS patch")
-            .map_err(|e| PatcherError::ExecutionFailed(e.to_string()))?;
+        let child =
+            crate::security::spawn_hidden_tokio(&mut cmd, "kernel_patcher: native OS patch")
+                .map_err(|e| PatcherError::ExecutionFailed(e.to_string()))?;
         let status = child
             .wait_with_output()
             .await

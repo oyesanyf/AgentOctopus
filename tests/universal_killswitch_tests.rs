@@ -85,19 +85,19 @@ fn test_octopus_port_discovery_and_cross_platform_zero_leak_quarantine_builders(
     let joined = pf_lines.join("\n");
     assert!(!joined.contains("pass quick on lo0 all"));
     assert!(!joined.contains("pass quick from 127.0.0.1 to any"));
-    assert!(joined.contains("on lo0 inet proto tcp from 127.0.0.1 to 127.0.0.1 port 5005 keep state"));
+    assert!(
+        joined.contains("on lo0 inet proto tcp from 127.0.0.1 to 127.0.0.1 port 5005 keep state")
+    );
     assert!(joined.contains("169.254.0.0/16"));
     assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 53"));
     assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 67"));
     assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 68"));
     assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 8080"));
-    assert!(!pf_lines
-        .iter()
-        .any(|line| line.starts_with("pass ")
-            && (line.contains("port 53")
-                || line.contains("port 67")
-                || line.contains("port 68")
-                || line.contains("port 8080"))));
+    assert!(!pf_lines.iter().any(|line| line.starts_with("pass ")
+        && (line.contains("port 53")
+            || line.contains("port 67")
+            || line.contains("port 68")
+            || line.contains("port 8080"))));
     assert!(joined.contains("block drop in quick all"));
     assert!(joined.contains("block drop out quick all"));
 }

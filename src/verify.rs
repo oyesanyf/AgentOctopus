@@ -335,7 +335,10 @@ impl SubsystemVerifier {
             .await
             .map_err(|e| format!("Offline kernel patch dry-run failed: {e}"))?;
         if !dry_run.dry_run || !dry_run.success || dry_run.command.is_empty() {
-            return Err(format!("Unexpected kernel patch dry-run result: {:?}", dry_run));
+            return Err(format!(
+                "Unexpected kernel patch dry-run result: {:?}",
+                dry_run
+            ));
         }
 
         Ok(())

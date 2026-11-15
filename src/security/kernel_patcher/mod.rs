@@ -19,9 +19,7 @@ pub mod types;
 pub use error::PatcherError;
 pub use patcher::{resolve_nvd_api_key, KernelPatcher};
 pub use privilege::is_elevated;
-pub use types::{
-    HostKernelInfo, KernelVulnerability, OsFamily, PatchExecutionResult, ScanOptions,
-};
+pub use types::{HostKernelInfo, KernelVulnerability, OsFamily, PatchExecutionResult, ScanOptions};
 
 use serde::{Deserialize, Serialize};
 
@@ -288,7 +286,10 @@ pub async fn execute_patch_kernel_cli(args: &PatchKernelCliArgs) -> Result<(), P
                 .unwrap_or_else(|| "N/A".to_string());
             let sev_str = v.cvss_v31_severity.as_deref().unwrap_or("UNKNOWN");
             if v.is_cisa_kev {
-                println!("  [CISA KEV] {} | CVSS v3.1: {} ({})", v.cve_id, score_str, sev_str);
+                println!(
+                    "  [CISA KEV] {} | CVSS v3.1: {} ({})",
+                    v.cve_id, score_str, sev_str
+                );
                 if let Some(ref action) = v.cisa_required_action {
                     println!("    Required Action: {action}");
                 }
@@ -495,8 +496,14 @@ mod tests {
         assert_eq!(escape_cpe_attribute("   "), "*");
         assert_eq!(escape_cpe_attribute("-"), "-");
 
-        assert_eq!(canonicalize_linux_kernel_version("6.8.0-49-generic"), "6.8.0");
-        assert_eq!(canonicalize_linux_kernel_version("5.15.167.4-microsoft-standard-WSL2"), "5.15.167");
+        assert_eq!(
+            canonicalize_linux_kernel_version("6.8.0-49-generic"),
+            "6.8.0"
+        );
+        assert_eq!(
+            canonicalize_linux_kernel_version("5.15.167.4-microsoft-standard-WSL2"),
+            "5.15.167"
+        );
 
         assert_eq!(
             canonicalize_windows_cpe(22631, false, Some("23H2")),
@@ -556,16 +563,14 @@ PRETTY_NAME="Ubuntu 24.04 LTS"
 
         let mac_info = parse_macos_kernel_info(Some("14.4.1"), "23.4.0", "aarch64");
         assert_eq!(mac_info.os_family, OsFamily::MacOS);
-        assert_eq!(
-            mac_info.cpe23,
-            "cpe:2.3:o:apple:macos:14.4.1:*:*:*:*:*:*:*"
-        );
+        assert_eq!(mac_info.cpe23, "cpe:2.3:o:apple:macos:14.4.1:*:*:*:*:*:*:*");
         assert_valid_cpe23(&mac_info.cpe23);
     }
 
     #[test]
     fn test_host_kernel_detection_on_current_os() {
-        let info = HostKernelInfo::detect_host_kernel().expect("host kernel detection must succeed");
+        let info =
+            HostKernelInfo::detect_host_kernel().expect("host kernel detection must succeed");
         assert!(!info.kernel_release.is_empty());
         assert!(!info.architecture.is_empty());
         assert_valid_cpe23(&info.cpe23);

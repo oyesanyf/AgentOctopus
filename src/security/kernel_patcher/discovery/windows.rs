@@ -197,20 +197,21 @@ fn read_reg_string(hkey: windows_sys::Win32::System::Registry::HKEY, name: &str)
 #[cfg(windows)]
 pub fn query_windows_registry() -> WindowsRegistryInfo {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
-    use windows_sys::Win32::System::Registry::{HKEY, HKEY_LOCAL_MACHINE, KEY_READ, RegOpenKeyExW};
+    use windows_sys::Win32::System::Registry::{RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ};
 
     let subkey = to_wide_null("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
     let mut hkey: HKEY = std::ptr::null_mut();
 
-    let status = unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.as_ptr(), 0, KEY_READ, &mut hkey) };
+    let status =
+        unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.as_ptr(), 0, KEY_READ, &mut hkey) };
     if status != ERROR_SUCCESS || hkey.is_null() {
         return WindowsRegistryInfo::default();
     }
 
     let guard = RegKeyGuard(hkey);
     let ubr = read_reg_dword(guard.0, "UBR");
-    let display_version =
-        read_reg_string(guard.0, "DisplayVersion").or_else(|| read_reg_string(guard.0, "ReleaseId"));
+    let display_version = read_reg_string(guard.0, "DisplayVersion")
+        .or_else(|| read_reg_string(guard.0, "ReleaseId"));
     let product_name = read_reg_string(guard.0, "ProductName");
     let edition_id = read_reg_string(guard.0, "EditionID");
     let installation_type = read_reg_string(guard.0, "InstallationType");

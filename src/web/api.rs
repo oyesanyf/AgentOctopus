@@ -4952,12 +4952,10 @@ pub fn parse_kernel_scan_disabled(primary: Option<&str>, fallback: Option<&str>)
 
     match raw {
         None => false,
-        Some(val) => {
-            !matches!(
-                val.to_ascii_lowercase().as_str(),
-                "0" | "false" | "no" | "off"
-            )
-        }
+        Some(val) => !matches!(
+            val.to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
     }
 }
 

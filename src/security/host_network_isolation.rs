@@ -1158,9 +1158,7 @@ impl WfpKernelSession {
 
         let sanitized_ports = sanitize_firewall_preserved_ports(preserved_ports);
         let mut app_id_blob: *mut FwpByteBlob = std::ptr::null_mut();
-        if let (Some(fn_get_app_id), Ok(exe_path)) =
-            (self.fn_get_app_id, std::env::current_exe())
-        {
+        if let (Some(fn_get_app_id), Ok(exe_path)) = (self.fn_get_app_id, std::env::current_exe()) {
             let exe_w: Vec<u16> = exe_path
                 .to_string_lossy()
                 .encode_utf16()
@@ -1651,7 +1649,9 @@ impl WfpKernelSession {
 
         if let Some(fn_free) = self.fn_free.filter(|_| !app_id_blob.is_null()) {
             unsafe {
-                fn_free((&mut app_id_blob as *mut *mut FwpByteBlob).cast::<*mut std::ffi::c_void>());
+                fn_free(
+                    (&mut app_id_blob as *mut *mut FwpByteBlob).cast::<*mut std::ffi::c_void>(),
+                );
             }
         }
 
@@ -2545,36 +2545,36 @@ fn parse_proc_net_destroy_targets(
             continue;
         };
 
-        let (local_words, remote_words, local_exact_lb, remote_exact_lb, remote_unspec) =
-            if is_ipv6 {
-                let Some((l_words, l_octets)) = parse_linux_ipv6_hex_words(l_ip_hex) else {
-                    continue;
-                };
-                let Some((r_words, r_octets)) = parse_linux_ipv6_hex_words(r_ip_hex) else {
-                    continue;
-                };
-                (
-                    l_words,
-                    r_words,
-                    is_exact_localhost_v6(l_octets),
-                    is_exact_localhost_v6(r_octets),
-                    r_octets == [0u8; 16] && r_port == 0,
-                )
-            } else {
-                let Some((l_word, l_octets)) = parse_linux_ipv4_hex_word(l_ip_hex) else {
-                    continue;
-                };
-                let Some((r_word, r_octets)) = parse_linux_ipv4_hex_word(r_ip_hex) else {
-                    continue;
-                };
-                (
-                    [l_word, 0, 0, 0],
-                    [r_word, 0, 0, 0],
-                    is_exact_localhost_v4(l_octets),
-                    is_exact_localhost_v4(r_octets),
-                    r_octets == [0u8; 4] && r_port == 0,
-                )
+        let (local_words, remote_words, local_exact_lb, remote_exact_lb, remote_unspec) = if is_ipv6
+        {
+            let Some((l_words, l_octets)) = parse_linux_ipv6_hex_words(l_ip_hex) else {
+                continue;
             };
+            let Some((r_words, r_octets)) = parse_linux_ipv6_hex_words(r_ip_hex) else {
+                continue;
+            };
+            (
+                l_words,
+                r_words,
+                is_exact_localhost_v6(l_octets),
+                is_exact_localhost_v6(r_octets),
+                r_octets == [0u8; 16] && r_port == 0,
+            )
+        } else {
+            let Some((l_word, l_octets)) = parse_linux_ipv4_hex_word(l_ip_hex) else {
+                continue;
+            };
+            let Some((r_word, r_octets)) = parse_linux_ipv4_hex_word(r_ip_hex) else {
+                continue;
+            };
+            (
+                [l_word, 0, 0, 0],
+                [r_word, 0, 0, 0],
+                is_exact_localhost_v4(l_octets),
+                is_exact_localhost_v4(r_octets),
+                r_octets == [0u8; 4] && r_port == 0,
+            )
+        };
 
         let hits_blocked_port = is_explicitly_blocked_quarantine_port(l_port)
             || is_explicitly_blocked_quarantine_port(r_port);
@@ -2633,7 +2633,10 @@ pub fn generate_linux_nftables_quarantine_script(preserved_ports: &[u16]) -> Str
     script.push_str("add table inet agent_octopus_quarantine\n");
     script.push_str("delete table inet agent_octopus_quarantine\n");
     script.push_str("table inet agent_octopus_quarantine {\n");
-    for (chain_name, hook, iface_kw) in [("input", "input", "iifname"), ("output", "output", "oifname")] {
+    for (chain_name, hook, iface_kw) in [
+        ("input", "input", "iifname"),
+        ("output", "output", "oifname"),
+    ] {
         script.push_str(&format!("    chain {} {{\n", chain_name));
         script.push_str(&format!(
             "        type filter hook {} priority -200; policy drop;\n",
@@ -3676,8 +3679,8 @@ mod tests {
     #[test]
     fn test_sanitize_firewall_preserved_ports_strips_proxy_lateral_discovery_and_5000() {
         let input = [
-            0, 53, 67, 68, 135, 445, 546, 547, 853, 1080, 3128, 5000, 5005, 5005, 5985, 5986,
-            8080, 8888, 9050, 5012,
+            0, 53, 67, 68, 135, 445, 546, 547, 853, 1080, 3128, 5000, 5005, 5005, 5985, 5986, 8080,
+            8888, 9050, 5012,
         ];
         assert_eq!(sanitize_firewall_preserved_ports(&input), vec![5005, 5012]);
         for &blocked in QUARANTINE_BLOCKED_LOOPBACK_PROXY_PORTS
@@ -3718,7 +3721,8 @@ mod tests {
 
     #[test]
     fn test_hardened_macos_pf_rules_reject_blanket_lo0_and_block_proxy_lateral_discovery() {
-        let rules = generate_macos_pf_quarantine_rules("agent_octopus", &[5005, 8080, 53, 445, 5000]);
+        let rules =
+            generate_macos_pf_quarantine_rules("agent_octopus", &[5005, 8080, 53, 445, 5000]);
         let joined = rules.join("\n");
 
         assert!(!joined.contains("pass quick on lo0 all"));
@@ -3730,9 +3734,13 @@ mod tests {
         assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 53"));
         assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 67"));
         assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 68"));
-        assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 8080"));
+        assert!(
+            joined.contains("block drop out quick proto { tcp, udp } from any to any port 8080")
+        );
         assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 445"));
-        assert!(joined.contains("pass in quick on lo0 inet proto tcp from 127.0.0.1 to 127.0.0.1 port 5005 keep state"));
+        assert!(joined.contains(
+            "pass in quick on lo0 inet proto tcp from 127.0.0.1 to 127.0.0.1 port 5005 keep state"
+        ));
         assert!(!joined.contains("port 8080 keep state"));
         assert!(!joined.contains("port 53 keep state"));
         assert!(joined.contains("block drop in quick all"));

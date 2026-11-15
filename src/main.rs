@@ -429,16 +429,15 @@ async fn main() {
                     2
                 };
                 let sub_args = cli_args.get(offset..).unwrap_or(&[]);
-                let parsed =
-                    match agent_octopus::security::kernel_patcher::parse_patch_kernel_args(
-                        sub_args,
-                    ) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            eprintln!("Error: {}", e);
-                            std::process::exit(2);
-                        }
-                    };
+                let parsed = match agent_octopus::security::kernel_patcher::parse_patch_kernel_args(
+                    sub_args,
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(2);
+                    }
+                };
                 match agent_octopus::security::kernel_patcher::execute_patch_kernel_cli(&parsed)
                     .await
                 {
