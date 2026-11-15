@@ -60,6 +60,16 @@ pub fn json_error_payload(code: &str, message: &str) -> String {
     .to_string()
 }
 
+/// Summary of the latest background OS kernel vulnerability scan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KernelScanSummary {
+    pub scanned_at: chrono::DateTime<chrono::Utc>,
+    pub host_kernel: crate::security::kernel_patcher::HostKernelInfo,
+    pub vulnerability_count: usize,
+    pub cisa_kev_count: usize,
+    pub vulnerabilities: Vec<crate::security::kernel_patcher::KernelVulnerability>,
+}
+
 /// Global state shared across web API requests.
 pub struct WebState {
     pub gateway: Arc<CedarAuthorizationGateway>,
@@ -91,6 +101,7 @@ pub struct WebState {
     pub cage_engine: Arc<CageGovernanceEngine>,
     pub cage_substrate: Arc<crate::security::cage_substrate::CageSubstrateState>,
     pub agentmesh_engine: Arc<crate::security::agentmesh::AgentMeshEngine>,
+    pub latest_kernel_scan: Arc<tokio::sync::RwLock<Option<KernelScanSummary>>>,
 }
 
 fn load_or_init_egress_domains() -> Vec<String> {
@@ -292,6 +303,8 @@ impl Default for WebState {
             .expect("Failed to initialize AgentMeshEngine"),
         );
 
+        let latest_kernel_scan = Arc::new(tokio::sync::RwLock::new(None));
+
         Self {
             gateway,
             audit_log,
@@ -322,6 +335,7 @@ impl Default for WebState {
             cage_engine,
             cage_substrate,
             agentmesh_engine,
+            latest_kernel_scan,
         }
     }
 }
@@ -4927,6 +4941,116 @@ pub fn handle_agentmesh_mandate_attenuate(state: &WebState, body: &str) -> (&'st
     )
 }
 
+/// Resolves whether periodic OS kernel scanning is disabled via
+/// `AGENTOCTOPUS_DISABLE_KERNEL_SCAN` (primary) or `KILLSWITCH_DISABLE_KERNEL_SCAN` (fallback).
+#[must_use]
+pub fn parse_kernel_scan_disabled(primary: Option<&str>, fallback: Option<&str>) -> bool {
+    let raw = primary
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| fallback.map(str::trim).filter(|s| !s.is_empty()));
+
+    match raw {
+        None => false,
+        Some(val) => !matches!(
+            val.to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+    }
+}
+
+/// Resolves numeric timing env configuration (`AGENTOCTOPUS_*` primary, `KILLSWITCH_*` fallback).
+#[must_use]
+pub fn parse_kernel_scan_secs(
+    primary: Option<&str>,
+    fallback: Option<&str>,
+    default_secs: u64,
+) -> u64 {
+    primary
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .or_else(|| fallback.and_then(|s| s.trim().parse::<u64>().ok()))
+        .unwrap_or(default_secs)
+}
+
+/// Returns `true` when background kernel scanning is disabled by environment variable.
+#[must_use]
+pub fn is_kernel_scan_disabled() -> bool {
+    let primary = std::env::var("AGENTOCTOPUS_DISABLE_KERNEL_SCAN").ok();
+    let fallback = std::env::var("KILLSWITCH_DISABLE_KERNEL_SCAN").ok();
+    parse_kernel_scan_disabled(primary.as_deref(), fallback.as_deref())
+}
+
+/// Resolves initial delay before the first periodic kernel vulnerability scan (default: 5s).
+#[must_use]
+pub fn resolve_kernel_scan_initial_delay_secs() -> u64 {
+    let primary = std::env::var("AGENTOCTOPUS_KERNEL_SCAN_INITIAL_DELAY_SECS").ok();
+    let fallback = std::env::var("KILLSWITCH_KERNEL_SCAN_INITIAL_DELAY_SECS").ok();
+    parse_kernel_scan_secs(primary.as_deref(), fallback.as_deref(), 5)
+}
+
+/// Resolves interval between periodic kernel vulnerability scans (default: 3600s, min: 10s).
+#[must_use]
+pub fn resolve_kernel_scan_interval_secs() -> u64 {
+    let primary = std::env::var("AGENTOCTOPUS_KERNEL_SCAN_INTERVAL_SECS").ok();
+    let fallback = std::env::var("KILLSWITCH_KERNEL_SCAN_INTERVAL_SECS").ok();
+    parse_kernel_scan_secs(primary.as_deref(), fallback.as_deref(), 3600).max(10)
+}
+
+/// Read-only HTTP handler for `GET /api/kernel-patcher/status`.
+/// Holds zero locks across `.await` points.
+pub async fn handle_kernel_patcher_status(state: &WebState) -> String {
+    let latest_scan = {
+        let guard = state.latest_kernel_scan.read().await;
+        guard.clone()
+    };
+
+    let disabled = is_kernel_scan_disabled();
+    let initial_delay_secs = resolve_kernel_scan_initial_delay_secs();
+    let interval_secs = resolve_kernel_scan_interval_secs();
+    let nvd_api_key_configured =
+        crate::security::kernel_patcher::resolve_nvd_api_key(None).is_some();
+
+    match latest_scan {
+        Some(summary) => json!({
+            "enabled": !disabled,
+            "status": "completed",
+            "initial_delay_secs": initial_delay_secs,
+            "interval_secs": interval_secs,
+            "nvd_api_key_configured": nvd_api_key_configured,
+            "scanned_at": summary.scanned_at,
+            "host_kernel": summary.host_kernel,
+            "vulnerability_count": summary.vulnerability_count,
+            "cisa_kev_count": summary.cisa_kev_count,
+            "vulnerabilities": summary.vulnerabilities,
+            "latest_scan": summary,
+        })
+        .to_string(),
+        None => {
+            let detected_kernel = tokio::task::spawn_blocking(
+                crate::security::kernel_patcher::HostKernelInfo::detect_host_kernel,
+            )
+            .await
+            .ok()
+            .and_then(Result::ok);
+
+            json!({
+                "enabled": !disabled,
+                "status": if disabled { "disabled" } else { "pending" },
+                "initial_delay_secs": initial_delay_secs,
+                "interval_secs": interval_secs,
+                "nvd_api_key_configured": nvd_api_key_configured,
+                "scanned_at": serde_json::Value::Null,
+                "host_kernel": detected_kernel,
+                "vulnerability_count": 0,
+                "cisa_kev_count": 0,
+                "vulnerabilities": [],
+                "latest_scan": serde_json::Value::Null,
+            })
+            .to_string()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5099,5 +5223,76 @@ mod tests {
         // 7. Trace conformance
         let (s7, _b7) = handle_cage_trace_conformance(&state, "[]");
         assert_eq!(s7, "200 OK");
+    }
+
+    #[test]
+    fn test_kernel_scan_env_knob_precedence_and_clamp() {
+        assert!(!parse_kernel_scan_disabled(None, None));
+        assert!(parse_kernel_scan_disabled(Some("1"), None));
+        assert!(parse_kernel_scan_disabled(None, Some("true")));
+        assert!(!parse_kernel_scan_disabled(Some("false"), Some("1")));
+        assert!(parse_kernel_scan_disabled(Some(""), Some("yes")));
+
+        assert_eq!(parse_kernel_scan_secs(None, None, 3600), 3600);
+        assert_eq!(parse_kernel_scan_secs(Some("45"), Some("120"), 3600), 45);
+        assert_eq!(parse_kernel_scan_secs(None, Some("120"), 3600), 120);
+        assert_eq!(parse_kernel_scan_secs(Some("bad"), Some("90"), 3600), 90);
+    }
+
+    #[tokio::test]
+    async fn test_handle_kernel_patcher_status_empty_and_populated() {
+        let state = WebState::default();
+
+        let pending_body = handle_kernel_patcher_status(&state).await;
+        let pending_json: serde_json::Value =
+            serde_json::from_str(&pending_body).expect("valid pending status JSON");
+        assert_eq!(pending_json["vulnerability_count"], 0);
+        assert_eq!(pending_json["cisa_kev_count"], 0);
+        assert!(pending_json["latest_scan"].is_null());
+        assert!(pending_json["host_kernel"]["cpe23"].is_string());
+
+        let summary = KernelScanSummary {
+            scanned_at: chrono::Utc::now(),
+            host_kernel: crate::security::kernel_patcher::HostKernelInfo {
+                os_family: crate::security::kernel_patcher::OsFamily::Linux,
+                kernel_release: "6.8.0-49-generic".to_string(),
+                os_version: "24.04".to_string(),
+                cpe23: "cpe:2.3:o:linux:linux_kernel:6.8.0:*:*:*:*:*:*:*".to_string(),
+                architecture: "x86_64".to_string(),
+            },
+            vulnerability_count: 1,
+            cisa_kev_count: 1,
+            vulnerabilities: vec![crate::security::kernel_patcher::KernelVulnerability {
+                cve_id: "CVE-2024-1086".to_string(),
+                description: "Linux netfilter privilege escalation".to_string(),
+                cvss_v31_score: Some(7.8),
+                cvss_v31_severity: Some("HIGH".to_string()),
+                is_cisa_kev: true,
+                cisa_exploit_add: Some("2024-03-25".to_string()),
+                cisa_action_due: Some("2024-04-15".to_string()),
+                cisa_required_action: Some("Apply vendor patches".to_string()),
+                cisa_vulnerability_name: Some("Linux Kernel Netfilter UAF".to_string()),
+            }],
+        };
+
+        {
+            let mut guard = state.latest_kernel_scan.write().await;
+            *guard = Some(summary);
+        }
+
+        let completed_body = handle_kernel_patcher_status(&state).await;
+        let completed_json: serde_json::Value =
+            serde_json::from_str(&completed_body).expect("valid completed status JSON");
+        assert_eq!(completed_json["status"], "completed");
+        assert_eq!(completed_json["vulnerability_count"], 1);
+        assert_eq!(completed_json["cisa_kev_count"], 1);
+        assert_eq!(
+            completed_json["vulnerabilities"][0]["cve_id"],
+            "CVE-2024-1086"
+        );
+        assert_eq!(
+            completed_json["latest_scan"]["host_kernel"]["cpe23"],
+            "cpe:2.3:o:linux:linux_kernel:6.8.0:*:*:*:*:*:*:*"
+        );
     }
 }

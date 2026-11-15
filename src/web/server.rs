@@ -17,31 +17,34 @@ use super::api::{
     handle_evolution_stop, handle_get_egress_domains, handle_glm_fusion_calibration,
     handle_governor_inject_sample, handle_governor_reset, handle_governor_status,
     handle_harness2_library, handle_harness2_run, handle_harness2_status,
-    handle_harness2_validate_tree, handle_kernel_stats, handle_killswitch_disarm_with_peer,
-    handle_killswitch_engage, handle_killswitch_protocols, handle_killswitch_status,
-    handle_live_tests, handle_merged_well_known_jwks, handle_oshoosiclaw_containment_evaluate,
-    handle_oshoosiclaw_containment_status, handle_oss_fuzz_burst, handle_oss_fuzz_sarif,
-    handle_oss_fuzz_status, handle_osv_scanner_sarif, handle_osv_scanner_scan_now,
-    handle_osv_scanner_status, handle_otel_sessions, handle_otel_spans, handle_pqc_audit_cbom,
-    handle_pqc_decapsulate, handle_pqc_encapsulate, handle_pqc_generate_keypair, handle_pqc_sign,
-    handle_pqc_status, handle_pqc_verify, handle_protocol_analyzer_analyze,
-    handle_protocol_analyzer_events, handle_protocol_analyzer_status,
-    handle_protocol_research_evaluate, handle_protocol_research_hypotheses,
-    handle_protocol_research_knowledge_base, handle_protocol_research_status,
-    handle_protocol_research_swarm_status, handle_protocol_research_sync_rfc,
-    handle_protocol_research_validate_arm106, handle_rasp_create_canary,
-    handle_rasp_intercept_memory, handle_rasp_intercept_prompt, handle_rasp_intercept_tool,
-    handle_rasp_set_mitigation_tier, handle_rasp_status, handle_rasp_telemetry,
-    handle_research_active_rules, handle_research_approve, handle_research_clear,
-    handle_research_ingest, handle_research_langgraph_swarm, handle_research_novelty_check,
-    handle_research_pending, handle_research_reject, handle_research_schedule_get,
-    handle_research_schedule_update, handle_research_search, handle_research_status,
-    handle_research_validate, handle_research_verify_accuracy, handle_resilience_metrics,
-    handle_rl_defense_latest_cycle, handle_rl_defense_status, handle_rl_defense_train_cycle,
-    handle_rl_evaluate_action, handle_runtime_activity_stream, handle_sentinel_reset_lockdown,
-    handle_sentinel_simulate_breach, handle_session_bootstrap_nonce, handle_siquery_edr_status,
-    handle_siquery_protect_sweep, handle_siquery_query, handle_siquery_tables, handle_status,
-    handle_update_egress_domains, handle_validate_sisyphean, handle_vassilev_proof, WebState,
+    handle_harness2_validate_tree, handle_kernel_patcher_status, handle_kernel_stats,
+    handle_killswitch_disarm_with_peer, handle_killswitch_engage, handle_killswitch_protocols,
+    handle_killswitch_status, handle_live_tests, handle_merged_well_known_jwks,
+    handle_oshoosiclaw_containment_evaluate, handle_oshoosiclaw_containment_status,
+    handle_oss_fuzz_burst, handle_oss_fuzz_sarif, handle_oss_fuzz_status, handle_osv_scanner_sarif,
+    handle_osv_scanner_scan_now, handle_osv_scanner_status, handle_otel_sessions,
+    handle_otel_spans, handle_pqc_audit_cbom, handle_pqc_decapsulate, handle_pqc_encapsulate,
+    handle_pqc_generate_keypair, handle_pqc_sign, handle_pqc_status, handle_pqc_verify,
+    handle_protocol_analyzer_analyze, handle_protocol_analyzer_events,
+    handle_protocol_analyzer_status, handle_protocol_research_evaluate,
+    handle_protocol_research_hypotheses, handle_protocol_research_knowledge_base,
+    handle_protocol_research_status, handle_protocol_research_swarm_status,
+    handle_protocol_research_sync_rfc, handle_protocol_research_validate_arm106,
+    handle_rasp_create_canary, handle_rasp_intercept_memory, handle_rasp_intercept_prompt,
+    handle_rasp_intercept_tool, handle_rasp_set_mitigation_tier, handle_rasp_status,
+    handle_rasp_telemetry, handle_research_active_rules, handle_research_approve,
+    handle_research_clear, handle_research_ingest, handle_research_langgraph_swarm,
+    handle_research_novelty_check, handle_research_pending, handle_research_reject,
+    handle_research_schedule_get, handle_research_schedule_update, handle_research_search,
+    handle_research_status, handle_research_validate, handle_research_verify_accuracy,
+    handle_resilience_metrics, handle_rl_defense_latest_cycle, handle_rl_defense_status,
+    handle_rl_defense_train_cycle, handle_rl_evaluate_action, handle_runtime_activity_stream,
+    handle_sentinel_reset_lockdown, handle_sentinel_simulate_breach,
+    handle_session_bootstrap_nonce, handle_siquery_edr_status, handle_siquery_protect_sweep,
+    handle_siquery_query, handle_siquery_tables, handle_status, handle_update_egress_domains,
+    handle_validate_sisyphean, handle_vassilev_proof, is_kernel_scan_disabled,
+    resolve_kernel_scan_initial_delay_secs, resolve_kernel_scan_interval_secs, KernelScanSummary,
+    WebState,
 };
 use super::static_files::INDEX_HTML;
 use super::strict_http::{validate_complete_body, validate_header};
@@ -267,6 +270,12 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
                 }
             }
         }
+    });
+
+    // Spawn periodic OS kernel NVD / CISA KEV vulnerability scanner
+    let state_kernel = Arc::clone(&state);
+    tokio::spawn(async move {
+        run_periodic_kernel_scanner(state_kernel).await;
     });
 
     run_listener(first, state).await;
@@ -1238,6 +1247,16 @@ async fn handle_connection(
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/kernel-patcher/status") => {
+            let json_body = handle_kernel_patcher_status(&state).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );
@@ -3755,5 +3774,199 @@ fn latest_ci_lib_test_status(root: &std::path::Path) -> String {
         }
         Ok(out) => format!("unavailable (gh exited {})", out.status),
         Err(e) => format!("unavailable (gh not runnable: {})", e),
+    }
+}
+
+/// Executes a single OS kernel vulnerability scan cycle against NVD API 2.0 / CISA KEV.
+/// Updates `state.latest_kernel_scan` without holding any locks across `.await` points.
+pub async fn run_periodic_kernel_scan_cycle(
+    state: &WebState,
+) -> Result<usize, crate::security::kernel_patcher::PatcherError> {
+    run_periodic_kernel_scan_cycle_with_base_url(state, None).await
+}
+
+async fn run_periodic_kernel_scan_cycle_with_base_url(
+    state: &WebState,
+    custom_base_url: Option<&str>,
+) -> Result<usize, crate::security::kernel_patcher::PatcherError> {
+    use crate::security::kernel_patcher::{
+        resolve_nvd_api_key, HostKernelInfo, KernelPatcher, PatcherError, ScanOptions,
+    };
+
+    let host_kernel = tokio::task::spawn_blocking(HostKernelInfo::detect_host_kernel)
+        .await
+        .map_err(|e| PatcherError::DetectionFailed(e.to_string()))??;
+
+    tracing::info!(
+        "[KERNEL-SCANNER] Detected host OS: {} | Kernel: {} | CPE: {}",
+        host_kernel.os_family,
+        host_kernel.kernel_release,
+        host_kernel.cpe23
+    );
+
+    let api_key = resolve_nvd_api_key(None);
+    if api_key.is_some() {
+        tracing::info!(
+            "[KERNEL-SCANNER] Using authenticated NVD API 2.0 key for elevated rate limits"
+        );
+    } else {
+        tracing::debug!(
+            "[KERNEL-SCANNER] No NVD_API_KEY detected in environment; using public rate limits"
+        );
+    }
+
+    let options = ScanOptions {
+        cpe: Some(host_kernel.cpe23.clone()),
+        min_cvss_score: None,
+        kev_only: false,
+        api_key,
+        timeout_secs: 30,
+    };
+
+    let patcher = match custom_base_url {
+        Some(url) => KernelPatcher::with_base_url(url),
+        None => KernelPatcher::new(),
+    };
+    let findings = patcher.scan_kernel_vulnerabilities(&options).await?;
+
+    let cisa_kev_count = findings.iter().filter(|v| v.is_cisa_kev).count();
+    let vulnerability_count = findings.len();
+
+    if vulnerability_count == 0 {
+        tracing::info!(
+            "[KERNEL-SCANNER] Kernel vulnerability scan complete: 0 findings for CPE {}",
+            host_kernel.cpe23
+        );
+    } else {
+        tracing::warn!(
+            "[KERNEL-SCANNER] Kernel vulnerability scan complete: {} vulnerabilities found ({} CISA KEV) for CPE {}",
+            vulnerability_count,
+            cisa_kev_count,
+            host_kernel.cpe23
+        );
+    }
+
+    let summary = KernelScanSummary {
+        scanned_at: chrono::Utc::now(),
+        host_kernel,
+        vulnerability_count,
+        cisa_kev_count,
+        vulnerabilities: findings,
+    };
+    {
+        let mut guard = state.latest_kernel_scan.write().await;
+        *guard = Some(summary);
+    }
+
+    Ok(vulnerability_count)
+}
+
+/// Background loop executing periodic kernel vulnerability scans.
+/// Configured via `AGENTOCTOPUS_DISABLE_KERNEL_SCAN`,
+/// `AGENTOCTOPUS_KERNEL_SCAN_INITIAL_DELAY_SECS`, and
+/// `AGENTOCTOPUS_KERNEL_SCAN_INTERVAL_SECS` (with `KILLSWITCH_*` fallback).
+pub async fn run_periodic_kernel_scanner(state: Arc<WebState>) {
+    if is_kernel_scan_disabled() {
+        tracing::info!(
+            "[KERNEL-SCANNER] Periodic kernel vulnerability scanning disabled by environment"
+        );
+        return;
+    }
+
+    let initial_delay_secs = resolve_kernel_scan_initial_delay_secs();
+    let interval_secs = resolve_kernel_scan_interval_secs();
+
+    tracing::info!(
+        "[KERNEL-SCANNER] Starting periodic kernel vulnerability scanner (initial_delay: {}s, interval: {}s)",
+        initial_delay_secs,
+        interval_secs
+    );
+
+    tokio::time::sleep(tokio::time::Duration::from_secs(initial_delay_secs)).await;
+
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        match run_periodic_kernel_scan_cycle(&state).await {
+            Ok(count) => {
+                tracing::debug!("[KERNEL-SCANNER] Scan cycle finished: {} findings", count);
+            }
+            Err(crate::security::kernel_patcher::PatcherError::RateLimited) => {
+                tracing::warn!(
+                    "[KERNEL-SCANNER] NVD API rate-limit reached; skipping until next scheduled cycle"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[KERNEL-SCANNER] Periodic kernel vulnerability scan cycle error: {}",
+                    e
+                );
+            }
+        }
+
+        interval.tick().await;
+    }
+}
+
+#[cfg(test)]
+mod kernel_scanner_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn test_periodic_kernel_scan_cycle_updates_state_and_status_endpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind offline mock NVD listener");
+        let addr = listener.local_addr().expect("mock addr");
+        let body = r#"{
+            "resultsPerPage": 1,
+            "totalResults": 1,
+            "vulnerabilities": [{
+                "cve": {
+                    "id": "CVE-2024-21338",
+                    "cisaExploitAdd": "2024-02-29",
+                    "cisaRequiredAction": "Apply updates per vendor instructions.",
+                    "descriptions": [{"lang": "en", "value": "Windows Kernel Elevation of Privilege"}],
+                    "metrics": {
+                        "cvssMetricV31": [{
+                            "cvssData": {"baseScore": 7.8, "baseSeverity": "HIGH"}
+                        }]
+                    }
+                }
+            }]
+        }"#;
+
+        let server_task = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let state = WebState::default();
+        let mock_url = format!("http://127.0.0.1:{}/rest/json/cves/2.0", addr.port());
+        let found = run_periodic_kernel_scan_cycle_with_base_url(&state, Some(&mock_url))
+            .await
+            .expect("offline cycle should succeed");
+        assert_eq!(found, 1);
+
+        let status_json = handle_kernel_patcher_status(&state).await;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&status_json).expect("valid status JSON");
+        assert_eq!(parsed["status"], "completed");
+        assert_eq!(parsed["vulnerability_count"], 1);
+        assert_eq!(parsed["cisa_kev_count"], 1);
+        assert_eq!(parsed["vulnerabilities"][0]["cve_id"], "CVE-2024-21338");
+
+        server_task.abort();
     }
 }

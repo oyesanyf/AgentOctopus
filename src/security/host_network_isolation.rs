@@ -43,13 +43,62 @@ pub const ERROR_SUCCESS: u32 = 0;
 pub const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 
 pub const FWP_MATCH_EQUAL: u32 = 0;
+pub const FWP_MATCH_RANGE: u32 = 5;
 pub const FWP_MATCH_FLAGS_ALL_SET: u32 = 6;
 
 pub const FWP_EMPTY: u32 = 0;
 pub const FWP_UINT8: u32 = 1;
 pub const FWP_UINT16: u32 = 2;
 pub const FWP_UINT32: u32 = 3;
+pub const FWP_UINT64: u32 = 4;
 pub const FWP_BYTE_ARRAY16_TYPE: u32 = 11;
+pub const FWP_BYTE_BLOB_TYPE: u32 = 12;
+pub const FWP_RANGE_TYPE: u32 = 258;
+
+/// Well-known local proxy / tunnel / forwarder ports explicitly blocked from
+/// firewall loopback exemptions so quarantined agents cannot pivot out via loopback.
+pub const QUARANTINE_BLOCKED_LOOPBACK_PROXY_PORTS: [u16; 5] = [1080, 3128, 8080, 8888, 9050];
+
+/// Lateral-movement / remote-management ports always blocked during quarantine.
+pub const QUARANTINE_BLOCKED_LATERAL_PORTS: [u16; 4] = [135, 445, 5985, 5986];
+
+/// DNS / DoT / DHCP / DHCPv6 ports always blocked during quarantine.
+pub const QUARANTINE_BLOCKED_DISCOVERY_PORTS: [u16; 6] = [53, 67, 68, 546, 547, 853];
+
+/// Returns `true` if `port` is a proxy, lateral, discovery, forbidden (`5000`), or zero port.
+pub fn is_blocked_quarantine_port(port: u16) -> bool {
+    port == 0 || port == FORBIDDEN_PORT_5000 || is_explicitly_blocked_quarantine_port(port)
+}
+
+fn is_explicitly_blocked_quarantine_port(port: u16) -> bool {
+    port == FORBIDDEN_PORT_5000
+        || QUARANTINE_BLOCKED_LOOPBACK_PROXY_PORTS.contains(&port)
+        || QUARANTINE_BLOCKED_LATERAL_PORTS.contains(&port)
+        || QUARANTINE_BLOCKED_DISCOVERY_PORTS.contains(&port)
+}
+
+/// Filters and deduplicates control-plane ports before installing WFP, BFE,
+/// Netlink/nftables, or PF loopback allowlist rules.
+pub fn sanitize_firewall_preserved_ports(preserved_ports: &[u16]) -> Vec<u16> {
+    let mut sanitized = Vec::with_capacity(preserved_ports.len());
+    for &port in preserved_ports {
+        if !is_blocked_quarantine_port(port) && !sanitized.contains(&port) {
+            sanitized.push(port);
+        }
+    }
+    sanitized
+}
+
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+fn is_exact_localhost_v4(octets: [u8; 4]) -> bool {
+    octets == [127, 0, 0, 1]
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn is_exact_localhost_v6(octets: [u8; 16]) -> bool {
+    octets == Ipv6Addr::LOCALHOST.octets()
+        || octets == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 127, 0, 0, 1]
+}
 
 pub const FWP_ACTION_BLOCK: u32 = 0x0000_1001;
 pub const FWP_ACTION_PERMIT: u32 = 0x0000_1002;
@@ -209,13 +258,16 @@ pub fn discover_active_octopus_ports() -> Vec<u16> {
         }
         if let Ok(raw) = std::fs::read_to_string(&path) {
             if let Ok(p) = raw.trim().parse::<u16>() {
-                if (1024..=65535).contains(&p) && p != FORBIDDEN_PORT_5000 && !ports.contains(&p) {
+                if (1024..=65535).contains(&p)
+                    && !is_blocked_quarantine_port(p)
+                    && !ports.contains(&p)
+                {
                     ports.push(p);
                 }
             }
         }
     }
-    ports.retain(|&p| p != FORBIDDEN_PORT_5000 && p != 0);
+    ports.retain(|&p| !is_blocked_quarantine_port(p));
     ports
 }
 
@@ -417,6 +469,18 @@ pub const FWPM_CONDITION_FLAGS: WfpGuid = WfpGuid {
     data3: 0x435c,
     data4: [0x86, 0xd7, 0xe9, 0x03, 0x68, 0x4a, 0xa8, 0x0c],
 };
+pub const FWPM_CONDITION_IP_REMOTE_PORT: WfpGuid = WfpGuid {
+    data1: 0xc35a604d,
+    data2: 0xd22b,
+    data3: 0x4e1a,
+    data4: [0x91, 0xb4, 0x68, 0xf6, 0x74, 0xee, 0x67, 0x4b],
+};
+pub const FWPM_CONDITION_ALE_APP_ID: WfpGuid = WfpGuid {
+    data1: 0xd78e1e87,
+    data2: 0x8644,
+    data3: 0x4ea5,
+    data4: [0x94, 0x37, 0xd8, 0x09, 0xec, 0xef, 0xc9, 0x71],
+};
 
 #[repr(C)]
 pub struct FwpmDisplayData0 {
@@ -458,6 +522,13 @@ pub struct FwpByteBlob {
     pub size: u32,
     pub _pad: u32,
     pub data: *mut u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FwpRange0 {
+    pub value_low: FwpValue0,
+    pub value_high: FwpValue0,
 }
 
 #[repr(C)]
@@ -575,6 +646,17 @@ mod win_ffi {
             cbData: u32,
         ) -> i32;
         pub fn RegDeleteValueW(hKey: usize, lpValueName: *const u16) -> i32;
+        #[cfg(windows)]
+        pub fn RegEnumValueW(
+            hKey: usize,
+            dwIndex: u32,
+            lpValueName: *mut u16,
+            lpcchValueName: *mut u32,
+            lpReserved: *mut u32,
+            lpType: *mut u32,
+            lpData: *mut u8,
+            lpcbData: *mut u32,
+        ) -> i32;
         pub fn RegCloseKey(hKey: usize) -> i32;
     }
 
@@ -585,6 +667,8 @@ mod win_ffi {
     pub const KEY_READ: u32 = 0x0002_0019;
     pub const KEY_WRITE: u32 = 0x0002_0006;
     pub const REG_SZ: u32 = 1;
+    #[cfg(windows)]
+    pub const ERROR_NO_MORE_ITEMS: i32 = 259;
 }
 
 /// Checks whether the current process holds an elevated token (Windows Admin / Unix root).
@@ -679,6 +763,9 @@ type FnFwpmFilterDestroyEnumHandle0 = unsafe extern "system" fn(
     enum_handle: *mut std::ffi::c_void,
 ) -> u32;
 #[cfg(windows)]
+type FnFwpmGetAppIdFromFileName0 =
+    unsafe extern "system" fn(file_name: *const u16, app_id: *mut *mut FwpByteBlob) -> u32;
+#[cfg(windows)]
 type FnGetTcpTable =
     unsafe extern "system" fn(p_tcp_table: *mut u8, pdw_size: *mut u32, b_order: i32) -> u32;
 #[cfg(windows)]
@@ -698,6 +785,7 @@ pub struct WfpKernelSession {
     fn_create_enum: Option<FnFwpmFilterCreateEnumHandle0>,
     fn_enum: Option<FnFwpmFilterEnum0>,
     fn_destroy_enum: Option<FnFwpmFilterDestroyEnumHandle0>,
+    fn_get_app_id: Option<FnFwpmGetAppIdFromFileName0>,
     in_txn: AtomicBool,
 }
 
@@ -771,6 +859,8 @@ impl WfpKernelSession {
             unsafe { load_sym(b"FwpmFilterEnum0\0").map(|p| std::mem::transmute(p)) };
         let fn_destroy_enum: Option<FnFwpmFilterDestroyEnumHandle0> =
             unsafe { load_sym(b"FwpmFilterDestroyEnumHandle0\0").map(|p| std::mem::transmute(p)) };
+        let fn_get_app_id: Option<FnFwpmGetAppIdFromFileName0> =
+            unsafe { load_sym(b"FwpmGetAppIdFromFileName0\0").map(|p| std::mem::transmute(p)) };
 
         let mut s_name: Vec<u16> = "AgentOctopus-KillSwitch-Session\0".encode_utf16().collect();
         let mut s_desc: Vec<u16> = "AgentOctopus 22-Layer Hermetic WFP Quarantine\0"
@@ -839,6 +929,7 @@ impl WfpKernelSession {
             fn_create_enum,
             fn_enum,
             fn_destroy_enum,
+            fn_get_app_id,
             in_txn: AtomicBool::new(false),
         })
     }
@@ -1065,249 +1156,178 @@ impl WfpKernelSession {
             }
         };
 
+        let sanitized_ports = sanitize_firewall_preserved_ports(preserved_ports);
+        let mut app_id_blob: *mut FwpByteBlob = std::ptr::null_mut();
+        if let (Some(fn_get_app_id), Ok(exe_path)) = (self.fn_get_app_id, std::env::current_exe()) {
+            let exe_w: Vec<u16> = exe_path
+                .to_string_lossy()
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            if unsafe { fn_get_app_id(exe_w.as_ptr(), &mut app_id_blob) } != ERROR_SUCCESS {
+                app_id_blob = std::ptr::null_mut();
+            }
+        }
+
         let loopback_v4 = u32::from_be_bytes([127, 0, 0, 1]);
         let loopback_v6 = Ipv6Addr::LOCALHOST.octets();
+        let imds_v4 = u32::from_be_bytes([169, 254, 169, 254]);
+        let loopback_alias_range = FwpRange0 {
+            value_low: FwpValue0 {
+                type_: FWP_UINT32,
+                _pad: 0,
+                value: u32::from_be_bytes([127, 0, 0, 2]) as usize,
+            },
+            value_high: FwpValue0 {
+                type_: FWP_UINT32,
+                _pad: 0,
+                value: u32::from_be_bytes([127, 255, 255, 254]) as usize,
+            },
+        };
 
-        // 1. Permit IPv4 Loopback (127.0.0.1 + IS_LOOPBACK flag) across IPv4 layers
+        // 1. Explicit High-Priority Quarantine Blocks (Weight 20):
+        //    - Non-localhost loopback aliases (127.0.0.2..=127.255.255.254)
+        //    - Cloud IMDS metadata endpoint (169.254.169.254)
+        //    - Loopback proxy (1080, 3128, 8080, 8888, 9050), lateral (135, 445, 5985, 5986),
+        //      discovery (53, 67, 68, 546, 547, 853), and forbidden (5000) ports
+        for (layer, tag) in [
+            (FWPM_LAYER_ALE_AUTH_CONNECT_V4, "ALE-Out"),
+            (FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, "ALE-In"),
+            (FWPM_LAYER_OUTBOUND_TRANSPORT_V4, "Trans-Out"),
+            (FWPM_LAYER_INBOUND_TRANSPORT_V4, "Trans-In"),
+            (FWPM_LAYER_OUTBOUND_IPPACKET_V4, "IP-Out"),
+            (FWPM_LAYER_INBOUND_IPPACKET_V4, "IP-In"),
+        ] {
+            for (cond_key, cond_tag) in [
+                (FWPM_CONDITION_IP_REMOTE_ADDRESS, "Rem"),
+                (FWPM_CONDITION_IP_LOCAL_ADDRESS, "Loc"),
+            ] {
+                let mut cond_alias = [FwpmFilterCondition0 {
+                    field_key: cond_key,
+                    match_type: FWP_MATCH_RANGE,
+                    _pad: 0,
+                    condition_value: FwpConditionValue0 {
+                        type_: FWP_RANGE_TYPE,
+                        _pad: 0,
+                        value: &loopback_alias_range as *const FwpRange0 as usize,
+                    },
+                }];
+                if let Some(id) = add_one(
+                    &format!("Block-LB-Alias-{}-{}-v4", cond_tag, tag),
+                    layer,
+                    FWP_ACTION_BLOCK,
+                    20,
+                    &mut cond_alias,
+                ) {
+                    filter_ids.push(id);
+                }
+            }
+        }
+
         for (layer, tag) in [
             (FWPM_LAYER_ALE_AUTH_CONNECT_V4, "ALE-Out"),
             (FWPM_LAYER_OUTBOUND_TRANSPORT_V4, "Trans-Out"),
             (FWPM_LAYER_OUTBOUND_IPPACKET_V4, "IP-Out"),
-            (FWPM_LAYER_DATAGRAM_DATA_V4, "Dgram-Out"),
-            (FWPM_LAYER_OUTBOUND_ICMP_ERROR_V4, "ICMP-Out"),
         ] {
-            let mut c_rem = [FwpmFilterCondition0 {
+            let mut cond_imds = [FwpmFilterCondition0 {
                 field_key: FWPM_CONDITION_IP_REMOTE_ADDRESS,
                 match_type: FWP_MATCH_EQUAL,
                 _pad: 0,
                 condition_value: FwpConditionValue0 {
                     type_: FWP_UINT32,
                     _pad: 0,
-                    value: loopback_v4 as usize,
+                    value: imds_v4 as usize,
                 },
             }];
             if let Some(id) = add_one(
-                &format!("Permit-LB-Rem-{}-v4", tag),
+                &format!("Block-IMDS-{}-v4", tag),
                 layer,
-                FWP_ACTION_PERMIT,
-                15,
-                &mut c_rem,
-            ) {
-                filter_ids.push(id);
-            }
-            let mut c_loc = [FwpmFilterCondition0 {
-                field_key: FWPM_CONDITION_IP_LOCAL_ADDRESS,
-                match_type: FWP_MATCH_EQUAL,
-                _pad: 0,
-                condition_value: FwpConditionValue0 {
-                    type_: FWP_UINT32,
-                    _pad: 0,
-                    value: loopback_v4 as usize,
-                },
-            }];
-            if let Some(id) = add_one(
-                &format!("Permit-LB-Loc-{}-v4", tag),
-                layer,
-                FWP_ACTION_PERMIT,
-                15,
-                &mut c_loc,
-            ) {
-                filter_ids.push(id);
-            }
-            let mut c_flg = [FwpmFilterCondition0 {
-                field_key: FWPM_CONDITION_FLAGS,
-                match_type: FWP_MATCH_FLAGS_ALL_SET,
-                _pad: 0,
-                condition_value: FwpConditionValue0 {
-                    type_: FWP_UINT32,
-                    _pad: 0,
-                    value: FWP_CONDITION_FLAG_IS_LOOPBACK as usize,
-                },
-            }];
-            if let Some(id) = add_one(
-                &format!("Permit-LB-Flag-{}-v4", tag),
-                layer,
-                FWP_ACTION_PERMIT,
-                15,
-                &mut c_flg,
+                FWP_ACTION_BLOCK,
+                20,
+                &mut cond_imds,
             ) {
                 filter_ids.push(id);
             }
         }
 
-        for (layer, tag) in [
-            (FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, "ALE-In"),
-            (FWPM_LAYER_INBOUND_TRANSPORT_V4, "Trans-In"),
-            (FWPM_LAYER_INBOUND_IPPACKET_V4, "IP-In"),
-            (FWPM_LAYER_INBOUND_ICMP_ERROR_V4, "ICMP-In"),
-        ] {
-            let mut c_loc = [FwpmFilterCondition0 {
-                field_key: FWPM_CONDITION_IP_LOCAL_ADDRESS,
-                match_type: FWP_MATCH_EQUAL,
-                _pad: 0,
-                condition_value: FwpConditionValue0 {
-                    type_: FWP_UINT32,
+        for port in QUARANTINE_BLOCKED_LOOPBACK_PROXY_PORTS
+            .iter()
+            .chain(QUARANTINE_BLOCKED_LATERAL_PORTS.iter())
+            .chain(QUARANTINE_BLOCKED_DISCOVERY_PORTS.iter())
+            .chain(std::iter::once(&FORBIDDEN_PORT_5000))
+        {
+            for (layer, tag) in [
+                (FWPM_LAYER_ALE_AUTH_CONNECT_V4, "ALE-Out-v4"),
+                (FWPM_LAYER_ALE_AUTH_CONNECT_V6, "ALE-Out-v6"),
+                (FWPM_LAYER_OUTBOUND_TRANSPORT_V4, "Trans-Out-v4"),
+                (FWPM_LAYER_OUTBOUND_TRANSPORT_V6, "Trans-Out-v6"),
+                (FWPM_LAYER_DATAGRAM_DATA_V4, "Dgram-Out-v4"),
+                (FWPM_LAYER_DATAGRAM_DATA_V6, "Dgram-Out-v6"),
+            ] {
+                let mut cond_rport = [FwpmFilterCondition0 {
+                    field_key: FWPM_CONDITION_IP_REMOTE_PORT,
+                    match_type: FWP_MATCH_EQUAL,
                     _pad: 0,
-                    value: loopback_v4 as usize,
-                },
-            }];
-            if let Some(id) = add_one(
-                &format!("Permit-LB-Loc-{}-v4", tag),
-                layer,
-                FWP_ACTION_PERMIT,
-                15,
-                &mut c_loc,
-            ) {
-                filter_ids.push(id);
+                    condition_value: FwpConditionValue0 {
+                        type_: FWP_UINT16,
+                        _pad: 0,
+                        value: *port as usize,
+                    },
+                }];
+                if let Some(id) = add_one(
+                    &format!("Block-Port-{}-Rem-{}", port, tag),
+                    layer,
+                    FWP_ACTION_BLOCK,
+                    20,
+                    &mut cond_rport,
+                ) {
+                    filter_ids.push(id);
+                }
             }
-            let mut c_flg = [FwpmFilterCondition0 {
-                field_key: FWPM_CONDITION_FLAGS,
-                match_type: FWP_MATCH_FLAGS_ALL_SET,
-                _pad: 0,
-                condition_value: FwpConditionValue0 {
-                    type_: FWP_UINT32,
-                    _pad: 0,
-                    value: FWP_CONDITION_FLAG_IS_LOOPBACK as usize,
-                },
-            }];
-            if let Some(id) = add_one(
-                &format!("Permit-LB-Flag-{}-v4", tag),
-                layer,
-                FWP_ACTION_PERMIT,
-                15,
-                &mut c_flg,
-            ) {
-                filter_ids.push(id);
-            }
-        }
-
-        // 2. Permit IPv6 Loopback (::1 + IS_LOOPBACK flag) across IPv6 layers
-        for (layer, tag) in [
-            (FWPM_LAYER_ALE_AUTH_CONNECT_V6, "ALE-Out"),
-            (FWPM_LAYER_OUTBOUND_TRANSPORT_V6, "Trans-Out"),
-            (FWPM_LAYER_OUTBOUND_IPPACKET_V6, "IP-Out"),
-            (FWPM_LAYER_DATAGRAM_DATA_V6, "Dgram-Out"),
-            (FWPM_LAYER_OUTBOUND_ICMP_ERROR_V6, "ICMP-Out"),
-        ] {
-            let mut c_rem = [FwpmFilterCondition0 {
-                field_key: FWPM_CONDITION_IP_REMOTE_ADDRESS,
-                match_type: FWP_MATCH_EQUAL,
-                _pad: 0,
-                condition_value: FwpConditionValue0 {
-                    type_: FWP_BYTE_ARRAY16_TYPE,
-                    _pad: 0,
-                    value: loopback_v6.as_ptr() as usize,
-                },
-            }];
-            if let Some(id) = add_one(
-                &format!("Permit-LB-Rem-{}-v6", tag),
-                layer,
-                FWP_ACTION_PERMIT,
-                15,
-                &mut c_rem,
-            ) {
-                filter_ids.push(id);
-            }
-            let mut c_loc = [FwpmFilterCondition0 {
-                field_key: FWPM_CONDITION_IP_LOCAL_ADDRESS,
-                match_type: FWP_MATCH_EQUAL,
-                _pad: 0,
-                condition_value: FwpConditionValue0 {
-                    type_: FWP_BYTE_ARRAY16_TYPE,
-                    _pad: 0,
-                    value: loopback_v6.as_ptr() as usize,
-                },
-            }];
-            if let Some(id) = add_one(
-                &format!("Permit-LB-Loc-{}-v6", tag),
-                layer,
-                FWP_ACTION_PERMIT,
-                15,
-                &mut c_loc,
-            ) {
-                filter_ids.push(id);
-            }
-            let mut c_flg = [FwpmFilterCondition0 {
-                field_key: FWPM_CONDITION_FLAGS,
-                match_type: FWP_MATCH_FLAGS_ALL_SET,
-                _pad: 0,
-                condition_value: FwpConditionValue0 {
-                    type_: FWP_UINT32,
-                    _pad: 0,
-                    value: FWP_CONDITION_FLAG_IS_LOOPBACK as usize,
-                },
-            }];
-            if let Some(id) = add_one(
-                &format!("Permit-LB-Flag-{}-v6", tag),
-                layer,
-                FWP_ACTION_PERMIT,
-                15,
-                &mut c_flg,
-            ) {
-                filter_ids.push(id);
-            }
-        }
-
-        for (layer, tag) in [
-            (FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6, "ALE-In"),
-            (FWPM_LAYER_INBOUND_TRANSPORT_V6, "Trans-In"),
-            (FWPM_LAYER_INBOUND_IPPACKET_V6, "IP-In"),
-            (FWPM_LAYER_INBOUND_ICMP_ERROR_V6, "ICMP-In"),
-        ] {
-            let mut c_loc = [FwpmFilterCondition0 {
-                field_key: FWPM_CONDITION_IP_LOCAL_ADDRESS,
-                match_type: FWP_MATCH_EQUAL,
-                _pad: 0,
-                condition_value: FwpConditionValue0 {
-                    type_: FWP_BYTE_ARRAY16_TYPE,
-                    _pad: 0,
-                    value: loopback_v6.as_ptr() as usize,
-                },
-            }];
-            if let Some(id) = add_one(
-                &format!("Permit-LB-Loc-{}-v6", tag),
-                layer,
-                FWP_ACTION_PERMIT,
-                15,
-                &mut c_loc,
-            ) {
-                filter_ids.push(id);
-            }
-            let mut c_flg = [FwpmFilterCondition0 {
-                field_key: FWPM_CONDITION_FLAGS,
-                match_type: FWP_MATCH_FLAGS_ALL_SET,
-                _pad: 0,
-                condition_value: FwpConditionValue0 {
-                    type_: FWP_UINT32,
-                    _pad: 0,
-                    value: FWP_CONDITION_FLAG_IS_LOOPBACK as usize,
-                },
-            }];
-            if let Some(id) = add_one(
-                &format!("Permit-LB-Flag-{}-v6", tag),
-                layer,
-                FWP_ACTION_PERMIT,
-                15,
-                &mut c_flg,
-            ) {
-                filter_ids.push(id);
-            }
-        }
-
-        // 3. Permit active AgentOctopus WebUI ports strictly on loopback (127.0.0.1 / ::1)
-        for &port in preserved_ports {
-            if port == FORBIDDEN_PORT_5000 || port == 0 {
-                continue;
-            }
-            let mut cond_v4 = [
-                FwpmFilterCondition0 {
+            for (layer, tag) in [
+                (FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, "ALE-In-v4"),
+                (FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6, "ALE-In-v6"),
+                (FWPM_LAYER_INBOUND_TRANSPORT_V4, "Trans-In-v4"),
+                (FWPM_LAYER_INBOUND_TRANSPORT_V6, "Trans-In-v6"),
+            ] {
+                let mut cond_lport = [FwpmFilterCondition0 {
                     field_key: FWPM_CONDITION_IP_LOCAL_PORT,
                     match_type: FWP_MATCH_EQUAL,
                     _pad: 0,
                     condition_value: FwpConditionValue0 {
                         type_: FWP_UINT16,
                         _pad: 0,
-                        value: port as usize,
+                        value: *port as usize,
+                    },
+                }];
+                if let Some(id) = add_one(
+                    &format!("Block-Port-{}-Loc-{}", port, tag),
+                    layer,
+                    FWP_ACTION_BLOCK,
+                    20,
+                    &mut cond_lport,
+                ) {
+                    filter_ids.push(id);
+                }
+            }
+        }
+
+        // 2. Strict Exact-Localhost IP-Layer Permits (127.0.0.1 <-> 127.0.0.1 and ::1 <-> ::1)
+        //    All conditions are combined into a single filter per layer so source AND destination
+        //    AND loopback flag must match simultaneously.
+        for (layer, tag) in [
+            (FWPM_LAYER_OUTBOUND_IPPACKET_V4, "IP-Out"),
+            (FWPM_LAYER_INBOUND_IPPACKET_V4, "IP-In"),
+        ] {
+            let mut cond_ip_v4 = [
+                FwpmFilterCondition0 {
+                    field_key: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                    match_type: FWP_MATCH_EQUAL,
+                    _pad: 0,
+                    condition_value: FwpConditionValue0 {
+                        type_: FWP_UINT32,
+                        _pad: 0,
+                        value: loopback_v4 as usize,
                     },
                 },
                 FwpmFilterCondition0 {
@@ -1321,35 +1341,40 @@ impl WfpKernelSession {
                     },
                 },
                 FwpmFilterCondition0 {
-                    field_key: FWPM_CONDITION_IP_PROTOCOL,
-                    match_type: FWP_MATCH_EQUAL,
+                    field_key: FWPM_CONDITION_FLAGS,
+                    match_type: FWP_MATCH_FLAGS_ALL_SET,
                     _pad: 0,
                     condition_value: FwpConditionValue0 {
-                        type_: FWP_UINT8,
+                        type_: FWP_UINT32,
                         _pad: 0,
-                        value: 6,
+                        value: FWP_CONDITION_FLAG_IS_LOOPBACK as usize,
                     },
                 },
             ];
             if let Some(id) = add_one(
-                &format!("Permit-WebUI-{}-v4", port),
-                FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+                &format!("Permit-ExactLB-{}-v4", tag),
+                layer,
                 FWP_ACTION_PERMIT,
                 15,
-                &mut cond_v4,
+                &mut cond_ip_v4,
             ) {
                 filter_ids.push(id);
             }
+        }
 
-            let mut cond_v6 = [
+        for (layer, tag) in [
+            (FWPM_LAYER_OUTBOUND_IPPACKET_V6, "IP-Out"),
+            (FWPM_LAYER_INBOUND_IPPACKET_V6, "IP-In"),
+        ] {
+            let mut cond_ip_v6 = [
                 FwpmFilterCondition0 {
-                    field_key: FWPM_CONDITION_IP_LOCAL_PORT,
+                    field_key: FWPM_CONDITION_IP_REMOTE_ADDRESS,
                     match_type: FWP_MATCH_EQUAL,
                     _pad: 0,
                     condition_value: FwpConditionValue0 {
-                        type_: FWP_UINT16,
+                        type_: FWP_BYTE_ARRAY16_TYPE,
                         _pad: 0,
-                        value: port as usize,
+                        value: loopback_v6.as_ptr() as usize,
                     },
                 },
                 FwpmFilterCondition0 {
@@ -1363,24 +1388,270 @@ impl WfpKernelSession {
                     },
                 },
                 FwpmFilterCondition0 {
-                    field_key: FWPM_CONDITION_IP_PROTOCOL,
-                    match_type: FWP_MATCH_EQUAL,
+                    field_key: FWPM_CONDITION_FLAGS,
+                    match_type: FWP_MATCH_FLAGS_ALL_SET,
                     _pad: 0,
                     condition_value: FwpConditionValue0 {
-                        type_: FWP_UINT8,
+                        type_: FWP_UINT32,
                         _pad: 0,
-                        value: 6,
+                        value: FWP_CONDITION_FLAG_IS_LOOPBACK as usize,
                     },
                 },
             ];
             if let Some(id) = add_one(
-                &format!("Permit-WebUI-{}-v6", port),
-                FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+                &format!("Permit-ExactLB-{}-v6", tag),
+                layer,
                 FWP_ACTION_PERMIT,
                 15,
-                &mut cond_v6,
+                &mut cond_ip_v6,
             ) {
                 filter_ids.push(id);
+            }
+        }
+
+        // 3. Permit sanitized AgentOctopus TCP control-plane ports strictly on exact localhost
+        //    (127.0.0.1 <-> 127.0.0.1 and ::1 <-> ::1), never permitting UDP or external hosts.
+        for &port in &sanitized_ports {
+            for (layer, port_field, tag) in [
+                (
+                    FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+                    FWPM_CONDITION_IP_REMOTE_PORT,
+                    "ALE-Out-Rem",
+                ),
+                (
+                    FWPM_LAYER_OUTBOUND_TRANSPORT_V4,
+                    FWPM_CONDITION_IP_REMOTE_PORT,
+                    "Trans-Out-Rem",
+                ),
+                (
+                    FWPM_LAYER_OUTBOUND_TRANSPORT_V4,
+                    FWPM_CONDITION_IP_LOCAL_PORT,
+                    "Trans-Out-Loc",
+                ),
+                (
+                    FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4,
+                    FWPM_CONDITION_IP_LOCAL_PORT,
+                    "ALE-In-Loc",
+                ),
+                (
+                    FWPM_LAYER_INBOUND_TRANSPORT_V4,
+                    FWPM_CONDITION_IP_LOCAL_PORT,
+                    "Trans-In-Loc",
+                ),
+                (
+                    FWPM_LAYER_INBOUND_TRANSPORT_V4,
+                    FWPM_CONDITION_IP_REMOTE_PORT,
+                    "Trans-In-Rem",
+                ),
+            ] {
+                let mut cond_v4 = [
+                    FwpmFilterCondition0 {
+                        field_key: port_field,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_UINT16,
+                            _pad: 0,
+                            value: port as usize,
+                        },
+                    },
+                    FwpmFilterCondition0 {
+                        field_key: FWPM_CONDITION_IP_LOCAL_ADDRESS,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_UINT32,
+                            _pad: 0,
+                            value: loopback_v4 as usize,
+                        },
+                    },
+                    FwpmFilterCondition0 {
+                        field_key: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_UINT32,
+                            _pad: 0,
+                            value: loopback_v4 as usize,
+                        },
+                    },
+                    FwpmFilterCondition0 {
+                        field_key: FWPM_CONDITION_IP_PROTOCOL,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_UINT8,
+                            _pad: 0,
+                            value: 6,
+                        },
+                    },
+                ];
+                if let Some(id) = add_one(
+                    &format!("Permit-WebUI-{}-{}-v4", port, tag),
+                    layer,
+                    FWP_ACTION_PERMIT,
+                    15,
+                    &mut cond_v4,
+                ) {
+                    filter_ids.push(id);
+                }
+            }
+
+            if !app_id_blob.is_null() {
+                let mut cond_app_v4 = [
+                    FwpmFilterCondition0 {
+                        field_key: FWPM_CONDITION_ALE_APP_ID,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_BYTE_BLOB_TYPE,
+                            _pad: 0,
+                            value: app_id_blob as usize,
+                        },
+                    },
+                    FwpmFilterCondition0 {
+                        field_key: FWPM_CONDITION_IP_REMOTE_PORT,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_UINT16,
+                            _pad: 0,
+                            value: port as usize,
+                        },
+                    },
+                    FwpmFilterCondition0 {
+                        field_key: FWPM_CONDITION_IP_LOCAL_ADDRESS,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_UINT32,
+                            _pad: 0,
+                            value: loopback_v4 as usize,
+                        },
+                    },
+                    FwpmFilterCondition0 {
+                        field_key: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_UINT32,
+                            _pad: 0,
+                            value: loopback_v4 as usize,
+                        },
+                    },
+                    FwpmFilterCondition0 {
+                        field_key: FWPM_CONDITION_IP_PROTOCOL,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_UINT8,
+                            _pad: 0,
+                            value: 6,
+                        },
+                    },
+                ];
+                if let Some(id) = add_one(
+                    &format!("Permit-SelfApp-WebUI-{}-v4", port),
+                    FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+                    FWP_ACTION_PERMIT,
+                    16,
+                    &mut cond_app_v4,
+                ) {
+                    filter_ids.push(id);
+                }
+            }
+
+            for (layer, port_field, tag) in [
+                (
+                    FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+                    FWPM_CONDITION_IP_REMOTE_PORT,
+                    "ALE-Out-Rem",
+                ),
+                (
+                    FWPM_LAYER_OUTBOUND_TRANSPORT_V6,
+                    FWPM_CONDITION_IP_REMOTE_PORT,
+                    "Trans-Out-Rem",
+                ),
+                (
+                    FWPM_LAYER_OUTBOUND_TRANSPORT_V6,
+                    FWPM_CONDITION_IP_LOCAL_PORT,
+                    "Trans-Out-Loc",
+                ),
+                (
+                    FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
+                    FWPM_CONDITION_IP_LOCAL_PORT,
+                    "ALE-In-Loc",
+                ),
+                (
+                    FWPM_LAYER_INBOUND_TRANSPORT_V6,
+                    FWPM_CONDITION_IP_LOCAL_PORT,
+                    "Trans-In-Loc",
+                ),
+                (
+                    FWPM_LAYER_INBOUND_TRANSPORT_V6,
+                    FWPM_CONDITION_IP_REMOTE_PORT,
+                    "Trans-In-Rem",
+                ),
+            ] {
+                let mut cond_v6 = [
+                    FwpmFilterCondition0 {
+                        field_key: port_field,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_UINT16,
+                            _pad: 0,
+                            value: port as usize,
+                        },
+                    },
+                    FwpmFilterCondition0 {
+                        field_key: FWPM_CONDITION_IP_LOCAL_ADDRESS,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_BYTE_ARRAY16_TYPE,
+                            _pad: 0,
+                            value: loopback_v6.as_ptr() as usize,
+                        },
+                    },
+                    FwpmFilterCondition0 {
+                        field_key: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_BYTE_ARRAY16_TYPE,
+                            _pad: 0,
+                            value: loopback_v6.as_ptr() as usize,
+                        },
+                    },
+                    FwpmFilterCondition0 {
+                        field_key: FWPM_CONDITION_IP_PROTOCOL,
+                        match_type: FWP_MATCH_EQUAL,
+                        _pad: 0,
+                        condition_value: FwpConditionValue0 {
+                            type_: FWP_UINT8,
+                            _pad: 0,
+                            value: 6,
+                        },
+                    },
+                ];
+                if let Some(id) = add_one(
+                    &format!("Permit-WebUI-{}-{}-v6", port, tag),
+                    layer,
+                    FWP_ACTION_PERMIT,
+                    15,
+                    &mut cond_v6,
+                ) {
+                    filter_ids.push(id);
+                }
+            }
+        }
+
+        if let Some(fn_free) = self.fn_free.filter(|_| !app_id_blob.is_null()) {
+            unsafe {
+                fn_free(
+                    (&mut app_id_blob as *mut *mut FwpByteBlob).cast::<*mut std::ffi::c_void>(),
+                );
             }
         }
 
@@ -1488,21 +1759,8 @@ const BFE_FIREWALL_RULES_SUBKEY: &str =
 
 #[cfg(windows)]
 fn bfe_registry_rule_definitions(preserved_ports: &[u16]) -> Vec<(String, String)> {
+    let sanitized_ports = sanitize_firewall_preserved_ports(preserved_ports);
     let mut rules = vec![
-        (
-            format!("{}-Allow-Loopback-In", WFP_RULE_PREFIX),
-            format!(
-                "v2.31|Action=Allow|Active=TRUE|Dir=In|RA4=127.0.0.1|RA6=::1|Name={}-Allow-Loopback-In|Desc=AgentOctopus Loopback Inbound|",
-                WFP_RULE_PREFIX
-            ),
-        ),
-        (
-            format!("{}-Allow-Loopback-Out", WFP_RULE_PREFIX),
-            format!(
-                "v2.31|Action=Allow|Active=TRUE|Dir=Out|RA4=127.0.0.1|RA6=::1|Name={}-Allow-Loopback-Out|Desc=AgentOctopus Loopback Outbound|",
-                WFP_RULE_PREFIX
-            ),
-        ),
         (
             format!("{}-Block-Inbound-Low", WFP_RULE_PREFIX),
             format!(
@@ -1532,6 +1790,27 @@ fn bfe_registry_rule_definitions(preserved_ports: &[u16]) -> Vec<(String, String
             ),
         ),
         (
+            format!("{}-Block-Loopback-Alias-In", WFP_RULE_PREFIX),
+            format!(
+                "v2.31|Action=Block|Active=TRUE|Dir=In|RA4=127.0.0.2-127.255.255.254|Name={}-Block-Loopback-Alias-In|Desc=AgentOctopus Block Loopback Alias In|",
+                WFP_RULE_PREFIX
+            ),
+        ),
+        (
+            format!("{}-Block-Loopback-Alias-Out", WFP_RULE_PREFIX),
+            format!(
+                "v2.31|Action=Block|Active=TRUE|Dir=Out|RA4=127.0.0.2-127.255.255.254|Name={}-Block-Loopback-Alias-Out|Desc=AgentOctopus Block Loopback Alias Out|",
+                WFP_RULE_PREFIX
+            ),
+        ),
+        (
+            format!("{}-Block-IMDS-Out", WFP_RULE_PREFIX),
+            format!(
+                "v2.31|Action=Block|Active=TRUE|Dir=Out|RA4=169.254.169.254|Name={}-Block-IMDS-Out|Desc=AgentOctopus Block Cloud IMDS|",
+                WFP_RULE_PREFIX
+            ),
+        ),
+        (
             format!("{}-Block-Inbound-v6", WFP_RULE_PREFIX),
             format!(
                 "v2.31|Action=Block|Active=TRUE|Dir=In|RA6=::-::0,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff|Name={}-Block-Inbound-v6|Desc=AgentOctopus Block Inbound IPv6|",
@@ -1547,23 +1826,51 @@ fn bfe_registry_rule_definitions(preserved_ports: &[u16]) -> Vec<(String, String
         ),
     ];
 
-    for &port in preserved_ports {
-        if port == FORBIDDEN_PORT_5000 || port == 0 {
-            continue;
+    for port in QUARANTINE_BLOCKED_LOOPBACK_PROXY_PORTS
+        .iter()
+        .chain(QUARANTINE_BLOCKED_LATERAL_PORTS.iter())
+        .chain(QUARANTINE_BLOCKED_DISCOVERY_PORTS.iter())
+        .chain(std::iter::once(&FORBIDDEN_PORT_5000))
+    {
+        for proto in [6u8, 17u8] {
+            let block_out = format!("{}-Block-Port-{}-P{}-Out", WFP_RULE_PREFIX, port, proto);
+            rules.push((
+                block_out.clone(),
+                format!(
+                    "v2.31|Action=Block|Active=TRUE|Dir=Out|Protocol={}|RPort={}|Name={}|Desc=AgentOctopus Block Hardened Port Out|",
+                    proto, port, block_out
+                ),
+            ));
+            let block_in = format!("{}-Block-Port-{}-P{}-In", WFP_RULE_PREFIX, port, proto);
+            rules.push((
+                block_in.clone(),
+                format!(
+                    "v2.31|Action=Block|Active=TRUE|Dir=In|Protocol={}|LPort={}|Name={}|Desc=AgentOctopus Block Hardened Port In|",
+                    proto, port, block_in
+                ),
+            ));
         }
-        let in_name = format!("{}-Allow-WebUI-{}-In", WFP_RULE_PREFIX, port);
-        let in_val = format!(
-            "v2.31|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort={}|RA4=127.0.0.1|RA6=::1|Name={}|Desc=AgentOctopus WebUI Loopback In|",
-            port, in_name
-        );
-        rules.push((in_name, in_val));
+    }
 
-        let out_name = format!("{}-Allow-WebUI-{}-Out", WFP_RULE_PREFIX, port);
-        let out_val = format!(
-            "v2.31|Action=Allow|Active=TRUE|Dir=Out|Protocol=6|LPort={}|RA4=127.0.0.1|RA6=::1|Name={}|Desc=AgentOctopus WebUI Loopback Out|",
-            port, out_name
-        );
-        rules.push((out_name, out_val));
+    for &port in &sanitized_ports {
+        for (tag, la_key, addr, ra_key) in [
+            ("v4", "LA4", "127.0.0.1", "RA4"),
+            ("v6", "LA6", "::1", "RA6"),
+        ] {
+            let in_name = format!("{}-Allow-WebUI-{}-In-{}", WFP_RULE_PREFIX, port, tag);
+            let in_val = format!(
+                "v2.31|Action=Allow|Active=TRUE|Dir=In|Protocol=6|LPort={}|{}={}|{}={}|Name={}|Desc=AgentOctopus WebUI Exact Loopback In|",
+                port, la_key, addr, ra_key, addr, in_name
+            );
+            rules.push((in_name, in_val));
+
+            let out_name = format!("{}-Allow-WebUI-{}-Out-{}", WFP_RULE_PREFIX, port, tag);
+            let out_val = format!(
+                "v2.31|Action=Allow|Active=TRUE|Dir=Out|Protocol=6|RPort={}|{}={}|{}={}|Name={}|Desc=AgentOctopus WebUI Exact Loopback Out|",
+                port, la_key, addr, ra_key, addr, out_name
+            );
+            rules.push((out_name, out_val));
+        }
     }
     rules
 }
@@ -1627,15 +1934,58 @@ fn remove_bfe_registry_rules() -> usize {
         return 0;
     }
 
-    let mut ports: Vec<u16> = (5005..=5099).chain(8080..=8099).collect();
+    let mut prefixed_names: Vec<String> = Vec::new();
+    let mut index: u32 = 0;
+    loop {
+        let mut name_buf = vec![0u16; 512];
+        let mut name_len = name_buf.len() as u32;
+        let enum_rc = unsafe {
+            win_ffi::RegEnumValueW(
+                hkey,
+                index,
+                name_buf.as_mut_ptr(),
+                &mut name_len,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if enum_rc == win_ffi::ERROR_NO_MORE_ITEMS {
+            break;
+        }
+        if enum_rc == 0 {
+            let name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
+            if name.starts_with(WFP_RULE_PREFIX) {
+                prefixed_names.push(name);
+            }
+            index = index.saturating_add(1);
+        } else {
+            break;
+        }
+    }
+
+    let mut removed = 0usize;
+    let mut deleted = Vec::with_capacity(prefixed_names.len());
+    for name in prefixed_names {
+        let name_w: Vec<u16> = format!("{}\0", name).encode_utf16().collect();
+        if unsafe { win_ffi::RegDeleteValueW(hkey, name_w.as_ptr()) } == 0 {
+            removed += 1;
+        }
+        deleted.push(name);
+    }
+
+    let mut ports: Vec<u16> = (5005..=5099).collect();
     for p in discover_active_octopus_ports() {
         if !ports.contains(&p) {
             ports.push(p);
         }
     }
-
-    let mut removed = 0usize;
-    for (name, _) in bfe_registry_rule_definitions(&ports) {
+    let sanitized = sanitize_firewall_preserved_ports(&ports);
+    for (name, _) in bfe_registry_rule_definitions(&sanitized) {
+        if deleted.contains(&name) {
+            continue;
+        }
         let name_w: Vec<u16> = format!("{}\0", name).encode_utf16().collect();
         if unsafe { win_ffi::RegDeleteValueW(hkey, name_w.as_ptr()) } == 0 {
             removed += 1;
@@ -1680,6 +2030,7 @@ pub fn terminate_non_loopback_tcp_sockets(preserved_ports: &[u16]) -> usize {
         let count = num_entries.min(max_entries);
         let rows_ptr = unsafe { buf.as_ptr().add(4) as *const MibTcpRow };
 
+        let sanitized_ports = sanitize_firewall_preserved_ports(preserved_ports);
         let mut terminated = 0usize;
         for i in 0..count {
             let row = unsafe { *rows_ptr.add(i) };
@@ -1688,10 +2039,17 @@ pub fn terminate_non_loopback_tcp_sockets(preserved_ports: &[u16]) -> usize {
             let local_port = u16::from_be((row.dw_local_port & 0xFFFF) as u16);
             let remote_port = u16::from_be((row.dw_remote_port & 0xFFFF) as u16);
 
-            let is_loopback = local_octets[0] == 127 || remote_octets[0] == 127;
-            let is_ctrl =
-                preserved_ports.contains(&local_port) || preserved_ports.contains(&remote_port);
-            if matches!(row.dw_state, 3 | 4 | 5 | 8) && !is_loopback && !is_ctrl {
+            let both_exact_localhost =
+                is_exact_localhost_v4(local_octets) && is_exact_localhost_v4(remote_octets);
+            let hits_blocked_port = is_explicitly_blocked_quarantine_port(local_port)
+                || is_explicitly_blocked_quarantine_port(remote_port);
+            let is_ctrl = both_exact_localhost
+                && (sanitized_ports.contains(&local_port)
+                    || sanitized_ports.contains(&remote_port));
+            if matches!(row.dw_state, 3 | 4 | 5 | 8)
+                && (!both_exact_localhost || hits_blocked_port)
+                && !is_ctrl
+            {
                 let mut reset_row = row;
                 reset_row.dw_state = MIB_TCP_STATE_DELETE_TCB;
                 if unsafe { fn_set(&reset_row) } == ERROR_SUCCESS {
@@ -2117,6 +2475,254 @@ fn send_linux_netlink_route(msg: &[u8]) -> Result<(), HostIsolationError> {
     }
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProcNetSocketTarget {
+    is_ipv6: bool,
+    protocol: u8,
+    local_words: [u32; 4],
+    remote_words: [u32; 4],
+    local_port: u16,
+    remote_port: u16,
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_linux_ipv4_hex_word(hex_str: &str) -> Option<(u32, [u8; 4])> {
+    if hex_str.len() != 8 {
+        return None;
+    }
+    let raw = u32::from_str_radix(hex_str, 16).ok()?;
+    Some((raw, raw.to_ne_bytes()))
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_linux_ipv6_hex_words(hex_str: &str) -> Option<([u32; 4], [u8; 16])> {
+    if hex_str.len() != 32 {
+        return None;
+    }
+    let mut words = [0u32; 4];
+    let mut octets = [0u8; 16];
+    for i in 0..4 {
+        let word = u32::from_str_radix(&hex_str[i * 8..(i + 1) * 8], 16).ok()?;
+        words[i] = word;
+        octets[i * 4..(i + 1) * 4].copy_from_slice(&word.to_ne_bytes());
+    }
+    Some((words, octets))
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_proc_net_destroy_targets(
+    raw: &str,
+    is_ipv6: bool,
+    protocol: u8,
+    sanitized_ports: &[u16],
+) -> Vec<ProcNetSocketTarget> {
+    let mut targets = Vec::new();
+    for line in raw.lines().skip(1) {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 4 {
+            continue;
+        }
+        let state = cols[3];
+        let active_state = if protocol == 6 {
+            matches!(state, "01" | "02" | "03" | "08")
+        } else {
+            matches!(state, "01" | "07")
+        };
+        if !active_state {
+            continue;
+        }
+        let Some((l_ip_hex, l_port_hex)) = cols[1].split_once(':') else {
+            continue;
+        };
+        let Some((r_ip_hex, r_port_hex)) = cols[2].split_once(':') else {
+            continue;
+        };
+        let Ok(l_port) = u16::from_str_radix(l_port_hex, 16) else {
+            continue;
+        };
+        let Ok(r_port) = u16::from_str_radix(r_port_hex, 16) else {
+            continue;
+        };
+
+        let (local_words, remote_words, local_exact_lb, remote_exact_lb, remote_unspec) = if is_ipv6
+        {
+            let Some((l_words, l_octets)) = parse_linux_ipv6_hex_words(l_ip_hex) else {
+                continue;
+            };
+            let Some((r_words, r_octets)) = parse_linux_ipv6_hex_words(r_ip_hex) else {
+                continue;
+            };
+            (
+                l_words,
+                r_words,
+                is_exact_localhost_v6(l_octets),
+                is_exact_localhost_v6(r_octets),
+                r_octets == [0u8; 16] && r_port == 0,
+            )
+        } else {
+            let Some((l_word, l_octets)) = parse_linux_ipv4_hex_word(l_ip_hex) else {
+                continue;
+            };
+            let Some((r_word, r_octets)) = parse_linux_ipv4_hex_word(r_ip_hex) else {
+                continue;
+            };
+            (
+                [l_word, 0, 0, 0],
+                [r_word, 0, 0, 0],
+                is_exact_localhost_v4(l_octets),
+                is_exact_localhost_v4(r_octets),
+                r_octets == [0u8; 4] && r_port == 0,
+            )
+        };
+
+        let hits_blocked_port = is_explicitly_blocked_quarantine_port(l_port)
+            || is_explicitly_blocked_quarantine_port(r_port);
+        let is_preserved_ctrl =
+            sanitized_ports.contains(&l_port) || sanitized_ports.contains(&r_port);
+        let exempt_exact_localhost = !hits_blocked_port
+            && is_preserved_ctrl
+            && local_exact_lb
+            && (remote_exact_lb || (protocol != 6 && state == "07" && remote_unspec));
+
+        if exempt_exact_localhost {
+            continue;
+        }
+        targets.push(ProcNetSocketTarget {
+            is_ipv6,
+            protocol,
+            local_words,
+            remote_words,
+            local_port: l_port,
+            remote_port: r_port,
+        });
+    }
+    targets
+}
+
+/// Generates an atomic `nftables` defense-in-depth quarantine ruleset
+/// (`table inet agent_octopus_quarantine`) blocking external, loopback-alias, IMDS/link-local,
+/// proxy, lateral, and discovery traffic while permitting exact `127.0.0.1`/`::1` TCP control ports.
+pub fn generate_linux_nftables_quarantine_script(preserved_ports: &[u16]) -> String {
+    let sanitized_ports = sanitize_firewall_preserved_ports(preserved_ports);
+    let mut blocked_ports: Vec<u16> = Vec::with_capacity(
+        QUARANTINE_BLOCKED_LOOPBACK_PROXY_PORTS.len()
+            + QUARANTINE_BLOCKED_LATERAL_PORTS.len()
+            + QUARANTINE_BLOCKED_DISCOVERY_PORTS.len()
+            + 1,
+    );
+    blocked_ports.extend_from_slice(&QUARANTINE_BLOCKED_LOOPBACK_PROXY_PORTS);
+    blocked_ports.extend_from_slice(&QUARANTINE_BLOCKED_LATERAL_PORTS);
+    blocked_ports.extend_from_slice(&QUARANTINE_BLOCKED_DISCOVERY_PORTS);
+    blocked_ports.push(FORBIDDEN_PORT_5000);
+    blocked_ports.sort_unstable();
+    blocked_ports.dedup();
+
+    let blocked_list = blocked_ports
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let allowed_list = sanitized_ports
+        .iter()
+        .map(u16::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut script = String::new();
+    script.push_str("add table inet agent_octopus_quarantine\n");
+    script.push_str("delete table inet agent_octopus_quarantine\n");
+    script.push_str("table inet agent_octopus_quarantine {\n");
+    for (chain_name, hook, iface_kw) in [
+        ("input", "input", "iifname"),
+        ("output", "output", "oifname"),
+    ] {
+        script.push_str(&format!("    chain {} {{\n", chain_name));
+        script.push_str(&format!(
+            "        type filter hook {} priority -200; policy drop;\n",
+            hook
+        ));
+        script.push_str("        ip saddr 127.0.0.2-127.255.255.254 drop\n");
+        script.push_str("        ip daddr 127.0.0.2-127.255.255.254 drop\n");
+        script.push_str("        ip daddr 169.254.0.0/16 drop\n");
+        script.push_str("        ip6 daddr fe80::/10 drop\n");
+        script.push_str(&format!("        tcp dport {{ {} }} drop\n", blocked_list));
+        script.push_str(&format!("        tcp sport {{ {} }} drop\n", blocked_list));
+        script.push_str(&format!("        udp dport {{ {} }} drop\n", blocked_list));
+        script.push_str(&format!("        udp sport {{ {} }} drop\n", blocked_list));
+        if !allowed_list.is_empty() {
+            script.push_str(&format!(
+                "        {} \"lo\" ip saddr 127.0.0.1 ip daddr 127.0.0.1 tcp dport {{ {} }} accept\n",
+                iface_kw, allowed_list
+            ));
+            script.push_str(&format!(
+                "        {} \"lo\" ip saddr 127.0.0.1 ip daddr 127.0.0.1 tcp sport {{ {} }} accept\n",
+                iface_kw, allowed_list
+            ));
+            script.push_str(&format!(
+                "        {} \"lo\" ip6 saddr ::1 ip6 daddr ::1 tcp dport {{ {} }} accept\n",
+                iface_kw, allowed_list
+            ));
+            script.push_str(&format!(
+                "        {} \"lo\" ip6 saddr ::1 ip6 daddr ::1 tcp sport {{ {} }} accept\n",
+                iface_kw, allowed_list
+            ));
+        }
+        script.push_str("    }\n");
+    }
+    script.push_str("    chain forward {\n");
+    script.push_str("        type filter hook forward priority -200; policy drop;\n");
+    script.push_str("    }\n");
+    script.push_str("}\n");
+    script
+}
+
+#[cfg(target_os = "linux")]
+fn install_linux_nftables_quarantine(preserved_ports: &[u16]) -> Option<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let script = generate_linux_nftables_quarantine_script(preserved_ports);
+    for bin in ["/usr/sbin/nft", "/sbin/nft", "nft"] {
+        let Ok(mut child) = Command::new(bin)
+            .args(["-f", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+        else {
+            continue;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(script.as_bytes());
+        }
+        if matches!(child.wait_with_output(), Ok(out) if out.status.success()) {
+            return Some("linux-nftables:agent_octopus_quarantine".to_string());
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn remove_linux_nftables_quarantine() {
+    use std::process::{Command, Stdio};
+
+    for bin in ["/usr/sbin/nft", "/sbin/nft", "nft"] {
+        let Ok(status) = Command::new(bin)
+            .args(["delete", "table", "inet", "agent_octopus_quarantine"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        else {
+            continue;
+        };
+        if status.success() {
+            break;
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn terminate_linux_non_loopback_sockets(preserved_ports: &[u16]) -> usize {
     #[repr(C)]
@@ -2138,9 +2744,31 @@ fn terminate_linux_non_loopback_sockets(preserved_ports: &[u16]) -> usize {
         id: InetDiagSockId,
     }
 
-    let Ok(raw) = std::fs::read_to_string("/proc/net/tcp") else {
+    let sanitized_ports = sanitize_firewall_preserved_ports(preserved_ports);
+    let proc_tables: [(&str, bool, u8); 6] = [
+        ("/proc/net/tcp", false, 6),
+        ("/proc/net/tcp6", true, 6),
+        ("/proc/net/udp", false, 17),
+        ("/proc/net/udp6", true, 17),
+        ("/proc/net/raw", false, 255),
+        ("/proc/net/raw6", true, 255),
+    ];
+
+    let mut targets = Vec::new();
+    for (path, is_ipv6, protocol) in proc_tables {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            targets.extend(parse_proc_net_destroy_targets(
+                &raw,
+                is_ipv6,
+                protocol,
+                &sanitized_ports,
+            ));
+        }
+    }
+    if targets.is_empty() {
         return 0;
-    };
+    }
+
     let mut destroyed = 0usize;
     unsafe {
         let fd = libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, NETLINK_INET_DIAG);
@@ -2150,59 +2778,30 @@ fn terminate_linux_non_loopback_sockets(preserved_ports: &[u16]) -> usize {
         let mut sa: libc::sockaddr_nl = std::mem::zeroed();
         sa.nl_family = libc::AF_NETLINK as libc::sa_family_t;
 
-        for line in raw.lines().skip(1) {
-            let cols: Vec<&str> = line.split_whitespace().collect();
-            if cols.len() < 4 || cols[3] != "01" {
-                continue;
-            }
-            let Some((l_ip_hex, l_port_hex)) = cols[1].split_once(':') else {
-                continue;
-            };
-            let Some((r_ip_hex, r_port_hex)) = cols[2].split_once(':') else {
-                continue;
-            };
-            let Ok(l_ip_u32) = u32::from_str_radix(l_ip_hex, 16) else {
-                continue;
-            };
-            let Ok(r_ip_u32) = u32::from_str_radix(r_ip_hex, 16) else {
-                continue;
-            };
-            let Ok(l_port) = u16::from_str_radix(l_port_hex, 16) else {
-                continue;
-            };
-            let Ok(r_port) = u16::from_str_radix(r_port_hex, 16) else {
-                continue;
-            };
-
-            let l_bytes = l_ip_u32.to_ne_bytes();
-            let r_bytes = r_ip_u32.to_ne_bytes();
-            if l_bytes[0] == 127
-                || r_bytes[0] == 127
-                || preserved_ports.contains(&l_port)
-                || preserved_ports.contains(&r_port)
-            {
-                continue;
-            }
-
+        for (seq_offset, target) in targets.into_iter().enumerate() {
             let total_len = std::mem::size_of::<NlMsgHdr>() + std::mem::size_of::<InetDiagReqV2>();
             let hdr = NlMsgHdr {
                 nlmsg_len: total_len as u32,
                 nlmsg_type: SOCK_DESTROY,
                 nlmsg_flags: NLM_F_REQUEST | NLM_F_ACK,
-                nlmsg_seq: 2,
+                nlmsg_seq: 2 + seq_offset as u32,
                 nlmsg_pid: 0,
             };
             let req = InetDiagReqV2 {
-                family: libc::AF_INET as u8,
-                protocol: 6,
+                family: if target.is_ipv6 {
+                    libc::AF_INET6 as u8
+                } else {
+                    libc::AF_INET as u8
+                },
+                protocol: target.protocol,
                 ext: 0,
                 pad: 0,
                 states: 0xFFFF_FFFF,
                 id: InetDiagSockId {
-                    sport: l_port.to_be(),
-                    dport: r_port.to_be(),
-                    src: [l_ip_u32, 0, 0, 0],
-                    dst: [r_ip_u32, 0, 0, 0],
+                    sport: target.local_port.to_be(),
+                    dport: target.remote_port.to_be(),
+                    src: target.local_words,
+                    dst: target.remote_words,
                     if_idx: 0,
                     cookie: [0xFFFF_FFFF, 0xFFFF_FFFF],
                 },
@@ -2243,27 +2842,74 @@ pub const DIOCXBEGIN: u64 = 0xC810_4451;
 pub const DIOCXCOMMIT: u64 = 0xC810_4452;
 pub const DIOCXROLLBACK: u64 = 0xC810_4453;
 
-/// Generates the deterministic macOS `/dev/pf` anchor ruleset preserving `lo0`, `127.0.0.1`,
-/// `::1`, and active AgentOctopus WebUI ports while blocking all external traffic (zero DNS/DHCP leaks).
+/// Generates the deterministic hardened macOS `/dev/pf` anchor ruleset preserving ONLY
+/// exact-localhost (`127.0.0.1` / `::1`) TCP control ports while explicitly blocking DNS,
+/// DHCP, IMDS (`169.254.0.0/16`), link-local IPv6, loopback aliases, QUIC UDP/443, proxy
+/// forwarders (`1080, 3128, 8080, 8888, 9050`), lateral ports (`135, 445, 5985, 5986`), and
+/// all external traffic.
 pub fn generate_macos_pf_quarantine_rules(anchor: &str, preserved_ports: &[u16]) -> Vec<String> {
+    let sanitized_ports = sanitize_firewall_preserved_ports(preserved_ports);
     let mut lines = vec![
         format!("# AgentOctopus macOS /dev/pf Quarantine Anchor: {}", anchor),
-        "pass quick on lo0 all keep state".to_string(),
-        "pass quick from 127.0.0.1 to any keep state".to_string(),
-        "pass quick from ::1 to any keep state".to_string(),
+        "block drop out quick proto { tcp, udp, icmp } from any to 169.254.0.0/16".to_string(),
+        "block drop out quick proto { tcp, udp } from any to fe80::/10".to_string(),
+        "block drop out quick proto udp from any to any port 443".to_string(),
     ];
-    for &port in preserved_ports {
-        if port != FORBIDDEN_PORT_5000 && port != 0 {
-            lines.push(format!(
-                "pass in quick on lo0 proto tcp from any to any port {} keep state",
-                port
-            ));
-            lines.push(format!(
-                "pass out quick on lo0 proto tcp from any port {} to any keep state",
-                port
-            ));
-        }
+
+    for port in QUARANTINE_BLOCKED_DISCOVERY_PORTS
+        .iter()
+        .chain(QUARANTINE_BLOCKED_LOOPBACK_PROXY_PORTS.iter())
+        .chain(QUARANTINE_BLOCKED_LATERAL_PORTS.iter())
+        .chain(std::iter::once(&FORBIDDEN_PORT_5000))
+    {
+        lines.push(format!(
+            "block drop in quick proto {{ tcp, udp }} from any to any port {}",
+            port
+        ));
+        lines.push(format!(
+            "block drop out quick proto {{ tcp, udp }} from any to any port {}",
+            port
+        ));
     }
+
+    for &port in &sanitized_ports {
+        lines.push(format!(
+            "pass in quick on lo0 inet proto tcp from 127.0.0.1 to 127.0.0.1 port {} keep state",
+            port
+        ));
+        lines.push(format!(
+            "pass out quick on lo0 inet proto tcp from 127.0.0.1 to 127.0.0.1 port {} keep state",
+            port
+        ));
+        lines.push(format!(
+            "pass out quick on lo0 inet proto tcp from 127.0.0.1 port {} to 127.0.0.1 keep state",
+            port
+        ));
+        lines.push(format!(
+            "pass in quick on lo0 inet proto tcp from 127.0.0.1 port {} to 127.0.0.1 keep state",
+            port
+        ));
+        lines.push(format!(
+            "pass in quick on lo0 inet6 proto tcp from ::1 to ::1 port {} keep state",
+            port
+        ));
+        lines.push(format!(
+            "pass out quick on lo0 inet6 proto tcp from ::1 to ::1 port {} keep state",
+            port
+        ));
+        lines.push(format!(
+            "pass out quick on lo0 inet6 proto tcp from ::1 port {} to ::1 keep state",
+            port
+        ));
+        lines.push(format!(
+            "pass in quick on lo0 inet6 proto tcp from ::1 port {} to ::1 keep state",
+            port
+        ));
+    }
+
+    lines.push("block drop in quick on lo0 from 127.0.0.0/8 to any".to_string());
+    lines.push("block drop out quick on lo0 from 127.0.0.0/8 to any".to_string());
+    lines.push("block drop quick on lo0 all".to_string());
     lines.push("block drop in quick all".to_string());
     lines.push("block drop out quick all".to_string());
     lines
@@ -2365,12 +3011,24 @@ fn apply_macos_pf_ioctl(
         }
 
         if engage {
-            let mut rules_raw: Vec<(u8, u8, Option<&[u8]>, u8, Option<u16>)> =
-                vec![(0, 0, Some(b"lo0"), 0, None)];
-            if let Some(&ctrl) = preserved_ports.first() {
+            let sanitized_ports = sanitize_firewall_preserved_ports(preserved_ports);
+            let mut rules_raw: Vec<(u8, u8, Option<&[u8]>, u8, Option<u16>)> = Vec::new();
+            for &port in QUARANTINE_BLOCKED_DISCOVERY_PORTS
+                .iter()
+                .chain(QUARANTINE_BLOCKED_LOOPBACK_PROXY_PORTS.iter())
+                .chain(QUARANTINE_BLOCKED_LATERAL_PORTS.iter())
+                .chain(std::iter::once(&FORBIDDEN_PORT_5000))
+            {
+                for proto in [6u8, 17u8] {
+                    rules_raw.push((1, 1, None, proto, Some(port)));
+                    rules_raw.push((1, 2, None, proto, Some(port)));
+                }
+            }
+            for &ctrl in &sanitized_ports {
                 rules_raw.push((0, 1, Some(b"lo0"), 6, Some(ctrl)));
                 rules_raw.push((0, 2, Some(b"lo0"), 6, Some(ctrl)));
             }
+            rules_raw.push((1, 0, Some(b"lo0"), 0, None));
             rules_raw.push((1, 1, None, 0, None));
             rules_raw.push((1, 2, None, 0, None));
 
@@ -2497,6 +3155,7 @@ fn apply_platform_kernel_quarantine(
     reason: &str,
     preserved_ports: &[u16],
 ) -> Result<HostIsolationReceipt, HostIsolationError> {
+    let sanitized_ports = sanitize_firewall_preserved_ports(preserved_ports);
     if !is_current_process_elevated() && is_non_elevated_test_simulation() {
         return Ok(build_receipt(
             KernelIsolationBackend::SimulatedNonElevatedTest,
@@ -2504,7 +3163,7 @@ fn apply_platform_kernel_quarantine(
             vec![900_001, 900_002, 900_003],
             Vec::new(),
             vec!["cargo-test-non-elevated".to_string()],
-            preserved_ports.to_vec(),
+            sanitized_ports,
             0,
             engaged_by,
             reason,
@@ -2535,7 +3194,7 @@ fn apply_platform_kernel_quarantine(
                 persisted,
                 Vec::new(),
                 Vec::new(),
-                preserved_ports.to_vec(),
+                sanitized_ports,
                 0,
                 engaged_by,
                 reason,
@@ -2559,10 +3218,10 @@ fn apply_platform_kernel_quarantine(
             clear_persisted_wfp_filter_ids();
         }
 
-        let ids = session.install_22_layer_quarantine(preserved_ports)?;
+        let ids = session.install_22_layer_quarantine(&sanitized_ports)?;
         persist_wfp_filter_ids(&ids);
-        let reg_rules = apply_bfe_registry_rules(preserved_ports);
-        let severed = terminate_non_loopback_tcp_sockets(preserved_ports);
+        let reg_rules = apply_bfe_registry_rules(&sanitized_ports);
+        let severed = terminate_non_loopback_tcp_sockets(&sanitized_ports);
 
         Ok(build_receipt(
             KernelIsolationBackend::WindowsWfpBfe22Layer,
@@ -2570,7 +3229,7 @@ fn apply_platform_kernel_quarantine(
             ids,
             reg_rules,
             Vec::new(),
-            preserved_ports.to_vec(),
+            sanitized_ports,
             severed,
             engaged_by,
             reason,
@@ -2588,17 +3247,21 @@ fn apply_platform_kernel_quarantine(
         }
         send_linux_netlink_route(&build_linux_blackhole_route_msg(false, false, 10))?;
         send_linux_netlink_route(&build_linux_blackhole_route_msg(true, false, 10))?;
-        let severed = terminate_linux_non_loopback_sockets(preserved_ports);
+        let mut tokens = vec![
+            "ipv4:0.0.0.0/0->RTN_BLACKHOLE".to_string(),
+            "ipv6:::/0->RTN_BLACKHOLE".to_string(),
+        ];
+        if let Some(nft_token) = install_linux_nftables_quarantine(&sanitized_ports) {
+            tokens.push(nft_token);
+        }
+        let severed = terminate_linux_non_loopback_sockets(&sanitized_ports);
         Ok(build_receipt(
             KernelIsolationBackend::LinuxNetlinkBlackhole,
             "linux-netlink-rt-main".to_string(),
             Vec::new(),
             Vec::new(),
-            vec![
-                "ipv4:0.0.0.0/0->RTN_BLACKHOLE".to_string(),
-                "ipv6:::/0->RTN_BLACKHOLE".to_string(),
-            ],
-            preserved_ports.to_vec(),
+            tokens,
+            sanitized_ports,
             severed,
             engaged_by,
             reason,
@@ -2613,14 +3276,14 @@ fn apply_platform_kernel_quarantine(
                 remediation: "Run with sudo.".to_string(),
             });
         }
-        let token = apply_macos_pf_ioctl(true, preserved_ports)?;
+        let token = apply_macos_pf_ioctl(true, &sanitized_ports)?;
         Ok(build_receipt(
             KernelIsolationBackend::MacOsPfIoctl,
             token.clone(),
             Vec::new(),
             Vec::new(),
             vec![token],
-            preserved_ports.to_vec(),
+            sanitized_ports,
             0,
             engaged_by,
             reason,
@@ -2680,6 +3343,7 @@ fn disarm_platform_kernel_quarantine(disarmed_by: &str) -> Result<(), HostIsolat
         if is_current_process_elevated() {
             let _ = send_linux_netlink_route(&build_linux_blackhole_route_msg(false, true, 10));
             let _ = send_linux_netlink_route(&build_linux_blackhole_route_msg(true, true, 10));
+            remove_linux_nftables_quarantine();
         }
         Ok(())
     }
@@ -3006,4 +3670,128 @@ static GLOBAL_HOST_KILLSWITCH: OnceLock<HostKillSwitchManager> = OnceLock::new()
 
 pub fn global_host_killswitch() -> &'static HostKillSwitchManager {
     GLOBAL_HOST_KILLSWITCH.get_or_init(|| HostKillSwitchManager::new(None))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_firewall_preserved_ports_strips_proxy_lateral_discovery_and_5000() {
+        let input = [
+            0, 53, 67, 68, 135, 445, 546, 547, 853, 1080, 3128, 5000, 5005, 5005, 5985, 5986, 8080,
+            8888, 9050, 5012,
+        ];
+        assert_eq!(sanitize_firewall_preserved_ports(&input), vec![5005, 5012]);
+        for &blocked in QUARANTINE_BLOCKED_LOOPBACK_PROXY_PORTS
+            .iter()
+            .chain(QUARANTINE_BLOCKED_LATERAL_PORTS.iter())
+            .chain(QUARANTINE_BLOCKED_DISCOVERY_PORTS.iter())
+            .chain(std::iter::once(&FORBIDDEN_PORT_5000))
+        {
+            assert!(
+                is_blocked_quarantine_port(blocked),
+                "port {} must be blocked from quarantine exemptions",
+                blocked
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_bfe_registry_rules_exclude_blanket_loopback_and_block_proxies() {
+        let rules = bfe_registry_rule_definitions(&[5005, 8080, 53, 5000]);
+        let joined: String = rules
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!joined.contains("Allow-Loopback-In"));
+        assert!(!joined.contains("Allow-Loopback-Out"));
+        assert!(joined.contains("127.0.0.2-127.255.255.254"));
+        assert!(joined.contains("169.254.169.254"));
+        assert!(joined.contains("Block-Port-8080"));
+        assert!(joined.contains("Block-Port-53"));
+        assert!(joined.contains("Allow-WebUI-5005-In-v4"));
+        assert!(!joined.contains("Allow-WebUI-8080"));
+        assert!(!joined.contains("Allow-WebUI-5000"));
+        assert!(!joined.contains("Allow-WebUI-53"));
+    }
+
+    #[test]
+    fn test_hardened_macos_pf_rules_reject_blanket_lo0_and_block_proxy_lateral_discovery() {
+        let rules =
+            generate_macos_pf_quarantine_rules("agent_octopus", &[5005, 8080, 53, 445, 5000]);
+        let joined = rules.join("\n");
+
+        assert!(!joined.contains("pass quick on lo0 all"));
+        assert!(!joined.contains("pass quick from 127.0.0.1 to any"));
+        assert!(!joined.contains("pass quick from ::1 to any"));
+        assert!(joined.contains("169.254.0.0/16"));
+        assert!(joined.contains("fe80::/10"));
+        assert!(joined.contains("block drop out quick proto udp from any to any port 443"));
+        assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 53"));
+        assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 67"));
+        assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 68"));
+        assert!(
+            joined.contains("block drop out quick proto { tcp, udp } from any to any port 8080")
+        );
+        assert!(joined.contains("block drop out quick proto { tcp, udp } from any to any port 445"));
+        assert!(joined.contains(
+            "pass in quick on lo0 inet proto tcp from 127.0.0.1 to 127.0.0.1 port 5005 keep state"
+        ));
+        assert!(!joined.contains("port 8080 keep state"));
+        assert!(!joined.contains("port 53 keep state"));
+        assert!(joined.contains("block drop in quick all"));
+        assert!(joined.contains("block drop out quick all"));
+    }
+
+    #[test]
+    fn test_linux_nftables_script_hardened_rules() {
+        let script = generate_linux_nftables_quarantine_script(&[5005, 8080, 53, 5000]);
+        assert!(script.contains("table inet agent_octopus_quarantine"));
+        assert!(script.contains("policy drop;"));
+        assert!(script.contains("127.0.0.2-127.255.255.254 drop"));
+        assert!(script.contains("169.254.0.0/16 drop"));
+        assert!(script.contains("8080"));
+        assert!(script.contains("53"));
+        assert!(script.contains("ip saddr 127.0.0.1 ip daddr 127.0.0.1 tcp dport { 5005 } accept"));
+        assert!(!script.contains("tcp dport { 5005, 8080"));
+    }
+
+    #[test]
+    fn test_parse_proc_net_destroy_targets_covers_ipv4_ipv6_tcp_udp_raw() {
+        // Little-endian host encoding: 127.0.0.1 -> 0100007F, 127.0.0.2 -> 0200007F, 8.8.8.8 -> 08080808
+        let tcp_v4 = "\
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n\
+   0: 0100007F:138D 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1000        0 100\n\
+   1: 0100007F:1F90 0100007F:C351 01 00000000:00000000 00:00000000 00000000  1000        0 101\n\
+   2: 0200007F:138D 0100007F:C352 01 00000000:00000000 00:00000000 00000000  1000        0 102\n\
+   3: 0100007F:A1B2 08080808:0035 01 00000000:00000000 00:00000000 00000000  1000        0 103\n";
+        let targets_tcp4 = parse_proc_net_destroy_targets(tcp_v4, false, 6, &[5005]);
+        // Slot 0 (127.0.0.1:5005 <-> 127.0.0.1) is spared; slots 1 (port 8080), 2 (127.0.0.2), 3 (8.8.8.8:53) targeted.
+        assert_eq!(targets_tcp4.len(), 3);
+        assert_eq!(targets_tcp4[0].local_port, 8080);
+        assert_eq!(targets_tcp4[1].local_port, 5005);
+        assert_eq!(targets_tcp4[2].remote_port, 53);
+
+        // IPv6 ::1 on little-endian /proc/net/tcp6: 00000000000000000000000001000000
+        let udp_v6 = "\
+  sl  local_address                         remote_address                        st\n\
+   0: 00000000000000000000000001000000:138D 00000000000000000000000001000000:C350 01\n\
+   1: 00000000000000000000000001000000:A000 00000000000000000000000002000000:0035 07\n";
+        let targets_udp6 = parse_proc_net_destroy_targets(udp_v6, true, 17, &[5005]);
+        assert_eq!(targets_udp6.len(), 1);
+        assert!(targets_udp6[0].is_ipv6);
+        assert_eq!(targets_udp6[0].protocol, 17);
+        assert_eq!(targets_udp6[0].remote_port, 53);
+
+        let raw_v4 = "\
+  sl  local_address rem_address   st\n\
+   0: 00000000:00FF 00000000:0000 07\n";
+        let targets_raw = parse_proc_net_destroy_targets(raw_v4, false, 255, &[5005]);
+        assert_eq!(targets_raw.len(), 1);
+        assert_eq!(targets_raw[0].protocol, 255);
+    }
 }

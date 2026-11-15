@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+# AgentOctopus post-commit hook: routes every local commit on `main` through
+# `scripts/solo_pr_ship.ps1` so changes ship via reviewed PRs.
+
+if [ "$AGENT_OCTOPUS_SKIP_POST_COMMIT_HOOK" = "1" ]; then
+    exit 0
+fi
+
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+if [ "$CURRENT_BRANCH" != "main" ]; then
+    exit 0
+fi
+
+REPO_TOP=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+REPO_TOP_NORM=$(printf '%s' "$REPO_TOP" | tr '\\' '/' | sed 's:/*$::')
+REPO_TOP_LOWER=$(printf '%s' "$REPO_TOP_NORM" | tr '[:upper:]' '[:lower:]')
+if [ "$REPO_TOP_LOWER" != "d:/harfile/agentoctopus" ]; then
+    echo "[post-commit] Refusing hook outside D:/harfile/AgentOctopus (got '$REPO_TOP_NORM')." >&2
+    exit 1
+fi
+
+COMMIT_MSG=$(git log -1 --pretty=%s 2>/dev/null || echo "chore: automated verified update")
+echo "[post-commit] Launching Solo-PR ship workflow for commit on main..."
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "scripts/solo_pr_ship.ps1" -Title "$COMMIT_MSG" < /dev/null
+exit $?

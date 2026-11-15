@@ -21,6 +21,11 @@ use crate::security::delegation::DelegationScopeGuard;
 use crate::security::host_network_isolation::{global_host_killswitch, HostKillSwitchManager};
 use crate::security::identity::AgentIdentity;
 use crate::security::isolation::SandboxConfinementPolicy;
+use crate::security::kernel_patcher::{
+    cpe::split_unescaped_colons,
+    discovery::{parse_linux_kernel_info, parse_macos_kernel_info, parse_windows_kernel_info},
+    HostKernelInfo, KernelPatcher,
+};
 use crate::security::process_immunity::is_process_immune;
 use crate::security::siquery::{SiqueryEngine, SiqueryOutputFormat};
 use crate::security::universal_protocols::UniversalProtocolCatalog;
@@ -106,7 +111,7 @@ impl SubsystemVerifier {
             name: "Core Host Containment & KillSwitch State Ledger Integrity".to_string(),
             passed: p1_res.is_ok(),
             details: p1_res.err().unwrap_or_else(|| {
-                "KillSwitch engage/disarm cycle verified, 218 protocol catalog entries validated".to_string()
+                "KillSwitch engage/disarm cycle verified, 218 protocol catalog entries & host kernel CPE 2.3 validated".to_string()
             }),
             duration_ms: p1_start.elapsed().as_millis(),
         });
@@ -259,6 +264,80 @@ impl SubsystemVerifier {
             return Err(format!(
                 "Universal protocol catalog incomplete: found {} protocols (expected >= 200)",
                 total
+            ));
+        }
+
+        // Verify offline host kernel discovery, cross-platform CPE 2.3 parsers, and safe dry-run patch plan
+        Self::verify_host_kernel_cpe_offline().await?;
+
+        Ok(())
+    }
+
+    /// Offline host-kernel discovery, NIST CPE 2.3 validation, and dry-run patch check.
+    /// Makes zero network calls and zero OS modifications.
+    pub async fn verify_host_kernel_cpe_offline() -> Result<(), String> {
+        let host_kernel = tokio::task::spawn_blocking(HostKernelInfo::detect_host_kernel)
+            .await
+            .map_err(|e| format!("Host kernel detection task join failed: {e}"))?
+            .map_err(|e| format!("Host kernel detection failed: {e}"))?;
+
+        if host_kernel.kernel_release.trim().is_empty()
+            || host_kernel.architecture.trim().is_empty()
+            || !host_kernel.cpe23.starts_with("cpe:2.3:o:")
+        {
+            return Err(format!(
+                "Invalid host kernel discovery output: {:?}",
+                host_kernel
+            ));
+        }
+
+        let cpe_parts = split_unescaped_colons(&host_kernel.cpe23);
+        if cpe_parts.len() != 13 {
+            return Err(format!(
+                "Host kernel CPE 2.3 '{}' must contain 13 fields, found {}",
+                host_kernel.cpe23,
+                cpe_parts.len()
+            ));
+        }
+
+        let linux_sample = parse_linux_kernel_info("6.8.0-49-generic", None, "x86_64");
+        if linux_sample.cpe23 != "cpe:2.3:o:linux:linux_kernel:6.8.0:*:*:*:*:*:*:*" {
+            return Err(format!(
+                "Linux CPE 2.3 canonicalization mismatch: {}",
+                linux_sample.cpe23
+            ));
+        }
+        let win_sample = parse_windows_kernel_info(
+            10,
+            0,
+            22631,
+            Some(3880),
+            Some("Windows 11 Enterprise"),
+            Some("23H2"),
+            "x86_64",
+        );
+        if win_sample.cpe23 != "cpe:2.3:o:microsoft:windows_11:23h2:*:*:*:*:*:*:*" {
+            return Err(format!(
+                "Windows CPE 2.3 canonicalization mismatch: {}",
+                win_sample.cpe23
+            ));
+        }
+        let mac_sample = parse_macos_kernel_info(Some("14.4.1"), "23.4.0", "aarch64");
+        if mac_sample.cpe23 != "cpe:2.3:o:apple:macos:14.4.1:*:*:*:*:*:*:*" {
+            return Err(format!(
+                "macOS CPE 2.3 canonicalization mismatch: {}",
+                mac_sample.cpe23
+            ));
+        }
+
+        let dry_run = KernelPatcher::new()
+            .apply_os_kernel_patch(true)
+            .await
+            .map_err(|e| format!("Offline kernel patch dry-run failed: {e}"))?;
+        if !dry_run.dry_run || !dry_run.success || dry_run.command.is_empty() {
+            return Err(format!(
+                "Unexpected kernel patch dry-run result: {:?}",
+                dry_run
             ));
         }
 
@@ -560,5 +639,17 @@ impl SubsystemVerifier {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SubsystemVerifier;
+
+    #[tokio::test]
+    async fn test_verify_host_kernel_cpe_offline_succeeds() {
+        SubsystemVerifier::verify_host_kernel_cpe_offline()
+            .await
+            .expect("offline host kernel CPE verification must pass");
     }
 }
