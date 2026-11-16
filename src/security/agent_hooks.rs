@@ -775,11 +775,58 @@ pub fn evaluate_hook_synchronously(req: &NormalizedHookRequest) -> HookEvaluatio
                 matched_path
             ),
             Some("SensitiveSystemPathGuard"),
-            Some("Access to root credential databases (/etc/shadow, SAM, SYSTEM) is strictly forbidden"),
+            Some("Access to protected credential stores is strictly forbidden"),
             duration_us,
         );
         record_decision(req, &decision);
         return decision;
+    }
+
+    // 2b. Mandatory Auto-Protected Workspace Write-Deny Guard
+    if let Some(tool) = &req.tool_name {
+        let t_lower = tool.to_ascii_lowercase();
+        let is_mutating_file_tool = [
+            "write", "edit", "replace", "create", "delete", "remove", "rename", "move", "append",
+            "patch",
+        ]
+        .iter()
+        .any(|kw| t_lower.contains(kw))
+            && !t_lower.contains("read")
+            && !t_lower.contains("view");
+        if is_mutating_file_tool {
+            let mut candidate_paths = Vec::new();
+            if let Some(fp) = &req.file_path {
+                candidate_paths.push(fp.clone());
+            }
+            if let Some(args) = &req.arguments {
+                for key in ["file_path", "path", "target_file", "destination", "target"] {
+                    if let Some(s) = args.get(key).and_then(|v| v.as_str()) {
+                        candidate_paths.push(s.to_string());
+                    }
+                }
+            }
+            let is_dir_mutation = ["delete", "remove", "rename", "move"]
+                .iter()
+                .any(|kw| t_lower.contains(kw));
+            for cand in candidate_paths {
+                let deny = if is_dir_mutation {
+                    crate::security::sensitive_paths::classify_pinned_parent_for_write_deny(&cand)
+                } else {
+                    crate::security::sensitive_paths::classify_mandatory_write_deny_path(&cand)
+                };
+                if let Some(kind) = deny {
+                    let duration_us = start_instant.elapsed().as_micros() as u64;
+                    let decision = HookEvaluationDecision::deny(
+                        format!("{} ('{}')", kind.description(), cand),
+                        Some("MandatoryWriteDenyGuard"),
+                        Some("Auto-protected workspace hook, shell, and IDE configs cannot be modified"),
+                        duration_us,
+                    );
+                    record_decision(req, &decision);
+                    return decision;
+                }
+            }
+        }
     }
 
     // 3. Layer 1: SemanticCommandAst (Structural privilege escalation AST parsing)
@@ -1057,5 +1104,35 @@ mod tests {
         assert!(decision
             .rationale
             .contains("sensitive system credential store blocked"));
+    }
+
+    #[test]
+    fn test_mandatory_write_deny_hook_blocks_git_hooks_and_mcp_json() {
+        let write_req = NormalizedHookRequest {
+            agent: SupportedAgentKind::Claude,
+            event_type: HookEventType::PreToolUse,
+            tool_name: Some("write_to_file".into()),
+            command: None,
+            file_path: Some(".git/hooks/pre-commit".into()),
+            arguments: None,
+            exit_code: None,
+            stderr: None,
+            cwd: None,
+            session_id: None,
+            rpc_id: None,
+        };
+        let decision = evaluate_hook_synchronously(&write_req);
+        assert!(!decision.allowed);
+        assert_eq!(
+            decision.denied_by_layer.as_deref(),
+            Some("MandatoryWriteDenyGuard")
+        );
+
+        let read_req = NormalizedHookRequest {
+            tool_name: Some("read_file".into()),
+            file_path: Some(".mcp.json".into()),
+            ..write_req
+        };
+        assert!(evaluate_hook_synchronously(&read_req).allowed);
     }
 }

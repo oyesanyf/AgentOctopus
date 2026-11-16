@@ -227,9 +227,15 @@ pub use security::{
 };
 
 pub use security::{
-    extract_hosts_from_text, global_cpu_pool, init_global_cpu_pool, spawn_cpu, AtifScanner,
-    AtifSeverity, AtifSignal, CpuPoolError, CpuThreadPool, JournalEntry, JournalWatcherConfig,
-    SafeAgentsClient, SafeAgentsClientConfig, SafeAgentsClientError, SafeAgentsHarnessEvaluator,
-    SafeAgentsJournalWatcher, SafeAgentsJournalWatcherHandle, ToolCallEvaluator,
+    classify_mandatory_write_deny_path, classify_pinned_parent_for_write_deny,
+    classify_sensitive_system_path, extract_hosts_from_text, global_cpu_pool,
+    host_port_pattern_matches, init_global_cpu_pool, is_denied_resolved_ip,
+    is_denied_resolved_ip_with_local, is_mandatory_write_deny_path, is_sensitive_credential_store,
+    local_host_interface_ips, parse_and_validate_dynamic_policy, resolve_and_pin_allowed_host,
+    spawn_cpu, validate_http_request_target, AtifScanner, AtifSeverity, AtifSignal, CpuPoolError,
+    CpuThreadPool, CredentialSentinelMasker, DynamicNetworkPolicy, IpCidr, JournalEntry,
+    JournalWatcherConfig, MandatoryWriteDenyKind, SafeAgentsClient, SafeAgentsClientConfig,
+    SafeAgentsClientError, SafeAgentsHarnessEvaluator, SafeAgentsJournalWatcher,
+    SafeAgentsJournalWatcherHandle, SensitiveCredentialStoreKind, ToolCallEvaluator,
     ToolEvaluationVerdict, ToolInvocationContext, ToolVerdict,
 };

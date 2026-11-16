@@ -552,7 +552,8 @@ pub fn is_restricted_rebinding_ip(ip: &std::net::IpAddr) -> bool {
             let is_metadata = o[0] == 169 && o[1] == 254; // 169.254.0.0/16
             let is_benchmarking = o[0] == 198 && (o[1] & 0xfe) == 18; // 198.18.0.0/15 (CIS 3.3)
             let is_reserved_class_e = (o[0] & 0xf0) == 240; // 240.0.0.0/4 (CIS 3.3)
-            let is_ietf_protocol = o[0] == 192 && o[1] == 0 && o[2] == 0; // 192.0.0.0/24
+            let is_ietf_protocol = o[0] == 192 && o[1] == 0 && o[2] == 0; // 192.0.0.0/24 (incl. Oracle IMDS 192.0.0.192)
+            let is_azure_wireserver = o == [168, 63, 129, 16]; // Azure WireServer / Metadata Platform IP
             v4.is_loopback()
                 || v4.is_private()
                 || v4.is_link_local()
@@ -566,6 +567,7 @@ pub fn is_restricted_rebinding_ip(ip: &std::net::IpAddr) -> bool {
                 || is_benchmarking
                 || is_reserved_class_e
                 || is_ietf_protocol
+                || is_azure_wireserver
         }
         std::net::IpAddr::V6(v6) => {
             let o = v6.octets();

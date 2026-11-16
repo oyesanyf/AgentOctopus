@@ -109,14 +109,65 @@ pub const AARCH64_BLOCKED_SOCKET_SYSCALLS: &[u32] = &[
     269, // SYS_sendmmsg
 ];
 
-/// Generates a valid BPF filter bytecode array that validates architecture and
-/// blocks the specified syscalls with `SECCOMP_RET_ERRNO | (errno_code & 0xffff)`.
-pub fn build_socket_filter_bpf(
-    expected_arch: u32,
-    blocked_syscalls: &[u32],
-    errno_code: u32,
-) -> Vec<sock_filter> {
-    let mut insns = Vec::with_capacity(blocked_syscalls.len() + 6);
+/// POSIX `EPERM` (Operation not permitted = 1 on Linux and POSIX).
+pub const LINUX_EPERM: u32 = 1;
+
+/// POSIX `ENOSYS` (Function not implemented = 38 on Linux; triggers `clone3` -> `clone` fallback).
+pub const LINUX_ENOSYS: u32 = 38;
+
+/// Linux x86_64 syscalls blocked to prevent `io_uring` socket bypasses and mount/namespace escapes
+/// (aligned with `anthropics/sandbox-runtime` seccomp hardening).
+pub const X86_64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS: &[u32] = &[
+    155, // SYS_pivot_root
+    165, // SYS_mount
+    166, // SYS_umount2
+    272, // SYS_unshare
+    308, // SYS_setns
+    425, // SYS_io_uring_setup
+    426, // SYS_io_uring_enter
+    427, // SYS_io_uring_register
+    428, // SYS_open_tree
+    429, // SYS_move_mount
+    430, // SYS_fsopen
+    431, // SYS_fsconfig
+    432, // SYS_fsmount
+    433, // SYS_fspick
+    442, // SYS_mount_setattr
+];
+
+/// Linux aarch64 syscalls blocked to prevent `io_uring` socket bypasses and mount/namespace escapes.
+pub const AARCH64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS: &[u32] = &[
+    39,  // SYS_umount2
+    40,  // SYS_mount
+    41,  // SYS_pivot_root
+    97,  // SYS_unshare
+    268, // SYS_setns
+    425, // SYS_io_uring_setup
+    426, // SYS_io_uring_enter
+    427, // SYS_io_uring_register
+    428, // SYS_open_tree
+    429, // SYS_move_mount
+    430, // SYS_fsopen
+    431, // SYS_fsconfig
+    432, // SYS_fsmount
+    433, // SYS_fspick
+    442, // SYS_mount_setattr
+];
+
+/// `SYS_clone3` syscall number (`435` on both Linux x86_64 and aarch64), denied with `ENOSYS`
+/// so glibc and language runtimes cleanly fall back to `clone`.
+pub const LINUX_SYS_CLONE3: u32 = 435;
+
+/// Generates a multi-rule seccomp-BPF bytecode program validating `expected_arch` and mapping each
+/// `(syscalls, errno_code)` rule group to `SECCOMP_RET_ERRNO | (errno_code & 0xffff)`.
+pub fn build_syscall_policy_bpf(expected_arch: u32, rules: &[(&[u32], u32)]) -> Vec<sock_filter> {
+    let total_syscalls: usize = rules.iter().map(|(list, _)| list.len()).sum();
+    debug_assert!(
+        total_syscalls + rules.len() <= u8::MAX as usize,
+        "BPF short jump offsets must fit within u8"
+    );
+
+    let mut insns = Vec::with_capacity(total_syscalls + rules.len() + 6);
 
     // 1. Load architecture from seccomp_data: offset 4
     insns.push(sock_filter {
@@ -150,19 +201,23 @@ pub fn build_socket_filter_bpf(
         k: 0,
     });
 
-    // 5. For each blocked syscall, jump to the deny instruction
-    let num_blocked = blocked_syscalls.len();
-    for (i, &syscall_nr) in blocked_syscalls.iter().enumerate() {
-        let jump_offset = (num_blocked - 1 - i) as u8 + 1;
-        insns.push(sock_filter {
-            code: BPF_JMP | BPF_JEQ | BPF_K,
-            jt: jump_offset,
-            jf: 0,
-            k: syscall_nr,
-        });
+    // 5. Emit equality jumps for each (syscalls, errno) rule group.
+    // Layout after checks: [RET ALLOW] followed by one [RET ERRNO] per rule group.
+    let mut flat_idx = 0usize;
+    for (rule_idx, &(syscall_list, _errno)) in rules.iter().enumerate() {
+        for &syscall_nr in syscall_list {
+            let jump_offset = ((total_syscalls - flat_idx) + rule_idx) as u8;
+            insns.push(sock_filter {
+                code: BPF_JMP | BPF_JEQ | BPF_K,
+                jt: jump_offset,
+                jf: 0,
+                k: syscall_nr,
+            });
+            flat_idx += 1;
+        }
     }
 
-    // 6. Default allow instruction (reached if no blocked syscall matched)
+    // 6. Default allow instruction (reached if no rule matched)
     insns.push(sock_filter {
         code: BPF_RET | BPF_K,
         jt: 0,
@@ -170,16 +225,53 @@ pub fn build_socket_filter_bpf(
         k: SECCOMP_RET_ALLOW,
     });
 
-    // 7. Deny instruction: return SECCOMP_RET_ERRNO | (errno_code & 0xffff)
-    let errno_ret = SECCOMP_RET_ERRNO | (errno_code & 0x0000_ffff);
-    insns.push(sock_filter {
-        code: BPF_RET | BPF_K,
-        jt: 0,
-        jf: 0,
-        k: errno_ret,
-    });
+    // 7. Rule-specific ERRNO return instructions
+    for &(_, errno_code) in rules {
+        let errno_ret = SECCOMP_RET_ERRNO | (errno_code & 0x0000_ffff);
+        insns.push(sock_filter {
+            code: BPF_RET | BPF_K,
+            jt: 0,
+            jf: 0,
+            k: errno_ret,
+        });
+    }
 
     insns
+}
+
+/// Generates a valid BPF filter bytecode array that validates architecture and
+/// blocks the specified syscalls with `SECCOMP_RET_ERRNO | (errno_code & 0xffff)`.
+pub fn build_socket_filter_bpf(
+    expected_arch: u32,
+    blocked_syscalls: &[u32],
+    errno_code: u32,
+) -> Vec<sock_filter> {
+    build_syscall_policy_bpf(expected_arch, &[(blocked_syscalls, errno_code)])
+}
+
+/// Builds the full hardened Tier 2 seccomp-BPF program blocking sockets (`EACCES`),
+/// `io_uring`/mount/namespace escape syscalls (`EPERM`), and `clone3` (`ENOSYS`).
+pub fn build_hardened_sandbox_bpf(expected_arch: u32) -> Option<Vec<sock_filter>> {
+    let (socket_syscalls, escape_syscalls) = match expected_arch {
+        AUDIT_ARCH_X86_64 => (
+            X86_64_BLOCKED_SOCKET_SYSCALLS,
+            X86_64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS,
+        ),
+        AUDIT_ARCH_AARCH64 => (
+            AARCH64_BLOCKED_SOCKET_SYSCALLS,
+            AARCH64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS,
+        ),
+        _ => return None,
+    };
+    let clone3_slice = [LINUX_SYS_CLONE3];
+    Some(build_syscall_policy_bpf(
+        expected_arch,
+        &[
+            (socket_syscalls, LINUX_EACCES),
+            (escape_syscalls, LINUX_EPERM),
+            (&clone3_slice, LINUX_ENOSYS),
+        ],
+    ))
 }
 
 /// In-memory BPF bytecode simulator for deterministic cross-platform unit testing.
@@ -519,19 +611,25 @@ mod linux_impl {
         Err(err)
     }
 
-    /// Installs mandatory seccomp-BPF filter blocking all 18 socket system calls with `EACCES`.
+    /// Installs mandatory seccomp-BPF filter blocking socket syscalls (`EACCES`), `io_uring`/
+    /// mount/namespace escape syscalls (`EPERM`), and `clone3` (`ENOSYS`).
     unsafe fn apply_seccomp_socket_filter() -> std::io::Result<()> {
         #[cfg(target_arch = "x86_64")]
-        let (arch, blocked) = (AUDIT_ARCH_X86_64, X86_64_BLOCKED_SOCKET_SYSCALLS);
+        let arch = AUDIT_ARCH_X86_64;
         #[cfg(target_arch = "aarch64")]
-        let (arch, blocked) = (AUDIT_ARCH_AARCH64, AARCH64_BLOCKED_SOCKET_SYSCALLS);
+        let arch = AUDIT_ARCH_AARCH64;
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         return Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "Unsupported architecture for Linux seccomp-BPF",
         ));
 
-        let insns = build_socket_filter_bpf(arch, blocked, libc::EACCES as u32);
+        let insns = build_hardened_sandbox_bpf(arch).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Unsupported architecture for hardened Linux seccomp-BPF",
+            )
+        })?;
         let prog = sock_fprog {
             len: insns.len() as u16,
             filter: insns.as_ptr(),
@@ -637,8 +735,11 @@ mod linux_impl {
         // Fail-Closed Pre-Exec Security Confinement Closure
         unsafe {
             cmd.pre_exec(move || {
-                // 1. Mandatory PR_SET_NO_NEW_PRIVS
+                // 1. Mandatory PR_SET_NO_NEW_PRIVS + PR_SET_DUMPABLE=0 (blocks ptrace & /proc/pid/mem)
                 if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
 
@@ -886,5 +987,69 @@ mod tests {
             assert!(err.contains("FAIL-CLOSED"));
             let _ = std::fs::remove_file(dummy_path);
         }
+    }
+
+    #[test]
+    fn test_hardened_bpf_blocks_io_uring_ns_mount_and_clone3_on_x86_64_and_aarch64() {
+        let cases = [
+            (
+                AUDIT_ARCH_X86_64,
+                X86_64_BLOCKED_SOCKET_SYSCALLS,
+                X86_64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS,
+                56u32, // x86_64 SYS_clone (remains allowed when clone3 returns ENOSYS)
+            ),
+            (
+                AUDIT_ARCH_AARCH64,
+                AARCH64_BLOCKED_SOCKET_SYSCALLS,
+                AARCH64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS,
+                220u32, // aarch64 SYS_clone
+            ),
+        ];
+
+        for (arch, sockets, escapes, clone_nr) in cases {
+            let insns = build_hardened_sandbox_bpf(arch).expect("supported arch");
+            for &nr in sockets {
+                assert_eq!(
+                    evaluate_bpf_filter(&insns, arch, nr),
+                    SECCOMP_RET_ERRNO | LINUX_EACCES,
+                    "socket syscall {} must return EACCES on arch {:#x}",
+                    nr,
+                    arch
+                );
+            }
+            for &nr in escapes {
+                assert_eq!(
+                    evaluate_bpf_filter(&insns, arch, nr),
+                    SECCOMP_RET_ERRNO | LINUX_EPERM,
+                    "escape/io_uring syscall {} must return EPERM on arch {:#x}",
+                    nr,
+                    arch
+                );
+            }
+            assert_eq!(
+                evaluate_bpf_filter(&insns, arch, LINUX_SYS_CLONE3),
+                SECCOMP_RET_ERRNO | LINUX_ENOSYS,
+                "clone3 must return ENOSYS on arch {:#x}",
+                arch
+            );
+            assert_eq!(
+                evaluate_bpf_filter(&insns, arch, clone_nr),
+                SECCOMP_RET_ALLOW,
+                "legacy clone {} must remain allowed on arch {:#x}",
+                clone_nr,
+                arch
+            );
+            assert_eq!(
+                evaluate_bpf_filter(&insns, arch, 0),
+                SECCOMP_RET_ALLOW,
+                "SYS_read (0) must remain allowed on arch {:#x}",
+                arch
+            );
+            assert_eq!(
+                evaluate_bpf_filter(&insns, 0x1234_5678, 0),
+                SECCOMP_RET_KILL_PROCESS
+            );
+        }
+        assert!(build_hardened_sandbox_bpf(0xdead_beef).is_none());
     }
 }

@@ -90,7 +90,17 @@ impl SandboxConfinementPolicy {
             )));
         }
 
-        // 2. Sensitive OS paths and credentials
+        // 2. Sensitive OS paths and credential stores (system + developer/cloud/profile stores)
+        if let Some(store_kind) =
+            crate::security::sensitive_paths::classify_sensitive_system_path(target_path)
+        {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "Host credential store access denied ({}): target '{}' violates sandbox boundary",
+                store_kind.description(),
+                target_path
+            )));
+        }
+
         let forbidden_paths = [
             "/etc/passwd",
             "/etc/shadow",
@@ -137,5 +147,77 @@ impl SandboxConfinementPolicy {
         }
 
         Ok(())
+    }
+
+    /// Validates write/create/modify access against mandatory auto-protected workspace files
+    /// (`.git/hooks`, `.git/config`, `.bashrc`, `.mcp.json`, `.vscode`, `.claude/commands`),
+    /// which remain protected even inside writable working directories.
+    pub fn validate_filesystem_write_confinement(
+        &self,
+        target_path: &str,
+    ) -> Result<(), OctopusSecurityError> {
+        self.validate_filesystem_confinement(target_path)?;
+        if let Some(kind) =
+            crate::security::sensitive_paths::classify_mandatory_write_deny_path(target_path)
+        {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "{}: write to '{}' blocked by mandatory auto-protection",
+                kind.description(),
+                target_path
+            )));
+        }
+        Ok(())
+    }
+
+    /// Validates directory rename/delete mutations, enforcing pinned-parent / `FILE_DELETE_CHILD`
+    /// protection so attackers cannot move `.git`, `.vscode`, `.idea`, or `.claude` aside.
+    pub fn validate_directory_mutation_confinement(
+        &self,
+        dir_path: &str,
+    ) -> Result<(), OctopusSecurityError> {
+        self.validate_filesystem_confinement(dir_path)?;
+        if let Some(kind) =
+            crate::security::sensitive_paths::classify_pinned_parent_for_write_deny(dir_path)
+        {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "{}: mutation/unlink of pinned ancestor directory '{}' blocked",
+                kind.description(),
+                dir_path
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_write_and_pinned_parent_confinement_blocks_auto_protected_paths() {
+        let mut policy = SandboxConfinementPolicy::default();
+        policy.allow_host_filesystem = true;
+
+        assert!(policy
+            .validate_filesystem_write_confinement("src/lib.rs")
+            .is_ok());
+        assert!(policy
+            .validate_filesystem_write_confinement(".git/hooks/pre-commit")
+            .is_err());
+        assert!(policy
+            .validate_filesystem_write_confinement(".mcp.json")
+            .is_err());
+        assert!(policy
+            .validate_filesystem_write_confinement("~/.zshrc")
+            .is_err());
+        assert!(policy
+            .validate_filesystem_write_confinement(".vscode/settings.json")
+            .is_err());
+        assert!(policy
+            .validate_directory_mutation_confinement(".git")
+            .is_err());
+        assert!(policy
+            .validate_directory_mutation_confinement(".claude")
+            .is_err());
     }
 }
