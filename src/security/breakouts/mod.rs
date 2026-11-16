@@ -409,6 +409,16 @@ pub fn validate_agent_filesystem_access(
         )));
     }
 
+    if let Some(store_kind) =
+        crate::security::sensitive_paths::classify_sensitive_system_path(trimmed)
+    {
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FS_CREDENTIAL_STORE_BLOCKED ({}): Access to '{}' blocked",
+            store_kind.description(),
+            trimmed
+        )));
+    }
+
     let forbidden_patterns = [
         "/etc/shadow",
         "/etc/passwd",

@@ -63,16 +63,21 @@ pub use journal_watcher::{
     SafeAgentsJournalWatcherHandle,
 };
 pub use safeagents_client::{
+    host_port_pattern_matches, is_denied_resolved_ip, is_denied_resolved_ip_with_local,
+    local_host_interface_ips, parse_and_validate_dynamic_policy, resolve_and_pin_allowed_host,
+    validate_http_request_target, CredentialSentinelMasker, DynamicNetworkPolicy, IpCidr,
     SafeAgentsClient, SafeAgentsClientConfig, SafeAgentsClientError, ToolCallEvaluator,
     ToolEvaluationVerdict,
 };
 
 pub use linux_sandbox::{
-    build_socket_filter_bpf, describe_tier2_host_confinement_posture, evaluate_bpf_filter,
-    spawn_tier2_linux_command, LinuxConfinementConfig, LinuxConfinementVerification,
-    LinuxResourceLimits, AARCH64_BLOCKED_SOCKET_SYSCALLS, AUDIT_ARCH_AARCH64, AUDIT_ARCH_X86_64,
-    LINUX_EACCES, SECCOMP_RET_ALLOW, SECCOMP_RET_ERRNO, SECCOMP_RET_KILL_PROCESS,
-    X86_64_BLOCKED_SOCKET_SYSCALLS,
+    build_hardened_sandbox_bpf, build_socket_filter_bpf, build_syscall_policy_bpf,
+    describe_tier2_host_confinement_posture, evaluate_bpf_filter, spawn_tier2_linux_command,
+    LinuxConfinementConfig, LinuxConfinementVerification, LinuxResourceLimits,
+    AARCH64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS, AARCH64_BLOCKED_SOCKET_SYSCALLS, AUDIT_ARCH_AARCH64,
+    AUDIT_ARCH_X86_64, LINUX_EACCES, LINUX_ENOSYS, LINUX_EPERM, LINUX_SYS_CLONE3,
+    SECCOMP_RET_ALLOW, SECCOMP_RET_ERRNO, SECCOMP_RET_KILL_PROCESS,
+    X86_64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS, X86_64_BLOCKED_SOCKET_SYSCALLS,
 };
 
 pub use agentjacking_guard::{
@@ -317,8 +322,10 @@ pub use semantic_dlp::{
     SemanticDlpRecord, SemanticDlpVerdict, SemanticEntityKind, ZeroLeakageProof,
 };
 pub use sensitive_paths::{
-    classify_sensitive_system_path, is_sensitive_credential_store, scan_for_sensitive_system_path,
-    scan_json_for_sensitive_path, SensitiveSystemPathGuard, SensitiveSystemStoreKind,
+    classify_mandatory_write_deny_path, classify_pinned_parent_for_write_deny,
+    classify_sensitive_system_path, is_mandatory_write_deny_path, is_sensitive_credential_store,
+    scan_for_sensitive_system_path, scan_json_for_sensitive_path, MandatoryWriteDenyKind,
+    SensitiveCredentialStoreKind, SensitiveSystemPathGuard, SensitiveSystemStoreKind,
 };
 pub use siquery::{
     register_lineage_file_events_hook, register_lineage_open_files_hook, FileEventRecord,
