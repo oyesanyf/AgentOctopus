@@ -17,9 +17,11 @@ pub struct DefenseExperience {
     pub timestamp_secs: u64,
 }
 
-/// Statistics and telemetry for the Reinforcement Learning Adaptive Defense Engine.
+/// Statistics and telemetry for the optional offline/advisory RL Anomaly Scorer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RlDefenseStats {
+    pub enabled: bool,
+    pub advisory_only: bool,
     pub total_episodes: usize,
     pub total_steps: usize,
     pub epsilon: f32,
@@ -104,21 +106,35 @@ pub struct AdaptiveRlDefenseEngine {
     pub episodes_completed: RwLock<usize>,
     pub steps_completed: RwLock<usize>,
     pub cumulative_reward: RwLock<f32>,
-    /// Closed-loop RL latency & I/O backpressure self-healing actuator counter
+    /// Closed-loop RL latency & I/O backpressure self-healing actuator counter (disabled in deterministic mode)
     pub fast_path_io_shedding_remaining: std::sync::atomic::AtomicUsize,
+    /// Runtime enablement flag (disabled by default; opt-in via OCTOPUS_ENABLE_RL_ADVISORY=1)
+    enabled: std::sync::atomic::AtomicBool,
+    /// Always true: D3QN is strictly advisory-only and never gates allow/deny decisions
+    pub advisory_only: bool,
     persistence_path: std::path::PathBuf,
 }
 
 impl Default for AdaptiveRlDefenseEngine {
     fn default() -> Self {
-        Self::new("config/rl_defense_policy.json")
+        let opt_in = std::env::var("OCTOPUS_ENABLE_RL_ADVISORY")
+            .map(|v| {
+                let t = v.trim();
+                t == "1" || t.eq_ignore_ascii_case("true")
+            })
+            .unwrap_or(false);
+        if opt_in {
+            Self::new_enabled_advisory("config/rl_defense_policy.json")
+        } else {
+            Self::new_disabled_with_path("config/rl_defense_policy.json")
+        }
     }
 }
 
 impl AdaptiveRlDefenseEngine {
-    pub fn new(path: &str) -> Self {
+    fn build_empty(path: &str, enabled: bool) -> Self {
         let p = std::path::PathBuf::from(path);
-        let engine = Self {
+        Self {
             q_table: RwLock::new(HashMap::new()),
             target_q_table: RwLock::new(HashMap::new()),
             state_values: RwLock::new(HashMap::new()),
@@ -142,11 +158,54 @@ impl AdaptiveRlDefenseEngine {
             steps_completed: RwLock::new(0),
             cumulative_reward: RwLock::new(0.0),
             fast_path_io_shedding_remaining: std::sync::atomic::AtomicUsize::new(0),
+            enabled: std::sync::atomic::AtomicBool::new(enabled),
+            advisory_only: true,
             persistence_path: p,
-        };
+        }
+    }
 
+    /// Creates a disabled advisory engine with zero disk I/O.
+    pub fn new_disabled() -> Self {
+        Self::new_disabled_with_path("config/rl_defense_policy.json")
+    }
+
+    /// Creates a disabled advisory engine configured with the given persistence path (zero disk I/O).
+    pub fn new_disabled_with_path(path: &str) -> Self {
+        Self::build_empty(path, false)
+    }
+
+    /// Creates an explicitly enabled, strictly advisory-only D3QN engine and loads persisted Q-values if present.
+    pub fn new_enabled_advisory(path: &str) -> Self {
+        let engine = Self::build_empty(path, true);
         engine.load_from_disk();
         engine
+    }
+
+    /// Constructs an explicitly enabled advisory engine at `path` (offline evaluation / benchmarks).
+    /// Production code should use `Default::default()` (which is disabled unless opted in).
+    pub fn new(path: &str) -> Self {
+        Self::new_enabled_advisory(path)
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled
+            .store(enabled, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn is_advisory_only(&self) -> bool {
+        self.advisory_only
+    }
+
+    /// Returns an optional advisory action if enabled, or `None` when disabled.
+    pub fn advise_action(&self, state: &AdaptiveStateVector) -> Option<AdaptiveDefenseAction> {
+        if !self.is_enabled() {
+            return None;
+        }
+        Some(self.select_action(state))
     }
 
     /// Evaluates the Dueling Q-value: Q(s, a) = V(s) + (A(s, a) - (1/|A|) \sum A(s, a'))
@@ -214,6 +273,9 @@ impl AdaptiveRlDefenseEngine {
     /// Selects an adaptive defensive action for the current state using Dueling Double Q-Learning,
     /// Bayesian epistemic uncertainty evaluation, and Sisyphean precautionary escalation.
     pub fn select_action(&self, state: &AdaptiveStateVector) -> AdaptiveDefenseAction {
+        if !self.is_enabled() {
+            return AdaptiveDefenseAction::PassiveObserve;
+        }
         let bucket = state.discretize_bucket();
         let eps = *self.epsilon.read().unwrap();
         let threat = state.composite_threat_severity();
@@ -344,6 +406,9 @@ impl AdaptiveRlDefenseEngine {
         next_state: &AdaptiveStateVector,
         is_terminal: bool,
     ) -> f32 {
+        if !self.is_enabled() {
+            return 0.0;
+        }
         let reward = self.reward_engine.compute_reward(
             state,
             action,
@@ -495,6 +560,9 @@ impl AdaptiveRlDefenseEngine {
         boost_action_idx: usize,
         penalty: f32,
     ) {
+        if !self.is_enabled() {
+            return;
+        }
         // 1. Penalize the ineffective action in Q-table
         {
             let mut q = self.q_table.write().unwrap();
@@ -536,6 +604,9 @@ impl AdaptiveRlDefenseEngine {
         state: &AdaptiveStateVector,
         current_action: AdaptiveDefenseAction,
     ) -> AdaptiveDefenseAction {
+        if !self.is_enabled() {
+            return AdaptiveDefenseAction::PassiveObserve;
+        }
         let bucket = state.discretize_bucket();
         let observe_idx = AdaptiveDefenseAction::PassiveObserve.to_index();
         let current_idx = current_action.to_index();
@@ -569,16 +640,12 @@ impl AdaptiveRlDefenseEngine {
         AdaptiveDefenseAction::PassiveObserve
     }
 
-    /// Closed-loop RL Latency & Backpressure Self-Healing Actuator:
-    /// When end-to-end request latency exceeds the SLA budget (e.g., > 100ms due to disk I/O or burst load),
-    /// RL activates fast-path I/O shedding for the next 250 requests and boosts fast-path containment
-    /// Q-values for high-divergence egress/breakout buckets.
+    /// Closed-loop RL Latency & Backpressure Advisory Recorder (non-gating).
+    /// Fast-path OTel I/O shedding is permanently disabled in deterministic containment mode.
     pub fn self_heal_latency_spike(&self, state: &AdaptiveStateVector, observed_latency_ms: f64) {
-        if observed_latency_ms <= 100.0 {
+        if !self.is_enabled() || observed_latency_ms <= 100.0 {
             return;
         }
-        self.fast_path_io_shedding_remaining
-            .store(250, std::sync::atomic::Ordering::SeqCst);
 
         let bucket = state.discretize_bucket();
         if state.composite_threat_severity() > 0.0 {
@@ -589,22 +656,8 @@ impl AdaptiveRlDefenseEngine {
         }
     }
 
-    /// Consumes a ticket from the RL fast-path I/O shedding window if active.
+    /// Always returns `false`: RL cannot suppress OpenTelemetry audit/span persistence.
     pub fn consume_io_shedding_ticket(&self) -> bool {
-        let mut current = self
-            .fast_path_io_shedding_remaining
-            .load(std::sync::atomic::Ordering::Relaxed);
-        while current > 0 {
-            match self.fast_path_io_shedding_remaining.compare_exchange_weak(
-                current,
-                current - 1,
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::Relaxed,
-            ) {
-                Ok(_) => return true,
-                Err(actual) => current = actual,
-            }
-        }
         false
     }
 
@@ -659,15 +712,20 @@ impl AdaptiveRlDefenseEngine {
 
         let v_count = self.state_values.read().unwrap().len();
 
-        let posture = if eps < 0.05 {
-            "Converged High-Confidence Defense (Sisyphean Bound Overcome)".to_string()
+        let enabled = self.is_enabled();
+        let posture = if !enabled {
+            "Disabled (Optional Offline Advisory — Deterministic Containment Active)".to_string()
+        } else if eps < 0.05 {
+            "Advisory Only — Converged Anomaly Scorer".to_string()
         } else if eps < 0.15 {
-            "Exploiting Learned Invariants & Dueling Advantages".to_string()
+            "Advisory Only — Calibrated Anomaly Scorer".to_string()
         } else {
-            "Actively Exploring & Calibrating".to_string()
+            "Advisory Only — Offline Calibration Active".to_string()
         };
 
         RlDefenseStats {
+            enabled,
+            advisory_only: self.advisory_only,
             total_episodes: episodes,
             total_steps: steps,
             epsilon: eps,
@@ -684,6 +742,9 @@ impl AdaptiveRlDefenseEngine {
 
     /// Saves learned policy, Q-table, and dueling networks to disk for persistence.
     pub fn save_to_disk(&self) {
+        if !self.is_enabled() {
+            return;
+        }
         if let Some(parent) = self.persistence_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -701,6 +762,9 @@ impl AdaptiveRlDefenseEngine {
 
     /// Loads learned policy from disk if it exists.
     pub fn load_from_disk(&self) {
+        if !self.is_enabled() {
+            return;
+        }
         if !self.persistence_path.exists() {
             return;
         }
@@ -725,6 +789,9 @@ impl AdaptiveRlDefenseEngine {
     /// proportionally to transition priority, computing importance-sampling correction weights,
     /// updating Q-values and dueling networks, and refreshing replay buffer priorities.
     pub fn train_prioritized_replay(&self, batch_size: usize) -> Option<PerTrainingMetrics> {
+        if !self.is_enabled() {
+            return None;
+        }
         let mut buf = self.replay_buffer.write().unwrap();
         let n = buf.len();
         if n == 0 || batch_size == 0 {

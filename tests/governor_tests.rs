@@ -318,10 +318,21 @@ fn test_governor_4_stage_progressive_ladder() {
 #[test]
 fn test_governor_rl_closed_loop_mitigation_attenuation() {
     let config = GovernorConfig::default();
-    let mut state = SecurityGovernorState::new(config);
-    let rl = AdaptiveRlDefenseEngine::new("config/test_gov_rl.json");
+    let mut state_disabled = SecurityGovernorState::new(config.clone());
+    let mut state_advisory = SecurityGovernorState::new(config);
 
-    let sample = TelemetrySample {
+    let temp_rl_path = std::env::temp_dir().join(format!(
+        "octopus_test_gov_rl_{}_{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let rl_disabled = AdaptiveRlDefenseEngine::new_disabled();
+    let rl_advisory = AdaptiveRlDefenseEngine::new_enabled_advisory(temp_rl_path.to_str().unwrap());
+
+    let make_sample = || TelemetrySample {
         step: 1,
         timestamp: Instant::now(),
         breach_time_estimate: None,
@@ -332,23 +343,48 @@ fn test_governor_rl_closed_loop_mitigation_attenuation() {
         },
     };
 
-    // Evaluate with closed-loop RL mitigation
-    let (eff_eps, surv_prob, action_opt) =
-        state.evaluate_sample_with_rl(sample, Some(&rl)).unwrap();
+    let mut state_ref = SecurityGovernorState::new(GovernorConfig::default());
+    state_ref.current_step = 1;
+    let raw_risk = state_ref.compute_step_risk(&make_sample().event);
 
-    assert!(action_opt.is_some(), "RL action should be selected");
-    // Raw risk for interactive shell is ~0.9776. With RL containment mitigation (factor >= 0.65),
-    // effective risk should be significantly lower!
+    // 1. With default disabled RL, no action is emitted and effective_epsilon == raw_risk
+    let (eff_disabled, surv_disabled, act_disabled) = state_disabled
+        .evaluate_sample_with_rl(make_sample(), Some(&rl_disabled))
+        .unwrap();
+    assert!(act_disabled.is_none());
+    assert!((eff_disabled - raw_risk).abs() < 1e-12);
+    assert!((surv_disabled - (1.0 - raw_risk)).abs() < 1e-12);
+    assert_eq!(
+        state_disabled.current_stage(),
+        GovernorStage::Stage3HardMitigation
+    );
+
+    // 2. Even with enabled RL advisory, hazard is NEVER attenuated (effective_epsilon == raw_risk)
+    let (eff_adv, surv_adv, act_adv) = state_advisory
+        .evaluate_sample_with_rl(make_sample(), Some(&rl_advisory))
+        .unwrap();
     assert!(
-        eff_eps < 0.60,
-        "RL active defense mitigation must attenuate effective hazard risk: got {}",
-        eff_eps
+        act_adv.is_some(),
+        "Enabled RL may emit read-only advisory action metadata"
     );
     assert!(
-        surv_prob > 0.40,
-        "Survival probability must be preserved above critical threshold by active RL mitigation: got {}",
-        surv_prob
+        (eff_adv - raw_risk).abs() < 1e-12,
+        "RL advisory MUST NOT attenuate raw hazard risk: expected {}, got {}",
+        raw_risk,
+        eff_adv
     );
+    assert!(
+        (surv_adv - surv_disabled).abs() < 1e-12,
+        "Survival probability MUST be invariant to RL: expected {}, got {}",
+        surv_disabled,
+        surv_adv
+    );
+    assert_eq!(
+        state_advisory.current_stage(),
+        GovernorStage::Stage3HardMitigation
+    );
+
+    let _ = std::fs::remove_file(temp_rl_path);
 }
 
 #[test]

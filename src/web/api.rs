@@ -16,9 +16,7 @@ use crate::security::math_validator::VassilevMathValidator;
 use crate::security::rasp::{
     AdaptiveMitigationTier, AgentRaspEngine, AgentSecuritySubject, RaspAgentTrustTier, RaspDecision,
 };
-use crate::security::rl_defense::{
-    AdaptiveDefenseAction, AdaptiveRlDefenseEngine, AdaptiveStateVector,
-};
+use crate::security::rl_defense::{AdaptiveRlDefenseEngine, AdaptiveStateVector};
 use crate::telemetry::otel::{OtelSessionTelemetry, OtelSpanKind, OtelStatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -192,10 +190,9 @@ impl Default for WebState {
             gov_config,
         )));
 
-        let rasp_engine = Arc::new(AgentRaspEngine::new(
-            Arc::clone(&rl_defense),
-            Arc::clone(&otel_telemetry),
-        ));
+        let rasp_engine = Arc::new(AgentRaspEngine::new_deterministic(Arc::clone(
+            &otel_telemetry,
+        )));
 
         let atlas_sync = Arc::new(crate::security::atlas_arm::AtlasSyncManager::default());
         let oss_fuzz_arm = Arc::new(crate::security::oss_fuzz_arm::ContinuousOssFuzzArm::default());
@@ -351,6 +348,12 @@ impl WebState {
         self.cage_engine = engine;
         self
     }
+
+    /// Builder method to supply a custom or pre-configured optional RL advisory engine (primarily for tests).
+    pub fn with_rl_defense(mut self, rl_defense: Arc<AdaptiveRlDefenseEngine>) -> Self {
+        self.rl_defense = rl_defense;
+        self
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -445,7 +448,9 @@ pub fn handle_status(state: &WebState) -> String {
             "cedar_enforced": kernel_stats.cedar_enforced
         },
         "rl_active_defense": {
-            "status": "Active",
+            "status": if state.rl_defense.is_enabled() { "AdvisoryOnly" } else { "Disabled (Optional Offline Advisory)" },
+            "enabled": state.rl_defense.is_enabled(),
+            "advisory_only": state.rl_defense.is_advisory_only(),
             "posture": rl_stats.current_defense_posture,
             "total_episodes": rl_stats.total_episodes,
             "total_steps": rl_stats.total_steps,
@@ -562,7 +567,7 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
                     reason: err_msg,
                     tarpit_engaged: Some(true),
                     decoy_honey_token: Some(honey_token),
-                    rl_action_tier: Some("MicroContainment".to_string()),
+                    rl_action_tier: None,
                     breakout_verdict: Some("VETO_SCHEMA_TAMPERING".to_string()),
                     trace_id: None,
                 };
@@ -585,7 +590,7 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
                     reason: err_msg,
                     tarpit_engaged: Some(true),
                     decoy_honey_token: Some(honey_token),
-                    rl_action_tier: Some("MicroContainment".to_string()),
+                    rl_action_tier: None,
                     breakout_verdict: Some("VETO_SCHEMA_TAMPERING".to_string()),
                     trace_id: None,
                 };
@@ -664,81 +669,105 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         &payload_str,
     );
 
-    // 3. Synthesize 10-D State Vector for RL Engine (including Egress Divergence for Perimeter 2 SSRF/DNS/Scheme probes)
-    let mut state_vec = AdaptiveStateVector::default();
+    // 3. Deterministic Egress & URL-Smuggling Guard (Perimeter 2 SSRF / DNS / Scheme checks)
+    let mut egress_guard_veto: Option<String> = None;
     if tool_name == "http_egress" {
         let dom = req
             .context
             .get("destination_domain")
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        let url_field_non_string = req
+            .context
+            .get("url")
+            .map_or(false, |v| !v.is_null() && !v.is_string());
         let raw_url = req
             .context
             .get("url")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let is_approved_domain = {
-            let allowed = state.allowed_domains.read().map_err(|_| {
-                json_error_payload("LOCK_POISONED", "Allowed domains lock poisoned")
-            })?;
-            allowed.iter().any(|d| d.eq_ignore_ascii_case(dom))
+        let allowed = state
+            .allowed_domains
+            .read()
+            .map_err(|_| json_error_payload("LOCK_POISONED", "Allowed domains lock poisoned"))?;
+
+        let has_smuggling_or_control = |s: &str| -> bool {
+            if s.chars().any(|c| c.is_control())
+                || s.contains('#')
+                || s.contains('@')
+                || s.contains('\\')
+            {
+                return true;
+            }
+            let lc = s.to_ascii_lowercase();
+            lc.contains("%00")
+                || lc.contains("%0d")
+                || lc.contains("%0a")
+                || lc.contains("%23")
+                || lc.contains("%5c")
         };
-        let has_smuggling_pattern = raw_url.contains('#')
-            || raw_url.contains('@')
-            || raw_url.contains('\\')
-            || raw_url.contains("%0d")
-            || raw_url.contains("%0a")
-            || (!raw_url.is_empty()
-                && !raw_url.starts_with("https://www.google.com")
-                && !raw_url.starts_with("https://google.com"));
-        if !is_approved_domain || has_smuggling_pattern {
-            state_vec.egress_divergence = 0.95;
+
+        let host_matches_domain = |parsed: &url::Url, expected_dom: &str| -> bool {
+            let expected_norm = expected_dom
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            if expected_norm.is_empty() {
+                return false;
+            }
+            match parsed.host_str() {
+                Some(host) => {
+                    let host_norm = host.trim_end_matches('.').to_ascii_lowercase();
+                    host_norm == expected_norm
+                        || host_norm.ends_with(&format!(".{}", expected_norm))
+                }
+                None => false,
+            }
+        };
+
+        let is_approved_domain =
+            !dom.is_empty() && allowed.iter().any(|d| d.eq_ignore_ascii_case(dom));
+        let has_smuggling_pattern = url_field_non_string
+            || has_smuggling_or_control(dom)
+            || has_smuggling_or_control(raw_url)
+            || has_smuggling_or_control(&req.resource);
+
+        let url_allowed = if raw_url.trim().is_empty() {
+            match crate::containment_ring::validate_agent_egress_url(&req.resource, &allowed) {
+                Ok(parsed) => host_matches_domain(&parsed, dom),
+                Err(_) => false,
+            }
+        } else {
+            let primary_ok =
+                match crate::containment_ring::validate_agent_egress_url(raw_url, &allowed) {
+                    Ok(parsed) => host_matches_domain(&parsed, dom),
+                    Err(_) => false,
+                };
+            let res_lc = req.resource.trim().to_ascii_lowercase();
+            let resource_ok = if res_lc.contains("://")
+                || res_lc.starts_with("http:")
+                || res_lc.starts_with("https:")
+                || res_lc.starts_with("//")
+            {
+                match crate::containment_ring::validate_agent_egress_url(&req.resource, &allowed) {
+                    Ok(parsed) => host_matches_domain(&parsed, dom),
+                    Err(_) => false,
+                }
+            } else {
+                true
+            };
+            primary_ok && resource_ok
+        };
+
+        if !is_approved_domain || has_smuggling_pattern || !url_allowed {
+            egress_guard_veto = Some(format!(
+                "VETO BY DETERMINISTIC EGRESS GUARD: Unapproved domain '{}' or URL smuggling pattern",
+                dom
+            ));
         }
     }
-    if !breakout_eval.technical.is_clean {
-        state_vec.credential_access_pressure = 0.95;
-    }
-    if !breakout_eval.operational.is_clean {
-        state_vec.credential_access_pressure = 0.85;
-    }
-    if !breakout_eval.behavioral.is_clean {
-        state_vec.eval_harness_tamper_signal = 0.95;
-    }
-    if !breakout_eval.data.is_clean {
-        state_vec.cross_agent_scratchpad_leak = 0.9;
-    }
-    if rasp_dec.is_blocked() {
-        state_vec.schema_tamper_score = 0.95;
-    }
 
-    // 4. Query Progressive Action from RL Engine & Apply RL Active Self-Healing
-    let mut rl_action = state.rl_defense.select_action(&state_vec);
-    if req.attach_supervisor_approval
-        && breakout_eval.is_clean
-        && !rasp_dec.is_blocked()
-        && rl_action.is_containment()
-    {
-        rl_action = state
-            .rl_defense
-            .self_heal_authorized_workflow(&state_vec, rl_action);
-    } else if (!breakout_eval.is_clean
-        || rasp_dec.is_blocked()
-        || state_vec.egress_divergence >= 0.85)
-        && !rl_action.is_containment()
-    {
-        state.rl_defense.tune_on_failure(
-            state_vec.discretize_bucket(),
-            rl_action.to_index(),
-            AdaptiveDefenseAction::HardMitigation.to_index(),
-            -50.0,
-        );
-        rl_action = AdaptiveDefenseAction::HardMitigation;
-    }
-    state
-        .otel_telemetry
-        .update_session_rl_tier(&session_id, rl_action.as_str());
-
-    let mut result = state.gateway.authorize_tool_invocation_with_approval(
+    let result = state.gateway.authorize_tool_invocation_with_approval(
         &token,
         &req.principal,
         tool_name,
@@ -746,65 +775,6 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         req.context.clone(),
         approval_receipt.as_ref(),
     );
-
-    // 5. RL Self-Healing for Supervisor-Attested Dogwood Temporal Prerequisites:
-    // When a clean, cryptographically supervisor-attested request fails solely because the temporal trace
-    // lacks the prerequisite read/authentication event (e.g., stateless API invocation or window expiry),
-    // RL Self-Healing restores the attested prerequisite event and re-verifies the gateway!
-    if let Err(ref err) = result {
-        if req.attach_supervisor_approval
-            && approval_receipt.is_some()
-            && breakout_eval.is_clean
-            && !rasp_dec.is_blocked()
-            && err
-                .to_string()
-                .contains("Dogwood temporal policy prerequisite unsatisfied")
-        {
-            let prereq_action = match tool_name {
-                "ledger_writer" => "Octopus::Action::\"LedgerRead\"",
-                "kernel_sentinel" => "Octopus::Action::\"AuthenticateStep\"",
-                _ => "Octopus::Action::\"Read\"",
-            };
-            let mut prereq_fields = std::collections::HashMap::new();
-            prereq_fields.insert("rl_self_healed".to_string(), serde_json::Value::Bool(true));
-            prereq_fields.insert(
-                "supervisor_attested".to_string(),
-                serde_json::Value::Bool(true),
-            );
-            state.production_temporal_engine.record_event(
-                prereq_action,
-                crate::security::cedar_arm::temporal::EventKind::Response,
-                &req.principal,
-                &req.resource,
-                prereq_fields,
-            );
-            rl_action = state
-                .rl_defense
-                .self_heal_authorized_workflow(&state_vec, rl_action);
-            state
-                .otel_telemetry
-                .update_session_rl_tier(&session_id, rl_action.as_str());
-            let _ = state
-                .evolution_arm
-                .synthesize_and_apply_fix_for_failure(
-                    &format!("CEDAR_TEMPORAL_{}", tool_name.to_ascii_uppercase()),
-                    &format!(
-                        "Principal '{}' action '{}' on '{}'",
-                        req.principal, tool_name, req.resource
-                    ),
-                )
-                .await;
-
-            result = state.gateway.authorize_tool_invocation_with_approval(
-                &token,
-                &req.principal,
-                tool_name,
-                &req.resource,
-                req.context.clone(),
-                approval_receipt.as_ref(),
-            );
-        }
-    }
 
     let (mut is_allowed, determining_policies, mut diagnostic_errors, mut reason) = match result {
         Ok(verdict) => {
@@ -828,7 +798,7 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         ),
     };
 
-    // Override if RT-ASP, Breakout Guard, or RL Action Tier mandates containment!
+    // Deterministic containment boundary: RT-ASP, Breakout Taxonomy, or Egress Guard can only veto
     if rasp_dec.is_blocked() {
         is_allowed = false;
         let r_msg = match &rasp_dec {
@@ -845,26 +815,50 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
             breakout_eval.composite_verdict
         );
         diagnostic_errors.push(breakout_eval.composite_verdict.clone());
-    } else if rl_action.is_containment() && state_vec.composite_threat_severity() > 0.0 {
+    } else if let Some(ref egress_err) = egress_guard_veto {
         is_allowed = false;
-        reason = format!(
-            "VETO BY RL ADAPTIVE DEFENSE: Escalated to {}",
-            rl_action.as_str()
-        );
-        diagnostic_errors.push(format!("RL_DEFENSE_ESCALATION_{}", rl_action.as_str()));
+        reason = egress_err.clone();
+        diagnostic_errors.push("DETERMINISTIC_EGRESS_SMUGGLING_VETO".to_string());
     }
 
-    let is_threat = !breakout_eval.is_clean || !is_allowed;
-    let was_contained = !is_allowed;
-    let io_shedding_active = state.rl_defense.consume_io_shedding_ticket();
+    // Optional read-only advisory tier computed AFTER is_allowed is finalized (never gates or mutates verdict)
+    let advisory_tier: Option<String> = if state.rl_defense.is_enabled() {
+        let mut advisory_vec = AdaptiveStateVector::default();
+        if egress_guard_veto.is_some() {
+            advisory_vec.egress_divergence = 0.95;
+        }
+        if !breakout_eval.technical.is_clean {
+            advisory_vec.credential_access_pressure = 0.95;
+        }
+        if !breakout_eval.operational.is_clean {
+            advisory_vec.credential_access_pressure = 0.85;
+        }
+        if !breakout_eval.behavioral.is_clean {
+            advisory_vec.eval_harness_tamper_signal = 0.95;
+        }
+        if !breakout_eval.data.is_clean {
+            advisory_vec.cross_agent_scratchpad_leak = 0.9;
+        }
+        if rasp_dec.is_blocked() {
+            advisory_vec.schema_tamper_score = 0.95;
+        }
+        state
+            .rl_defense
+            .advise_action(&advisory_vec)
+            .map(|act| act.as_str().to_string())
+    } else {
+        None
+    };
 
-    // Record OTel Span (skipped on disk when RL fast-path I/O shedding is active)
+    let is_threat = !breakout_eval.is_clean || !is_allowed;
+
+    // Record OTel Span unconditionally (no RL I/O shedding)
     let end_nano = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64;
 
-    if !io_shedding_active {
+    {
         let mut span_attrs = std::collections::HashMap::new();
         span_attrs.insert("session.id".to_string(), session_id.clone());
         span_attrs.insert("agent.principal".to_string(), req.principal.clone());
@@ -882,7 +876,12 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
             "breakout.composite".to_string(),
             breakout_eval.composite_verdict.clone(),
         );
-        span_attrs.insert("rl.action_tier".to_string(), rl_action.as_str().to_string());
+        span_attrs.insert(
+            "rl.action_tier".to_string(),
+            advisory_tier
+                .clone()
+                .unwrap_or_else(|| "Disabled".to_string()),
+        );
 
         let status_code = if is_allowed {
             OtelStatusCode::Ok
@@ -914,13 +913,7 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         decision_str,
     );
 
-    // Measure TRUE end-to-end latency AFTER OTel & Audit I/O so RL observes real I/O stalls and self-heals them
     let duration_ms = start_instant.elapsed().as_secs_f64() * 1000.0;
-    if duration_ms > 100.0 {
-        state
-            .rl_defense
-            .self_heal_latency_spike(&state_vec, duration_ms);
-    }
 
     // Track resilience (MTTD/MTTR)
     let (mttd_ms, mttr_ms) = if is_threat {
@@ -931,19 +924,6 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
     state
         .otel_telemetry
         .record_resilience_event(mttd_ms, mttr_ms, Some(&session_id));
-
-    // RL Step Update
-    let mut next_state_vec = state_vec.clone();
-    next_state_vec.step_count_drift = (next_state_vec.step_count_drift + 0.005).min(1.0);
-    state.rl_defense.step(
-        &state_vec,
-        rl_action,
-        is_threat,
-        was_contained,
-        duration_ms,
-        &next_state_vec,
-        false,
-    );
 
     // Tarpit Engagement for unauthorized/denied attempts
     let should_engage = req.engage_tarpit.unwrap_or(true);
@@ -996,7 +976,7 @@ pub async fn handle_evaluate_cedar(state: &WebState, body: &str) -> Result<Strin
         reason,
         tarpit_engaged,
         decoy_honey_token,
-        rl_action_tier: Some(rl_action.as_str().to_string()),
+        rl_action_tier: advisory_tier,
         breakout_verdict: Some(breakout_eval.composite_verdict),
         trace_id: Some(trace_id),
     };
@@ -1110,10 +1090,48 @@ pub fn handle_update_egress_domains(state: &WebState, body: &str) -> Result<Stri
 
 pub fn handle_rl_defense_status(state: &WebState) -> String {
     let stats = state.rl_defense.stats();
-    serde_json::to_string(&stats).unwrap_or_default()
+    json!({
+        "enabled": stats.enabled,
+        "advisory_only": stats.advisory_only,
+        "status": if stats.enabled { "AdvisoryOnly" } else { "Disabled" },
+        "total_episodes": stats.total_episodes,
+        "total_steps": stats.total_steps,
+        "epsilon": stats.epsilon,
+        "average_reward": stats.average_reward,
+        "action_distribution": stats.action_distribution,
+        "q_table_entries": stats.q_table_entries,
+        "replay_buffer_size": stats.replay_buffer_size,
+        "current_defense_posture": stats.current_defense_posture,
+        "average_epistemic_uncertainty": stats.average_epistemic_uncertainty,
+        "dueling_state_values_count": stats.dueling_state_values_count,
+        "prioritized_replay_p95_weight": stats.prioritized_replay_p95_weight,
+    })
+    .to_string()
 }
 
 pub async fn handle_rl_defense_train_cycle(state: &WebState) -> String {
+    if !state.rl_defense.is_enabled() {
+        return json!({
+            "enabled": false,
+            "advisory_only": true,
+            "status": "Disabled",
+            "message": "D3QN offline advisory scorer is disabled by default (set OCTOPUS_ENABLE_RL_ADVISORY=1 to opt in)",
+            "cycle_id": 0,
+            "total_probes": 0,
+            "passed_invariants": 0,
+            "defensive_breaches": 0,
+            "total_reward": 0.0,
+            "average_reward": 0.0,
+            "average_latency_ms": 0.0,
+            "mttd_ms": 0.0,
+            "mttr_ms": 0.0,
+            "cumulative_survival_prob": 1.0,
+            "epsilon_after_cycle": 0.0,
+            "action_distribution": {},
+            "results_summary": []
+        })
+        .to_string();
+    }
     let report = state.continuous_eval.run_continuous_training_cycle().await;
     serde_json::to_string(&report).unwrap_or_default()
 }
@@ -1121,6 +1139,27 @@ pub async fn handle_rl_defense_train_cycle(state: &WebState) -> String {
 pub async fn handle_rl_defense_latest_cycle(state: &WebState) -> String {
     if let Some(report) = state.continuous_eval.get_latest_report() {
         serde_json::to_string(&report).unwrap_or_default()
+    } else if !state.rl_defense.is_enabled() {
+        json!({
+            "enabled": false,
+            "advisory_only": true,
+            "status": "Disabled",
+            "message": "D3QN offline advisory scorer is disabled by default",
+            "cycle_id": 0,
+            "total_probes": 0,
+            "passed_invariants": 0,
+            "defensive_breaches": 0,
+            "total_reward": 0.0,
+            "average_reward": 0.0,
+            "average_latency_ms": 0.0,
+            "mttd_ms": 0.0,
+            "mttr_ms": 0.0,
+            "cumulative_survival_prob": 1.0,
+            "epsilon_after_cycle": 0.0,
+            "action_distribution": {},
+            "results_summary": []
+        })
+        .to_string()
     } else {
         let report = state.continuous_eval.run_continuous_training_cycle().await;
         serde_json::to_string(&report).unwrap_or_default()
@@ -1173,16 +1212,38 @@ pub fn handle_rl_evaluate_action(state: &WebState, body: &str) -> Result<String,
         state_vec.cross_agent_scratchpad_leak = state_vec.cross_agent_scratchpad_leak.max(0.9);
     }
 
-    let action = state.rl_defense.select_action(&state_vec);
+    if !state.rl_defense.is_enabled() {
+        return Ok(json!({
+            "principal": req.principal,
+            "action": req.action,
+            "resource": req.resource,
+            "rl_enabled": false,
+            "advisory_only": true,
+            "breakout_evaluation": breakout_eval,
+            "rl_action_selected": "Disabled",
+            "rl_tier_description": "D3QN offline advisory scorer is disabled by default; deterministic containment active",
+            "is_containment": false,
+            "threat_severity": state_vec.composite_threat_severity()
+        })
+        .to_string());
+    }
+
+    let action = state
+        .rl_defense
+        .advise_action(&state_vec)
+        .unwrap_or(crate::security::rl_defense::AdaptiveDefenseAction::PassiveObserve);
 
     Ok(json!({
         "principal": req.principal,
         "action": req.action,
         "resource": req.resource,
+        "rl_enabled": true,
+        "advisory_only": true,
         "breakout_evaluation": breakout_eval,
         "rl_action_selected": action.as_str(),
         "rl_tier_description": action.tier_description(),
-        "is_containment": action.is_containment(),
+        "is_containment": false,
+        "advisory_would_contain": action.is_containment(),
         "threat_severity": state_vec.composite_threat_severity()
     })
     .to_string())
@@ -1446,30 +1507,20 @@ pub fn handle_governor_inject_sample(state: &WebState, body: &str) -> Result<Str
 
     let raw_epsilon = gov.compute_step_risk(&sample.event);
 
-    // Demonstrate Code Adaptation & Improvement:
-    // If use_rl is enabled, consult the RL engine to attenuate hazard via learned containment
-    let (effective_epsilon, rl_action_name, mitigation_factor) = if use_rl && is_malicious {
+    // Deterministic containment: RL never attenuates Governor hazard thresholds (0% attenuation always)
+    let effective_epsilon = raw_epsilon;
+    let mitigation_factor = 0.0_f64;
+    let rl_action_name = if use_rl && state.rl_defense.is_enabled() {
         let mut s_vec = AdaptiveStateVector::default();
-        s_vec.credential_access_pressure = 0.9;
-        let action = state.rl_defense.select_action(&s_vec);
-        let factor = match action {
-            AdaptiveDefenseAction::HardMitigation => 0.85,
-            AdaptiveDefenseAction::MicroContainment => 0.65,
-            AdaptiveDefenseAction::MemoryIntrospection => 0.40,
-            AdaptiveDefenseAction::TraceElevation => 0.25,
-            AdaptiveDefenseAction::PassiveObserve => 0.05,
-        };
-        (
-            raw_epsilon * (1.0 - factor),
-            action.as_str().to_string(),
-            factor,
-        )
+        if is_malicious {
+            s_vec.credential_access_pressure = 0.9;
+        }
+        match state.rl_defense.advise_action(&s_vec) {
+            Some(action) => format!("{} (Advisory Only - 0% Attenuation)", action.as_str()),
+            None => "DeterministicEnforced (No RL Attenuation)".to_string(),
+        }
     } else {
-        (
-            raw_epsilon,
-            "StaticBaseline (No RL Mitigation)".to_string(),
-            0.0,
-        )
+        "DeterministicEnforced (No RL Attenuation)".to_string()
     };
 
     gov.current_step = next_step;
@@ -3159,21 +3210,9 @@ pub async fn handle_evolution_auto_fix(state: &WebState, body: &str) -> Result<S
         .await
         .map_err(|e| json_error_payload("AUTO_FIX_FAILED", &format!("{}", e)))?;
 
-    // 2. Synchronize RL Double Q-Learning policy for the failure vector
-    let mut state_vec = AdaptiveStateVector::default();
-    if failure_id.to_ascii_uppercase().contains("EGRESS") {
-        state_vec.egress_divergence = 0.95;
-        state.rl_defense.self_heal_latency_spike(&state_vec, 1500.0);
-    } else {
-        let current_action = state.rl_defense.select_action(&state_vec);
-        let _ = state
-            .rl_defense
-            .self_heal_authorized_workflow(&state_vec, current_action);
-    }
-
     Ok(serde_json::json!({
         "status": "SUCCESS",
-        "remediated_by": "OpenEvolve_Arm109_and_RL_DoubleQ",
+        "remediated_by": "OpenEvolve_Arm109",
         "failure_id": failure_id,
         "candidate": candidate
     })
@@ -3502,7 +3541,7 @@ pub fn handle_oshoosiclaw_containment_evaluate(
 ) -> Result<String, String> {
     let req: OshoosiClawEvaluateRequest = if body.trim().is_empty() {
         OshoosiClawEvaluateRequest {
-            action: Some("rl_benchmark".to_string()),
+            action: Some("validate_egress".to_string()),
             payload: None,
             url: None,
             relative_path: None,
@@ -3518,9 +3557,18 @@ pub fn handle_oshoosiclaw_containment_evaluate(
         })?
     };
 
-    let action = req.action.unwrap_or_else(|| "rl_benchmark".to_string());
+    let action = req.action.unwrap_or_else(|| "validate_egress".to_string());
     match action.as_str() {
         "rl_benchmark" => {
+            if !state.rl_defense.is_enabled() {
+                return Ok(serde_json::json!({
+                    "status": "DISABLED",
+                    "enabled": false,
+                    "advisory_only": true,
+                    "message": "RL 5-policy benchmark requires OCTOPUS_ENABLE_RL_ADVISORY=1"
+                })
+                .to_string());
+            }
             let episodes = req.episodes.unwrap_or(10).clamp(10, 50);
             let seed = req.seed.unwrap_or(42);
             let report = state

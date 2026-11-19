@@ -219,7 +219,7 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
         });
     }
 
-    // Spawn autonomous 24/7 background continuous evaluation, dynamic RL tuning, and telemetry loop
+    // Spawn periodic continuous fuzzing & optional RL advisory evaluation loop
     let state_auto = Arc::clone(&state);
     tokio::spawn(async move {
         // Initial delay before background loop begins to allow server initialization
@@ -227,26 +227,28 @@ pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Erro
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(8));
         loop {
             interval.tick().await;
-            let report = state_auto
-                .continuous_eval
-                .run_continuous_training_cycle()
-                .await;
-            tracing::info!(
-                "[AUTONOMOUS-24/7] Cycle #{}: Passed: {}/{} | Breaches: {} | RL Posture: {} | MTTD: {:.2}ms | MTTR: {:.2}ms | Survival: {:.2}%",
-                report.cycle_id, report.passed_invariants, report.total_probes, report.defensive_breaches,
-                if report.epsilon_after_cycle < 0.1 { "CONVERGED" } else { "TUNING" },
-                report.mttd_ms, report.mttr_ms, report.cumulative_survival_prob * 100.0
-            );
-            if std::env::var("OCTOPUS_CONSOLE")
-                .map(|v| v == "1" || v == "true")
-                .unwrap_or(false)
-            {
-                eprintln!(
-                    "[AUTONOMOUS-24/7] Cycle #{}: Passed: {}/{} | Breaches: {} | RL Posture: {} | MTTD: {:.2}ms | MTTR: {:.2}ms | Survival: {:.2}%",
+            if state_auto.rl_defense.is_enabled() {
+                let report = state_auto
+                    .continuous_eval
+                    .run_continuous_training_cycle()
+                    .await;
+                tracing::info!(
+                    "[RL-ADVISORY] Cycle #{}: Passed: {}/{} | Breaches: {} | Advisory Posture: {} | MTTD: {:.2}ms | MTTR: {:.2}ms | Survival: {:.2}%",
                     report.cycle_id, report.passed_invariants, report.total_probes, report.defensive_breaches,
-                    if report.epsilon_after_cycle < 0.1 { "CONVERGED" } else { "TUNING" },
+                    if report.epsilon_after_cycle < 0.1 { "CONVERGED" } else { "CALIBRATING" },
                     report.mttd_ms, report.mttr_ms, report.cumulative_survival_prob * 100.0
                 );
+                if std::env::var("OCTOPUS_CONSOLE")
+                    .map(|v| v == "1" || v == "true")
+                    .unwrap_or(false)
+                {
+                    eprintln!(
+                        "[RL-ADVISORY] Cycle #{}: Passed: {}/{} | Breaches: {} | Advisory Posture: {} | MTTD: {:.2}ms | MTTR: {:.2}ms | Survival: {:.2}%",
+                        report.cycle_id, report.passed_invariants, report.total_probes, report.defensive_breaches,
+                        if report.epsilon_after_cycle < 0.1 { "CONVERGED" } else { "CALIBRATING" },
+                        report.mttd_ms, report.mttr_ms, report.cumulative_survival_prob * 100.0
+                    );
+                }
             }
 
             // Continuous Google OSS-Fuzz dynamic runtime fuzzing pass
@@ -3284,17 +3286,13 @@ async fn stream_command_output(
                         }
                         let _ = stream.flush().await;
 
-                        // Autonomous OpenEvolve (Arm 109) + RL Active Defense Remediation on Failure
+                        // Autonomous OpenEvolve (Arm 109) Remediation on Failure
                         if let Some(fail_id) = failed_test_id {
                             if let Ok(cand) = state
                                 .evolution_arm
                                 .synthesize_and_apply_fix_for_failure(&fail_id, &uncolored)
                                 .await
                             {
-                                let state_vec = crate::security::rl_defense::AdaptiveStateVector::default();
-                                let cur_act = state.rl_defense.select_action(&state_vec);
-                                let _ = state.rl_defense.self_heal_authorized_workflow(&state_vec, cur_act);
-
                                 let fix_event = format!(
                                     "data: {}\n\n",
                                     serde_json::json!({

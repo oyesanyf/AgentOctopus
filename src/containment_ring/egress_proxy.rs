@@ -633,10 +633,31 @@ pub fn validate_agent_egress_url(
     raw_url: &str,
     allowed_domains: &[String],
 ) -> Result<Url, OctopusSecurityError> {
+    if raw_url.chars().any(|c| c.is_control()) {
+        return Err(OctopusSecurityError::SsrfBlocked(
+            "SSRF_CONTROL_CHAR_IN_URL: Control characters are prohibited in outbound URL"
+                .to_string(),
+        ));
+    }
     let trimmed = raw_url.trim();
     if trimmed.is_empty() {
         return Err(OctopusSecurityError::SsrfBlocked(
             "SSRF_EMPTY_URL: Outbound URL cannot be empty".to_string(),
+        ));
+    }
+    let trimmed_lc = trimmed.to_ascii_lowercase();
+    if trimmed.contains('\\')
+        || trimmed.contains('#')
+        || trimmed.contains('@')
+        || trimmed_lc.contains("%0d")
+        || trimmed_lc.contains("%0a")
+        || trimmed_lc.contains("%00")
+        || trimmed_lc.contains("%23")
+        || trimmed_lc.contains("%5c")
+    {
+        return Err(OctopusSecurityError::SsrfBlocked(
+            "SSRF_SMUGGLING_PATTERN: Prohibited delimiter or encoded control/smuggling sequence in outbound URL"
+                .to_string(),
         ));
     }
 
@@ -707,7 +728,14 @@ pub fn validate_agent_egress_url(
             format!("[{}]", v6)
         }
         Some(url::Host::Domain(d)) => {
-            let lower = d.trim_end_matches('.').to_ascii_lowercase();
+            let single = d.strip_suffix('.').unwrap_or(d);
+            if single.ends_with('.') || single.is_empty() {
+                return Err(OctopusSecurityError::SsrfBlocked(format!(
+                    "SSRF_MALFORMED_DOMAIN: Host '{}' has invalid trailing dots",
+                    d
+                )));
+            }
+            let lower = single.to_ascii_lowercase();
             let unbracketed = lower
                 .strip_prefix('[')
                 .and_then(|s| s.strip_suffix(']'))

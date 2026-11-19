@@ -703,7 +703,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
   <div class="nav-tab" onclick="switchTab('audit-viewer')">📜 Cryptographic Audit Log</div>
   <div class="nav-tab" onclick="switchTab('swarm-status')">🐙 Swarm &amp; Invariants</div>
   <div class="nav-tab" onclick="switchTab('containment-rings')">⭕ 4-Ring Concentric Defense</div>
-  <div class="nav-tab" onclick="switchTab('rl-continuous')">🧠 Continuous Security &amp; RL Active Defense</div>
+  <div class="nav-tab" onclick="switchTab('rl-continuous')">🧠 Optional Advisory (D3QN)</div>
   <div class="nav-tab" onclick="switchTab('rasp-shield')">⚡ Real-Time ASP (RT-ASP)</div>
   <div class="nav-tab" onclick="switchTab('fuzz-supply-chain')">🔍 Continuous OSS-Fuzz &amp; OSV Scanner</div>
   <div class="nav-tab" onclick="switchTab('protocol-research')">🌐 Protocol Research (Arm 107)</div>
@@ -735,25 +735,25 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
       </div>
     </nav>
 
-    <!-- RL ACTIVE DEFENSE DASHBOARD BANNER -->
+    <!-- OPTIONAL D3QN ADVISORY SCORER BANNER -->
     <div class="card" style="background: linear-gradient(135deg, rgba(6, 182, 212, 0.1), rgba(99, 102, 241, 0.1)); border: 1px solid rgba(6, 182, 212, 0.35); margin-bottom: 1.25rem;">
       <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
         <div style="display: flex; align-items: center; gap: 0.85rem;">
-          <div style="font-size: 2.2rem;">🧠</div>
+          <div style="font-size: 2.2rem;">🛡️</div>
           <div>
             <div style="display: flex; align-items: center; gap: 0.6rem;">
-              <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #f8fafc;">Reinforcement Learning Adaptive Defense Engine</h3>
-              <span class="badge badge-success" id="main-rl-posture-badge" style="background: rgba(6, 182, 212, 0.2); color: #38bdf8; border: 1px solid #0891b2;">ACTIVE DEFENSE</span>
+              <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #f8fafc;">Deterministic Containment Active &bull; D3QN Advisory (Optional)</h3>
+              <span class="badge badge-success" id="main-rl-posture-badge" style="background: rgba(100, 116, 139, 0.25); color: #cbd5e1; border: 1px solid #64748b;">OPTIONAL ADVISORY (DISABLED)</span>
             </div>
             <p style="margin: 0.25rem 0 0; font-size: 0.8rem; color: #94a3b8;">
-              Autonomous Double Q-Learning engine (<a href="javascript:void(0)" onclick="switchTab('rl-continuous')" style="color: #38bdf8; font-weight: 600; text-decoration: underline;">Tab 5</a>) defending against the Vassilev Sisyphean Bound ($P_{secure}(N) \le (1 - \epsilon_{min})^N$).
+              Security allow/deny decisions are enforced 100% deterministically by Cedar PARC, Wasmtime, OS Sandbox, and RT-ASP. D3QN (<a href="javascript:void(0)" onclick="switchTab('rl-continuous')" style="color: #38bdf8; font-weight: 600; text-decoration: underline;">Optional Advisory Tab</a>) is disabled by default.
             </p>
           </div>
         </div>
         <div style="display: flex; gap: 1.25rem; align-items: center; flex-wrap: wrap;">
           <div style="text-align: right;">
-            <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase;">Active RL Tier</div>
-            <div id="main-rl-active-tier" style="font-size: 0.95rem; font-weight: 700; color: #38bdf8;">Tier 0: PassiveObserve</div>
+            <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase;">Advisory Scorer</div>
+            <div id="main-rl-active-tier" style="font-size: 0.95rem; font-weight: 700; color: #94a3b8;">Disabled</div>
           </div>
           <div style="text-align: right;">
             <div style="font-size: 0.72rem; color: #94a3b8; text-transform: uppercase;">Mean Time to Detect (MTTD)</div>
@@ -783,15 +783,14 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
               <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800; color: #f8fafc; letter-spacing: 0.5px;">AUTONOMOUS SECURITY FLYWHEEL</h3>
               <span class="badge" id="flywheel-status-badge" style="background: rgba(16, 185, 129, 0.25); color: #34d399; border: 1px solid #10b981; font-weight: 700; display: inline-flex; align-items: center; gap: 0.4rem;">
-                <span class="pulse-beacon" style="width: 8px; height: 8px; margin: 0;"></span>
-                24/7 CLOSED-LOOP ACTIVE
+                ⏸️ DETERMINISTIC BOUNDARY ACTIVE (AUTO-PILOT OFF)
               </span>
               <span class="badge" id="flywheel-heartbeat-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); font-family: monospace;">
-                💓 Heartbeat: <span id="flywheel-heartbeat-text">Active (just now)</span>
+                💓 Heartbeat: <span id="flywheel-heartbeat-text">Standby (On-Demand)</span>
               </span>
             </div>
             <p style="margin: 0.25rem 0 0; font-size: 0.8rem; color: #94a3b8;">
-              Continuous Closed-Loop Adversarial Immunity: Testing ➔ Scanning ➔ Mutating ➔ RL Hardening ➔ Repeating
+              Deterministic Enforcement Pipeline: Testing ➔ Scanning ➔ Mutating ➔ Deterministic Clamps
             </p>
           </div>
         </div>
@@ -800,8 +799,8 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
             <div style="font-size: 0.7rem; color: #94a3b8; text-transform: uppercase;">Flywheel Cycles</div>
             <div id="flywheel-cycle-counter" style="font-size: 1.25rem; font-weight: 800; color: #34d399; font-family: monospace;">Cycle #1</div>
           </div>
-          <button class="btn btn-secondary" id="btn-toggle-flywheel" onclick="toggleFlywheelAutoPilot()" style="font-size: 0.8rem; padding: 0.4rem 0.8rem; border: 1px solid #10b981; color: #6ee7b7;">
-            ⏸️ Pause Flywheel
+          <button class="btn btn-secondary" id="btn-toggle-flywheel" onclick="toggleFlywheelAutoPilot()" style="font-size: 0.8rem; padding: 0.4rem 0.8rem; border: 1px solid #64748b; color: #cbd5e1;">
+            ▶️ Resume Auto-Pilot
           </button>
           <button class="btn btn-primary" onclick="triggerManualFlywheelCycle()" style="font-size: 0.8rem; padding: 0.4rem 0.8rem; background: linear-gradient(135deg, #059669, #0284c7);">
             ⚡ Spin Now
@@ -844,15 +843,15 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
           <div style="margin-top: 0.6rem; font-size: 0.72rem; color: #c084fc; font-family: monospace;" id="flywheel-step-3-metric">● 1,000 In-Process Mutators</div>
         </div>
 
-        <!-- STEP 4: RL HARDENING -->
+        <!-- STEP 4: DETERMINISTIC ENFORCEMENT -->
         <div class="flywheel-step-card" id="flywheel-step-4" style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(251, 191, 36, 0.4); border-radius: 0.5rem; padding: 0.85rem; transition: all 0.3s ease;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
-            <span style="font-size: 0.75rem; font-weight: 700; color: #fbbf24; text-transform: uppercase; letter-spacing: 0.5px;">STEP 4: RL HARDENING</span>
+            <span style="font-size: 0.75rem; font-weight: 700; color: #fbbf24; text-transform: uppercase; letter-spacing: 0.5px;">STEP 4: DETERMINISTIC ENFORCEMENT</span>
             <span class="flywheel-step-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #fbbf24;"></span>
           </div>
-          <div style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-bottom: 0.2rem;">🧠 Closed-Loop Q-Learning Optimization</div>
-          <div style="font-size: 0.75rem; color: #94a3b8; line-height: 1.35;">Adaptive policy calibration, Sisyphean Bound defense, automated mitigation clamp.</div>
-          <div style="margin-top: 0.6rem; font-size: 0.72rem; color: #fbbf24; font-family: monospace;" id="flywheel-step-4-metric">● Posture: High-Confidence</div>
+          <div style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-bottom: 0.2rem;">🛡️ Cedar PARC, Wasmtime &amp; OS Sandbox Clamps</div>
+          <div style="font-size: 0.75rem; color: #94a3b8; line-height: 1.35;">Deterministic policy gates, Wasmtime fuel/memory caps, OS kernel isolation &amp; RT-ASP sanitizers.</div>
+          <div style="margin-top: 0.6rem; font-size: 0.72rem; color: #fbbf24; font-family: monospace;" id="flywheel-step-4-metric">● Deterministic Boundary Active</div>
         </div>
       </div>
 
@@ -1457,8 +1456,8 @@ forbid (
             </tr>
             <tr>
               <td><code>AdaptiveRlDefenseArm</code></td>
-              <td>Double Q-Learning + Prioritized Replay</td>
-              <td>Dynamic 5-Tier Escalation (Observe &rarr; Trace &rarr; Memory &rarr; Contain &rarr; Mitigation)</td>
+              <td>Optional Offline / Advisory Anomaly Scorer (Disabled by Default)</td>
+              <td>Non-gating offline/advisory anomaly telemetry (never overrides Cedar/Wasmtime/OS/RT-ASP)</td>
             </tr>
           </tbody>
         </table>
@@ -1484,7 +1483,7 @@ forbid (
           <h2>🛡️ Absolute Defensive Invariants</h2>
         </div>
         <ul style="font-size: 0.9rem; line-height: 1.8; color: var(--text-muted); padding-left: 1.25rem;">
-          <li><strong style="color: var(--text-main);">Continuous Security &amp; RL Active Defense (Beyond One and Done):</strong> Closed-loop Double Q-learning engine with prioritized experience replay and 5-tier progressive action space (PassiveObserve &rarr; TraceElevation &rarr; MemoryIntrospection &rarr; MicroContainment &rarr; HardMitigation). Eliminates the Vassilev Sisyphean Bound ($P_{secure}(N) \le (1 - \epsilon_{min})^N$) by continuously retraining on adversarial vectors with sub-millisecond MTTD/MTTR.</li>
+          <li><strong style="color: var(--text-main);">Optional Offline / Advisory Anomaly Scorer (D3QN):</strong> Disabled by default (opt-in via <code>OCTOPUS_ENABLE_RL_ADVISORY=1</code>). Strictly advisory-only telemetry—never sits in the hard allow/deny kernel decision path and never attenuates Governor hazard bounds.</li>
           <li><strong style="color: var(--text-main);">Four-Category Breakout Taxonomy:</strong> Dedicated real-time interception for Technical escapes (unmasked Docker daemon sockets), Operational leakage (STS credential revocation), Behavioral tampering (SHA-256 test harness integrity), and Data partitioning (cross-agent memory isolation).</li>
           <li><strong style="color: var(--text-main);">Zero-Touch PATH &amp; Environment:</strong> Never mutates user or system registry PATH (HKCU/HKLM). Process-scoped memory only.</li>
           <li><strong style="color: var(--text-main);">The Google Egress Invariant:</strong> The only approved internet site is Google (<code>google.com</code>, <code>www.google.com</code>). All other domains, SSRF metadata (<code>169.254.169.254</code>), and private subnets are deterministically blocked.</li>
@@ -2037,7 +2036,7 @@ with urllib.request.urlopen(req) as resp:
       </div>
       <div class="breadcrumb-meta">
         <span class="breadcrumb-badge purple">📐 Vassilev Bound P(N) &le; (1-&epsilon;)<sup>N</sup></span>
-        <span class="breadcrumb-badge green">⚡ D3QN Double Q-Learning</span>
+        <span class="breadcrumb-badge green">🧪 Optional Offline Advisory (D3QN)</span>
         <span class="breadcrumb-badge amber">🛡️ 4-Stage Progressive Ladder</span>
       </div>
     </nav>
@@ -2047,22 +2046,22 @@ with urllib.request.urlopen(req) as resp:
         <div>
           <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
             <h2 style="color: var(--accent-cyan); font-size: 1.3rem; margin: 0;">
-              🧠 Beyond One and Done: Continuous Security &amp; Reinforcement Learning Active Defense
+              🧠 Continuous Evaluation &amp; Optional Offline Advisory (D3QN)
             </h2>
-            <span class="badge" id="rl-continuous-live-badge" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid #10b981; font-weight: 700; font-size: 0.75rem;">
-              ● ALWAYS RUNNING (Autonomous 24/7 Continuous Loop Active)
+            <span class="badge" id="rl-continuous-live-badge" style="background: rgba(100, 116, 139, 0.25); color: #cbd5e1; border: 1px solid #64748b; font-weight: 700; font-size: 0.75rem;">
+              ⏸️ DISABLED BY DEFAULT (Optional Offline Advisory)
             </span>
           </div>
           <p style="color: var(--text-muted); font-size: 0.85rem; max-width: 900px; line-height: 1.5; margin: 0;">
-            Implementation of the continuous security operations architecture (Femi Oyesanya, October 2026).
-            Features an autonomous <strong>Reinforcement Learning Active Defense Engine</strong> (Double Q-Learning, 5-tier action space, prioritized experience replay),
-            the <strong>Four-Category Breakout Taxonomy</strong> (Technical, Operational, Behavioral, Data), and <strong>OpenTelemetry (OTel)</strong> session telemetry with real-time MTTD, MTTR, and the <strong>Vassilev Sisyphean Bound</strong> (<span style="font-family: monospace;">P<sub>secure</sub>(N) &le; (1 - &epsilon;<sub>min</sub>)<sup>N</sup></span>).
+            Deterministic Rust Containment (<strong>Wasmtime + OS Sandbox + AWS Cedar + RT-ASP</strong>) is the 100% deterministic hard boundary for all allow/deny verdicts.
+            The optional <strong>D3QN Advisory Anomaly Scorer</strong> runs offline/on-demand only when explicitly enabled (<code>OCTOPUS_ENABLE_RL_ADVISORY=1</code>) alongside the
+            <strong>Four-Category Breakout Taxonomy</strong>, <strong>OpenTelemetry (OTel)</strong> telemetry, and the <strong>Vassilev Sisyphean Bound</strong> (<span style="font-family: monospace;">P<sub>secure</sub>(N) &le; (1 - &epsilon;<sub>min</sub>)<sup>N</sup></span>).
           </p>
         </div>
         <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
           <div style="display: flex; align-items: center; gap: 0.45rem; background: rgba(15, 23, 42, 0.7); border: 1px solid #334155; padding: 0.4rem 0.7rem; border-radius: 6px;">
-            <span style="font-size: 0.75rem; color: #94a3b8; font-weight: 600;">24/7 AUTO-PILOT</span>
-            <input type="checkbox" id="rl-autopilot-toggle" checked onchange="toggleContinuousAutoPilot(this.checked)" style="cursor: pointer;" title="Toggle 24/7 continuous autonomous execution stream">
+            <span style="font-size: 0.75rem; color: #94a3b8; font-weight: 600;">ADVISORY POLL</span>
+            <input type="checkbox" id="rl-autopilot-toggle" onchange="toggleContinuousAutoPilot(this.checked)" style="cursor: pointer;" title="Toggle optional advisory polling stream">
           </div>
           <button class="btn btn-primary" onclick="runRlContinuousCycle()" id="btn-run-continuous-cycle" style="display: flex; align-items: center; gap: 0.5rem; background: #06b6d4; color: #000; font-weight: 600;">
             <span>▶</span> Run Instant Cycle
@@ -2083,15 +2082,14 @@ with urllib.request.urlopen(req) as resp:
             <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
               <h3 style="margin: 0; font-size: 1.1rem; font-weight: 800; color: #f8fafc; letter-spacing: 0.5px;">AUTONOMOUS SECURITY FLYWHEEL</h3>
               <span class="badge" id="flywheel-status-badge-rl" style="background: rgba(16, 185, 129, 0.25); color: #34d399; border: 1px solid #10b981; font-weight: 700; display: inline-flex; align-items: center; gap: 0.4rem;">
-                <span class="pulse-beacon" style="width: 8px; height: 8px; margin: 0;"></span>
-                24/7 CLOSED-LOOP ACTIVE
+                ⏸️ DETERMINISTIC BOUNDARY ACTIVE (AUTO-PILOT OFF)
               </span>
               <span class="badge" id="flywheel-heartbeat-badge-rl" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); font-family: monospace;">
-                💓 Heartbeat: <span id="flywheel-heartbeat-text-rl">Active (just now)</span>
+                💓 Heartbeat: <span id="flywheel-heartbeat-text-rl">Standby (On-Demand)</span>
               </span>
             </div>
             <p style="margin: 0.25rem 0 0; font-size: 0.8rem; color: #94a3b8;">
-              Continuous Closed-Loop Adversarial Immunity: Testing ➔ Scanning ➔ Mutating ➔ RL Hardening ➔ Repeating
+              Deterministic Enforcement Pipeline: Testing ➔ Scanning ➔ Mutating ➔ Deterministic Clamps
             </p>
           </div>
         </div>
@@ -2100,8 +2098,8 @@ with urllib.request.urlopen(req) as resp:
             <div style="font-size: 0.7rem; color: #94a3b8; text-transform: uppercase;">Flywheel Cycles</div>
             <div id="flywheel-cycle-counter-rl" style="font-size: 1.25rem; font-weight: 800; color: #34d399; font-family: monospace;">Cycle #1</div>
           </div>
-          <button class="btn btn-secondary" id="btn-toggle-flywheel-rl" onclick="toggleFlywheelAutoPilot()" style="font-size: 0.8rem; padding: 0.4rem 0.8rem; border: 1px solid #10b981; color: #6ee7b7;">
-            ⏸️ Pause Flywheel
+          <button class="btn btn-secondary" id="btn-toggle-flywheel-rl" onclick="toggleFlywheelAutoPilot()" style="font-size: 0.8rem; padding: 0.4rem 0.8rem; border: 1px solid #64748b; color: #cbd5e1;">
+            ▶️ Resume Auto-Pilot
           </button>
           <button class="btn btn-primary" onclick="triggerManualFlywheelCycle()" style="font-size: 0.8rem; padding: 0.4rem 0.8rem; background: linear-gradient(135deg, #059669, #0284c7);">
             ⚡ Spin Now
@@ -2144,15 +2142,15 @@ with urllib.request.urlopen(req) as resp:
           <div style="margin-top: 0.6rem; font-size: 0.72rem; color: #c084fc; font-family: monospace;" id="flywheel-step-3-metric-rl">● 1,000 In-Process Mutators</div>
         </div>
 
-        <!-- STEP 4: RL HARDENING -->
+        <!-- STEP 4: DETERMINISTIC ENFORCEMENT -->
         <div class="flywheel-step-card" id="flywheel-step-4-rl" style="background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(251, 191, 36, 0.4); border-radius: 0.5rem; padding: 0.85rem; transition: all 0.3s ease;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
-            <span style="font-size: 0.75rem; font-weight: 700; color: #fbbf24; text-transform: uppercase; letter-spacing: 0.5px;">STEP 4: RL HARDENING</span>
+            <span style="font-size: 0.75rem; font-weight: 700; color: #fbbf24; text-transform: uppercase; letter-spacing: 0.5px;">STEP 4: DETERMINISTIC ENFORCEMENT</span>
             <span class="flywheel-step-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #fbbf24;"></span>
           </div>
-          <div style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-bottom: 0.2rem;">🧠 Closed-Loop Q-Learning Optimization</div>
-          <div style="font-size: 0.75rem; color: #94a3b8; line-height: 1.35;">Adaptive policy calibration, Sisyphean Bound defense, automated mitigation clamp.</div>
-          <div style="margin-top: 0.6rem; font-size: 0.72rem; color: #fbbf24; font-family: monospace;" id="flywheel-step-4-metric-rl">● Posture: High-Confidence</div>
+          <div style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-bottom: 0.2rem;">🛡️ Cedar PARC, Wasmtime &amp; OS Sandbox Clamps</div>
+          <div style="font-size: 0.75rem; color: #94a3b8; line-height: 1.35;">Deterministic policy gates, Wasmtime fuel/memory caps, OS kernel isolation &amp; RT-ASP sanitizers.</div>
+          <div style="margin-top: 0.6rem; font-size: 0.72rem; color: #fbbf24; font-family: monospace;" id="flywheel-step-4-metric-rl">● Deterministic Boundary Active</div>
         </div>
       </div>
 
@@ -2506,8 +2504,8 @@ with urllib.request.urlopen(req) as resp:
               ADAPTATION MODE
             </label>
             <select id="gov-adaptation-mode" style="width: 100%; padding: 0.45rem; background: #0f172a; border: 1px solid #475569; color: #f8fafc; border-radius: 4px; font-size: 0.8rem;">
-              <option value="rl_mitigated" style="color: #38bdf8; font-weight: 700;">🧠 Enhanced RL Mitigation (D3QN Attenuation)</option>
-              <option value="static_unmitigated">⚪ Static Unmitigated (Sisyphean Collapse)</option>
+              <option value="static_unmitigated" selected>🛡️ Deterministic Containment (No RL Attenuation)</option>
+              <option value="rl_mitigated" style="color: #38bdf8; font-weight: 700;">🧠 Optional Advisory Scorer (0% Hazard Attenuation)</option>
             </select>
           </div>
           <button class="btn btn-primary" onclick="injectGovernorSample()" id="btn-inject-gov" style="font-size: 0.8rem; padding: 0.48rem 1rem; background: #ef4444; color: #fff;">
@@ -2556,7 +2554,7 @@ with urllib.request.urlopen(req) as resp:
       <div class="breadcrumb-meta">
         <span class="breadcrumb-badge">🛡️ In-Process Runtime Interceptors</span>
         <span class="breadcrumb-badge purple">🍯 Honeypot Decoys &amp; Tarpits</span>
-        <span class="breadcrumb-badge green">🧠 Closed-Loop RL Self-Healing</span>
+        <span class="breadcrumb-badge green">🛡️ Deterministic Breach Escalation</span>
       </div>
     </nav>
 
@@ -2958,7 +2956,7 @@ with urllib.request.urlopen(req) as resp:
             <span class="badge" style="background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid #a855f7;">🛡️ GHOSTJACKING DEFENSE: ACTIVE</span>
           </div>
           <p style="color: var(--text-muted); font-size: 0.85rem; max-width: 950px; line-height: 1.5; margin: 0;">
-            Consolidated live event stream capturing every runtime operation across the agent swarm: Cedar authorization decisions, Double Q-Learning active defense transitions (Tiers 0–4), RT-ASP tarpit intercepts, OpenTelemetry distributed spans, and cryptographic Merkle chain additions. All emitted logs are actively defanged against <strong>Agentjacking</strong>, <strong>GhostJacking</strong> (invisible Unicode instruction smuggling), and <strong>EchoLeak</strong> (zero-click Markdown image exfiltration).
+            Consolidated live event stream capturing every runtime operation across the agent swarm: Cedar authorization decisions, optional D3QN advisory telemetry, RT-ASP tarpit intercepts, OpenTelemetry distributed spans, and cryptographic Merkle chain additions. All emitted logs are actively defanged against <strong>Agentjacking</strong>, <strong>GhostJacking</strong> (invisible Unicode instruction smuggling), and <strong>EchoLeak</strong> (zero-click Markdown image exfiltration).
           </p>
         </div>
         <div style="display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;">
@@ -2985,7 +2983,7 @@ with urllib.request.urlopen(req) as resp:
             <option value="ALL">All Subsystems (Consolidated)</option>
             <option value="Strict-HTTP">🌐 Strict HTTP &amp; Protocol Terminator</option>
             <option value="Cedar-Policy">🛡️ Cedar Policy Engine</option>
-            <option value="RL-ActiveDefense">🧠 RL Active Defense (D3QN)</option>
+            <option value="RL-ActiveDefense">🧠 Optional Advisory Scorer (D3QN)</option>
             <option value="OpenTelemetry">🔭 OpenTelemetry Spans</option>
             <option value="Swarm-Runner">🐙 Swarm &amp; Live Tests</option>
           </select>
@@ -5550,9 +5548,15 @@ with urllib.request.urlopen(req) as resp:
         }
       }
       const mainPostureBadge = document.getElementById('main-rl-posture-badge');
-      if (mainPostureBadge) mainPostureBadge.textContent = (data.current_defense_posture || 'ACTIVE DEFENSE').toUpperCase();
+      if (mainPostureBadge) {
+        mainPostureBadge.textContent = data.enabled
+          ? (data.current_defense_posture || 'ADVISORY ONLY').toUpperCase()
+          : 'OPTIONAL ADVISORY (DISABLED)';
+      }
       const mainActiveTier = document.getElementById('main-rl-active-tier');
-      if (mainActiveTier) mainActiveTier.textContent = `${highestAction}`;
+      if (mainActiveTier) {
+        mainActiveTier.textContent = data.enabled ? `${highestAction} (Advisory)` : 'Disabled';
+      }
 
       for (let i = 0; i <= 4; i++) {
         const pill = document.getElementById(`tier-pill-${i}`);
@@ -5642,14 +5646,14 @@ with urllib.request.urlopen(req) as resp:
   // ==========================================
   // AUTONOMOUS SECURITY FLYWHEEL CONTROLLER
   // ==========================================
-  let flywheelAutoPilot = true;
+  let flywheelAutoPilot = false;
   let flywheelSecondsSinceHeartbeat = 0;
-  let currentFlywheelPhase = 0; // 0: Testing, 1: Scanning, 2: Mutating, 3: RL Hardening
+  let currentFlywheelPhase = 0; // 0: Testing, 1: Scanning, 2: Mutating, 3: Deterministic Clamps
   const flywheelPhases = [
     { name: 'Testing Active', detail: 'Autonomous Invariant Execution (Cedar PARC, Win32 Job Object, Egress Filter)', color: '#34d399' },
     { name: 'Scanning Active', detail: 'Threat Surface Discovery (MITRE ATLAS STIX 2.1 & OSV Scanner)', color: '#38bdf8' },
     { name: 'Mutating Active', detail: 'Continuous Adversarial Burst (OSS-Fuzz 1,000 Mutation Engine)', color: '#c084fc' },
-    { name: 'RL Hardening Active', detail: 'Closed-Loop Q-Learning Optimization & Dynamic Cedar Clamping', color: '#fbbf24' }
+    { name: 'Deterministic Clamps Active', detail: 'Cedar PARC, Wasmtime Fuel, OS Sandbox & RT-ASP Enforcement', color: '#fbbf24' }
   ];
 
   function updateFlywheelState(report) {
@@ -5801,7 +5805,7 @@ with urllib.request.urlopen(req) as resp:
     }
   }, 1000);
 
-  let rlAutoPilotEnabled = true;
+  let rlAutoPilotEnabled = false;
   let lastRenderedCycleId = 0;
 
   function renderContinuousReport(report) {
@@ -5888,13 +5892,13 @@ with urllib.request.urlopen(req) as resp:
     if (badge) {
       if (enabled) {
         badge.style.display = 'inline-block';
-        badge.textContent = '● ALWAYS RUNNING (Autonomous 24/7 Continuous Loop Active)';
+        badge.textContent = '● ADVISORY POLLING ACTIVE (Non-Gating)';
         badge.style.background = 'rgba(16, 185, 129, 0.2)';
         badge.style.color = '#10b981';
       } else {
-        badge.textContent = '⏸️ AUTO-PILOT PAUSED';
-        badge.style.background = 'rgba(239, 68, 68, 0.2)';
-        badge.style.color = '#ef4444';
+        badge.textContent = '⏸️ DISABLED BY DEFAULT (Optional Offline Advisory)';
+        badge.style.background = 'rgba(100, 116, 139, 0.25)';
+        badge.style.color = '#cbd5e1';
       }
     }
   }
