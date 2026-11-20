@@ -155,7 +155,22 @@ mod sys {
     pub const CREATE_SUSPENDED: u32 = 0x0000_0004;
     pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     pub const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
+    pub const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
+    pub const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+    pub const STD_INPUT_HANDLE: u32 = (-10i32) as u32;
+    pub const STD_OUTPUT_HANDLE: u32 = (-11i32) as u32;
+    pub const STD_ERROR_HANDLE: u32 = (-12i32) as u32;
+    pub const WAIT_OBJECT_0: u32 = 0x0000_0000;
+    pub const WAIT_TIMEOUT: u32 = 0x0000_0102;
     pub const INFINITE: u32 = 0xFFFF_FFFF;
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    pub struct SECURITY_ATTRIBUTES {
+        pub nLength: u32,
+        pub lpSecurityDescriptor: *mut c_void,
+        pub bInheritHandle: BOOL,
+    }
 
     #[repr(C)]
     #[allow(non_snake_case)]
@@ -256,6 +271,14 @@ mod sys {
         pub fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: u32) -> u32;
         pub fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *mut u32) -> BOOL;
         pub fn GetCommandLineW() -> *const u16;
+        pub fn CreatePipe(
+            hReadPipe: *mut HANDLE,
+            hWritePipe: *mut HANDLE,
+            lpPipeAttributes: *const SECURITY_ATTRIBUTES,
+            nSize: u32,
+        ) -> BOOL;
+        pub fn SetHandleInformation(hObject: HANDLE, dwMask: u32, dwFlags: u32) -> BOOL;
+        pub fn GetStdHandle(nStdHandle: u32) -> HANDLE;
     }
 }
 
@@ -580,6 +603,29 @@ impl DeelevatedChild {
         }
         Ok(code)
     }
+
+    /// Waits up to `timeout` (or indefinitely if `None`). Returns `Ok(None)` on timeout.
+    pub fn wait_with_timeout(
+        &self,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<Option<u32>, OctopusSecurityError> {
+        let ms = match timeout {
+            Some(d) => d.as_millis().min((sys::INFINITE - 1) as u128) as u32,
+            None => sys::INFINITE,
+        };
+        let rc = unsafe { sys::WaitForSingleObject(self.process, ms) };
+        if rc == sys::WAIT_TIMEOUT {
+            return Ok(None);
+        }
+        if rc != sys::WAIT_OBJECT_0 {
+            return Err(last_err("WaitForSingleObject"));
+        }
+        let mut code: u32 = 0;
+        if unsafe { sys::GetExitCodeProcess(self.process, &mut code) } == 0 {
+            return Err(last_err("GetExitCodeProcess"));
+        }
+        Ok(Some(code))
+    }
 }
 
 #[cfg(windows)]
@@ -779,6 +825,229 @@ pub fn spawn_deelevated_in_job(
         posture,
         process: pi.hProcess,
     })
+}
+
+#[cfg(windows)]
+fn build_sorted_utf16_env_block(env_pairs: &[(String, String)]) -> Vec<u16> {
+    let mut sorted = env_pairs.to_vec();
+    sorted.sort_by(|a, b| a.0.to_ascii_uppercase().cmp(&b.0.to_ascii_uppercase()));
+    let mut block = Vec::new();
+    for (k, v) in &sorted {
+        let entry = format!("{}={}", k, v);
+        block.extend(entry.encode_utf16());
+        block.push(0);
+    }
+    block.push(0);
+    block
+}
+
+/// Spawns `command_line` under [`create_deelevated_token`] bound to `job` (`WindowsJobObject`),
+/// passing explicit `cwd`, sanitized `env_pairs`, and either inherited or piped stdio handles.
+#[cfg(windows)]
+pub fn spawn_deelevated_in_job_with_io(
+    application_name: Option<&str>,
+    command_line: &str,
+    cwd: Option<&std::path::Path>,
+    env_pairs: Option<&[(String, String)]>,
+    pipe_stdio: bool,
+    hide_window: bool,
+    job: &crate::security::windows_sandbox::WindowsJobObject,
+) -> Result<
+    (
+        DeelevatedChild,
+        Option<std::fs::File>,
+        Option<std::fs::File>,
+    ),
+    OctopusSecurityError,
+> {
+    use std::os::windows::io::{FromRawHandle, RawHandle};
+    let token = create_deelevated_token()?;
+
+    let mut si: sys::STARTUPINFOW = unsafe { std::mem::zeroed() };
+    si.cb = std::mem::size_of::<sys::STARTUPINFOW>() as u32;
+
+    let mut out_read: sys::HANDLE = std::ptr::null_mut();
+    let mut out_write: sys::HANDLE = std::ptr::null_mut();
+    let mut err_read: sys::HANDLE = std::ptr::null_mut();
+    let mut err_write: sys::HANDLE = std::ptr::null_mut();
+
+    let close_pipes = |handles: &[sys::HANDLE]| {
+        for &h in handles {
+            if !h.is_null() && h != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+                unsafe { sys::CloseHandle(h) };
+            }
+        }
+    };
+
+    if pipe_stdio {
+        let sa = sys::SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<sys::SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: std::ptr::null_mut(),
+            bInheritHandle: 1,
+        };
+        if unsafe { sys::CreatePipe(&mut out_read, &mut out_write, &sa, 0) } == 0 {
+            return Err(last_err("CreatePipe(stdout)"));
+        }
+        unsafe { sys::SetHandleInformation(out_read, sys::HANDLE_FLAG_INHERIT, 0) };
+        if unsafe { sys::CreatePipe(&mut err_read, &mut err_write, &sa, 0) } == 0 {
+            close_pipes(&[out_read, out_write]);
+            return Err(last_err("CreatePipe(stderr)"));
+        }
+        unsafe { sys::SetHandleInformation(err_read, sys::HANDLE_FLAG_INHERIT, 0) };
+
+        let stdin_h = unsafe { sys::GetStdHandle(sys::STD_INPUT_HANDLE) };
+        if !stdin_h.is_null() && stdin_h != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            unsafe {
+                sys::SetHandleInformation(
+                    stdin_h,
+                    sys::HANDLE_FLAG_INHERIT,
+                    sys::HANDLE_FLAG_INHERIT,
+                )
+            };
+        }
+        si.dwFlags |= sys::STARTF_USESTDHANDLES;
+        si.hStdInput = stdin_h;
+        si.hStdOutput = out_write;
+        si.hStdError = err_write;
+    } else {
+        let stdin_h = unsafe { sys::GetStdHandle(sys::STD_INPUT_HANDLE) };
+        let stdout_h = unsafe { sys::GetStdHandle(sys::STD_OUTPUT_HANDLE) };
+        let stderr_h = unsafe { sys::GetStdHandle(sys::STD_ERROR_HANDLE) };
+        for h in [stdin_h, stdout_h, stderr_h] {
+            if !h.is_null() && h != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+                unsafe {
+                    sys::SetHandleInformation(h, sys::HANDLE_FLAG_INHERIT, sys::HANDLE_FLAG_INHERIT)
+                };
+            }
+        }
+        si.dwFlags |= sys::STARTF_USESTDHANDLES;
+        si.hStdInput = stdin_h;
+        si.hStdOutput = stdout_h;
+        si.hStdError = stderr_h;
+    }
+
+    let mut pi: sys::PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    let wide_app: Option<Vec<u16>> =
+        application_name.map(|s| s.encode_utf16().chain(std::iter::once(0)).collect());
+    let mut wide_cmd: Vec<u16> = command_line
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let wide_cwd: Option<Vec<u16>> = cwd.map(|p| {
+        p.to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect()
+    });
+    let env_block: Option<Vec<u16>> = env_pairs.map(build_sorted_utf16_env_block);
+
+    let mut flags = sys::CREATE_SUSPENDED | sys::CREATE_UNICODE_ENVIRONMENT;
+    if hide_window {
+        flags |= sys::CREATE_NO_WINDOW;
+    }
+
+    let ok = unsafe {
+        sys::CreateProcessAsUserW(
+            token.raw(),
+            wide_app.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()),
+            wide_cmd.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1, // bInheritHandles = TRUE so stdio streams flow cleanly
+            flags,
+            env_block
+                .as_ref()
+                .map_or(std::ptr::null(), |v| v.as_ptr() as *const std::ffi::c_void),
+            wide_cwd.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()),
+            &si,
+            &mut pi,
+        )
+    };
+
+    // Close write ends in parent regardless of spawn result
+    close_pipes(&[out_write, err_write]);
+
+    if ok == 0 {
+        close_pipes(&[out_read, err_read]);
+        return Err(last_err(
+            "CreateProcessAsUserW(de-elevated+job+io, CREATE_SUSPENDED)",
+        ));
+    }
+
+    let terminate = |reason: String| -> OctopusSecurityError {
+        unsafe {
+            sys::TerminateProcess(pi.hProcess, 1);
+            sys::CloseHandle(pi.hThread);
+            sys::CloseHandle(pi.hProcess);
+        }
+        close_pipes(&[out_read, err_read]);
+        OctopusSecurityError::IsolationViolation(reason)
+    };
+
+    if let Err(e) = job.assign_process(pi.hProcess) {
+        return Err(terminate(format!(
+            "FAIL-CLOSED: job.assign_process failed: {}",
+            e
+        )));
+    }
+    match job.verify_process_in_job(pi.hProcess) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(terminate(
+                "FAIL-CLOSED: IsProcessInJob returned FALSE on suspended child".to_string(),
+            ))
+        }
+        Err(e) => {
+            return Err(terminate(format!(
+                "FAIL-CLOSED: verify_process_in_job failed: {}",
+                e
+            )))
+        }
+    }
+
+    let posture = match TokenPosture::of_process(pi.hProcess) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(terminate(format!(
+                "FAIL-CLOSED: child token inspection failed: {}",
+                e
+            )))
+        }
+    };
+    if let Err(reasons) = posture.verify_agent_safe() {
+        return Err(terminate(format!(
+            "FAIL-CLOSED: suspended child token unsafe, terminated before ResumeThread: {}",
+            reasons.join("; ")
+        )));
+    }
+
+    if unsafe { sys::ResumeThread(pi.hThread) } == u32::MAX {
+        return Err(terminate(
+            "FAIL-CLOSED: ResumeThread failed on verified child".to_string(),
+        ));
+    }
+    unsafe { sys::CloseHandle(pi.hThread) };
+
+    let stdout_file = if pipe_stdio && !out_read.is_null() {
+        Some(unsafe { std::fs::File::from_raw_handle(out_read as RawHandle) })
+    } else {
+        None
+    };
+    let stderr_file = if pipe_stdio && !err_read.is_null() {
+        Some(unsafe { std::fs::File::from_raw_handle(err_read as RawHandle) })
+    } else {
+        None
+    };
+
+    Ok((
+        DeelevatedChild {
+            pid: pi.dwProcessId,
+            posture,
+            process: pi.hProcess,
+        },
+        stdout_file,
+        stderr_file,
+    ))
 }
 
 /// Called first thing in `main` of every long-running Agent Octopus binary.

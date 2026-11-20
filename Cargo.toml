@@ -3,7 +3,7 @@ name = "agent_octopus"
 version = "0.1.0"
 edition = "2021"
 authors = ["Femo <oyesanyf@gmail.com>"]
-description = "Biologically-inspired decentralized agent swarm breakout defense & Real-Time Agentic Self-Protection (RT-ASP) architecture"
+description = "Single-binary Rust deterministic agent containment runtime (AWS Cedar, Wasmtime, OS sandboxes, and RT-ASP sanitizers)"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 homepage = "https://github.com/oyesanyf/AgentOctopus"
@@ -13,6 +13,8 @@ keywords = ["security", "ai-agents", "rasp", "cedar-policy", "sandbox"]
 categories = ["cryptography", "development-tools", "command-line-utilities"]
 exclude = [
     "start.exe",
+    "octopus.exe",
+    "agent_octopus.exe",
     "logs/**",
     "strix_runs/**",
     "**/__pycache__/**",
@@ -20,6 +22,11 @@ exclude = [
     "paper_text.txt",
     "extract_paper.py",
 ]
+
+[[bin]]
+name = "octopus"
+path = "src/bin/octopus.rs"
+test = false
 
 [[bin]]
 name = "agent_octopus"

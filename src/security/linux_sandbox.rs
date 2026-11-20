@@ -821,7 +821,214 @@ mod linux_impl {
             },
         })
     }
+
+    /// Applies deterministic CLI containment (`setpgid`, `PR_SET_NO_NEW_PRIVS`, `PR_SET_DUMPABLE=0`,
+    /// `setrlimit`, Landlock LSM, and seccomp-BPF) inside `CommandExt::pre_exec`.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn apply_cli_pre_exec_confinement(
+        binary_path: &Path,
+        cwd: &Path,
+        ro_dirs: &[PathBuf],
+        rw_dirs: &[PathBuf],
+        mandatory_ro_dirs: &[PathBuf],
+        memory_bytes: u64,
+        block_all_sockets: bool,
+        strict_fail_closed: bool,
+    ) -> std::io::Result<()> {
+        let _ = libc::setpgid(0, 0);
+
+        if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        let mut userns_isolated = false;
+        if block_all_sockets {
+            let (_net, user_iso) = apply_network_namespace_unshare(true)?;
+            userns_isolated = user_iso;
+        }
+
+        let limits = LinuxResourceLimits {
+            max_as_bytes: memory_bytes,
+            max_data_bytes: memory_bytes,
+            max_nproc: 64,
+            max_cpu_seconds: 120,
+            max_nofile: 512,
+        };
+        apply_resource_limits(&limits, userns_isolated)?;
+
+        // Landlock LSM filesystem containment (allows system libs + ro_dirs read-only, rw_dirs + cwd read-write;
+        // falls back gracefully in non-strict mode on older kernels lacking Landlock).
+        let version =
+            sys_landlock_create_ruleset(std::ptr::null(), 0, LANDLOCK_CREATE_RULESET_VERSION);
+        if version < 1 {
+            if strict_fail_closed {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "Landlock LSM is not supported or enabled on this host kernel",
+                ));
+            }
+        } else {
+            let access_ro = LANDLOCK_ACCESS_FS_EXECUTE
+                | LANDLOCK_ACCESS_FS_READ_FILE
+                | LANDLOCK_ACCESS_FS_READ_DIR;
+            let access_rw = access_ro
+                | LANDLOCK_ACCESS_FS_WRITE_FILE
+                | LANDLOCK_ACCESS_FS_REMOVE_DIR
+                | LANDLOCK_ACCESS_FS_REMOVE_FILE
+                | LANDLOCK_ACCESS_FS_MAKE_DIR
+                | LANDLOCK_ACCESS_FS_MAKE_REG
+                | LANDLOCK_ACCESS_FS_TRUNCATE;
+            let mut access_handled = access_ro
+                | LANDLOCK_ACCESS_FS_WRITE_FILE
+                | LANDLOCK_ACCESS_FS_REMOVE_DIR
+                | LANDLOCK_ACCESS_FS_REMOVE_FILE
+                | LANDLOCK_ACCESS_FS_MAKE_CHAR
+                | LANDLOCK_ACCESS_FS_MAKE_DIR
+                | LANDLOCK_ACCESS_FS_MAKE_REG
+                | LANDLOCK_ACCESS_FS_MAKE_SOCK
+                | LANDLOCK_ACCESS_FS_MAKE_FIFO
+                | LANDLOCK_ACCESS_FS_MAKE_BLOCK
+                | LANDLOCK_ACCESS_FS_MAKE_SYM;
+            if version >= 2 {
+                access_handled |= LANDLOCK_ACCESS_FS_REFER;
+            }
+            if version >= 3 {
+                access_handled |= LANDLOCK_ACCESS_FS_TRUNCATE;
+            }
+            let attr = landlock_ruleset_attr {
+                handled_access_fs: access_handled,
+            };
+            let ruleset_fd =
+                sys_landlock_create_ruleset(&attr, std::mem::size_of::<landlock_ruleset_attr>(), 0);
+            if ruleset_fd < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let add_rule = |path: &Path,
+                            allowed: u64,
+                            require_exists: bool,
+                            fail_on_open_err: bool|
+             -> std::io::Result<()> {
+                if !require_exists && !path.exists() {
+                    return Ok(());
+                }
+                use std::os::unix::ffi::OsStrExt;
+                let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+                let fd = libc::open(
+                    c_path.as_ptr(),
+                    libc::O_PATH | libc::O_CLOEXEC | libc::O_DIRECTORY,
+                );
+                if fd < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if fail_on_open_err {
+                        return Err(err);
+                    }
+                    return Ok(());
+                }
+                let path_attr = landlock_path_beneath_attr {
+                    allowed_access: allowed & access_handled,
+                    parent_fd: fd,
+                };
+                let ret = sys_landlock_add_rule(
+                    ruleset_fd,
+                    LANDLOCK_RULE_PATH_BENEATH,
+                    &path_attr as *const _ as *const std::ffi::c_void,
+                    0,
+                );
+                let add_err = if ret < 0 {
+                    Some(std::io::Error::last_os_error())
+                } else {
+                    None
+                };
+                libc::close(fd);
+                if let Some(err) = add_err {
+                    return Err(err);
+                }
+                Ok(())
+            };
+            if let Some(parent) = binary_path.parent() {
+                let _ = add_rule(parent, access_ro, false, false);
+            }
+            for sys_dir in &[
+                "/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/dev", "/tmp",
+            ] {
+                let p = Path::new(sys_dir);
+                if p.is_dir() {
+                    let _ = add_rule(p, access_ro, false, false);
+                }
+            }
+            for dir in ro_dirs {
+                if strict_fail_closed {
+                    if let Err(e) = add_rule(dir, access_ro, false, true) {
+                        libc::close(ruleset_fd);
+                        return Err(e);
+                    }
+                } else {
+                    let _ = add_rule(dir, access_ro, false, false);
+                }
+            }
+            for dir in mandatory_ro_dirs {
+                if let Err(e) = add_rule(dir, access_ro, true, true) {
+                    libc::close(ruleset_fd);
+                    return Err(e);
+                }
+            }
+            let rw_mask = access_rw & access_handled;
+            let _ = add_rule(cwd, rw_mask, false, false);
+            for dir in rw_dirs {
+                let _ = add_rule(dir, rw_mask, false, false);
+            }
+            let rc = sys_landlock_restrict_self(ruleset_fd, 0);
+            libc::close(ruleset_fd);
+            if rc < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+
+        if block_all_sockets {
+            apply_seccomp_socket_filter()?;
+        } else {
+            #[cfg(target_arch = "x86_64")]
+            let (arch, escape_syscalls) =
+                (AUDIT_ARCH_X86_64, X86_64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS);
+            #[cfg(target_arch = "aarch64")]
+            let (arch, escape_syscalls) =
+                (AUDIT_ARCH_AARCH64, AARCH64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS);
+            #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+            {
+                let clone3_slice = [LINUX_SYS_CLONE3];
+                let insns = build_syscall_policy_bpf(
+                    arch,
+                    &[
+                        (escape_syscalls, LINUX_EPERM),
+                        (&clone3_slice, LINUX_ENOSYS),
+                    ],
+                );
+                let prog = sock_fprog {
+                    len: insns.len() as u16,
+                    filter: insns.as_ptr(),
+                };
+                if libc::prctl(
+                    libc::PR_SET_SECCOMP,
+                    libc::SECCOMP_MODE_FILTER,
+                    &prog as *const _ as usize,
+                    0,
+                    0,
+                ) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
+
+#[cfg(target_os = "linux")]
+pub use linux_impl::apply_cli_pre_exec_confinement;
 
 // ---------------------------------------------------------------------------
 // Public Gateway Function (Cross-Platform Interface)

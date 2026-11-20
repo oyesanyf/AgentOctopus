@@ -98,11 +98,22 @@ pub mod win32 {
             TokenInformationLength: DWORD,
             ReturnLength: *mut DWORD,
         ) -> BOOL;
+        pub fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            StringSecurityDescriptor: *const u16,
+            StringSecurityRevision: DWORD,
+            SecurityDescriptor: *mut *mut c_void,
+            SecurityDescriptorSize: *mut u32,
+        ) -> BOOL;
     }
 
     #[link(name = "kernel32")]
     extern "system" {
         pub fn LocalFree(hMem: *mut c_void) -> *mut c_void;
+        pub fn GetProcessHeap() -> HANDLE;
+        pub fn HeapFree(hHeap: HANDLE, dwFlags: DWORD, lpMem: *mut c_void) -> BOOL;
+        pub fn LoadLibraryW(lpLibFileName: *const u16) -> HANDLE;
+        pub fn GetProcAddress(hModule: HANDLE, lpProcName: *const u8) -> *const c_void;
+        pub fn FreeLibrary(hLibModule: HANDLE) -> BOOL;
         pub fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) -> DWORD;
         pub fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *mut DWORD) -> BOOL;
         pub fn InitializeProcThreadAttributeList(
@@ -505,6 +516,231 @@ fn rollback_appcontainer_profile(name: &str) {
     let wide_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let _ = win32::DeleteAppContainerProfile(wide_name.as_ptr());
+    }
+}
+
+#[cfg(windows)]
+type FnNetworkIsolationGetAppContainerConfig = unsafe extern "system" fn(
+    pdw_num_public_app_cs: *mut win32::DWORD,
+    app_container_sids: *mut *mut win32::SID_AND_ATTRIBUTES,
+) -> win32::DWORD;
+
+#[cfg(windows)]
+type FnNetworkIsolationSetAppContainerConfig = unsafe extern "system" fn(
+    dw_num_public_app_cs: win32::DWORD,
+    app_container_sids: *const win32::SID_AND_ATTRIBUTES,
+) -> win32::DWORD;
+
+#[cfg(windows)]
+unsafe fn load_network_isolation_fns() -> Option<(
+    HANDLE,
+    FnNetworkIsolationGetAppContainerConfig,
+    FnNetworkIsolationSetAppContainerConfig,
+)> {
+    let dll_name: Vec<u16> = "firewallapi.dll"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let hmod = win32::LoadLibraryW(dll_name.as_ptr());
+    if hmod.is_null() {
+        return None;
+    }
+    let p_get = win32::GetProcAddress(hmod, b"NetworkIsolationGetAppContainerConfig\0".as_ptr());
+    let p_set = win32::GetProcAddress(hmod, b"NetworkIsolationSetAppContainerConfig\0".as_ptr());
+    if p_get.is_null() || p_set.is_null() {
+        win32::FreeLibrary(hmod);
+        return None;
+    }
+    let get_fn: FnNetworkIsolationGetAppContainerConfig = std::mem::transmute(p_get);
+    let set_fn: FnNetworkIsolationSetAppContainerConfig = std::mem::transmute(p_set);
+    Some((hmod, get_fn, set_fn))
+}
+
+#[cfg(windows)]
+unsafe fn free_network_isolation_config(count: win32::DWORD, arr: *mut win32::SID_AND_ATTRIBUTES) {
+    if arr.is_null() {
+        return;
+    }
+    let heap = win32::GetProcessHeap();
+    for i in 0..(count as usize) {
+        let sid_ptr = (*arr.add(i)).Sid;
+        if !sid_ptr.is_null() {
+            win32::HeapFree(heap, 0, sid_ptr);
+        }
+    }
+    win32::HeapFree(heap, 0, arr as *mut std::ffi::c_void);
+}
+
+#[cfg(windows)]
+fn revoke_appcontainer_loopback_exemption(sid_str: &str) {
+    let wide_sid: Vec<u16> = sid_str.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut target_psid: win32::PSID = std::ptr::null_mut();
+    if unsafe { win32::ConvertStringSidToSidW(wide_sid.as_ptr(), &mut target_psid) } == 0
+        || target_psid.is_null()
+    {
+        return;
+    }
+    unsafe {
+        if let Some((hmod, get_fn, set_fn)) = load_network_isolation_fns() {
+            let mut count: win32::DWORD = 0;
+            let mut arr: *mut win32::SID_AND_ATTRIBUTES = std::ptr::null_mut();
+            if get_fn(&mut count, &mut arr) == 0 && !arr.is_null() && count > 0 {
+                let mut filtered: Vec<win32::SID_AND_ATTRIBUTES> =
+                    Vec::with_capacity(count as usize);
+                let mut removed_any = false;
+                for i in 0..(count as usize) {
+                    let entry = &*arr.add(i);
+                    if !entry.Sid.is_null() && win32::EqualSid(entry.Sid, target_psid) != 0 {
+                        removed_any = true;
+                    } else {
+                        filtered.push(win32::SID_AND_ATTRIBUTES {
+                            Sid: entry.Sid,
+                            Attributes: entry.Attributes,
+                        });
+                    }
+                }
+                if removed_any {
+                    let ptr = if filtered.is_empty() {
+                        std::ptr::null()
+                    } else {
+                        filtered.as_ptr()
+                    };
+                    let _ = set_fn(filtered.len() as win32::DWORD, ptr);
+                }
+            }
+            free_network_isolation_config(count, arr);
+            win32::FreeLibrary(hmod);
+        }
+        win32::LocalFree(target_psid);
+    }
+}
+
+/// Pre-created Windows AppContainer profile whose SID is known before spawning the child process
+/// (allowing Named Pipe DACLs and optional NetworkIsolation loopback exemptions to bind strictly to this SID).
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct PreparedAppContainerProfile {
+    pub container_name: String,
+    pub sid_str: String,
+    psid: win32::PSID,
+    loopback_exempt_added: bool,
+    already_loopback_exempt: bool,
+}
+
+#[cfg(windows)]
+unsafe impl Send for PreparedAppContainerProfile {}
+
+#[cfg(windows)]
+impl PreparedAppContainerProfile {
+    pub fn prepare_appcontainer_profile() -> Result<Self, OctopusSecurityError> {
+        let container_name = format!(
+            "AgentOctopus.OctopusRun.{}_{:08x}",
+            std::process::id(),
+            rand::random::<u32>()
+        );
+        let (sid_str, psid) = create_or_open_appcontainer_profile(
+            &container_name,
+            "AgentOctopus Strict CLI Sandbox",
+            "AppContainer boundary for octopus run --sandbox strict",
+        )?;
+        Ok(Self {
+            container_name,
+            sid_str,
+            psid,
+            loopback_exempt_added: false,
+            already_loopback_exempt: false,
+        })
+    }
+
+    pub fn try_enable_loopback_exemption(&mut self) -> bool {
+        if self.psid.is_null() {
+            return false;
+        }
+        if self.already_loopback_exempt || self.loopback_exempt_added {
+            return true;
+        }
+        unsafe {
+            let Some((hmod, get_fn, set_fn)) = load_network_isolation_fns() else {
+                return false;
+            };
+            let mut count: win32::DWORD = 0;
+            let mut arr: *mut win32::SID_AND_ATTRIBUTES = std::ptr::null_mut();
+            let rc_get = get_fn(&mut count, &mut arr);
+            if rc_get != 0 {
+                free_network_isolation_config(count, arr);
+                win32::FreeLibrary(hmod);
+                return false;
+            }
+            let mut new_list: Vec<win32::SID_AND_ATTRIBUTES> =
+                Vec::with_capacity((count as usize) + 1);
+            if !arr.is_null() {
+                for i in 0..(count as usize) {
+                    let entry = &*arr.add(i);
+                    if !entry.Sid.is_null() && win32::EqualSid(entry.Sid, self.psid) != 0 {
+                        self.already_loopback_exempt = true;
+                        free_network_isolation_config(count, arr);
+                        win32::FreeLibrary(hmod);
+                        return true;
+                    }
+                    new_list.push(win32::SID_AND_ATTRIBUTES {
+                        Sid: entry.Sid,
+                        Attributes: entry.Attributes,
+                    });
+                }
+            }
+            new_list.push(win32::SID_AND_ATTRIBUTES {
+                Sid: self.psid,
+                Attributes: 0,
+            });
+            let rc_set = set_fn(new_list.len() as win32::DWORD, new_list.as_ptr());
+            free_network_isolation_config(count, arr);
+            win32::FreeLibrary(hmod);
+            if rc_set == 0 {
+                self.loopback_exempt_added = true;
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    pub fn loopback_exempt_active(&self) -> bool {
+        self.already_loopback_exempt || self.loopback_exempt_added
+    }
+
+    fn take_raw(&mut self) -> Option<(String, String, win32::PSID, bool, bool)> {
+        if self.psid.is_null() {
+            return None;
+        }
+        let psid = self.psid;
+        self.psid = std::ptr::null_mut();
+        let added = self.loopback_exempt_added;
+        self.loopback_exempt_added = false;
+        let already = self.already_loopback_exempt;
+        self.already_loopback_exempt = false;
+        Some((
+            std::mem::take(&mut self.container_name),
+            std::mem::take(&mut self.sid_str),
+            psid,
+            added,
+            already,
+        ))
+    }
+}
+
+#[cfg(windows)]
+impl Drop for PreparedAppContainerProfile {
+    fn drop(&mut self) {
+        if !self.psid.is_null() {
+            if self.loopback_exempt_added {
+                revoke_appcontainer_loopback_exemption(&self.sid_str);
+            }
+            unsafe {
+                win32::FreeSid(self.psid);
+            }
+            self.psid = std::ptr::null_mut();
+            rollback_appcontainer_profile(&self.container_name);
+        }
     }
 }
 
@@ -1713,5 +1949,596 @@ pub fn spawn_tier2_appcontainer_command(
 ) -> Result<Tier2ConfinedChildResult, OctopusSecurityError> {
     Err(OctopusSecurityError::IsolationViolation(
         "FAIL-CLOSED: Tier 2 native child confinement is unsupported on this operating system (requires Windows AppContainer or Linux Landlock/seccomp-BPF)".to_string(),
+    ))
+}
+
+/// Owned handle to a Windows AppContainer + Job Object confined child process for `octopus run --sandbox strict`.
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct AppContainerChildHandle {
+    pub pid: u32,
+    pub container_name: String,
+    pub package_sid: String,
+    pub posture: crate::security::token_posture::TokenPosture,
+    pub appcontainer_verification: AppContainerTokenVerification,
+    granted_acl_paths: Vec<std::path::PathBuf>,
+    loopback_exempt_added: bool,
+    process: HANDLE,
+}
+
+#[cfg(windows)]
+unsafe impl Send for AppContainerChildHandle {}
+
+#[cfg(windows)]
+impl AppContainerChildHandle {
+    /// Waits up to `timeout` (or indefinitely if `None`). Returns `Ok(None)` on timeout.
+    pub fn wait_with_timeout(
+        &self,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<Option<u32>, OctopusSecurityError> {
+        const WAIT_OBJECT_0: u32 = 0x0000_0000;
+        const WAIT_TIMEOUT: u32 = 0x0000_0102;
+        const INFINITE: u32 = 0xFFFF_FFFF;
+        let ms = match timeout {
+            Some(d) => d.as_millis().min((INFINITE - 1) as u128) as u32,
+            None => INFINITE,
+        };
+        let rc = unsafe { win32::WaitForSingleObject(self.process, ms) };
+        if rc == WAIT_TIMEOUT {
+            return Ok(None);
+        }
+        if rc != WAIT_OBJECT_0 {
+            let err = unsafe { win32::GetLastError() };
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "FAIL-CLOSED: WaitForSingleObject(AppContainer) failed (OS Error {})",
+                err
+            )));
+        }
+        let mut code: u32 = 1;
+        if unsafe { win32::GetExitCodeProcess(self.process, &mut code) } == 0 {
+            let err = unsafe { win32::GetLastError() };
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "FAIL-CLOSED: GetExitCodeProcess(AppContainer) failed (OS Error {})",
+                err
+            )));
+        }
+        Ok(Some(code))
+    }
+}
+
+#[cfg(windows)]
+fn revoke_appcontainer_acls(package_sid: &str, paths: &[std::path::PathBuf]) {
+    let sid_arg = format!("*{}", package_sid);
+    for p in paths {
+        if p.exists() {
+            let _ = std::process::Command::new("icacls")
+                .arg(p)
+                .arg("/remove")
+                .arg(&sid_arg)
+                .arg("/Q")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for AppContainerChildHandle {
+    fn drop(&mut self) {
+        if !self.process.is_null() && self.process != INVALID_HANDLE_VALUE {
+            unsafe {
+                CloseHandle(self.process);
+            }
+        }
+        if self.loopback_exempt_added {
+            revoke_appcontainer_loopback_exemption(&self.package_sid);
+        }
+        revoke_appcontainer_acls(&self.package_sid, &self.granted_acl_paths);
+        rollback_appcontainer_profile(&self.container_name);
+    }
+}
+
+/// Spawns a CLI workload inside a verified Windows AppContainer + `WindowsJobObject` (`--sandbox strict`)
+/// with explicit `cwd`, sanitized `env_pairs`, and inherited or piped stdio. Fails closed if
+/// AppContainer creation, job binding, or AppContainer token verification fails.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_appcontainer_in_job_with_io(
+    application_name: &str,
+    args: &[String],
+    cwd: &std::path::Path,
+    env_pairs: &[(String, String)],
+    allow_loopback_cap: bool,
+    allow_read_dirs: &[std::path::PathBuf],
+    allow_write_dirs: &[std::path::PathBuf],
+    mandatory_ro_dirs: &[std::path::PathBuf],
+    pipe_stdio: bool,
+    job: &WindowsJobObject,
+) -> Result<
+    (
+        AppContainerChildHandle,
+        Option<std::fs::File>,
+        Option<std::fs::File>,
+    ),
+    OctopusSecurityError,
+> {
+    spawn_appcontainer_in_job_with_io_prepared(
+        application_name,
+        args,
+        cwd,
+        env_pairs,
+        allow_loopback_cap,
+        allow_read_dirs,
+        allow_write_dirs,
+        mandatory_ro_dirs,
+        pipe_stdio,
+        job,
+        None,
+    )
+}
+
+/// Spawns a CLI workload inside a verified Windows AppContainer + `WindowsJobObject` (`--sandbox strict`)
+/// optionally consuming a pre-created `PreparedAppContainerProfile`. Grants network capability SIDs
+/// (`S-1-15-3-1`, `S-1-15-3-3`) ONLY when `allow_loopback_cap && loopback_exempt_active`; otherwise
+/// enforces `CapabilityCount = 0` so kernel network blocks fail fast.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_appcontainer_in_job_with_io_prepared(
+    application_name: &str,
+    args: &[String],
+    cwd: &std::path::Path,
+    env_pairs: &[(String, String)],
+    allow_loopback_cap: bool,
+    allow_read_dirs: &[std::path::PathBuf],
+    allow_write_dirs: &[std::path::PathBuf],
+    mandatory_ro_dirs: &[std::path::PathBuf],
+    pipe_stdio: bool,
+    job: &WindowsJobObject,
+    prepared: Option<PreparedAppContainerProfile>,
+) -> Result<
+    (
+        AppContainerChildHandle,
+        Option<std::fs::File>,
+        Option<std::fs::File>,
+    ),
+    OctopusSecurityError,
+> {
+    use std::os::windows::io::{FromRawHandle, RawHandle};
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct AC_SECURITY_ATTRIBUTES {
+        nLength: u32,
+        lpSecurityDescriptor: *mut std::ffi::c_void,
+        bInheritHandle: i32,
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreatePipe(
+            hReadPipe: *mut HANDLE,
+            hWritePipe: *mut HANDLE,
+            lpPipeAttributes: *const AC_SECURITY_ATTRIBUTES,
+            nSize: u32,
+        ) -> i32;
+        fn SetHandleInformation(hObject: HANDLE, dwMask: u32, dwFlags: u32) -> i32;
+        fn GetStdHandle(nStdHandle: u32) -> HANDLE;
+    }
+
+    const STARTF_USESTDHANDLES: u32 = 0x0000_0100;
+    const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+    const STD_INPUT_HANDLE: u32 = (-10i32) as u32;
+    const STD_OUTPUT_HANDLE: u32 = (-11i32) as u32;
+    const STD_ERROR_HANDLE: u32 = (-12i32) as u32;
+    const SE_GROUP_ENABLED: u32 = 0x0000_0004;
+    const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
+    const CREATE_UNICODE_ENVIRONMENT: u32 = 0x0000_0400;
+
+    let (container_name, sid_str, psid, loopback_exempt_added, loopback_exempt_active) =
+        if let Some(mut prep) = prepared {
+            let (cn, ss, p, added, already) = prep.take_raw().ok_or_else(|| {
+                OctopusSecurityError::IsolationViolation(
+                    "FAIL-CLOSED: PreparedAppContainerProfile missing SID".to_string(),
+                )
+            })?;
+            (cn, ss, p, added, added || already)
+        } else {
+            let cn = format!(
+                "AgentOctopus.OctopusRun.{}_{:08x}",
+                std::process::id(),
+                rand::random::<u32>()
+            );
+            let (ss, p) = create_or_open_appcontainer_profile(
+                &cn,
+                "AgentOctopus Strict CLI Sandbox",
+                "AppContainer boundary for octopus run --sandbox strict",
+            )?;
+            (cn, ss, p, false, false)
+        };
+
+    let cleanup_profile = |acl_paths: &[std::path::PathBuf]| {
+        if loopback_exempt_added {
+            revoke_appcontainer_loopback_exemption(&sid_str);
+        }
+        revoke_appcontainer_acls(&sid_str, acl_paths);
+        rollback_appcontainer_profile(&container_name);
+    };
+
+    // Best-effort grant AppContainer SID ACLs on declared user directories so scripts/cwd are readable/writable.
+    let mut granted_acl_paths = Vec::new();
+    let sid_grant_rx = format!("*{}:(OI)(CI)RX", sid_str);
+    let sid_grant_m = format!("*{}:(OI)(CI)M", sid_str);
+    let mut try_grant = |path: &std::path::Path, perm: &str| {
+        if path.exists() {
+            if let Ok(st) = std::process::Command::new("icacls")
+                .arg(path)
+                .arg("/grant")
+                .arg(perm)
+                .arg("/Q")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+            {
+                if st.success() && !granted_acl_paths.contains(&path.to_path_buf()) {
+                    granted_acl_paths.push(path.to_path_buf());
+                }
+            }
+        }
+    };
+    for p in allow_read_dirs {
+        try_grant(p, &sid_grant_rx);
+    }
+    try_grant(cwd, &sid_grant_rx);
+    for p in allow_write_dirs {
+        try_grant(p, &sid_grant_m);
+    }
+    if let Some(exe_parent) = std::path::Path::new(application_name).parent() {
+        try_grant(exe_parent, &sid_grant_rx);
+    }
+    for p in mandatory_ro_dirs {
+        let granted = p.exists()
+            && std::process::Command::new("icacls")
+                .arg(p)
+                .arg("/grant")
+                .arg(&sid_grant_rx)
+                .arg("/Q")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|st| st.success());
+        if !granted {
+            unsafe { win32::FreeSid(psid) };
+            cleanup_profile(&granted_acl_paths);
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "FAIL-CLOSED: failed to grant AppContainer (RX) ACL on mandatory guard directory '{}'",
+                p.display()
+            )));
+        }
+        if !granted_acl_paths.contains(&p.to_path_buf()) {
+            granted_acl_paths.push(p.to_path_buf());
+        }
+    }
+
+    let mut cap_sids: Vec<win32::PSID> = Vec::new();
+    let mut caps: Vec<win32::SID_AND_ATTRIBUTES> = Vec::new();
+    if allow_loopback_cap && loopback_exempt_active {
+        for sid_lit in ["S-1-15-3-1", "S-1-15-3-3"] {
+            let wide: Vec<u16> = sid_lit.encode_utf16().chain(std::iter::once(0)).collect();
+            let mut csid: win32::PSID = std::ptr::null_mut();
+            if unsafe { win32::ConvertStringSidToSidW(wide.as_ptr(), &mut csid) } != 0
+                && !csid.is_null()
+            {
+                cap_sids.push(csid);
+                caps.push(win32::SID_AND_ATTRIBUTES {
+                    Sid: csid,
+                    Attributes: SE_GROUP_ENABLED,
+                });
+            }
+        }
+    }
+
+    let free_cap_sids = |sids: &[win32::PSID]| {
+        for &cs in sids {
+            if !cs.is_null() {
+                unsafe { win32::LocalFree(cs) };
+            }
+        }
+    };
+
+    let mut sec_cap = win32::SECURITY_CAPABILITIES {
+        AppContainerSid: psid,
+        Capabilities: if caps.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            caps.as_mut_ptr()
+        },
+        CapabilityCount: caps.len() as u32,
+        Reserved: 0,
+    };
+
+    let mut attr_size: usize = 0;
+    unsafe {
+        win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+    }
+    if attr_size == 0 {
+        free_cap_sids(&cap_sids);
+        unsafe { win32::FreeSid(psid) };
+        cleanup_profile(&granted_acl_paths);
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED: InitializeProcThreadAttributeList size query failed".to_string(),
+        ));
+    }
+
+    let mut attr_buf = vec![0u8; attr_size];
+    let attr_list = attr_buf.as_mut_ptr() as *mut std::ffi::c_void;
+    if unsafe { win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) } == 0 {
+        free_cap_sids(&cap_sids);
+        unsafe { win32::FreeSid(psid) };
+        cleanup_profile(&granted_acl_paths);
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED: InitializeProcThreadAttributeList init failed".to_string(),
+        ));
+    }
+
+    if unsafe {
+        win32::UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            0x00020009,
+            &mut sec_cap as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<win32::SECURITY_CAPABILITIES>(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        unsafe {
+            win32::DeleteProcThreadAttributeList(attr_list);
+            win32::FreeSid(psid);
+        }
+        free_cap_sids(&cap_sids);
+        cleanup_profile(&granted_acl_paths);
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED: UpdateProcThreadAttribute(SECURITY_CAPABILITIES) failed".to_string(),
+        ));
+    }
+
+    let mut out_read: HANDLE = std::ptr::null_mut();
+    let mut out_write: HANDLE = std::ptr::null_mut();
+    let mut err_read: HANDLE = std::ptr::null_mut();
+    let mut err_write: HANDLE = std::ptr::null_mut();
+    let close_pipes = |handles: &[HANDLE]| {
+        for &h in handles {
+            if !h.is_null() && h != INVALID_HANDLE_VALUE {
+                unsafe { CloseHandle(h) };
+            }
+        }
+    };
+
+    let mut si_ex: win32::STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+    si_ex.StartupInfo.cb = std::mem::size_of::<win32::STARTUPINFOEXW>() as u32;
+    si_ex.lpAttributeList = attr_list;
+
+    if pipe_stdio {
+        let sa = AC_SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<AC_SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: std::ptr::null_mut(),
+            bInheritHandle: 1,
+        };
+        if unsafe { CreatePipe(&mut out_read, &mut out_write, &sa, 0) } == 0 {
+            unsafe {
+                win32::DeleteProcThreadAttributeList(attr_list);
+                win32::FreeSid(psid);
+            }
+            free_cap_sids(&cap_sids);
+            cleanup_profile(&granted_acl_paths);
+            return Err(OctopusSecurityError::IsolationViolation(
+                "FAIL-CLOSED: CreatePipe(stdout) failed".to_string(),
+            ));
+        }
+        unsafe { SetHandleInformation(out_read, HANDLE_FLAG_INHERIT, 0) };
+        if unsafe { CreatePipe(&mut err_read, &mut err_write, &sa, 0) } == 0 {
+            close_pipes(&[out_read, out_write]);
+            unsafe {
+                win32::DeleteProcThreadAttributeList(attr_list);
+                win32::FreeSid(psid);
+            }
+            free_cap_sids(&cap_sids);
+            cleanup_profile(&granted_acl_paths);
+            return Err(OctopusSecurityError::IsolationViolation(
+                "FAIL-CLOSED: CreatePipe(stderr) failed".to_string(),
+            ));
+        }
+        unsafe { SetHandleInformation(err_read, HANDLE_FLAG_INHERIT, 0) };
+        let stdin_h = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        if !stdin_h.is_null() && stdin_h != INVALID_HANDLE_VALUE {
+            unsafe { SetHandleInformation(stdin_h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+        }
+        si_ex.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        si_ex.StartupInfo.hStdInput = stdin_h;
+        si_ex.StartupInfo.hStdOutput = out_write;
+        si_ex.StartupInfo.hStdError = err_write;
+    } else {
+        let stdin_h = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        let stdout_h = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+        let stderr_h = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+        for h in [stdin_h, stdout_h, stderr_h] {
+            if !h.is_null() && h != INVALID_HANDLE_VALUE {
+                unsafe { SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) };
+            }
+        }
+        si_ex.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+        si_ex.StartupInfo.hStdInput = stdin_h;
+        si_ex.StartupInfo.hStdOutput = stdout_h;
+        si_ex.StartupInfo.hStdError = stderr_h;
+    }
+
+    // Ensure AppContainer-required Windows env vars exist and are sorted case-insensitively.
+    let mut env_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (k, v) in env_pairs {
+        env_map.insert(k.clone(), v.clone());
+    }
+    let sys_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+    let sys_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+    let cwd_str = cwd.to_string_lossy().to_string();
+    let defaults = [
+        ("SystemRoot", sys_root.clone()),
+        ("WINDIR", sys_root.clone()),
+        ("SystemDrive", sys_drive.clone()),
+        (
+            "ProgramData",
+            std::env::var("ProgramData").unwrap_or_else(|_| format!("{}\\ProgramData", sys_drive)),
+        ),
+        ("ComSpec", format!("{}\\System32\\cmd.exe", sys_root)),
+        ("PATHEXT", ".COM;.EXE;.BAT;.CMD".to_string()),
+        (
+            "USERPROFILE",
+            std::env::var("USERPROFILE").unwrap_or_else(|_| cwd_str.clone()),
+        ),
+        (
+            "LOCALAPPDATA",
+            std::env::var("LOCALAPPDATA").unwrap_or_else(|_| cwd_str.clone()),
+        ),
+        (
+            "APPDATA",
+            std::env::var("APPDATA").unwrap_or_else(|_| cwd_str.clone()),
+        ),
+    ];
+    for (k, v) in defaults {
+        if !env_map.keys().any(|ek| ek.eq_ignore_ascii_case(k)) {
+            env_map.insert(k.to_string(), v);
+        }
+    }
+    let mut sorted_env: Vec<(String, String)> = env_map.into_iter().collect();
+    sorted_env.sort_by(|a, b| a.0.to_ascii_uppercase().cmp(&b.0.to_ascii_uppercase()));
+    let mut env_block: Vec<u16> = Vec::new();
+    for (k, v) in &sorted_env {
+        let entry = format!("{}={}", k, v);
+        env_block.extend(entry.encode_utf16());
+        env_block.push(0);
+    }
+    env_block.push(0);
+
+    let wide_app: Vec<u16> = application_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let cmdline = build_windows_command_line(application_name, args);
+    let mut wide_cmd: Vec<u16> = cmdline.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_cwd: Vec<u16> = cwd_str.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let mut pi: windows_sys::Win32::System::Threading::PROCESS_INFORMATION =
+        unsafe { std::mem::zeroed() };
+
+    let created = unsafe {
+        win32::CreateProcessW(
+            wide_app.as_ptr(),
+            wide_cmd.as_mut_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            1, // bInheritHandles = TRUE for stdio streaming
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+            env_block.as_mut_ptr() as *mut std::ffi::c_void,
+            wide_cwd.as_ptr(),
+            &si_ex as *const _ as *const std::ffi::c_void,
+            &mut pi,
+        )
+    };
+
+    unsafe {
+        win32::DeleteProcThreadAttributeList(attr_list);
+    }
+    free_cap_sids(&cap_sids);
+    close_pipes(&[out_write, err_write]);
+
+    if created == 0 {
+        let err = unsafe { win32::GetLastError() };
+        close_pipes(&[out_read, err_read]);
+        unsafe { win32::FreeSid(psid) };
+        cleanup_profile(&granted_acl_paths);
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: CreateProcessW in AppContainer '{}' for '{}' failed (OS Error {})",
+            container_name, application_name, err
+        )));
+    }
+
+    let cleanup_fail = |reason: OctopusSecurityError| -> OctopusSecurityError {
+        unsafe {
+            win32::TerminateProcess(pi.hProcess, 1);
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+        close_pipes(&[out_read, err_read]);
+        cleanup_profile(&granted_acl_paths);
+        reason
+    };
+
+    if let Err(e) = job.assign_process(pi.hProcess) {
+        unsafe { win32::FreeSid(psid) };
+        return Err(cleanup_fail(e));
+    }
+
+    let ac_verification = match verify_process_appcontainer_token(pi.hProcess, psid, &sid_str, job)
+    {
+        Ok(v) => {
+            unsafe { win32::FreeSid(psid) };
+            v
+        }
+        Err(e) => {
+            unsafe { win32::FreeSid(psid) };
+            return Err(cleanup_fail(e));
+        }
+    };
+
+    let posture = match crate::security::token_posture::TokenPosture::of_process(pi.hProcess) {
+        Ok(p) => p,
+        Err(e) => return Err(cleanup_fail(e)),
+    };
+    if let Err(reasons) = posture.verify_agent_safe() {
+        return Err(cleanup_fail(OctopusSecurityError::IsolationViolation(
+            format!(
+                "FAIL-CLOSED: AppContainer child TokenPosture unsafe: {}",
+                reasons.join("; ")
+            ),
+        )));
+    }
+
+    if unsafe { win32::ResumeThread(pi.hThread) } == u32::MAX {
+        let err = unsafe { win32::GetLastError() };
+        return Err(cleanup_fail(OctopusSecurityError::IsolationViolation(
+            format!(
+                "FAIL-CLOSED: ResumeThread failed on AppContainer child (OS Error {})",
+                err
+            ),
+        )));
+    }
+    unsafe { CloseHandle(pi.hThread) };
+
+    let stdout_file = if pipe_stdio && !out_read.is_null() {
+        Some(unsafe { std::fs::File::from_raw_handle(out_read as RawHandle) })
+    } else {
+        None
+    };
+    let stderr_file = if pipe_stdio && !err_read.is_null() {
+        Some(unsafe { std::fs::File::from_raw_handle(err_read as RawHandle) })
+    } else {
+        None
+    };
+
+    Ok((
+        AppContainerChildHandle {
+            pid: pi.dwProcessId,
+            container_name,
+            package_sid: sid_str,
+            posture,
+            appcontainer_verification: ac_verification,
+            granted_acl_paths,
+            loopback_exempt_added,
+            process: pi.hProcess,
+        },
+        stdout_file,
+        stderr_file,
     ))
 }

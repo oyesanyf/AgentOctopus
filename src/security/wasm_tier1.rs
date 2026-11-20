@@ -850,17 +850,21 @@ impl WasmTier1Executor {
             }
         }
 
-        let run_fn = instance
+        let call_res = if let Ok(run_fn) = instance
             .get_typed_func::<(), i32>(&mut store, "octopus_run")
             .or_else(|_| instance.get_typed_func::<(), i32>(&mut store, "execute_step"))
-            .map_err(|e| {
-                OctopusSecurityError::IsolationViolation(format!(
-                    "TIER1_WASM_MISSING_ENTRYPOINT [{}]: expected `(func (export \"octopus_run\") (result i32))`: {}",
-                    tool_name, e
-                ))
-            })?;
+        {
+            run_fn.call(&mut store, ())
+        } else if let Ok(start_fn) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
+            start_fn.call(&mut store, ()).map(|()| 0)
+        } else {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "TIER1_WASM_MISSING_ENTRYPOINT [{}]: expected `octopus_run`, `execute_step`, or `_start`",
+                tool_name
+            )));
+        };
 
-        let exit_code = match run_fn.call(&mut store, ()) {
+        let exit_code = match call_res {
             Ok(code) => code,
             Err(trap) => {
                 let fuel_left = store.get_fuel().unwrap_or(0);

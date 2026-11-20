@@ -10,6 +10,18 @@ use tokio::sync::mpsc;
 async fn main() {
     let cli_args: Vec<String> = std::env::args().collect();
 
+    if cli_args.get(1).map(|s| s.as_str()) == Some("--help")
+        || cli_args.get(1).map(|s| s.as_str()) == Some("-h")
+    {
+        agent_octopus::cli::print_octopus_help();
+        std::process::exit(0);
+    }
+
+    if cli_args.get(1).map(|s| s.as_str()) == Some("run") {
+        let code = agent_octopus::cli::run::execute_from_args(&cli_args).await;
+        std::process::exit(code);
+    }
+
     // 1. In-memory 7-phase self-diagnostics (--verify / --check / verify)
     if cli_args
         .iter()
