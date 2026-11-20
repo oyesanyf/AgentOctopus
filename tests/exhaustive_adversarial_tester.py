@@ -1124,9 +1124,11 @@ class ExhaustiveTestOrchestrator:
             )
             return
 
-        instruction_file = os.path.abspath("strix_octopus_instructions.txt")
+        logs_dir = os.path.abspath("logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        instruction_file = os.path.join(logs_dir, "strix_octopus_instructions.txt")
         instructions = (
-            "Focus on Agent Octopus Web Application (http://127.0.0.1:5005):\n"
+            f"Focus on Agent Octopus Web Application ({self.target.base_url}):\n"
             "1. Verify POST /api/evaluate-cedar enforces zero trust context and authorization barriers.\n"
             "2. Ensure SSRF attempts against metadata addresses are dropped deterministically.\n"
             "3. Confirm cryptographic audit log at /api/audit-log maintains tamper resistance.\n"
@@ -1365,10 +1367,18 @@ class ExhaustiveTestOrchestrator:
             print(f"    * {perim_name:<34} {color}{counts['passed']}/{counts['total']} ({pct:.1f}%){RESET}")
         print(f"{BOLD}{'=' * 85}{RESET}\n")
 
-        # Save structured reports to both root and current directories
+        # Save structured reports to logs/ directory
+        logs_dir = os.path.abspath("logs")
+        os.makedirs(logs_dir, exist_ok=True)
         out_files = [
-            ("octopus_exhaustive_test_report.json", "octopus_exhaustive_test_report.md"),
-            ("strix_llm_test_report.json", "strix_llm_test_report.md"),
+            (
+                os.path.join(logs_dir, "octopus_exhaustive_test_report.json"),
+                os.path.join(logs_dir, "octopus_exhaustive_test_report.md"),
+            ),
+            (
+                os.path.join(logs_dir, "strix_llm_test_report.json"),
+                os.path.join(logs_dir, "strix_llm_test_report.md"),
+            ),
         ]
 
         for j_name, m_name in out_files:

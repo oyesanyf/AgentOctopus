@@ -2522,7 +2522,9 @@ class ExhaustiveTestOrchestrator:
             log_warn(f"Strix executable not found at {self.strix_path}. Native benchmarks verified.")
             return
 
-        instruction_file = os.path.abspath("strix_octopus_instructions.txt")
+        logs_dir = os.path.abspath("logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        instruction_file = os.path.join(logs_dir, "strix_octopus_instructions.txt")
         with open(instruction_file, "w", encoding="utf-8") as f:
             f.write(
                 f"Focus on Agent Octopus Web Application ({self.target.base_url}):\n"
@@ -2788,12 +2790,11 @@ class ExhaustiveTestOrchestrator:
         logs_dir = os.path.abspath("logs")
         os.makedirs(logs_dir, exist_ok=True)
 
-        # Save structured reports to both root and logs/ directory
+        # Save structured reports to logs/ directory
         out_files = [
-            ("octopus_exhaustive_test_report.json", "octopus_exhaustive_test_report.md"),
-            ("strix_llm_test_report.json", "strix_llm_test_report.md"),
-            ("pyrit_test_report.json", "pyrit_test_report.md"),
             (os.path.join(logs_dir, "octopus_exhaustive_test_report.json"), os.path.join(logs_dir, "octopus_exhaustive_test_report.md")),
+            (os.path.join(logs_dir, "strix_llm_test_report.json"), os.path.join(logs_dir, "strix_llm_test_report.md")),
+            (os.path.join(logs_dir, "pyrit_test_report.json"), os.path.join(logs_dir, "pyrit_test_report.md")),
             (os.path.join(logs_dir, "adversarial_audit.json"), os.path.join(logs_dir, "adversarial_audit.md")),
         ]
 

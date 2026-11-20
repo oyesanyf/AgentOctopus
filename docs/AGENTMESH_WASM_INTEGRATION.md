@@ -1,12 +1,12 @@
 # Google AgentMesh (`v0.2.0`) x AgentOctopus (`wasmtime v49.0.4`) Zero-Socket Sandbox Integration
 
-> **Upstream Issue Alignment**: Built for [`google/agentmesh#734`](https://github.com/google/agentmesh/issues/734) (*"Help wanted: real-world integrations, examples and tests across gateways, IdPs, sandboxes and clouds"*) and the [AgentMesh Security Architecture](https://google.github.io/agentmesh/docs/contributing/security-architecture/).
+> **Upstream Issue Alignment**: Built for [`google/agentmesh#734`](https://github.com/google/agentmesh/issues/734) (*"Help wanted: real-world integrations, examples and tests across gateways, IdPs, sandboxes and clouds"*), [`google/agentmesh#887`](https://github.com/google/agentmesh/pull/887) (merged: Wasmtime sandbox on the mesh under its own identity), [`google/agentmesh#897`](https://github.com/google/agentmesh/pull/897) (out-of-band `SecuritySignalEvent` containment webhook contract), and the [AgentMesh Security Architecture](https://google.github.io/agentmesh/docs/contributing/security-architecture/).
 
 ---
 
 ## 1. Topology & End-to-End Security Boundaries
 
-`AgentOctopus` provides a cross-platform (`Linux`, `macOS`, `Windows`) capability-sandbox runtime (`wasmtime v49.0.4`) that enrolls isolated workloads onto an unmodified **`google/agentmesh v0.2.0`** mesh (`agentmesh-one` + `office-node` + `edge-node`), strictly separating **sandbox isolation** from **platform workload identity**, **mesh transport**, and **task-scoped Biscuit authorization**:
+`google/agentmesh` connects agents across machines (SPIFFE identity, Biscuit Datalog authority, `libp2p` transport, `SecuritySignalEvent` webhooks), while **`AgentOctopus`** is the single-binary Rust host containment runtime (`Wasmtime v49.0.4` + OS kernel sandbox + `AWS Cedar v4.13` + `RT-ASP`) — 100x lighter and faster than multi-service Python governance gateways (such as **CAGE**), while preserving optional `RoutingSeal` wire-compatibility. Specifically, `AgentOctopus` provides a cross-platform (`Linux`, `macOS`, `Windows`) capability-sandbox runtime (`wasmtime v49.0.4`) that enrolls isolated workloads onto an unmodified **`google/agentmesh v0.2.0`** mesh (`agentmesh-one` + `office-node` + `edge-node`), strictly separating **sandbox isolation** from **platform workload identity**, **mesh transport**, and **task-scoped Biscuit authorization**:
 
 ```mermaid
 flowchart LR
@@ -92,10 +92,17 @@ cargo test --lib security::agentmesh
 cargo test --lib security::linux_sandbox
 ```
 
-### Mode C — Interactive Web Dashboard (Tab 17: `AgentMesh & Wasm Sandbox`)
+### Mode C — Interactive Web Dashboard (Tab 17: `AgentMesh & Wasm Sandbox`, `http://127.0.0.1:3030`)
 ```bash
-cargo run --bin start -- --console
+cargo run --bin agent_octopus -- start --port 3030
+# (Or headless/console launcher: cargo run --bin start -- --console --port 3030)
+# Reads logs/active_port.txt (default http://127.0.0.1:3030)
 python scripts/test_all_submenus.py
+```
+
+### Mode D — 1-Command Contained Workload CLI
+```bash
+octopus run --policy examples/quickstart/policy.json -- python examples/quickstart/my_agent.py
 ```
 
 ---
