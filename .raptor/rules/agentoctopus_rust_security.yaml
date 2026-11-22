@@ -1,0 +1,46 @@
+rules:
+  - id: agentoctopus.rust.tls-danger-accept-invalid-certs
+    languages: [rust]
+    severity: ERROR
+    message: "TLS certificate verification disabled via danger_accept_invalid_certs(true). Fail closed."
+    pattern: $BUILDER.danger_accept_invalid_certs(true)
+
+  - id: agentoctopus.rust.tls-danger-accept-invalid-hostnames
+    languages: [rust]
+    severity: ERROR
+    message: "TLS hostname verification disabled via danger_accept_invalid_hostnames(true). Fail closed."
+    pattern: $BUILDER.danger_accept_invalid_hostnames(true)
+
+  - id: agentoctopus.rust.shell-command-injection
+    languages: [rust]
+    severity: ERROR
+    message: "Avoid spawning raw shell interpreters (sh -c / cmd /c / powershell -Command) in security-critical code."
+    pattern-either:
+      - pattern: Command::new("sh").arg("-c")
+      - pattern: Command::new("cmd").arg("/c")
+      - pattern: Command::new("cmd.exe").arg("/c")
+      - pattern: Command::new("powershell").arg("-Command")
+
+  - id: agentoctopus.javascript.dangerous-eval-function-constructor
+    languages: [javascript]
+    severity: ERROR
+    message: "Dynamic code execution via eval() or Function() constructor is forbidden in the Dashboard UI."
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+
+  - id: agentoctopus.python.unsafe-yaml-load
+    languages: [python]
+    severity: ERROR
+    message: "Use yaml.safe_load() instead of unsafe yaml.load()."
+    pattern: yaml.load($DATA)
+
+  - id: agentoctopus.generic.hardcoded-private-key-block
+    languages: [generic]
+    severity: ERROR
+    message: "Hardcoded PEM private key block committed to repository."
+    pattern-regex: "-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"
+    paths:
+      exclude:
+        - "tests/**"
+        - ".raptor/**"

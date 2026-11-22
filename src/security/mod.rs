@@ -282,15 +282,18 @@ pub use cage_substrate::{
     SealedJournalEnvelope,
 };
 pub use host_network_isolation::{
-    apply_virtual_patch_perimeter_shield, build_linux_blackhole_route_msg,
-    build_virtual_patch_perimeter_spec, discover_active_octopus_ports,
+    active_vpatch_wfp_filter_count, apply_virtual_patch_perimeter_shield,
+    apply_virtual_patch_perimeter_shield_with_options, build_linux_blackhole_route_msg,
+    build_linux_nft_vpatch_netlink_batch, build_virtual_patch_perimeter_spec,
+    disarm_virtual_patch_perimeter_shield, discover_active_octopus_ports,
     generate_bsd_darwin_pf_virtual_patch_rules, generate_linux_nftables_virtual_patch_rules,
     generate_macos_pf_quarantine_rules, global_host_killswitch, handle_wfp_kernel_apply_cli,
-    has_live_active_wfp_filters, is_current_process_elevated, load_persisted_wfp_filter_ids,
+    has_live_active_vpatch_wfp_filters, has_live_active_wfp_filters, is_current_process_elevated,
+    load_persisted_vpatch_wfp_filter_ids, load_persisted_wfp_filter_ids,
     terminate_non_loopback_tcp_sockets, FwpmFilter0, HostIsolationError, HostIsolationReceipt,
     HostKillSwitchManager, HostKillSwitchStatus, KernelIsolationBackend, KernelPerimeterPatchSpec,
     BLOCKED_L2_ETHERTYPES, DEFAULT_OCTOPUS_PORT, FORBIDDEN_PORT_5000, VIRTUAL_PATCH_INBOUND_PORTS,
-    WFP_RULE_PREFIX,
+    WFP_RULE_PREFIX, WFP_VPATCH_RULE_PREFIX,
 };
 pub use universal_protocols::{
     OsiLayer, ProtocolDefinition, ProtocolDomain, ProtocolVectorType, UniversalProtocolCatalog,

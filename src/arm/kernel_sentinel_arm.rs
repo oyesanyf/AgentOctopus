@@ -699,3 +699,228 @@ impl KernelSentinelArm {
         }
     }
 }
+
+/// A loaded host kernel driver matching a known BYOVD (Bring Your Own Vulnerable Driver) signature.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetectedByovdDriver {
+    pub loaded_path: String,
+    pub matched_rule_path: String,
+    pub matched_sha256: String,
+    pub observed_sha256: Option<String>,
+}
+
+/// Live host kernel driver BYOVD audit report (works with or without `\\.\OsoosiDriver` attached).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ByovdDriverAuditReport {
+    pub driver_bridge_attached: bool,
+    pub hvci_enabled: Option<bool>,
+    pub ms_vulnerable_driver_blocklist_enabled: Option<bool>,
+    pub loaded_drivers_scanned: usize,
+    pub vulnerable_drivers_detected: Vec<DetectedByovdDriver>,
+    pub enforced_rules: Vec<String>,
+}
+
+/// Normalizes Windows NT device driver paths (`\SystemRoot\...`, `\??\...`) into filesystem paths.
+#[must_use]
+pub fn normalize_windows_driver_nt_path(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with(r"\systemroot\") {
+        let sysroot = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        let suffix = &trimmed[r"\systemroot\".len()..];
+        return format!("{}\\{}", sysroot.trim_end_matches('\\'), suffix);
+    }
+    if let Some(suffix) = trimmed.strip_prefix(r"\??\") {
+        return suffix.to_string();
+    }
+    trimmed.to_string()
+}
+
+/// Computes streaming SHA-256 hex digest of a file with bounded 64 KiB stack buffer.
+#[cfg(windows)]
+fn sha256_file_bounded(path: &std::path::Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65_536];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Some(hex::encode(hasher.finalize()))
+}
+
+#[cfg(windows)]
+fn enumerate_loaded_windows_driver_paths() -> Vec<String> {
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+
+    type FnK32EnumDeviceDrivers =
+        unsafe extern "system" fn(*mut *mut std::ffi::c_void, u32, *mut u32) -> i32;
+    type FnK32GetDeviceDriverFileNameW =
+        unsafe extern "system" fn(*mut std::ffi::c_void, *mut u16, u32) -> u32;
+
+    let h_k32 = unsafe { GetModuleHandleA(b"kernel32.dll\0".as_ptr()) };
+    if h_k32.is_null() {
+        return Vec::new();
+    }
+    let Some(p_enum) = (unsafe { GetProcAddress(h_k32, b"K32EnumDeviceDrivers\0".as_ptr()) })
+    else {
+        return Vec::new();
+    };
+    let Some(p_name) =
+        (unsafe { GetProcAddress(h_k32, b"K32GetDeviceDriverFileNameW\0".as_ptr()) })
+    else {
+        return Vec::new();
+    };
+
+    let fn_enum: FnK32EnumDeviceDrivers = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, FnK32EnumDeviceDrivers>(p_enum)
+    };
+    let fn_name: FnK32GetDeviceDriverFileNameW = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, FnK32GetDeviceDriverFileNameW>(
+            p_name,
+        )
+    };
+
+    let mut needed: u32 = 0;
+    let ok = unsafe { fn_enum(std::ptr::null_mut(), 0, &mut needed) };
+    if ok == 0 || needed == 0 {
+        return Vec::new();
+    }
+    let ptr_size = std::mem::size_of::<*mut std::ffi::c_void>();
+    let count = (needed as usize / ptr_size).clamp(1, 4096);
+    let mut bases: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); count];
+    let cb = (bases.len() * ptr_size) as u32;
+    let mut actual: u32 = 0;
+    if unsafe { fn_enum(bases.as_mut_ptr(), cb, &mut actual) } == 0 {
+        return Vec::new();
+    }
+    let actual_count = (actual as usize / ptr_size).min(bases.len());
+    let mut paths = Vec::with_capacity(actual_count);
+    let mut name_buf = [0u16; 520];
+    for &base in &bases[..actual_count] {
+        if base.is_null() {
+            continue;
+        }
+        let len = unsafe { fn_name(base, name_buf.as_mut_ptr(), name_buf.len() as u32) } as usize;
+        if len > 0 && len < name_buf.len() {
+            let raw = String::from_utf16_lossy(&name_buf[..len]);
+            paths.push(normalize_windows_driver_nt_path(&raw));
+        }
+    }
+    paths
+}
+
+impl KernelSentinelArm {
+    /// Audits live loaded host kernel drivers in parallel against `BYOVD_VULNERABLE_DRIVERS`
+    /// and inspects OS Code Integrity (HVCI + Microsoft Vulnerable Driver Blocklist) even when
+    /// `\\.\OsoosiDriver` is not installed.
+    pub fn audit_live_loaded_kernel_drivers(&self) -> ByovdDriverAuditReport {
+        let driver_bridge_attached = self.tier2_connected.load(Ordering::SeqCst);
+        let enforced_rules = self
+            .enforce_byovd_virtual_patch_blocklist()
+            .unwrap_or_default();
+
+        #[cfg(windows)]
+        {
+            use rayon::prelude::*;
+
+            let (posture, _, _) =
+                crate::security::kernel_patcher::discovery::windows::query_windows_posture("");
+            let driver_paths = enumerate_loaded_windows_driver_paths();
+            let loaded_drivers_scanned = driver_paths.len();
+
+            let vulnerable_drivers_detected: Vec<DetectedByovdDriver> = driver_paths
+                .into_par_iter()
+                .filter_map(|loaded_path| {
+                    let path_match = match_byovd_vulnerable_driver(Some(&loaded_path), None);
+                    // Only hash on-disk .sys image if filename matches or is in System32\drivers
+                    let should_hash =
+                        path_match.is_some() || loaded_path.to_ascii_lowercase().ends_with(".sys");
+                    let observed_sha256 = if should_hash {
+                        sha256_file_bounded(std::path::Path::new(&loaded_path))
+                    } else {
+                        None
+                    };
+                    let matched = path_match.or_else(|| {
+                        observed_sha256
+                            .as_deref()
+                            .and_then(|h| match_byovd_vulnerable_driver(None, Some(h)))
+                    });
+                    matched.map(|(matched_rule_path, matched_sha256)| DetectedByovdDriver {
+                        loaded_path,
+                        matched_rule_path: matched_rule_path.to_string(),
+                        matched_sha256: matched_sha256.to_string(),
+                        observed_sha256,
+                    })
+                })
+                .collect();
+
+            ByovdDriverAuditReport {
+                driver_bridge_attached,
+                hvci_enabled: posture.hvci_enabled,
+                ms_vulnerable_driver_blocklist_enabled: posture.vulnerable_driver_blocklist_enabled,
+                loaded_drivers_scanned,
+                vulnerable_drivers_detected,
+                enforced_rules,
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let modules = std::fs::read_to_string("/proc/modules").unwrap_or_default();
+            let loaded_drivers_scanned = modules.lines().filter(|l| !l.trim().is_empty()).count();
+            ByovdDriverAuditReport {
+                driver_bridge_attached,
+                hvci_enabled: None,
+                ms_vulnerable_driver_blocklist_enabled: None,
+                loaded_drivers_scanned,
+                vulnerable_drivers_detected: Vec::new(),
+                enforced_rules,
+            }
+        }
+
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            ByovdDriverAuditReport {
+                driver_bridge_attached,
+                hvci_enabled: None,
+                ms_vulnerable_driver_blocklist_enabled: None,
+                loaded_drivers_scanned: 0,
+                vulnerable_drivers_detected: Vec::new(),
+                enforced_rules,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod byovd_audit_tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_windows_driver_nt_path() {
+        let p = normalize_windows_driver_nt_path(r"\SystemRoot\System32\drivers\RTCore64.sys");
+        assert!(p
+            .to_ascii_lowercase()
+            .ends_with(r"\system32\drivers\rtcore64.sys"));
+        let p2 = normalize_windows_driver_nt_path(r"\??\C:\Windows\System32\drivers\gdrv.sys");
+        assert_eq!(p2, r"C:\Windows\System32\drivers\gdrv.sys");
+    }
+
+    #[test]
+    fn test_live_loaded_driver_audit_runs_cleanly_without_driver_bridge() {
+        let arm = KernelSentinelArm::default();
+        let report = arm.audit_live_loaded_kernel_drivers();
+        assert!(!report.enforced_rules.is_empty());
+        #[cfg(windows)]
+        assert!(
+            report.loaded_drivers_scanned > 0,
+            "Windows host must enumerate live loaded kernel drivers via K32EnumDeviceDrivers"
+        );
+    }
+}

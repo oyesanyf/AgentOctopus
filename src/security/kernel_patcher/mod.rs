@@ -17,11 +17,13 @@ pub mod privilege;
 pub mod shield_state;
 pub mod types;
 pub mod validation;
+pub mod windows_wua;
 
 pub use error::PatcherError;
 pub use patcher::{
-    plan_native_kernel_patch_with_probe, plan_native_kernel_patch_with_probe_opts,
-    resolve_nvd_api_key, BinaryProbe, HostBinaryProbe, KernelPatcher, MockBinaryProbe,
+    plan_native_kernel_patch_with_posture, plan_native_kernel_patch_with_probe,
+    plan_native_kernel_patch_with_probe_opts, resolve_host_patch_plan_preview, resolve_nvd_api_key,
+    write_kernel_patch_helper_result, BinaryProbe, HostBinaryProbe, KernelPatcher, MockBinaryProbe,
 };
 pub use privilege::is_elevated;
 pub use shield_state::{global_kernel_shield, KernelShieldCoordinator};
@@ -31,6 +33,7 @@ pub use types::{
     PatchPlan, PatchStep, RebootPendingStatus, ScanOptions, TelemetryHealthStatus,
     VirtualPatchShieldState, VirtualPatchSurface,
 };
+pub use windows_wua::{WuaExecutionSummary, WuaOperationResult, WuaUpdateCandidate};
 
 use serde::{Deserialize, Serialize};
 
@@ -337,7 +340,11 @@ pub async fn execute_patch_kernel_cli(args: &PatchKernelCliArgs) -> Result<(), P
 
     let patch_result = if args.apply || args.dry_run {
         let is_dry_run = args.dry_run || !args.apply;
-        Some(patcher.apply_os_kernel_patch(is_dry_run).await?)
+        Some(
+            patcher
+                .apply_os_kernel_patch_with_options(is_dry_run, args.apply && !args.dry_run, true)
+                .await?,
+        )
     } else {
         None
     };
@@ -350,9 +357,11 @@ pub async fn execute_patch_kernel_cli(args: &PatchKernelCliArgs) -> Result<(), P
                     .enforce_byovd_virtual_patch_blocklist();
             }
             let ports = crate::security::host_network_isolation::discover_active_octopus_ports();
-            match crate::security::host_network_isolation::apply_virtual_patch_perimeter_shield(
+            let allow_uac = args.apply && !args.dry_run;
+            match crate::security::host_network_isolation::apply_virtual_patch_perimeter_shield_with_options(
                 &live_posture,
                 &ports,
+                allow_uac,
             ) {
                 Ok(r) => (Some(r.os_enforcement_applied), Some(r.readback_verified)),
                 Err(_) => (Some(false), Some(false)),
@@ -511,6 +520,28 @@ pub async fn execute_patch_kernel_cli(args: &PatchKernelCliArgs) -> Result<(), P
         println!("Tip: Pass --dry-run to preview the OS-native patch command, or --apply with elevated privileges to execute.");
     }
 
+    Ok(())
+}
+
+/// Executes the one-shot elevated `--kernel-patch-apply [--accept-eula]` helper action,
+/// writes the result receipt to `logs/kernel_patch_helper_result.json`, and exits immediately.
+/// Must be invoked at the very top of `main()` before `relaunch_deelevated_or_fail` so Finding 7
+/// stays enforced for the main AgentOctopus runtime.
+pub async fn handle_kernel_patch_apply_cli(auto_accept_eula: bool) -> Result<(), PatcherError> {
+    if !is_elevated() {
+        return Err(PatcherError::InsufficientPrivileges);
+    }
+    let patcher = KernelPatcher::new();
+    let result = patcher
+        .apply_os_kernel_patch_with_options(false, false, auto_accept_eula)
+        .await?;
+    write_kernel_patch_helper_result(&result)?;
+    if !result.success {
+        return Err(PatcherError::ExecutionFailed(format!(
+            "OS kernel patch completed with non-success status: {}",
+            result.output
+        )));
+    }
     Ok(())
 }
 

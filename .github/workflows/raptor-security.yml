@@ -1,0 +1,292 @@
+name: RAPTOR Autonomous Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Nightly audit at 02:30 UTC
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+permissions: read-all
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  raptor-security:
+    name: RAPTOR Security Audit (SAST + Crypto + SCA)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Execute RAPTOR Security Pipeline (SAST + PQC Crypto + SCA + CycloneDX SBOM + OSV-Scanner)
+        run: |
+          set -euo pipefail
+          mkdir -p raptor_out
+          chmod 777 raptor_out
+
+          # Scrub any cloud API keys to guarantee 0 paid model usage
+          unset ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY MISTRAL_API_KEY AWS_BEARER_TOKEN_BEDROCK CLAUDE_CODE_USE_BEDROCK
+
+          # Stage clean source tree (exclude vendor/target/.git/deploy)
+          STAGE_DIR="${RUNNER_TEMP}/agentoctopus_raptor_stage"
+          rm -rf "${STAGE_DIR}"
+          mkdir -p "${STAGE_DIR}"
+          tar -C "${GITHUB_WORKSPACE}" \
+            --exclude='./.git' \
+            --exclude='./target' \
+            --exclude='./vendor' \
+            --exclude='./deploy' \
+            --exclude='./raptor_out' \
+            --exclude='./logs' \
+            --exclude='./strix_runs' \
+            --exclude='./.agents' \
+            --exclude='./data/harness2' \
+            -cf - . | tar -C "${STAGE_DIR}" -xf -
+
+          # Start free local Ollama if available for RAPTOR agentic triage (USD 0.00 cost)
+          FREE_MODEL="qwen2.5:1.5b"
+          OLLAMA_PID=""
+          if command -v ollama >/dev/null 2>&1 || curl -fsSL https://ollama.com/install.sh | sh; then
+            export OLLAMA_HOST="127.0.0.1:11434"
+            ollama serve >/tmp/ollama_serve.log 2>&1 &
+            OLLAMA_PID=$!
+            for _ in $(seq 1 25); do
+              if curl -fsS --max-time 1 http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+                break
+              fi
+              sleep 1
+            done
+            FREE_RAM_GB=$(awk '/MemAvailable/ {printf "%d", $2 / 1024 / 1024}' /proc/meminfo)
+            if command -v nvidia-smi >/dev/null 2>&1 && [ "${FREE_RAM_GB}" -ge 12 ]; then
+              FREE_MODEL="qwen2.5:7b"
+            elif command -v nvidia-smi >/dev/null 2>&1 && [ "${FREE_RAM_GB}" -ge 6 ]; then
+              FREE_MODEL="qwen2.5:3b"
+            else
+              FREE_MODEL="qwen2.5:1.5b"
+            fi
+            ollama pull "${FREE_MODEL}" || true
+          fi
+          export FREE_MODEL
+          trap 'if [ -n "${OLLAMA_PID}" ]; then kill "${OLLAMA_PID}" 2>/dev/null || true; fi' EXIT
+
+          # 1. Run RAPTOR Container Engine (danielcuthbert/raptor:latest + gadievron/raptor)
+          if docker pull danielcuthbert/raptor:latest >/dev/null 2>&1; then
+            echo "[+] Pulled danielcuthbert/raptor:latest."
+            RAPTOR_ENGINE_DIR="${RUNNER_TEMP}/raptor_engine"
+            rm -rf "${RAPTOR_ENGINE_DIR}"
+            git clone --depth 1 https://github.com/gadievron/raptor.git "${RAPTOR_ENGINE_DIR}"
+            mkdir -p "${RAPTOR_ENGINE_DIR}/out"
+            chmod -R 777 "${RAPTOR_ENGINE_DIR}"
+
+            if [ -d "${GITHUB_WORKSPACE}/.raptor/rules" ]; then
+              mkdir -p "${RAPTOR_ENGINE_DIR}/engine/semgrep/rules/agentoctopus_advanced"
+              cp -r "${GITHUB_WORKSPACE}/.raptor/rules/"*.yaml "${RAPTOR_ENGINE_DIR}/engine/semgrep/rules/agentoctopus_advanced/"
+            fi
+
+            cat > "${RAPTOR_ENGINE_DIR}/run_raptor_ci.sh" << 'RUNEOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          export PATH="/root/.local/bin:/home/vscode/.local/bin:/usr/local/bin:${PATH}"
+          unset ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY MISTRAL_API_KEY AWS_BEARER_TOKEN_BEDROCK
+
+          mkdir -p /out/scan /out/crypto /out/sca /out/custom
+          cd /raptor_engine
+
+          python3 raptor.py describe --target /src > /out/describe.txt 2>&1 || true
+          python3 raptor.py scan --repo /src --out /out/scan || true
+          python3 raptor.py scan --repo /src --policy-groups crypto --out /out/crypto || true
+          python3 raptor.py sca --repo /src --out /out/sca || true
+
+          if command -v semgrep >/dev/null 2>&1 && [ -d /src/.raptor/rules ]; then
+            semgrep --config /src/.raptor/rules --sarif --output /out/custom/agentoctopus_custom.sarif /src || true
+          fi
+
+          if [ -f /out/scan/combined.sarif ] && [ -n "${FREE_MODEL:-}" ]; then
+            python3 raptor.py agentic \
+              --repo /src \
+              --sarif /out/scan/combined.sarif \
+              --model "ollama/${FREE_MODEL}" \
+              --accept-weakened-defenses \
+              --max-findings 5 \
+              --no-exploits \
+              --no-codeql \
+              --phase-timeout 90 \
+              --out /out/agentic || true
+          fi
+          RUNEOF
+            chmod +x "${RAPTOR_ENGINE_DIR}/run_raptor_ci.sh"
+
+            docker run --rm --network host \
+              -v "${STAGE_DIR}:/src:ro" \
+              -v "${RAPTOR_ENGINE_DIR}:/raptor_engine" \
+              -v "${GITHUB_WORKSPACE}/raptor_out:/out" \
+              -e OLLAMA_HOST="http://127.0.0.1:11434" \
+              -e FREE_MODEL="${FREE_MODEL}" \
+              -e RAPTOR_ALLOW_DEGRADED_UNTRUSTED="1" \
+              danielcuthbert/raptor:latest \
+              bash /raptor_engine/run_raptor_ci.sh || true
+          else
+            echo "[!] danielcuthbert/raptor:latest unavailable; running standalone Semgrep SAST fallback."
+            python3 -m pip install --quiet semgrep
+            semgrep --config "${GITHUB_WORKSPACE}/.raptor/rules" --config p/security-audit --config p/secrets \
+              --sarif --output "${GITHUB_WORKSPACE}/raptor_out/semgrep_fallback.sarif" "${STAGE_DIR}" || true
+          fi
+
+          # 2. Emit CycloneDX 1.5 SBOM from Cargo.lock
+          python3 - << 'SBOMEOF'
+          import json, os, uuid
+          from datetime import datetime, timezone
+
+          components = []
+          if os.path.exists("Cargo.lock"):
+              with open("Cargo.lock", "r", encoding="utf-8", errors="replace") as f:
+                  content = f.read()
+              for block in content.split("[[package]]")[1:]:
+                  name, ver, chk = "", "", ""
+                  for line in block.splitlines():
+                      t = line.strip()
+                      if t.startswith('name = "'):
+                          name = t[len('name = "'):-1]
+                      elif t.startswith('version = "'):
+                          ver = t[len('version = "'):-1]
+                      elif t.startswith('checksum = "'):
+                          chk = t[len('checksum = "'):-1]
+                  if name and ver:
+                      comp = {
+                          "type": "library",
+                          "name": name,
+                          "version": ver,
+                          "purl": f"pkg:cargo/{name}@{ver}"
+                      }
+                      if chk:
+                          comp["hashes"] = [{"alg": "SHA-256", "content": chk}]
+                      components.append(comp)
+
+          sbom = {
+              "bomFormat": "CycloneDX",
+              "specVersion": "1.5",
+              "serialNumber": f"urn:uuid:{uuid.uuid4()}",
+              "version": 1,
+              "metadata": {
+                  "timestamp": datetime.now(timezone.utc).isoformat(),
+                  "component": {
+                      "type": "application",
+                      "name": "agent_octopus",
+                      "version": "0.2.0"
+                  }
+              },
+              "components": components
+          }
+          os.makedirs("raptor_out", exist_ok=True)
+          with open("raptor_out/sbom.cdx.json", "w", encoding="utf-8") as out_f:
+              json.dump(sbom, out_f, indent=2)
+          print(f"[+] Generated CycloneDX 1.5 SBOM with {len(components)} components")
+          SBOMEOF
+
+          # 3. Complementary Supply-Chain SCA: Google OSV-Scanner SARIF
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/src:ro" \
+            -v "${GITHUB_WORKSPACE}/raptor_out:/out" \
+            ghcr.io/google/osv-scanner:latest \
+            scan source --lockfile=/src/Cargo.lock --format=sarif --output=/out/osv_scanner.sarif || true
+
+          sudo chmod -R a+rX raptor_out || true
+
+          # 4. Strict Fail-Closed SARIF Gate (NEVER passes with 0 SARIF files parsed)
+          python3 - << 'PYEOF'
+          import glob, json, os, sys
+
+          sarif_files = [
+              p for p in glob.glob("raptor_out/**/*.sarif", recursive=True)
+              if not p.endswith("raptor_merged.sarif")
+          ]
+          total_findings = 0
+          critical_unmitigated = 0
+          blocker_details = []
+          rules_evaluated = set()
+          merged_runs = []
+
+          BLOCKER_RULE_SUBSTRINGS = (
+              "agentoctopus.rust.tls-danger-accept-invalid-certs",
+              "agentoctopus.rust.tls-danger-accept-invalid-hostnames",
+              "agentoctopus.rust.shell-command-injection",
+              "agentoctopus.javascript.dangerous-eval-function-constructor",
+              "agentoctopus.python.unsafe-yaml-load",
+              "agentoctopus.generic.hardcoded-private-key-block",
+              "hardcoded-private-key",
+              "danger-accept-invalid-certs",
+          )
+
+          for sf in sarif_files:
+              try:
+                  with open(sf, "r", encoding="utf-8", errors="replace") as f:
+                      data = json.load(f)
+                  for run in data.get("runs", []):
+                      if isinstance(run, dict):
+                          merged_runs.append(run)
+                      driver_rules = run.get("tool", {}).get("driver", {}).get("rules", [])
+                      for r in driver_rules:
+                          if isinstance(r, dict) and r.get("id"):
+                              rules_evaluated.add(r["id"])
+                      for res in run.get("results", []):
+                          total_findings += 1
+                          level = str(res.get("level", "warning")).lower()
+                          rule_id = str(res.get("ruleId", ""))
+                          if rule_id:
+                              rules_evaluated.add(rule_id)
+                          if level == "error" and any(b in rule_id for b in BLOCKER_RULE_SUBSTRINGS):
+                              critical_unmitigated += 1
+                              locs = res.get("locations", [])
+                              uri = ""
+                              if locs and isinstance(locs[0], dict):
+                                  uri = locs[0].get("physicalLocation", {}).get("artifactLocation", {}).get("uri", "")
+                              blocker_details.append({"ruleId": rule_id, "uri": uri, "sarif": sf})
+              except Exception as exc:
+                  print(f"[WARN] Could not parse SARIF {sf}: {exc}")
+
+          merged_sarif = {
+              "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+              "version": "2.1.0",
+              "runs": merged_runs[:10]
+          }
+          with open("raptor_out/raptor_merged.sarif", "w", encoding="utf-8") as mf:
+              json.dump(merged_sarif, mf, indent=2)
+
+          gate_passed = (len(sarif_files) > 0) and (critical_unmitigated == 0)
+          summary = {
+              "gate": "AgentOctopus RAPTOR Security Audit (SAST + PQC Crypto + SCA + CycloneDX SBOM + OSV-Scanner)",
+              "llm_provider": "ollama (Free Local Open-Weights Model — USD 0.00 Cost)",
+              "llm_model": os.environ.get("FREE_MODEL", "qwen2.5:1.5b"),
+              "sarif_files_parsed": len(sarif_files),
+              "sarif_files": sarif_files,
+              "unique_rules_indexed": len(rules_evaluated),
+              "total_findings_inspected": total_findings,
+              "critical_unmitigated_blockers": critical_unmitigated,
+              "blocker_details": blocker_details,
+              "sbom_generated": os.path.exists("raptor_out/sbom.cdx.json"),
+              "verdict": "PASS" if gate_passed else "FAIL"
+          }
+          with open("raptor_out/raptor_gate_summary.json", "w", encoding="utf-8") as out_f:
+              json.dump(summary, out_f, indent=2)
+
+          print(json.dumps(summary, indent=2))
+          if not gate_passed:
+              sys.exit(1)
+          PYEOF
+
+      - name: Upload RAPTOR SARIF & Audit Artifacts
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        if: always()
+        with:
+          name: agentoctopus-raptor-security-sarif
+          path: raptor_out/

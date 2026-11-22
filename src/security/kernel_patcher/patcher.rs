@@ -295,40 +295,151 @@ impl KernelPatcher {
 
     /// Executes or dry-runs the multi-step, pinned-binary OS-native kernel patch workflow.
     ///
-    /// Non-dry-run operations require elevated privileges (`InsufficientPrivileges`), verify every
-    /// pinned binary path (`UntrustedOrMissingBinary`), scrub dangerous env vars, execute via
-    /// `spawn_hidden_tokio`, re-check `RebootPendingStatus` (latching `shield_locked_until_reboot`
-    /// if a reboot is needed), and emit an RFC 6962 `PatchAuditReceipt`.
+    /// Non-dry-run operations require elevated privileges (`InsufficientPrivileges`) unless
+    /// `apply_os_kernel_patch_with_options(..., allow_uac_delegation: true, ...)` is used.
     pub async fn apply_os_kernel_patch(
         &self,
         dry_run: bool,
     ) -> Result<PatchExecutionResult, PatcherError> {
-        if !dry_run && !is_elevated() {
-            return Err(PatcherError::InsufficientPrivileges);
-        }
+        self.apply_os_kernel_patch_with_options(dry_run, false, true)
+            .await
+    }
 
+    /// Executes or dry-runs the OS-native kernel patch workflow with explicit Windows UAC
+    /// helper delegation and WUA COM EULA controls.
+    pub async fn apply_os_kernel_patch_with_options(
+        &self,
+        dry_run: bool,
+        allow_uac_delegation: bool,
+        auto_accept_eula: bool,
+    ) -> Result<PatchExecutionResult, PatcherError> {
         let snapshot = tokio::task::spawn_blocking(detect_host_posture_snapshot)
             .await
             .map_err(|e| PatcherError::DetectionFailed(e.to_string()))??;
 
-        let Some(plan) = resolve_host_patch_plan(dry_run) else {
+        let windows_hotpatch = matches!(
+            snapshot.livepatch.engine,
+            super::types::LivepatchEngine::WindowsHotpatch
+        ) && snapshot.livepatch.active_in_ram;
+
+        if !dry_run && !is_elevated() {
+            #[cfg(windows)]
+            if allow_uac_delegation {
+                let delegated = try_elevated_kernel_patch_delegation(auto_accept_eula)?;
+                if delegated {
+                    if let Some(mut helper_res) = load_kernel_patch_helper_result() {
+                        helper_res.uac_delegated = true;
+                        let post_snapshot =
+                            tokio::task::spawn_blocking(detect_host_posture_snapshot)
+                                .await
+                                .map_err(|e| PatcherError::DetectionFailed(e.to_string()))??;
+                        let mut effective_reboot = post_snapshot.reboot_pending.clone();
+                        if helper_res
+                            .wua_summary
+                            .as_ref()
+                            .is_some_and(|w| w.reboot_required)
+                            && !effective_reboot.reboot_required
+                        {
+                            effective_reboot.reboot_required = true;
+                            effective_reboot.reasons.push(
+                                "WUA COM ISystemInformation::RebootRequired=true".to_string(),
+                            );
+                            effective_reboot.shield_locked_until_reboot =
+                                !effective_reboot.livepatch_mitigated;
+                        }
+                        let receipt = global_kernel_shield().apply_post_patch_status(
+                            &post_snapshot.host_kernel.os_family,
+                            &post_snapshot.host_kernel.cpe23,
+                            &effective_reboot,
+                        )?;
+                        helper_res.reboot_pending = Some(effective_reboot);
+                        helper_res.shield_locked_until_reboot = receipt.shield_locked_until_reboot;
+                        helper_res.audit_receipt = Some(receipt);
+                        return Ok(helper_res);
+                    }
+                    return Err(PatcherError::ExecutionFailed(
+                        "Elevated --kernel-patch-apply helper completed without writing result receipt"
+                            .to_string(),
+                    ));
+                }
+            }
+            let _ = allow_uac_delegation;
+            return Err(PatcherError::InsufficientPrivileges);
+        }
+
+        let Some(plan) = resolve_host_patch_plan_with_posture(dry_run, windows_hotpatch) else {
             return Err(PatcherError::UnsupportedPlatform(
                 std::env::consts::OS.to_string(),
             ));
         };
 
         if dry_run {
-            let preview_lines: Vec<String> = plan
+            #[allow(unused_mut)]
+            let mut preview_lines: Vec<String> = plan
                 .steps
                 .iter()
                 .map(|s| format!("[DRY-RUN] [{}] {} {}", s.phase, s.command, s.args.join(" ")))
                 .collect();
+
+            #[allow(unused_mut)]
+            let mut wua_summary: Option<super::windows_wua::WuaExecutionSummary> = None;
+            #[allow(unused_mut)]
+            let mut effective_reboot = snapshot.reboot_pending.clone();
+
+            #[cfg(windows)]
+            {
+                let skip_wua = std::env::var("AGENT_OCTOPUS_SKIP_WUA_COM_PROBE")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false)
+                    || cfg!(test);
+                if !skip_wua {
+                    match tokio::time::timeout(
+                        Duration::from_secs(15),
+                        tokio::task::spawn_blocking(
+                            super::windows_wua::query_pending_updates_blocking,
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(Ok(Ok(summary))) => {
+                            if summary.reboot_required && !effective_reboot.reboot_required {
+                                effective_reboot.reboot_required = true;
+                                effective_reboot.reasons.push(
+                                    "WUA COM ISystemInformation::RebootRequired=true".to_string(),
+                                );
+                                effective_reboot.shield_locked_until_reboot =
+                                    !effective_reboot.livepatch_mitigated;
+                            }
+                            preview_lines
+                                .extend(super::windows_wua::format_wua_summary_lines(&summary));
+                            wua_summary = Some(summary);
+                        }
+                        Ok(Ok(Err(e))) => {
+                            preview_lines.push(format!(
+                                "[DRY-RUN] [WUA-COM] live search unavailable ({e}); showing static plan"
+                            ));
+                        }
+                        Ok(Err(join_err)) => {
+                            preview_lines.push(format!(
+                                "[DRY-RUN] [WUA-COM] worker error ({join_err}); showing static plan"
+                            ));
+                        }
+                        Err(_) => {
+                            preview_lines.push(
+                                "[DRY-RUN] [WUA-COM] search timed out after 15s; showing static plan"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+
             let output = preview_lines.join("\n");
             let ephemeral_coordinator = super::shield_state::KernelShieldCoordinator::new();
             let receipt = ephemeral_coordinator.apply_post_patch_status(
                 &snapshot.host_kernel.os_family,
                 &snapshot.host_kernel.cpe23,
-                &snapshot.reboot_pending,
+                &effective_reboot,
             )?;
 
             return Ok(PatchExecutionResult {
@@ -340,17 +451,129 @@ impl KernelPatcher {
                 os_subsystem: plan.os_subsystem,
                 steps: plan.steps,
                 step_outputs: preview_lines,
-                reboot_pending: Some(snapshot.reboot_pending.clone()),
+                reboot_pending: Some(effective_reboot),
                 shield_locked_until_reboot: receipt.shield_locked_until_reboot,
                 audit_receipt: Some(receipt),
+                wua_summary,
+                uac_delegated: false,
             });
         }
+
+        // Windows live execution: use native synchronous WUA COM API first; fall back to pinned
+        // UsoClient.exe ONLY when COM instantiation is unavailable on the host.
+        #[cfg(windows)]
+        {
+            match tokio::task::spawn_blocking(move || {
+                super::windows_wua::download_and_install_updates_blocking(auto_accept_eula)
+            })
+            .await
+            {
+                Ok(Ok(summary)) => {
+                    let step_outputs = super::windows_wua::format_wua_summary_lines(&summary);
+                    let combined_output = step_outputs.join("\n");
+                    let all_ok = summary.search_result.is_ok()
+                        && summary
+                            .download_result
+                            .is_none_or(super::windows_wua::WuaOperationResult::is_ok)
+                        && summary
+                            .install_result
+                            .is_none_or(super::windows_wua::WuaOperationResult::is_ok);
+
+                    let post_snapshot = tokio::task::spawn_blocking(detect_host_posture_snapshot)
+                        .await
+                        .map_err(|e| PatcherError::DetectionFailed(e.to_string()))??;
+                    let mut effective_reboot = post_snapshot.reboot_pending.clone();
+                    if summary.reboot_required && !effective_reboot.reboot_required {
+                        effective_reboot.reboot_required = true;
+                        effective_reboot
+                            .reasons
+                            .push("WUA COM ISystemInformation::RebootRequired=true".to_string());
+                        effective_reboot.shield_locked_until_reboot =
+                            !effective_reboot.livepatch_mitigated;
+                    }
+                    let receipt = global_kernel_shield().apply_post_patch_status(
+                        &post_snapshot.host_kernel.os_family,
+                        &post_snapshot.host_kernel.cpe23,
+                        &effective_reboot,
+                    )?;
+
+                    return Ok(PatchExecutionResult {
+                        dry_run: false,
+                        command: plan.primary_command,
+                        args: plan.primary_args,
+                        success: all_ok,
+                        output: combined_output,
+                        os_subsystem: "WindowsUpdateAgentCOM".to_string(),
+                        steps: plan.steps,
+                        step_outputs,
+                        reboot_pending: Some(effective_reboot),
+                        shield_locked_until_reboot: receipt.shield_locked_until_reboot,
+                        audit_receipt: Some(receipt),
+                        wua_summary: Some(summary),
+                        uac_delegated: false,
+                    });
+                }
+                Ok(Err(wua_err)) => {
+                    tracing::warn!(
+                        "[KERNEL-PATCHER] Native WUA COM failed ({wua_err}); falling back to pinned UsoClient.exe"
+                    );
+                }
+                Err(join_err) => {
+                    return Err(PatcherError::ExecutionFailed(format!(
+                        "WUA COM worker join error: {join_err}"
+                    )));
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = auto_accept_eula;
 
         let mut step_outputs = Vec::with_capacity(plan.steps.len());
         let mut combined_output = String::new();
         let mut all_ok = true;
 
         for step in &plan.steps {
+            if step.command == "WindowsUpdateAgentCOM" {
+                // Fallback path on Windows when COM failed: execute pinned UsoClient.exe instead.
+                let uso = r"C:\Windows\System32\UsoClient.exe";
+                verify_pinned_binary_path(uso)?;
+                let uso_arg = match step.phase.as_str() {
+                    "scan" | "search" => "StartScan",
+                    "download" => "StartDownload",
+                    _ => "StartInstall",
+                };
+                let mut cmd = tokio::process::Command::new(uso);
+                cmd.arg(uso_arg)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                apply_scrubbed_env(&mut cmd, &plan.os_family, &[])?;
+                let child = crate::security::spawn_hidden_tokio(
+                    &mut cmd,
+                    "kernel_patcher: UsoClient fallback",
+                )
+                .map_err(|e| PatcherError::ExecutionFailed(e.to_string()))?;
+                let status = child
+                    .wait_with_output()
+                    .await
+                    .map_err(|e| PatcherError::ExecutionFailed(e.to_string()))?;
+                let step_out = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&status.stdout),
+                    String::from_utf8_lossy(&status.stderr)
+                );
+                step_outputs.push(step_out.clone());
+                if !combined_output.is_empty() {
+                    combined_output.push('\n');
+                }
+                combined_output.push_str(&format!("[UsoClient-fallback] {step_out}"));
+                if !status.status.success() {
+                    all_ok = false;
+                    break;
+                }
+                continue;
+            }
+
             verify_pinned_binary_path(&step.command)?;
             let mut cmd = tokio::process::Command::new(&step.command);
             cmd.args(&step.args)
@@ -411,21 +634,44 @@ impl KernelPatcher {
             reboot_pending: Some(post_snapshot.reboot_pending),
             shield_locked_until_reboot: receipt.shield_locked_until_reboot,
             audit_receipt: Some(receipt),
+            wua_summary: None,
+            uac_delegated: false,
         })
     }
 }
 
-fn resolve_host_patch_plan(dry_run: bool) -> Option<PatchPlan> {
+/// Resolves the preview `PatchPlan` for the current host OS and livepatch posture.
+#[must_use]
+pub fn resolve_host_patch_plan_preview(dry_run: bool) -> Option<PatchPlan> {
+    let windows_hotpatch = detect_host_posture_snapshot().ok().is_some_and(|s| {
+        matches!(
+            s.livepatch.engine,
+            super::types::LivepatchEngine::WindowsHotpatch
+        ) && s.livepatch.active_in_ram
+    });
+    resolve_host_patch_plan_with_posture(dry_run, windows_hotpatch)
+}
+
+fn resolve_host_patch_plan_with_posture(
+    dry_run: bool,
+    windows_hotpatch_active: bool,
+) -> Option<PatchPlan> {
     let probe = HostBinaryProbe;
 
     #[cfg(target_os = "windows")]
     {
-        let _ = dry_run;
-        plan_native_kernel_patch_with_probe(&OsFamily::Windows, None, &probe)
+        plan_native_kernel_patch_with_posture(
+            &OsFamily::Windows,
+            None,
+            &probe,
+            dry_run,
+            windows_hotpatch_active,
+        )
     }
 
     #[cfg(target_os = "linux")]
     {
+        let _ = windows_hotpatch_active;
         let os_rel = detect_linux_os_release();
         let distro = classify_linux_distro(&os_rel);
         plan_native_kernel_patch_with_probe_opts(&OsFamily::Linux, Some(&distro), &probe, dry_run)
@@ -433,22 +679,25 @@ fn resolve_host_patch_plan(dry_run: bool) -> Option<PatchPlan> {
 
     #[cfg(target_os = "macos")]
     {
-        let _ = dry_run;
+        let _ = (dry_run, windows_hotpatch_active);
         plan_native_kernel_patch_with_probe(&OsFamily::MacOS, None, &probe)
     }
 
     #[cfg(target_os = "freebsd")]
     {
+        let _ = windows_hotpatch_active;
         plan_native_kernel_patch_with_probe_opts(&OsFamily::FreeBSD, None, &probe, dry_run)
     }
 
     #[cfg(target_os = "openbsd")]
     {
+        let _ = windows_hotpatch_active;
         plan_native_kernel_patch_with_probe_opts(&OsFamily::OpenBSD, None, &probe, dry_run)
     }
 
     #[cfg(target_os = "netbsd")]
     {
+        let _ = windows_hotpatch_active;
         plan_native_kernel_patch_with_probe_opts(&OsFamily::NetBSD, None, &probe, dry_run)
     }
 
@@ -461,9 +710,150 @@ fn resolve_host_patch_plan(dry_run: bool) -> Option<PatchPlan> {
         target_os = "netbsd"
     )))]
     {
-        let _ = (probe, dry_run);
+        let _ = (probe, dry_run, windows_hotpatch_active);
         None
     }
+}
+
+/// Helper receipt path used by the elevated `--kernel-patch-apply` one-shot helper.
+const KERNEL_PATCH_HELPER_RECEIPT_PATH: &str = "logs/kernel_patch_helper_result.json";
+
+#[cfg(windows)]
+fn load_kernel_patch_helper_result() -> Option<PatchExecutionResult> {
+    let path = std::path::Path::new(KERNEL_PATCH_HELPER_RECEIPT_PATH);
+    if path.is_symlink() {
+        return None;
+    }
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<PatchExecutionResult>(&raw).ok()
+}
+
+/// Writes the elevated `--kernel-patch-apply` helper execution receipt safely (rejecting symlinks).
+pub fn write_kernel_patch_helper_result(res: &PatchExecutionResult) -> Result<(), PatcherError> {
+    let path = std::path::Path::new(KERNEL_PATCH_HELPER_RECEIPT_PATH);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if path.is_symlink() {
+        return Err(PatcherError::ExecutionFailed(
+            "Refusing to write kernel patch helper receipt through symlink".to_string(),
+        ));
+    }
+    let serialized = serde_json::to_string_pretty(res)?;
+    std::fs::write(path, serialized).map_err(|e| PatcherError::ExecutionFailed(e.to_string()))
+}
+
+/// Delegates live Windows kernel patching to a short-lived elevated `--kernel-patch-apply` helper
+/// via `ShellExecuteExW("runas")`, keeping the main AgentOctopus server & arms strictly de-elevated.
+#[cfg(windows)]
+pub fn try_elevated_kernel_patch_delegation(auto_accept_eula: bool) -> Result<bool, PatcherError> {
+    if is_elevated() || cfg!(test) {
+        return Ok(false);
+    }
+
+    #[repr(C)]
+    struct ShellExecuteInfoW {
+        cb_size: u32,
+        f_mask: u32,
+        hwnd: *mut std::ffi::c_void,
+        lp_verb: *const u16,
+        lp_file: *const u16,
+        lp_parameters: *const u16,
+        lp_directory: *const u16,
+        n_show: i32,
+        h_inst_app: *mut std::ffi::c_void,
+        lp_id_list: *mut std::ffi::c_void,
+        lp_class: *const u16,
+        hkey_class: *mut std::ffi::c_void,
+        dw_hot_key: u32,
+        h_monitor_or_icon: *mut std::ffi::c_void,
+        h_process: *mut std::ffi::c_void,
+    }
+
+    type FnShellExecuteExW = unsafe extern "system" fn(*mut ShellExecuteInfoW) -> i32;
+
+    let exe = std::env::current_exe().map_err(|e| {
+        PatcherError::ExecutionFailed(format!("Cannot resolve current executable path: {e}"))
+    })?;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, WaitForSingleObject, INFINITE,
+    };
+
+    let shell_w: Vec<u16> = "shell32.dll\0".encode_utf16().collect();
+    let h_shell = unsafe { LoadLibraryW(shell_w.as_ptr()) };
+    if h_shell.is_null() {
+        return Err(PatcherError::InsufficientPrivileges);
+    }
+    let p_exec = unsafe { GetProcAddress(h_shell, b"ShellExecuteExW\0".as_ptr()) };
+    let Some(p_exec) = p_exec else {
+        return Err(PatcherError::InsufficientPrivileges);
+    };
+    let fn_exec: FnShellExecuteExW = unsafe {
+        std::mem::transmute::<unsafe extern "system" fn() -> isize, FnShellExecuteExW>(p_exec)
+    };
+
+    // Remove any stale helper receipt before launch
+    let _ = std::fs::remove_file(KERNEL_PATCH_HELPER_RECEIPT_PATH);
+
+    let exe_w: Vec<u16> = exe
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let verb_w: Vec<u16> = "runas\0".encode_utf16().collect();
+    let params_str = if auto_accept_eula {
+        "--kernel-patch-apply --accept-eula\0"
+    } else {
+        "--kernel-patch-apply\0"
+    };
+    let params_w: Vec<u16> = params_str.encode_utf16().collect();
+    let cwd_w: Option<Vec<u16>> = std::env::current_dir().ok().map(|d| {
+        d.to_string_lossy()
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect()
+    });
+
+    let mut sei = ShellExecuteInfoW {
+        cb_size: std::mem::size_of::<ShellExecuteInfoW>() as u32,
+        f_mask: 0x0000_0040, // SEE_MASK_NOCLOSEPROCESS
+        hwnd: std::ptr::null_mut(),
+        lp_verb: verb_w.as_ptr(),
+        lp_file: exe_w.as_ptr(),
+        lp_parameters: params_w.as_ptr(),
+        lp_directory: cwd_w.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()),
+        n_show: 0, // SW_HIDE
+        h_inst_app: std::ptr::null_mut(),
+        lp_id_list: std::ptr::null_mut(),
+        lp_class: std::ptr::null(),
+        hkey_class: std::ptr::null_mut(),
+        dw_hot_key: 0,
+        h_monitor_or_icon: std::ptr::null_mut(),
+        h_process: std::ptr::null_mut(),
+    };
+
+    let ok = unsafe { fn_exec(&mut sei) };
+    if ok == 0 || sei.h_process.is_null() {
+        return Err(PatcherError::InsufficientPrivileges);
+    }
+
+    let h_proc: HANDLE = sei.h_process;
+    unsafe {
+        let _ = WaitForSingleObject(h_proc, INFINITE);
+        let mut exit_code: u32 = 1;
+        let _ = GetExitCodeProcess(h_proc, &mut exit_code);
+        let _ = CloseHandle(h_proc);
+        if exit_code != 0 {
+            return Err(PatcherError::ExecutionFailed(format!(
+                "Elevated --kernel-patch-apply helper exited with code {exit_code}"
+            )));
+        }
+    }
+
+    Ok(true)
 }
 
 /// Builds a pinned, argv-only `PatchPlan` for any supported OS / Linux distro using `probe`.
@@ -485,40 +875,58 @@ pub fn plan_native_kernel_patch_with_probe_opts(
     probe: &dyn BinaryProbe,
     dry_run: bool,
 ) -> Option<PatchPlan> {
+    plan_native_kernel_patch_with_posture(os_family, distro, probe, dry_run, false)
+}
+
+/// Builds a pinned, argv-only `PatchPlan` incorporating host livepatch posture (such as Windows Hotpatch enrollment).
+#[must_use]
+pub fn plan_native_kernel_patch_with_posture(
+    os_family: &OsFamily,
+    distro: Option<&LinuxDistro>,
+    probe: &dyn BinaryProbe,
+    dry_run: bool,
+    windows_hotpatch_active: bool,
+) -> Option<PatchPlan> {
     match os_family {
         OsFamily::Windows => {
-            let uso = r"C:\Windows\System32\UsoClient.exe";
+            let wua_cmd = "WindowsUpdateAgentCOM";
             let steps = vec![
                 PatchStep {
-                    command: uso.to_string(),
-                    args: vec!["StartScan".to_string()],
+                    command: wua_cmd.to_string(),
+                    args: vec![
+                        "IUpdateSearcher::Search".to_string(),
+                        "IsInstalled=0 and IsHidden=0 and Type='Software'".to_string(),
+                    ],
                     env: Vec::new(),
-                    os_subsystem: "UsoClient".to_string(),
-                    phase: "scan".to_string(),
+                    os_subsystem: "WindowsUpdateAgentCOM".to_string(),
+                    phase: "search".to_string(),
                 },
                 PatchStep {
-                    command: uso.to_string(),
-                    args: vec!["StartDownload".to_string()],
+                    command: wua_cmd.to_string(),
+                    args: vec!["IUpdateDownloader::Download".to_string()],
                     env: Vec::new(),
-                    os_subsystem: "UsoClient".to_string(),
+                    os_subsystem: "WindowsUpdateAgentCOM".to_string(),
                     phase: "download".to_string(),
                 },
                 PatchStep {
-                    command: uso.to_string(),
-                    args: vec!["StartInstall".to_string()],
+                    command: wua_cmd.to_string(),
+                    args: vec![
+                        "IUpdateInstaller::Install".to_string(),
+                        "ISystemInformation::RebootRequired".to_string(),
+                    ],
                     env: Vec::new(),
-                    os_subsystem: "UsoClient".to_string(),
+                    os_subsystem: "WindowsUpdateAgentCOM".to_string(),
                     phase: "install".to_string(),
                 },
             ];
             Some(PatchPlan {
                 os_family: OsFamily::Windows,
                 distro: None,
-                primary_command: uso.to_string(),
-                primary_args: vec!["StartInstall".to_string()],
-                os_subsystem: "UsoClient".to_string(),
+                primary_command: wua_cmd.to_string(),
+                primary_args: vec!["IUpdateInstaller::Install".to_string()],
+                os_subsystem: "WindowsUpdateAgentCOM".to_string(),
                 steps,
-                rebootless_livepatch_preferred: false,
+                rebootless_livepatch_preferred: windows_hotpatch_active,
                 requires_elevation: true,
             })
         }
@@ -693,7 +1101,7 @@ fn plan_linux_distro_patch(
                 livepatch_preferred = true;
                 steps.push(PatchStep {
                     command: "/usr/bin/pro".to_string(),
-                    args: vec!["status".to_string(), "--wait".to_string()],
+                    args: vec!["refresh".to_string()],
                     env: Vec::new(),
                     os_subsystem: "ubuntu-pro".to_string(),
                     phase: "livepatch".to_string(),
@@ -810,24 +1218,8 @@ fn plan_linux_distro_patch(
             }
         }
         LinuxDistro::Sles | LinuxDistro::OpenSuse => {
-            if let Some(klp_bin) = first_existing(
-                probe,
-                &[
-                    "/usr/sbin/klp",
-                    "/usr/bin/klp",
-                    "/usr/sbin/kgr",
-                    "/usr/bin/kgr",
-                ],
-            ) {
-                livepatch_preferred = true;
-                steps.push(PatchStep {
-                    command: klp_bin.to_string(),
-                    args: vec!["status".to_string()],
-                    env: Vec::new(),
-                    os_subsystem: "klp".to_string(),
-                    phase: "livepatch".to_string(),
-                });
-            }
+            // SUSE delivers kernel livepatches as signed RPMs via zypper; install security patches
+            // first and then verify active in-RAM livepatch modules via `klp -v patches`.
             steps.push(PatchStep {
                 command: "/usr/bin/zypper".to_string(),
                 args: vec![
@@ -840,6 +1232,29 @@ fn plan_linux_distro_patch(
                 os_subsystem: "zypper".to_string(),
                 phase: "upgrade".to_string(),
             });
+            if let Some(klp_bin) = first_existing(
+                probe,
+                &[
+                    "/usr/sbin/klp",
+                    "/usr/bin/klp",
+                    "/usr/sbin/kgr",
+                    "/usr/bin/kgr",
+                ],
+            ) {
+                livepatch_preferred = true;
+                let klp_args = if klp_bin.ends_with("/kgr") {
+                    vec!["patches".to_string()]
+                } else {
+                    vec!["-v".to_string(), "patches".to_string()]
+                };
+                steps.push(PatchStep {
+                    command: klp_bin.to_string(),
+                    args: klp_args,
+                    env: Vec::new(),
+                    os_subsystem: "klp".to_string(),
+                    phase: "verify_livepatch".to_string(),
+                });
+            }
         }
         LinuxDistro::Arch => {
             steps.push(PatchStep {

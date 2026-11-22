@@ -110,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    // 3. One-shot elevated WFP kernel helper delegation (`ShellExecuteExW("runas")`):
+    // 3. One-shot elevated WFP & Kernel Patch helper delegation (`ShellExecuteExW("runas")`):
     // Must execute before `relaunch_deelevated_or_fail` and exit immediately without starting
     // any agent arms or network listeners so Finding 7 remains strictly enforced for the runtime.
     for i in 1..args.len() {
@@ -120,6 +120,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(()) => std::process::exit(0),
                 Err(e) => {
                     eprintln!("[WFP-HELPER-ERROR] {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        if args[i] == "--kernel-patch-apply" {
+            let auto_accept = args.iter().any(|a| a == "--accept-eula");
+            match agent_octopus::security::kernel_patcher::handle_kernel_patch_apply_cli(
+                auto_accept,
+            )
+            .await
+            {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("[KERNEL-PATCH-HELPER-ERROR] {}", e);
                     std::process::exit(1);
                 }
             }

@@ -94,6 +94,12 @@ jobs:
       - name: Run Native SRT Hardening Integration Tests
         run: cargo test --test srt_hardening_integration_tests --all-features
 
+      - name: Run Kernel Patcher, Virtual-Patch Shield & Kernel Firewall Suites
+        run: |
+          cargo test --test virtual_patch_shield_tests --all-features
+          cargo test --test universal_killswitch_tests --all-features
+          cargo test --test kernel_sentinel_tests --all-features
+
       - name: Run SafeAgents 562-Case Misuse Simulation Suite
         run: cargo test --test safeagents_562_misuse_suite --all-features
 

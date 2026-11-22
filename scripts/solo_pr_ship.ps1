@@ -2,7 +2,9 @@ param(
     [string]$Title = "chore: automated verified update",
     [string]$Body = "Automated Solo-Developer PR verified against AgentOctopus security invariants.",
     [string]$BodyFile = "",
-    [switch]$ValidateOnly = $false
+    [switch]$ValidateOnly = $false,
+    [switch]$DispatchReleaseBuilds = $false,
+    [string]$ReleaseVersion = "0.2.0"
 )
 $ErrorActionPreference = "Stop"
 
@@ -307,6 +309,39 @@ print(f"Merged PR #{pr_num} successfully!")
     }
     $null = Invoke-GitQuiet @("branch", "-D", $branchName)
     Write-Host "SUCCESS! Shipped via reviewed Pull Request and synced local main." -ForegroundColor Green
+
+    if ($DispatchReleaseBuilds) {
+        Write-Host "[+] Dispatching cross-OS release & Windows MSI workflow (v$ReleaseVersion)..." -ForegroundColor Cyan
+        $dispatchPy = @'
+import json, os, subprocess, sys, urllib.request
+repo, version = sys.argv[1], sys.argv[2]
+proc = subprocess.run(
+    ["git", "credential", "fill"],
+    input="protocol=https\nhost=github.com\n\n",
+    text=True, encoding="utf-8", capture_output=True, check=True,
+)
+creds = dict(line.split("=", 1) for line in proc.stdout.strip().splitlines() if "=" in line)
+token = creds.get("password") or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+req = urllib.request.Request(
+    f"https://api.github.com/repos/{repo}/actions/workflows/release-all-os.yml/dispatches",
+    data=json.dumps({"ref": "main", "inputs": {"version": version, "publish_release": "false"}}).encode("utf-8"),
+    headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json", "Content-Type": "application/json", "User-Agent": "AgentOctopus-PR-Ship"},
+    method="POST",
+)
+with urllib.request.urlopen(req) as resp:
+    print(f"Dispatched release-all-os.yml (HTTP {resp.status}) for version {version}.")
+'@
+        $dispFile = [System.IO.Path]::GetTempFileName()
+        try {
+            [System.IO.File]::WriteAllText($dispFile, $dispatchPy, $utf8NoBom)
+            & $pythonExe $dispFile $ExpectedRepoSlug $ReleaseVersion
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed dispatching release-all-os.yml"
+            }
+        } finally {
+            Remove-Item -Force $dispFile -ErrorAction SilentlyContinue
+        }
+    }
 } finally {
     Remove-Item -Force $titleTempFile -ErrorAction SilentlyContinue
     Remove-Item -Force $bodyTempFile -ErrorAction SilentlyContinue
