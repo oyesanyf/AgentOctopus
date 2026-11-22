@@ -66,6 +66,24 @@ pub struct KernelScanSummary {
     pub vulnerability_count: usize,
     pub cisa_kev_count: usize,
     pub vulnerabilities: Vec<crate::security::kernel_patcher::KernelVulnerability>,
+    #[serde(default)]
+    pub telemetry_degraded_fail_closed: bool,
+    #[serde(default)]
+    pub scan_status: String,
+    #[serde(default)]
+    pub scan_notice: Option<String>,
+    #[serde(default)]
+    pub livepatch: Option<crate::security::kernel_patcher::LivepatchStatus>,
+    #[serde(default)]
+    pub reboot_pending: Option<crate::security::kernel_patcher::RebootPendingStatus>,
+    #[serde(default)]
+    pub shield_locked_until_reboot: bool,
+    #[serde(default)]
+    pub security_posture: Option<crate::security::kernel_patcher::OsSecurityPosture>,
+    #[serde(default)]
+    pub virtual_patch_shield: Option<crate::security::kernel_patcher::VirtualPatchShieldState>,
+    #[serde(default)]
+    pub merkle_root: Option<String>,
 }
 
 /// Global state shared across web API requests.
@@ -100,6 +118,9 @@ pub struct WebState {
     pub cage_substrate: Arc<crate::security::cage_substrate::CageSubstrateState>,
     pub agentmesh_engine: Arc<crate::security::agentmesh::AgentMeshEngine>,
     pub latest_kernel_scan: Arc<tokio::sync::RwLock<Option<KernelScanSummary>>>,
+    pub host_killswitch_override: Option<Arc<crate::security::HostKillSwitchManager>>,
+    pub kernel_shield_override:
+        Option<Arc<crate::security::kernel_patcher::KernelShieldCoordinator>>,
 }
 
 fn load_or_init_egress_domains() -> Vec<String> {
@@ -169,6 +190,9 @@ impl Default for WebState {
         let live_events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let tarpit = Arc::new(TarpitArm::default());
         let kernel_sentinel = Arc::new(KernelSentinelArm::default());
+        if crate::security::virtual_patch_shield::current_shield_posture().is_shield_active() {
+            let _ = kernel_sentinel.enforce_byovd_virtual_patch_blocklist();
+        }
 
         let initial_domains = load_or_init_egress_domains();
         let _ = gateway.engine().update_egress_domains(&initial_domains);
@@ -333,6 +357,8 @@ impl Default for WebState {
             cage_substrate,
             agentmesh_engine,
             latest_kernel_scan,
+            host_killswitch_override: None,
+            kernel_shield_override: None,
         }
     }
 }
@@ -353,6 +379,40 @@ impl WebState {
     pub fn with_rl_defense(mut self, rl_defense: Arc<AdaptiveRlDefenseEngine>) -> Self {
         self.rl_defense = rl_defense;
         self
+    }
+
+    /// Builder method to supply an isolated `HostKillSwitchManager` (primarily for tests).
+    pub fn with_host_killswitch(
+        mut self,
+        mgr: Arc<crate::security::HostKillSwitchManager>,
+    ) -> Self {
+        self.host_killswitch_override = Some(mgr);
+        self
+    }
+
+    /// Builder method to supply an isolated `KernelShieldCoordinator` (primarily for tests).
+    pub fn with_kernel_shield(
+        mut self,
+        shield: Arc<crate::security::kernel_patcher::KernelShieldCoordinator>,
+    ) -> Self {
+        self.kernel_shield_override = Some(shield);
+        self
+    }
+
+    /// Returns the configured killswitch manager override or the global production singleton.
+    pub fn host_killswitch(&self) -> &crate::security::HostKillSwitchManager {
+        match self.host_killswitch_override.as_deref() {
+            Some(mgr) => mgr,
+            None => crate::security::global_host_killswitch(),
+        }
+    }
+
+    /// Returns the configured kernel shield coordinator override or the global production singleton.
+    pub fn kernel_shield(&self) -> &crate::security::kernel_patcher::KernelShieldCoordinator {
+        match self.kernel_shield_override.as_deref() {
+            Some(shield) => shield,
+            None => crate::security::kernel_patcher::global_kernel_shield(),
+        }
     }
 }
 
@@ -3997,8 +4057,8 @@ struct KillSwitchActionBody {
 }
 
 /// Returns live host KillSwitch status reconciled with kernel BFE filters and 16-domain protocol metrics.
-pub fn handle_killswitch_status(_state: &WebState) -> (&'static str, String) {
-    let status = crate::security::global_host_killswitch().status();
+pub fn handle_killswitch_status(state: &WebState) -> (&'static str, String) {
+    let status = state.host_killswitch().status();
     (
         "200 OK",
         serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string()),
@@ -4031,7 +4091,7 @@ pub fn handle_killswitch_engage(state: &WebState, body: &str) -> (&'static str, 
         .reason
         .unwrap_or_else(|| "Emergency Host Internet Disconnect via Dashboard".to_string());
 
-    match crate::security::global_host_killswitch().engage(&operator, &reason) {
+    match state.host_killswitch().engage(&operator, &reason) {
         Ok(st) => {
             state.audit_log.record_event(
                 "HOST_KILLSWITCH_ENGAGED",
@@ -4156,7 +4216,7 @@ pub fn handle_killswitch_disarm_with_peer(
         .reason
         .unwrap_or_else(|| "Host Internet Reconnect via Dashboard".to_string());
 
-    match crate::security::global_host_killswitch().disarm(&operator, &reason) {
+    match state.host_killswitch().disarm(&operator, &reason) {
         Ok(st) => {
             state.audit_log.record_event(
                 "HOST_KILLSWITCH_DISARMED",
@@ -5058,28 +5118,68 @@ pub async fn handle_kernel_patcher_status(state: &WebState) -> String {
     let nvd_api_key_configured =
         crate::security::kernel_patcher::resolve_nvd_api_key(None).is_some();
 
+    let shield_state = state.kernel_shield().state();
+    let global_posture = crate::security::virtual_patch_shield::current_shield_posture();
+
     match latest_scan {
-        Some(summary) => json!({
-            "enabled": !disabled,
-            "status": "completed",
-            "initial_delay_secs": initial_delay_secs,
-            "interval_secs": interval_secs,
-            "nvd_api_key_configured": nvd_api_key_configured,
-            "scanned_at": summary.scanned_at,
-            "host_kernel": summary.host_kernel,
-            "vulnerability_count": summary.vulnerability_count,
-            "cisa_kev_count": summary.cisa_kev_count,
-            "vulnerabilities": summary.vulnerabilities,
-            "latest_scan": summary,
-        })
-        .to_string(),
+        Some(summary) => {
+            let status_str = if summary.telemetry_degraded_fail_closed {
+                "degraded_fail_closed"
+            } else {
+                "completed"
+            };
+            let vps_state = summary
+                .virtual_patch_shield
+                .clone()
+                .unwrap_or_else(|| shield_state.clone());
+            let merkle_root = summary
+                .merkle_root
+                .clone()
+                .unwrap_or_else(|| vps_state.merkle_root.clone());
+            let shield_locked =
+                summary.shield_locked_until_reboot || vps_state.shield_locked_until_reboot;
+            let shield_active = vps_state.active || global_posture.is_shield_active();
+
+            json!({
+                "enabled": !disabled,
+                "status": status_str,
+                "initial_delay_secs": initial_delay_secs,
+                "interval_secs": interval_secs,
+                "nvd_api_key_configured": nvd_api_key_configured,
+                "scanned_at": summary.scanned_at,
+                "host_kernel": summary.host_kernel,
+                "vulnerability_count": summary.vulnerability_count,
+                "cisa_kev_count": summary.cisa_kev_count,
+                "vulnerabilities": summary.vulnerabilities,
+                "telemetry_degraded_fail_closed": summary.telemetry_degraded_fail_closed,
+                "scan_notice": summary.scan_notice,
+                "livepatch": summary.livepatch,
+                "reboot_pending": summary.reboot_pending,
+                "shield_locked_until_reboot": shield_locked,
+                "security_posture": summary.security_posture,
+                "virtual_patch_shield": vps_state,
+                "shield_active": shield_active,
+                "merkle_root": merkle_root,
+                "merkle_root_hex": merkle_root,
+                "latest_scan": summary,
+            })
+            .to_string()
+        }
         None => {
-            let detected_kernel = tokio::task::spawn_blocking(
-                crate::security::kernel_patcher::HostKernelInfo::detect_host_kernel,
+            let snapshot = tokio::task::spawn_blocking(
+                crate::security::kernel_patcher::discovery::detect_host_posture_snapshot,
             )
             .await
             .ok()
             .and_then(Result::ok);
+            let detected_kernel = snapshot.as_ref().map(|s| s.host_kernel.clone());
+            let livepatch = snapshot.as_ref().map(|s| s.livepatch.clone());
+            let reboot_pending = snapshot.as_ref().map(|s| s.reboot_pending.clone());
+            let security_posture = snapshot.as_ref().map(|s| s.security_posture.clone());
+            let shield_locked = shield_state.shield_locked_until_reboot
+                || reboot_pending
+                    .as_ref()
+                    .is_some_and(|r| r.shield_locked_until_reboot);
 
             json!({
                 "enabled": !disabled,
@@ -5092,6 +5192,15 @@ pub async fn handle_kernel_patcher_status(state: &WebState) -> String {
                 "vulnerability_count": 0,
                 "cisa_kev_count": 0,
                 "vulnerabilities": [],
+                "telemetry_degraded_fail_closed": shield_state.telemetry_degraded_fail_closed,
+                "livepatch": livepatch,
+                "reboot_pending": reboot_pending,
+                "shield_locked_until_reboot": shield_locked,
+                "security_posture": security_posture,
+                "virtual_patch_shield": shield_state,
+                "shield_active": shield_state.active || global_posture.is_shield_active(),
+                "merkle_root": shield_state.merkle_root,
+                "merkle_root_hex": shield_state.merkle_root,
                 "latest_scan": serde_json::Value::Null,
             })
             .to_string()
@@ -5321,6 +5430,15 @@ mod tests {
                 cisa_required_action: Some("Apply vendor patches".to_string()),
                 cisa_vulnerability_name: Some("Linux Kernel Netfilter UAF".to_string()),
             }],
+            telemetry_degraded_fail_closed: false,
+            scan_status: "completed".to_string(),
+            scan_notice: None,
+            livepatch: None,
+            reboot_pending: None,
+            shield_locked_until_reboot: false,
+            security_posture: None,
+            virtual_patch_shield: None,
+            merkle_root: None,
         };
 
         {

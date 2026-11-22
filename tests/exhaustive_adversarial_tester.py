@@ -27,6 +27,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -203,10 +204,22 @@ class OllamaClient:
         return None
 
 
+def _default_target_url() -> str:
+    return os.environ.get("OCTOPUS_TARGET_URL", "http://127.0.0.1:3030")
+
+
+def _default_strix_path() -> str:
+    return (
+        os.environ.get("OCTOPUS_STRIX_BIN")
+        or shutil.which("strix")
+        or os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "strix.exe")
+    )
+
+
 class OctopusTargetClient:
     """Client for testing live Agent Octopus runtime endpoints."""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:5005"):
+    def __init__(self, base_url: str = "http://127.0.0.1:3030"):
         self.base_url = base_url.rstrip("/")
         self.intercepted_errors: int = 0
 
@@ -214,7 +227,7 @@ class OctopusTargetClient:
         import http.client
         import urllib.parse
         parsed = urllib.parse.urlsplit(f"{self.base_url}{path}")
-        conn = http.client.HTTPConnection(parsed.hostname or "127.0.0.1", parsed.port or 5005, timeout=timeout)
+        conn = http.client.HTTPConnection(parsed.hostname or "127.0.0.1", parsed.port or 3030, timeout=timeout)
         headers = {"User-Agent": "AgentOctopus-Exhaustive"}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -347,14 +360,14 @@ class ExhaustiveTestOrchestrator:
 
     def __init__(
         self,
-        target_url: str = "http://127.0.0.1:5005",
+        target_url: Optional[str] = None,
         ollama_url: str = "http://127.0.0.1:11434",
-        strix_path: str = r"d:\tools\strix.exe",
+        strix_path: Optional[str] = None,
         fuzz_factor: int = 10,
     ):
-        self.target = OctopusTargetClient(target_url)
+        self.target = OctopusTargetClient(target_url or _default_target_url())
         self.ollama = OllamaClient(ollama_url)
-        self.strix_path = strix_path
+        self.strix_path = strix_path or _default_strix_path()
         self.fuzz_factor = fuzz_factor
         self.results: List[TestResult] = []
         self.intercepted_errors: int = 0
@@ -1180,11 +1193,11 @@ class ExhaustiveTestOrchestrator:
                     passed=True,
                     principal="strix_agent",
                     action="autonomous_pentest",
-                    resource="http://127.0.0.1:5005",
+                    resource=self.target.base_url,
                     verdict="Container Sandboxed",
                     reason="Docker container sandbox bypassed cleanly; native LLM adversarial fuzzing verified all endpoints.",
                     latency_ms=elapsed * 1000.0,
-                    payload_preview="Target: http://127.0.0.1:5005",
+                    payload_preview=f"Target: {self.target.base_url}",
                     policy_evaluated="Strix Multi-Agent Autonomous Penetration Testing Harness",
                     atlas_technique="AML.T0000",
                 )
@@ -1194,7 +1207,8 @@ class ExhaustiveTestOrchestrator:
             sarif_findings = []
             try:
                 import glob
-                sarif_files = glob.glob(r"d:\tools\strix_runs\*\findings.sarif") + glob.glob(r"strix_runs\*\findings.sarif")
+                runs_dir = os.environ.get("OCTOPUS_STRIX_RUNS_DIR", "strix_runs")
+                sarif_files = glob.glob(os.path.join(runs_dir, "*", "findings.sarif")) + glob.glob(r"strix_runs\*\findings.sarif")
                 if sarif_files:
                     latest_sarif = max(sarif_files, key=os.path.getmtime)
                     with open(latest_sarif, "r", encoding="utf-8") as sf:
@@ -1208,7 +1222,7 @@ class ExhaustiveTestOrchestrator:
             strix_passed = (findings_count == 0)
             verdict = f"Clean (0 Vulnerabilities)" if strix_passed else f"Findings ({findings_count})"
             reason = (
-                f"Strix autonomous audit completed against http://127.0.0.1:5005: 0 security findings / zero vulnerabilities detected."
+                f"Strix autonomous audit completed against {self.target.base_url}: 0 security findings / zero vulnerabilities detected."
                 if strix_passed
                 else f"Strix reported {findings_count} vulnerability findings in SARIF output."
             )
@@ -1220,11 +1234,11 @@ class ExhaustiveTestOrchestrator:
                 passed=strix_passed,
                 principal="strix_agent",
                 action="autonomous_pentest",
-                resource="http://127.0.0.1:5005",
+                resource=self.target.base_url,
                 verdict=verdict,
                 reason=reason,
                 latency_ms=elapsed * 1000.0,
-                payload_preview="Target: http://127.0.0.1:5005 | SARIF Verified",
+                payload_preview=f"Target: {self.target.base_url} | SARIF Verified",
                 policy_evaluated="Strix Multi-Agent Autonomous Penetration Testing Harness",
                 atlas_technique="AML.T0000",
             )
@@ -1235,7 +1249,8 @@ class ExhaustiveTestOrchestrator:
             sarif_findings = []
             try:
                 import glob
-                sarif_files = glob.glob(r"d:\tools\strix_runs\*\findings.sarif") + glob.glob(r"strix_runs\*\findings.sarif")
+                runs_dir = os.environ.get("OCTOPUS_STRIX_RUNS_DIR", "strix_runs")
+                sarif_files = glob.glob(os.path.join(runs_dir, "*", "findings.sarif")) + glob.glob(r"strix_runs\*\findings.sarif")
                 if sarif_files:
                     latest_sarif = max(sarif_files, key=os.path.getmtime)
                     with open(latest_sarif, "r", encoding="utf-8") as sf:
@@ -1253,11 +1268,11 @@ class ExhaustiveTestOrchestrator:
                 passed=(findings_count == 0),
                 principal="strix_agent",
                 action="autonomous_pentest",
-                resource="http://127.0.0.1:5005",
+                resource=self.target.base_url,
                 verdict="Clean (0 Vulnerabilities)",
                 reason=f"Strix audit bounded execution verified 0 exploit findings against Agent Octopus endpoints.",
                 latency_ms=30000.0,
-                payload_preview="Target: http://127.0.0.1:5005 | SARIF Clean",
+                payload_preview=f"Target: {self.target.base_url} | SARIF Clean",
                 policy_evaluated="Strix Multi-Agent Autonomous Penetration Testing Harness",
                 atlas_technique="AML.T0000",
             )
@@ -1271,7 +1286,7 @@ class ExhaustiveTestOrchestrator:
                 passed=True,
                 principal="strix_agent",
                 action="autonomous_pentest",
-                resource="http://127.0.0.1:5005",
+                resource=self.target.base_url,
                 verdict="Subprocess Error Handled",
                 reason=f"Strix subprocess execution error intercepted gracefully: {sub_err}",
                 latency_ms=0.0,
@@ -1288,7 +1303,7 @@ class ExhaustiveTestOrchestrator:
                 passed=True,
                 principal="strix_agent",
                 action="autonomous_pentest",
-                resource="http://127.0.0.1:5005",
+                resource=self.target.base_url,
                 verdict="External Handled",
                 reason=f"Strix execution handled gracefully: {err}",
                 latency_ms=0.0,
@@ -1414,9 +1429,9 @@ class ExhaustiveTestOrchestrator:
 
 def main():
     parser = argparse.ArgumentParser(description="Agent Octopus Exhaustive Boundary Verification Suite")
-    parser.add_argument("--target", default="http://127.0.0.1:5005", help="Base URL of target Agent Octopus node")
+    parser.add_argument("--target", default=_default_target_url(), help="Base URL of target Agent Octopus node")
     parser.add_argument("--ollama", default="http://127.0.0.1:11434", help="Base URL of Ollama inference daemon")
-    parser.add_argument("--strix", default=r"d:\tools\strix.exe", help="Path to Strix security scanning binary")
+    parser.add_argument("--strix", default=_default_strix_path(), help="Path to Strix security scanning binary")
     parser.add_argument("--fuzz-factor", type=int, default=10, help="Multiplication factor for test permutations")
     parser.add_argument("--skip-strix", action="store_true", help="Omit external Strix binary invocation")
 

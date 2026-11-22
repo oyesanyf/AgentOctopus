@@ -115,6 +115,48 @@ pub const LINUX_EPERM: u32 = 1;
 /// POSIX `ENOSYS` (Function not implemented = 38 on Linux; triggers `clone3` -> `clone` fallback).
 pub const LINUX_ENOSYS: u32 = 38;
 
+/// POSIX `EAFNOSUPPORT` (Address family not supported by protocol = 97 on Linux).
+pub const LINUX_EAFNOSUPPORT: u32 = 97;
+
+/// High-risk exotic socket families blocked by the Zero-Reboot Virtual-Patching Shield even
+/// when loopback proxy networking (`AF_INET`/`AF_INET6`/`AF_UNIX`) is allowed:
+/// `AF_PACKET=17`, `AF_RDS=21`, `AF_TIPC=30`, `AF_VSOCK=40`.
+pub const EXOTIC_BLOCKED_SOCKET_FAMILIES: &[u32] = &[17, 21, 30, 40];
+
+/// Linux x86_64 high-CVE EoP syscalls blocked by the Zero-Reboot Virtual-Patching Shield:
+/// `bpf`, `userfaultfd`, `add_key`, `request_key`, `keyctl`, `kexec_load`, `kexec_file_load`,
+/// `perf_event_open`, `ptrace`, `init_module`, `finit_module`, `delete_module`.
+pub const X86_64_VIRTUAL_PATCH_CVE_SYSCALLS: &[u32] = &[
+    101, // SYS_ptrace
+    175, // SYS_init_module
+    176, // SYS_delete_module
+    246, // SYS_kexec_load
+    248, // SYS_add_key
+    249, // SYS_request_key
+    250, // SYS_keyctl
+    298, // SYS_perf_event_open
+    313, // SYS_finit_module
+    320, // SYS_kexec_file_load
+    321, // SYS_bpf
+    323, // SYS_userfaultfd
+];
+
+/// Linux aarch64 high-CVE EoP syscalls blocked by the Zero-Reboot Virtual-Patching Shield.
+pub const AARCH64_VIRTUAL_PATCH_CVE_SYSCALLS: &[u32] = &[
+    104, // SYS_kexec_load
+    105, // SYS_init_module
+    106, // SYS_delete_module
+    117, // SYS_ptrace
+    217, // SYS_add_key
+    218, // SYS_request_key
+    219, // SYS_keyctl
+    241, // SYS_perf_event_open
+    273, // SYS_finit_module
+    280, // SYS_bpf
+    282, // SYS_userfaultfd
+    294, // SYS_kexec_file_load
+];
+
 /// Linux x86_64 syscalls blocked to prevent `io_uring` socket bypasses and mount/namespace escapes
 /// (aligned with `anthropics/sandbox-runtime` seccomp hardening).
 pub const X86_64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS: &[u32] = &[
@@ -250,16 +292,19 @@ pub fn build_socket_filter_bpf(
 }
 
 /// Builds the full hardened Tier 2 seccomp-BPF program blocking sockets (`EACCES`),
-/// `io_uring`/mount/namespace escape syscalls (`EPERM`), and `clone3` (`ENOSYS`).
+/// `io_uring`/mount/namespace escape syscalls (`EPERM`), high-CVE EoP syscalls (`EPERM`),
+/// and `clone3` (`ENOSYS`).
 pub fn build_hardened_sandbox_bpf(expected_arch: u32) -> Option<Vec<sock_filter>> {
-    let (socket_syscalls, escape_syscalls) = match expected_arch {
+    let (socket_syscalls, escape_syscalls, cve_syscalls) = match expected_arch {
         AUDIT_ARCH_X86_64 => (
             X86_64_BLOCKED_SOCKET_SYSCALLS,
             X86_64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS,
+            X86_64_VIRTUAL_PATCH_CVE_SYSCALLS,
         ),
         AUDIT_ARCH_AARCH64 => (
             AARCH64_BLOCKED_SOCKET_SYSCALLS,
             AARCH64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS,
+            AARCH64_VIRTUAL_PATCH_CVE_SYSCALLS,
         ),
         _ => return None,
     };
@@ -269,13 +314,198 @@ pub fn build_hardened_sandbox_bpf(expected_arch: u32) -> Option<Vec<sock_filter>
         &[
             (socket_syscalls, LINUX_EACCES),
             (escape_syscalls, LINUX_EPERM),
+            (cve_syscalls, LINUX_EPERM),
             (&clone3_slice, LINUX_ENOSYS),
         ],
     ))
 }
 
-/// In-memory BPF bytecode simulator for deterministic cross-platform unit testing.
-pub fn evaluate_bpf_filter(filter: &[sock_filter], arch: u32, nr: u32) -> u32 {
+/// Builds a Virtual-Patching Shield seccomp-BPF program for `expected_arch`:
+/// - If `block_all_sockets == true`: delegates to `build_hardened_sandbox_bpf`.
+/// - If `block_all_sockets == false` (loopback proxy mode): blocks `escape_syscalls` +
+///   `cve_syscalls` (`EPERM`), `clone3` (`ENOSYS`), AND inspects `socket(domain, ...)`
+///   `seccomp_data.args[0]` (offset 16) to deny exotic families (`AF_PACKET`, `AF_RDS`,
+///   `AF_TIPC`, `AF_VSOCK`) with `EAFNOSUPPORT` while preserving `AF_INET`/`AF_INET6`/`AF_UNIX`.
+pub fn build_virtual_patch_socket_family_bpf(
+    expected_arch: u32,
+    block_all_sockets: bool,
+) -> Option<Vec<sock_filter>> {
+    if block_all_sockets {
+        return build_hardened_sandbox_bpf(expected_arch);
+    }
+
+    let (sys_socket_nr, escape_syscalls, cve_syscalls) = match expected_arch {
+        AUDIT_ARCH_X86_64 => (
+            41u32,
+            X86_64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS,
+            X86_64_VIRTUAL_PATCH_CVE_SYSCALLS,
+        ),
+        AUDIT_ARCH_AARCH64 => (
+            198u32,
+            AARCH64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS,
+            AARCH64_VIRTUAL_PATCH_CVE_SYSCALLS,
+        ),
+        _ => return None,
+    };
+
+    let clone3_slice = [LINUX_SYS_CLONE3];
+    let rules: &[(&[u32], u32)] = &[
+        (escape_syscalls, LINUX_EPERM),
+        (cve_syscalls, LINUX_EPERM),
+        (&clone3_slice, LINUX_ENOSYS),
+    ];
+    let total_syscalls: usize = rules.iter().map(|(list, _)| list.len()).sum();
+    debug_assert!(
+        total_syscalls + rules.len() + EXOTIC_BLOCKED_SOCKET_FAMILIES.len() + 4 <= u8::MAX as usize
+    );
+
+    let mut insns = Vec::with_capacity(
+        total_syscalls + rules.len() + EXOTIC_BLOCKED_SOCKET_FAMILIES.len() + 10,
+    );
+
+    // 0: Load arch (offset 4)
+    insns.push(sock_filter {
+        code: BPF_LD | BPF_W | BPF_ABS,
+        jt: 0,
+        jf: 0,
+        k: 4,
+    });
+    // 1: Validate arch
+    insns.push(sock_filter {
+        code: BPF_JMP | BPF_JEQ | BPF_K,
+        jt: 1,
+        jf: 0,
+        k: expected_arch,
+    });
+    // 2: Kill on arch mismatch
+    insns.push(sock_filter {
+        code: BPF_RET | BPF_K,
+        jt: 0,
+        jf: 0,
+        k: SECCOMP_RET_KILL_PROCESS,
+    });
+    // 3: Load syscall nr (offset 0)
+    insns.push(sock_filter {
+        code: BPF_LD | BPF_W | BPF_ABS,
+        jt: 0,
+        jf: 0,
+        k: 0,
+    });
+    // 4: If nr == SYS_socket, jump past syscall checks + RET ALLOW + rule RETs to args[0] check
+    let socket_branch_jump = (total_syscalls + 1 + rules.len()) as u8;
+    insns.push(sock_filter {
+        code: BPF_JMP | BPF_JEQ | BPF_K,
+        jt: socket_branch_jump,
+        jf: 0,
+        k: sys_socket_nr,
+    });
+
+    // 5..5+total_syscalls: Syscall checks
+    let mut flat_idx = 0usize;
+    for (rule_idx, &(syscall_list, _errno)) in rules.iter().enumerate() {
+        for &syscall_nr in syscall_list {
+            let jump_offset = ((total_syscalls - flat_idx) + rule_idx) as u8;
+            insns.push(sock_filter {
+                code: BPF_JMP | BPF_JEQ | BPF_K,
+                jt: jump_offset,
+                jf: 0,
+                k: syscall_nr,
+            });
+            flat_idx += 1;
+        }
+    }
+
+    // Default ALLOW for non-socket syscalls
+    insns.push(sock_filter {
+        code: BPF_RET | BPF_K,
+        jt: 0,
+        jf: 0,
+        k: SECCOMP_RET_ALLOW,
+    });
+    // Rule-specific ERRNO returns
+    for &(_, errno_code) in rules {
+        insns.push(sock_filter {
+            code: BPF_RET | BPF_K,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_ERRNO | (errno_code & 0x0000_ffff),
+        });
+    }
+
+    // Socket-family inspection sub-block (target of socket_branch_jump):
+    // Load seccomp_data.args[0] (32-bit little-endian domain at byte offset 16)
+    insns.push(sock_filter {
+        code: BPF_LD | BPF_W | BPF_ABS,
+        jt: 0,
+        jf: 0,
+        k: 16,
+    });
+    let fam_count = EXOTIC_BLOCKED_SOCKET_FAMILIES.len();
+    for (i, &af) in EXOTIC_BLOCKED_SOCKET_FAMILIES.iter().enumerate() {
+        let jt = (fam_count - i) as u8;
+        insns.push(sock_filter {
+            code: BPF_JMP | BPF_JEQ | BPF_K,
+            jt,
+            jf: 0,
+            k: af,
+        });
+    }
+    insns.push(sock_filter {
+        code: BPF_RET | BPF_K,
+        jt: 0,
+        jf: 0,
+        k: SECCOMP_RET_ALLOW,
+    });
+    insns.push(sock_filter {
+        code: BPF_RET | BPF_K,
+        jt: 0,
+        jf: 0,
+        k: SECCOMP_RET_ERRNO | (LINUX_EAFNOSUPPORT & 0x0000_ffff),
+    });
+
+    Some(insns)
+}
+
+/// Builds the seccomp-BPF filter honoring both `block_all_sockets` and `block_exotic_sockets`
+/// (`VirtualPatchShieldPolicyConfig::block_exotic_sockets`).
+pub fn build_virtual_patch_seccomp_bpf(
+    expected_arch: u32,
+    block_all_sockets: bool,
+    block_exotic_sockets: bool,
+) -> Option<Vec<sock_filter>> {
+    if block_all_sockets {
+        return build_hardened_sandbox_bpf(expected_arch);
+    }
+    if block_exotic_sockets {
+        return build_virtual_patch_socket_family_bpf(expected_arch, false);
+    }
+    let (escape_syscalls, cve_syscalls) = match expected_arch {
+        AUDIT_ARCH_X86_64 => (
+            X86_64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS,
+            X86_64_VIRTUAL_PATCH_CVE_SYSCALLS,
+        ),
+        AUDIT_ARCH_AARCH64 => (
+            AARCH64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS,
+            AARCH64_VIRTUAL_PATCH_CVE_SYSCALLS,
+        ),
+        _ => return None,
+    };
+    let clone3_slice = [LINUX_SYS_CLONE3];
+    let rules: &[(&[u32], u32)] = &[
+        (escape_syscalls, LINUX_EPERM),
+        (cve_syscalls, LINUX_EPERM),
+        (&clone3_slice, LINUX_ENOSYS),
+    ];
+    Some(build_syscall_policy_bpf(expected_arch, rules))
+}
+
+/// In-memory BPF bytecode simulator supporting both syscall nr and `seccomp_data.args[0..6]`.
+pub fn evaluate_bpf_filter_with_args(
+    filter: &[sock_filter],
+    arch: u32,
+    nr: u32,
+    args: &[u64; 6],
+) -> u32 {
     let mut pc = 0;
     let mut reg_a: u32 = 0;
 
@@ -288,6 +518,9 @@ pub fn evaluate_bpf_filter(filter: &[sock_filter], arch: u32, nr: u32) -> u32 {
                     reg_a = nr;
                 } else if insn.k == 4 {
                     reg_a = arch;
+                } else if insn.k >= 16 && insn.k < 64 && (insn.k - 16) % 8 == 0 {
+                    let arg_idx = ((insn.k - 16) / 8) as usize;
+                    reg_a = args[arg_idx] as u32;
                 } else {
                     reg_a = 0;
                 }
@@ -311,6 +544,11 @@ pub fn evaluate_bpf_filter(filter: &[sock_filter], arch: u32, nr: u32) -> u32 {
         }
     }
     SECCOMP_RET_KILL_PROCESS
+}
+
+/// In-memory BPF bytecode simulator for deterministic cross-platform unit testing.
+pub fn evaluate_bpf_filter(filter: &[sock_filter], arch: u32, nr: u32) -> u32 {
+    evaluate_bpf_filter_with_args(filter, arch, nr, &[0; 6])
 }
 
 // ---------------------------------------------------------------------------
@@ -427,9 +665,19 @@ pub fn describe_tier2_host_confinement_posture() -> String {
     }
     #[cfg(target_os = "linux")]
     {
-        "Linux Landlock LSM + seccomp-BPF (18 socket syscalls -> EACCES) + CLONE_NEWNET + setrlimit (64 MiB)".to_string()
+        "Linux Landlock LSM + seccomp-BPF (socket + high-CVE EoP + exotic AF_* clamp) + CLONE_NEWNET + setrlimit (64 MiB)".to_string()
     }
-    #[cfg(all(not(windows), not(target_os = "linux")))]
+    #[cfg(any(target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    {
+        "BSD Tier-2 confinement (OpenBSD pledge/unveil, FreeBSD procctl/Capsicum, NetBSD setrlimit + /dev/pf)".to_string()
+    }
+    #[cfg(not(any(
+        windows,
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    )))]
     {
         "Unsupported host OS (Fail-Closed)".to_string()
     }
@@ -833,6 +1081,7 @@ mod linux_impl {
         mandatory_ro_dirs: &[PathBuf],
         memory_bytes: u64,
         block_all_sockets: bool,
+        block_exotic_sockets: bool,
         strict_fail_closed: bool,
     ) -> std::io::Result<()> {
         let _ = libc::setpgid(0, 0);
@@ -856,6 +1105,7 @@ mod linux_impl {
             max_nproc: 64,
             max_cpu_seconds: 120,
             max_nofile: 512,
+            max_core_bytes: 0,
         };
         apply_resource_limits(&limits, userns_isolated)?;
 
@@ -991,21 +1241,18 @@ mod linux_impl {
             apply_seccomp_socket_filter()?;
         } else {
             #[cfg(target_arch = "x86_64")]
-            let (arch, escape_syscalls) =
-                (AUDIT_ARCH_X86_64, X86_64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS);
+            let arch = AUDIT_ARCH_X86_64;
             #[cfg(target_arch = "aarch64")]
-            let (arch, escape_syscalls) =
-                (AUDIT_ARCH_AARCH64, AARCH64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS);
+            let arch = AUDIT_ARCH_AARCH64;
             #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
             {
-                let clone3_slice = [LINUX_SYS_CLONE3];
-                let insns = build_syscall_policy_bpf(
-                    arch,
-                    &[
-                        (escape_syscalls, LINUX_EPERM),
-                        (&clone3_slice, LINUX_ENOSYS),
-                    ],
-                );
+                let insns = build_virtual_patch_seccomp_bpf(arch, false, block_exotic_sockets)
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::Unsupported,
+                            "Unsupported architecture for virtual-patch seccomp-BPF",
+                        )
+                    })?;
                 let prog = sock_fprog {
                     len: insns.len() as u16,
                     filter: insns.as_ptr(),

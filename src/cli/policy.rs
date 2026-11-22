@@ -47,6 +47,72 @@ pub struct LimitsPolicyConfig {
     pub wasm_fuel: Option<u64>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_entropy_threshold() -> f64 {
+    6.4
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BinaryIntegrityPolicyConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub require_signed_binaries: bool,
+    #[serde(default = "default_true")]
+    pub block_packed: bool,
+    #[serde(default = "default_true")]
+    pub block_wx_sections: bool,
+    #[serde(default = "default_true")]
+    pub block_direct_syscalls: bool,
+    #[serde(default = "default_entropy_threshold")]
+    pub entropy_threshold: f64,
+    #[serde(default)]
+    pub max_allowed_direct_syscalls: u32,
+    #[serde(default)]
+    pub allow_direct_syscalls_for: Vec<String>,
+}
+
+impl Default for BinaryIntegrityPolicyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            require_signed_binaries: false,
+            block_packed: true,
+            block_wx_sections: true,
+            block_direct_syscalls: true,
+            entropy_threshold: 6.4,
+            max_allowed_direct_syscalls: 0,
+            allow_direct_syscalls_for: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VirtualPatchShieldPolicyConfig {
+    #[serde(default)]
+    pub promote_wasm_on_cve: bool,
+    #[serde(default)]
+    pub disallow_win32k: bool,
+    #[serde(default = "default_true")]
+    pub block_exotic_sockets: bool,
+    #[serde(default = "default_true")]
+    pub fail_closed_on_degraded_telemetry: bool,
+}
+
+impl Default for VirtualPatchShieldPolicyConfig {
+    fn default() -> Self {
+        Self {
+            promote_wasm_on_cve: false,
+            disallow_win32k: false,
+            block_exotic_sockets: true,
+            fail_closed_on_degraded_telemetry: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OctopusRunPolicy {
     #[serde(default)]
@@ -63,6 +129,10 @@ pub struct OctopusRunPolicy {
     pub credentials: CredentialsPolicyConfig,
     #[serde(default)]
     pub limits: LimitsPolicyConfig,
+    #[serde(default)]
+    pub virtual_patch_shield: VirtualPatchShieldPolicyConfig,
+    #[serde(default)]
+    pub binary_integrity: BinaryIntegrityPolicyConfig,
     #[serde(default)]
     pub cedar_policy: Option<String>,
     #[serde(default)]
@@ -172,6 +242,15 @@ pub fn load_octopus_policy(path: &Path) -> Result<LoadedOctopusPolicy, String> {
                     e
                 )
             })?;
+
+            if !policy.binary_integrity.entropy_threshold.is_finite()
+                || !(0.0..=8.0).contains(&policy.binary_integrity.entropy_threshold)
+            {
+                return Err(format!(
+                    "'binary_integrity.entropy_threshold' must be a finite number in 0.0..=8.0 (got {})",
+                    policy.binary_integrity.entropy_threshold
+                ));
+            }
 
             for entry in &policy.allowed_domains {
                 validate_domain_pattern(entry, "allowed_domains")?;

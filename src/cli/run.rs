@@ -1,5 +1,6 @@
+use crate::cli::latent_shield::{evaluate_gate1_sbom_pair, load_shield_for_cli, SbomGuardSummary};
 use crate::cli::policy::{load_octopus_policy, LoadedOctopusPolicy};
-use crate::cli::proxy::{start_loopback_proxy, EgressEventRecord};
+use crate::cli::proxy::{start_loopback_proxy_with_monitor, EgressEventRecord};
 use crate::cli::wasm_runner::{execute_wasm_target, is_wasm_or_wat_target};
 use crate::cli::{
     parse_octopus_cli, CliParseResult, OctopusRunArgs, SandboxMode, EXIT_PREFLIGHT_DENIED,
@@ -7,6 +8,10 @@ use crate::cli::{
 };
 use crate::security::breakouts::TechnicalBreakoutGuard;
 use crate::security::cedar_arm::CedarPolicyEngine;
+use crate::security::latent_shield::{
+    AgentRuntimeGuard, LiveRuntimeMonitor, RuntimeEventKind, RuntimeGuardVerdictSummary,
+    SbomIntent, UnifiedSecurityShield,
+};
 use crate::security::semantic_command::{parse_semantic_command, DynamicBinaryMetadataProbe};
 use crate::security::sensitive_paths::{
     classify_mandatory_write_deny_path, classify_pinned_parent_for_write_deny,
@@ -34,6 +39,551 @@ struct JsonRunSummary {
     egress_events: Vec<EgressEventRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     diagnostic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    virtual_patch_shield: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sbom_guard: Option<SbomGuardSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    runtime_guard: Option<RuntimeGuardVerdictSummary>,
+}
+
+fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    if s.len() >= prefix.len()
+        && s.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+    {
+        Some(&s[prefix.len()..])
+    } else {
+        None
+    }
+}
+
+fn collapse_consecutive_slashes_preserving_root(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    if s.starts_with("//") {
+        out.push_str("//");
+        chars.next();
+        chars.next();
+    }
+    let mut prev_slash = false;
+    for ch in chars {
+        if ch == '/' {
+            if !prev_slash {
+                out.push('/');
+            }
+            prev_slash = true;
+        } else {
+            prev_slash = false;
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn decode_hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_decode_file_url_part(raw: &str) -> String {
+    let input = raw.as_bytes();
+    let mut out = Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        if input[i] == b'%' && i + 2 < input.len() {
+            if let (Some(hi), Some(lo)) = (
+                decode_hex_digit(input[i + 1]),
+                decode_hex_digit(input[i + 2]),
+            ) {
+                let decoded = (hi << 4) | lo;
+                if decoded != 0 {
+                    out.push(if decoded == b'\\' { b'/' } else { decoded });
+                }
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if input[i] == b'\\' { b'/' } else { input[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn canonicalize_file_url_drive_pipe(s: &str) -> String {
+    let b = s.as_bytes();
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b'|' && (b.len() == 2 || b[2] == b'/')
+    {
+        let mut out = String::with_capacity(s.len());
+        out.push(b[0] as char);
+        out.push(':');
+        out.push_str(&s[2..]);
+        out
+    } else {
+        s.to_string()
+    }
+}
+
+fn is_win_drive_or_pipe_designator(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 2
+        && b[0].is_ascii_alphabetic()
+        && matches!(b[1], b':' | b'|')
+        && (b.len() == 2 || b[2] == b'/')
+}
+
+fn is_local_file_authority(host: &str) -> bool {
+    let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if h.is_empty() {
+        return false;
+    }
+    if matches!(
+        h.as_str(),
+        "localhost"
+            | "localhost.localdomain"
+            | "0.0.0.0"
+            | "[::1]"
+            | "[0:0:0:0:0:0:0:1]"
+            | "[::ffff:127.0.0.1]"
+            | "[::]"
+    ) {
+        return true;
+    }
+    if let Ok(ip4) = h.parse::<std::net::Ipv4Addr>() {
+        return ip4.is_loopback() || ip4.is_unspecified();
+    }
+    if h.starts_with('[') && h.ends_with(']') && h.len() >= 2 {
+        let inner = &h[1..h.len() - 1];
+        let addr_str = inner.split('%').next().unwrap_or(inner);
+        if let Ok(ip6) = addr_str.parse::<std::net::Ipv6Addr>() {
+            return ip6.is_loopback()
+                || ip6.is_unspecified()
+                || ip6
+                    .to_ipv4_mapped()
+                    .is_some_and(|v4| v4.is_loopback() || v4.is_unspecified());
+        }
+    }
+    false
+}
+
+fn collapse_file_url_segments(path: &str) -> String {
+    let mut stack: Vec<&str> = Vec::new();
+    for seg in path.split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            if stack.len() == 1 && is_win_drive_or_pipe_designator(stack[0]) {
+                continue;
+            }
+            stack.pop();
+        } else {
+            stack.push(seg);
+        }
+    }
+    let mut out = stack.join("/");
+    if !stack.is_empty() && path.ends_with('/') {
+        out.push('/');
+    }
+    out
+}
+
+fn normalize_file_url_after_slash(after_slash: &str) -> String {
+    let trimmed = after_slash.trim_start_matches('/');
+    if trimmed.is_empty() {
+        return "/".to_string();
+    }
+
+    if let Some((dev_pref, rest)) = trimmed
+        .strip_prefix("./")
+        .map(|r| ("//./", r))
+        .or_else(|| trimmed.strip_prefix("?/").map(|r| ("//?/", r)))
+        .or_else(|| trimmed.strip_prefix("??/").map(|r| ("/??/", r)))
+    {
+        let collapsed = collapse_file_url_segments(rest);
+        let canon = canonicalize_file_url_drive_pipe(&collapsed);
+        return format!("{dev_pref}{canon}");
+    }
+
+    let segs: Vec<&str> = trimmed.split('/').collect();
+    let mut stack: Vec<&str> = Vec::new();
+    let mut dev_idx: Option<(&'static str, usize)> = None;
+    for (idx, &seg) in segs.iter().enumerate() {
+        if seg.is_empty() {
+            continue;
+        }
+        if stack.is_empty() && matches!(seg, "." | "?" | "??") && idx + 1 < segs.len() {
+            let tail_first = segs[idx + 1..].iter().copied().find(|s| !s.is_empty());
+            let tail_is_device_or_drive = tail_first.is_some_and(|tf| {
+                let tfl = tf.to_ascii_lowercase();
+                let tb = tf.as_bytes();
+                tfl == "pipe"
+                    || tfl == "unc"
+                    || tfl == "globalroot"
+                    || tfl == "global"
+                    || tfl == "dosdevices"
+                    || tfl == "device"
+                    || (tb.len() >= 2
+                        && tb[0].is_ascii_alphabetic()
+                        && matches!(tb[1], b':' | b'|'))
+            });
+            if tail_is_device_or_drive || seg == "?" || seg == "??" {
+                let pref = match seg {
+                    "." => "//./",
+                    "?" => "//?/",
+                    _ => "/??/",
+                };
+                dev_idx = Some((pref, idx + 1));
+                break;
+            }
+        }
+        if seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            if stack.len() == 1 && is_win_drive_or_pipe_designator(stack[0]) {
+                continue;
+            }
+            stack.pop();
+        } else {
+            stack.push(seg);
+        }
+    }
+
+    if let Some((dev_pref, start)) = dev_idx {
+        let tail_raw = segs[start..].join("/");
+        let mut collapsed = collapse_file_url_segments(&tail_raw);
+        if !collapsed.is_empty() && trimmed.ends_with('/') && !collapsed.ends_with('/') {
+            collapsed.push('/');
+        }
+        let canon = canonicalize_file_url_drive_pipe(&collapsed);
+        return format!("{dev_pref}{canon}");
+    }
+
+    let mut collapsed = stack.join("/");
+    if !stack.is_empty() && trimmed.ends_with('/') {
+        collapsed.push('/');
+    }
+    if collapsed.is_empty() {
+        return "/".to_string();
+    }
+
+    let canon = canonicalize_file_url_drive_pipe(&collapsed);
+    let cb = canon.as_bytes();
+    if cb.len() >= 2 && cb[0].is_ascii_alphabetic() && cb[1] == b':' {
+        return canon;
+    }
+
+    let canon_lower = canon.to_ascii_lowercase();
+    if let Some(rest) = strip_prefix_ci(&canon, "unc/") {
+        return format!("//{}", rest.trim_start_matches('/'));
+    }
+    if canon_lower == "globalroot" {
+        return String::new();
+    }
+    if let Some(rest) = strip_prefix_ci(&canon, "globalroot/") {
+        return format!("/{}", rest.trim_start_matches('/'));
+    }
+    if let Some(rest) = strip_prefix_ci(&canon, "global/") {
+        return format!("//./{}", rest.trim_start_matches('/'));
+    }
+    if let Some(rest) = strip_prefix_ci(&canon, "dosdevices/") {
+        return format!("/??/{}", rest.trim_start_matches('/'));
+    }
+    if canon_lower == "device" || canon_lower.starts_with("device/") {
+        return format!("/{canon}");
+    }
+
+    format!("/{canon}")
+}
+
+fn normalize_windows_device_namespace_inner(val: &str, lowercase: bool) -> String {
+    let mut s = val.trim().trim_matches(['"', '\'', '`']).replace('\\', "/");
+    if lowercase {
+        s.make_ascii_lowercase();
+    }
+    if s.is_empty()
+        || strip_prefix_ci(&s, "http://").is_some()
+        || strip_prefix_ci(&s, "https://").is_some()
+    {
+        return s;
+    }
+    if let Some(raw_after_file) = strip_prefix_ci(&s, "file://") {
+        let mut decoded_after_file = percent_decode_file_url_part(raw_after_file);
+        if lowercase {
+            decoded_after_file.make_ascii_lowercase();
+        }
+        let after_file = decoded_after_file.as_str();
+        if after_file.starts_with("//") {
+            let trimmed = after_file.trim_start_matches('/');
+            s = if trimmed.is_empty() {
+                String::new()
+            } else if trimmed.starts_with("./")
+                || trimmed.starts_with("?/")
+                || trimmed.starts_with("??/")
+                || is_win_drive_or_pipe_designator(trimmed)
+            {
+                normalize_file_url_after_slash(trimmed)
+            } else {
+                format!("//{trimmed}")
+            };
+        } else if after_file.starts_with('/') {
+            s = normalize_file_url_after_slash(after_file);
+        } else if !after_file.is_empty() {
+            if is_win_drive_or_pipe_designator(after_file) {
+                s = normalize_file_url_after_slash(after_file);
+            } else if let Some((host, rest)) = after_file.split_once('/') {
+                if is_local_file_authority(host) {
+                    if rest.starts_with('/') {
+                        s = normalize_file_url_after_slash(rest);
+                    } else {
+                        let cand = normalize_file_url_after_slash(rest);
+                        let cb = cand.as_bytes();
+                        let is_drive =
+                            cb.len() >= 2 && cb[0].is_ascii_alphabetic() && cb[1] == b':';
+                        let is_device_or_unc = cand.starts_with("//")
+                            || cand.starts_with("/??/")
+                            || strip_prefix_ci(&cand, "/device/").is_some();
+                        if is_drive || is_device_or_unc {
+                            s = cand;
+                        } else {
+                            let tail = cand.trim_start_matches('/');
+                            s = if tail.is_empty() {
+                                format!("//{host}/")
+                            } else {
+                                format!("//{host}/{tail}")
+                            };
+                        }
+                    }
+                } else {
+                    s = format!("//{after_file}");
+                }
+            } else {
+                s = format!("//{after_file}");
+            }
+        } else {
+            s = String::new();
+        }
+    } else if let Some(raw_after_file_single) = strip_prefix_ci(&s, "file:/") {
+        let mut decoded_after_file = percent_decode_file_url_part(raw_after_file_single);
+        if lowercase {
+            decoded_after_file.make_ascii_lowercase();
+        }
+        s = normalize_file_url_after_slash(&decoded_after_file);
+    }
+    if s.is_empty() {
+        return s;
+    }
+    s = collapse_consecutive_slashes_preserving_root(&s);
+    loop {
+        if let Some(rest) = s.strip_prefix("//./") {
+            let mut stack: Vec<&str> = Vec::new();
+            for seg in rest.split('/') {
+                if seg.is_empty() || seg == "." {
+                    continue;
+                }
+                if seg == ".." {
+                    stack.pop();
+                } else {
+                    stack.push(seg);
+                }
+            }
+            let mut collapsed = String::with_capacity(s.len());
+            collapsed.push_str("//./");
+            collapsed.push_str(&stack.join("/"));
+            if !stack.is_empty() && rest.ends_with('/') {
+                collapsed.push('/');
+            }
+            if collapsed != s {
+                s = collapsed;
+                continue;
+            }
+        }
+        if let Some(rest) = strip_prefix_ci(&s, "//?/globalroot")
+            .or_else(|| strip_prefix_ci(&s, "//./globalroot"))
+            .or_else(|| strip_prefix_ci(&s, "/??/globalroot"))
+            .filter(|r| r.is_empty() || r.starts_with('/'))
+        {
+            s = if rest.is_empty() {
+                String::new()
+            } else {
+                format!("/{}", rest.trim_start_matches('/'))
+            };
+        } else if let Some(rest) =
+            strip_prefix_ci(&s, "//?/global/").or_else(|| strip_prefix_ci(&s, "//./global/"))
+        {
+            s = format!("//./{}", rest.trim_start_matches('/'));
+        } else if let Some(rest) = strip_prefix_ci(&s, "/??/global/") {
+            s = format!("/??/{}", rest.trim_start_matches('/'));
+        } else if let Some(rest) = strip_prefix_ci(&s, "/global??/")
+            .or_else(|| strip_prefix_ci(&s, "//?/global??/"))
+            .or_else(|| strip_prefix_ci(&s, "//./global??/"))
+            .or_else(|| strip_prefix_ci(&s, "/??/global??/"))
+            .or_else(|| strip_prefix_ci(&s, "/dosdevices/"))
+            .or_else(|| strip_prefix_ci(&s, "//?/dosdevices/"))
+            .or_else(|| strip_prefix_ci(&s, "//./dosdevices/"))
+            .or_else(|| strip_prefix_ci(&s, "/??/dosdevices/"))
+        {
+            s = format!("/??/{}", rest.trim_start_matches('/'));
+        } else if let Some(rest) = strip_prefix_ci(&s, "//?/unc/")
+            .or_else(|| strip_prefix_ci(&s, "//./unc/"))
+            .or_else(|| strip_prefix_ci(&s, "/??/unc/"))
+        {
+            s = format!("//{}", rest.trim_start_matches('/'));
+        } else if let Some(rest) = strip_prefix_ci(&s, "/device/mup/")
+            .or_else(|| strip_prefix_ci(&s, "/device/lanmanredirector/"))
+            .or_else(|| strip_prefix_ci(&s, "//./device/mup/"))
+            .or_else(|| strip_prefix_ci(&s, "//?/device/mup/"))
+            .or_else(|| strip_prefix_ci(&s, "/??/device/mup/"))
+            .or_else(|| strip_prefix_ci(&s, "//./device/lanmanredirector/"))
+            .or_else(|| strip_prefix_ci(&s, "//?/device/lanmanredirector/"))
+            .or_else(|| strip_prefix_ci(&s, "/??/device/lanmanredirector/"))
+        {
+            let mut rest = rest.trim_start_matches('/');
+            while rest.starts_with(';') {
+                if let Some((_, tail)) = rest.split_once('/') {
+                    rest = tail.trim_start_matches('/');
+                } else {
+                    break;
+                }
+            }
+            s = format!("//{rest}");
+        } else {
+            break;
+        }
+    }
+    s
+}
+
+fn normalize_windows_device_namespace_str(val: &str) -> String {
+    normalize_windows_device_namespace_inner(val, true)
+}
+
+fn has_file_url_globbing(val: &str) -> bool {
+    let s = strip_matching_outer_quotes(val.trim()).replace('\\', "/");
+    let Some(after_scheme) = strip_prefix_ci(&s, "file:") else {
+        return false;
+    };
+    if after_scheme.contains(['{', '}']) {
+        return true;
+    }
+    if !after_scheme.contains(['[', ']']) {
+        return false;
+    }
+    if let Some(after_two_slashes) = after_scheme.strip_prefix("//") {
+        if after_two_slashes.starts_with('[') {
+            let (authority, rest) = match after_two_slashes.split_once('/') {
+                Some((auth, path_part)) => (auth, path_part),
+                None => (after_two_slashes, ""),
+            };
+            if authority.starts_with('[') && authority.ends_with(']') && authority.len() >= 2 {
+                let inner = &authority[1..authority.len() - 1];
+                let addr_str = inner.split('%').next().unwrap_or(inner);
+                let zone_valid = inner
+                    .split_once('%')
+                    .is_none_or(|(_, z)| !z.is_empty() && !z.contains(['[', ']', '{', '}']));
+                if zone_valid && addr_str.parse::<std::net::Ipv6Addr>().is_ok() {
+                    return rest.contains(['[', ']']);
+                }
+            }
+        }
+    }
+    true
+}
+
+pub(crate) fn is_untrusted_windows_named_pipe_arg(val: &str) -> bool {
+    let s = normalize_windows_device_namespace_str(val);
+    if s.is_empty() || s.starts_with("http://") || s.starts_with("https://") {
+        return false;
+    }
+
+    let dev_normalized = s
+        .strip_prefix("//./")
+        .or_else(|| s.strip_prefix("//?/"))
+        .or_else(|| s.strip_prefix("/??/"))
+        .map(|rest| format!("/{}", rest.trim_start_matches('/')));
+    let is_device_namedpipe =
+        |p: &str| p == "/device/namedpipe" || p.starts_with("/device/namedpipe/");
+
+    if is_device_namedpipe(&s)
+        || dev_normalized.as_deref().is_some_and(is_device_namedpipe)
+        || s == "/??/pipe"
+        || s.starts_with("/??/pipe/")
+    {
+        return true;
+    }
+    if let Some(rest) = s.strip_prefix("//") {
+        let mut parts = rest.splitn(3, '/');
+        let host = parts.next().unwrap_or("");
+        let share = parts.next().unwrap_or("").trim_end_matches(['.', ' ']);
+        if !host.is_empty() && share == "pipe" {
+            return true;
+        }
+    }
+    if (s.starts_with("//./") || s.starts_with("//?/"))
+        && s[4..]
+            .split('/')
+            .next()
+            .is_some_and(|seg| seg.trim_end_matches(['.', ' ']) == "pipe")
+    {
+        return true;
+    }
+    false
+}
+
+pub(crate) fn check_no_reparse_or_symlink(path: &Path, label: &str) -> Result<(), String> {
+    let abs = if path.is_relative() {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        path.to_path_buf()
+    };
+    let raw_str = abs.to_string_lossy();
+    let trimmed = if raw_str.len() > 3 && (raw_str.ends_with('/') || raw_str.ends_with('\\')) {
+        raw_str.trim_end_matches(['/', '\\'])
+    } else {
+        raw_str.as_ref()
+    };
+    let check_path = Path::new(trimmed);
+
+    for anc in check_path.ancestors() {
+        if anc.as_os_str().is_empty() {
+            continue;
+        }
+        #[cfg(target_os = "macos")]
+        if anc == Path::new("/var") || anc == Path::new("/tmp") || anc == Path::new("/etc") {
+            continue;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(anc) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            return Err(format!(
+                "{} '{}' (or ancestor '{}') is a symlink/reparse point (blocked by virtual-patch breakout clamp)",
+                label,
+                path.display(),
+                anc.display()
+            ));
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+            if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+                return Err(format!(
+                    "{} '{}' (or ancestor '{}') has FILE_ATTRIBUTE_REPARSE_POINT set (blocked by virtual-patch breakout clamp)",
+                    label,
+                    path.display(),
+                    anc.display()
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 struct TempGuardDir(PathBuf);
@@ -110,27 +660,97 @@ fn is_local_unc_host(host: &str) -> bool {
 }
 
 #[cfg(windows)]
-fn strip_win_verbatim_and_local_unc_str(raw: &str) -> String {
-    let mut t = raw.replace('\\', "/");
-    let mut tl = t.to_ascii_lowercase();
-    if tl.starts_with("//?/global/") || tl.starts_with("//./global/") {
-        t = format!("//{}{}", &t[2..4], &t[11..]);
-        tl = t.to_ascii_lowercase();
+fn is_windows_reserved_device_first_seg(seg: &str) -> bool {
+    let lower = seg.trim_end_matches(['.', ' ']).to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "pipe"
+            | "mailslot"
+            | "global"
+            | "globalroot"
+            | "global??"
+            | "unc"
+            | "dosdevices"
+            | "device"
+            | "con"
+            | "prn"
+            | "aux"
+            | "nul"
+            | "conin$"
+            | "conout$"
+    ) {
+        return true;
     }
-    if tl.starts_with("//?/unc/") || tl.starts_with("//./unc/") {
-        t = format!("//{}", &t[8..]);
-    } else if tl.starts_with("//?/") {
-        t = t[4..].to_string();
-    } else if tl.starts_with("//./") {
+    if let Some(rest) = lower
+        .strip_prefix("com")
+        .or_else(|| lower.strip_prefix("lpt"))
+    {
+        if rest.len() == 1 && rest.as_bytes()[0].is_ascii_digit() && rest != "0" {
+            return true;
+        }
+    }
+    lower.starts_with("physicaldrive") || lower.starts_with("harddiskvolume")
+}
+
+#[cfg(windows)]
+fn push_win_root_relative_candidates(norm_cand: &str, check_paths: &mut Vec<String>) {
+    let sys_drive = std::env::var("SystemDrive")
+        .unwrap_or_else(|_| "C:".to_string())
+        .trim()
+        .to_string();
+    let drive_prefix = if sys_drive.len() >= 2
+        && sys_drive.as_bytes()[0].is_ascii_alphabetic()
+        && sys_drive.as_bytes()[1] == b':'
+    {
+        &sys_drive[..2]
+    } else {
+        "C:"
+    };
+    let rel = norm_cand.replace('/', "\\");
+    let sys_pb = PathBuf::from(format!("{}{}", drive_prefix, rel));
+    let sys_lex = lexical_collapse_slashes(&strip_win_ads_and_trailing_dots_for_cedar(
+        &sys_pb.to_string_lossy(),
+    ));
+    if !sys_lex.is_empty() && !check_paths.contains(&sys_lex) {
+        check_paths.push(sys_lex);
+    }
+    if let Ok(canon_pb) = std::fs::canonicalize(&sys_pb) {
+        let canon_stripped = strip_win_verbatim_prefix(canon_pb);
+        let canon_clean = lexical_collapse_slashes(&strip_win_ads_and_trailing_dots_for_cedar(
+            &canon_stripped.to_string_lossy(),
+        ));
+        if !canon_clean.is_empty() && !check_paths.contains(&canon_clean) {
+            check_paths.push(canon_clean);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn strip_win_verbatim_and_local_unc_str(raw: &str) -> String {
+    let raw_trimmed = raw.trim().trim_matches(['"', '\'', '`']);
+    let is_file_url = strip_prefix_ci(raw_trimmed, "file:/").is_some();
+    let mut t = normalize_windows_device_namespace_inner(raw, false);
+    if strip_prefix_ci(&t, "//?/").is_some()
+        || strip_prefix_ci(&t, "//./").is_some()
+        || strip_prefix_ci(&t, "/??/").is_some()
+    {
         let bytes = t.as_bytes();
         if bytes.len() >= 6 && bytes[4].is_ascii_alphabetic() && bytes[5] == b':' {
             t = t[4..].to_string();
+        } else if (strip_prefix_ci(&t, "//./").is_some() || strip_prefix_ci(&t, "//?/").is_some())
+            && t.len() > 4
+        {
+            let rest = &t[4..];
+            let first_seg = rest.split('/').next().unwrap_or("");
+            if !first_seg.is_empty() && !is_windows_reserved_device_first_seg(first_seg) {
+                t = format!("/{rest}");
+            }
         }
     }
     if let Some(rest) = t.strip_prefix("//") {
         let mut parts = rest.splitn(3, '/');
         let host = parts.next().unwrap_or("");
-        let share = parts.next().unwrap_or("");
+        let share = parts.next().unwrap_or("").trim_end_matches(['.', ' ']);
         let tail = parts.next().unwrap_or("");
         if !host.is_empty() && is_local_unc_host(host) {
             let sb = share.as_bytes();
@@ -154,6 +774,17 @@ fn strip_win_verbatim_and_local_unc_str(raw: &str) -> String {
                     format!("{}/{}", sys_root, tail)
                 };
             }
+            if is_file_url
+                && !share.is_empty()
+                && !share.ends_with('$')
+                && !is_windows_reserved_device_first_seg(share)
+            {
+                return if tail.is_empty() {
+                    format!("/{share}")
+                } else {
+                    format!("/{share}/{tail}")
+                };
+            }
         }
     }
     t
@@ -161,41 +792,47 @@ fn strip_win_verbatim_and_local_unc_str(raw: &str) -> String {
 
 #[cfg(windows)]
 fn is_raw_admin_or_ipc_share_str(raw: &str) -> bool {
-    let mut t = raw.trim().replace('\\', "/");
-    let mut tl = t.to_ascii_lowercase();
-    if tl.starts_with("//?/global/unc/") || tl.starts_with("//./global/unc/") {
-        t = format!("//{}", &t[15..]);
-    } else {
-        if tl.starts_with("//?/global/") || tl.starts_with("//./global/") {
-            t = format!("//{}{}", &t[2..4], &t[11..]);
-            tl = t.to_ascii_lowercase();
-        }
-        if tl.starts_with("//?/unc/") || tl.starts_with("//./unc/") {
-            t = format!("//{}", &t[8..]);
-        }
-    }
+    let t = normalize_windows_device_namespace_str(raw);
     let Some(rest) = t.strip_prefix("//") else {
         return false;
     };
     let mut parts = rest.splitn(3, '/');
-    let _host = parts.next().unwrap_or("");
+    let host = parts.next().unwrap_or("");
     let share = parts.next().unwrap_or("").trim_end_matches(['.', ' ']);
-    share.eq_ignore_ascii_case("admin$") || share.eq_ignore_ascii_case("ipc$")
+    let tail = parts.next().unwrap_or("");
+    let is_bare_dollar_share = share.ends_with('$') && {
+        let mut depth = 0usize;
+        for seg in tail.split('/') {
+            if seg.is_empty() || seg == "." {
+                continue;
+            }
+            if seg == ".." {
+                depth = depth.saturating_sub(1);
+            } else {
+                depth += 1;
+            }
+        }
+        depth == 0
+    };
+    !host.is_empty()
+        && (share.eq_ignore_ascii_case("admin$")
+            || share.eq_ignore_ascii_case("ipc$")
+            || is_bare_dollar_share)
 }
 
 #[cfg(windows)]
 fn is_unc_admin_share_str(raw: &str) -> bool {
-    let t = raw.trim().replace('\\', "/");
+    let t = normalize_windows_device_namespace_str(raw);
     let Some(rest) = t.strip_prefix("//") else {
         return false;
     };
     let mut parts = rest.splitn(3, '/');
-    let _host = parts.next().unwrap_or("");
+    let host = parts.next().unwrap_or("");
     let share = parts.next().unwrap_or("").trim_end_matches(['.', ' ']);
-    !share.is_empty() && share.ends_with('$')
+    !host.is_empty() && !share.is_empty() && share.ends_with('$')
 }
 
-fn strip_win_verbatim_prefix(p: PathBuf) -> PathBuf {
+pub(crate) fn strip_win_verbatim_prefix(p: PathBuf) -> PathBuf {
     #[cfg(windows)]
     {
         let s = p.to_string_lossy().to_string();
@@ -445,7 +1082,7 @@ fn is_python_startup_guard_path(tok: &str) -> bool {
     last_seg == "sitecustomize.py" || last_seg == "usercustomize.py" || last_seg.ends_with(".pth")
 }
 
-fn strip_win_ads_and_trailing_dots_for_cedar(raw: &str) -> String {
+pub(crate) fn strip_win_ads_and_trailing_dots_for_cedar(raw: &str) -> String {
     #[cfg(windows)]
     let replaced = strip_win_verbatim_and_local_unc_str(raw.trim());
     #[cfg(not(windows))]
@@ -481,7 +1118,7 @@ fn strip_win_ads_and_trailing_dots_for_cedar(raw: &str) -> String {
     format!("{}{}", prefix, segs.join("/"))
 }
 
-fn expand_tilde_for_preflight(raw: &str) -> Option<PathBuf> {
+pub(crate) fn expand_tilde_for_preflight(raw: &str) -> Option<PathBuf> {
     let rest = if raw == "~" {
         ""
     } else if let Some(r) = raw.strip_prefix("~/") {
@@ -512,7 +1149,7 @@ fn expand_tilde_for_preflight(raw: &str) -> Option<PathBuf> {
     }
 }
 
-fn lexical_collapse_slashes(clean: &str) -> String {
+pub(crate) fn lexical_collapse_slashes(clean: &str) -> String {
     let s = clean.replace('\\', "/");
     let (prefix, rest) = if let Some(after_unc) = s.strip_prefix("//") {
         let mut it = after_unc.splitn(3, '/');
@@ -595,7 +1232,7 @@ fn under_dir_norm(target: &str, base: &str) -> bool {
     }
 }
 
-fn compile_policy_cedar_engine(
+pub(crate) fn compile_policy_cedar_engine(
     policy: &LoadedOctopusPolicy,
 ) -> Result<Option<CedarPolicyEngine>, String> {
     if policy.cedar_engine.is_none() {
@@ -668,6 +1305,7 @@ struct CedarFsServerState {
     cwd: String,
     sandbox_mode: String,
     auth_token: String,
+    runtime_monitor: Option<Arc<LiveRuntimeMonitor>>,
 }
 
 #[derive(Deserialize)]
@@ -704,6 +1342,31 @@ fn evaluate_cedar_fs_request(
     state: &CedarFsServerState,
     req: &CedarFsIpcRequest,
 ) -> CedarFsIpcResponse {
+    let mut resp = evaluate_cedar_fs_request_deterministic(state, req);
+    if resp.allowed {
+        if let Some(ref monitor) = state.runtime_monitor {
+            let kind = match req.action.as_str() {
+                "exec" => RuntimeEventKind::ChildProcess,
+                "fs_write" => RuntimeEventKind::FileWrite,
+                _ => RuntimeEventKind::FileRead,
+            };
+            let verdict = monitor.record_and_evaluate(kind, 0, 0.02, 0.22);
+            if verdict.block_execution {
+                resp = CedarFsIpcResponse {
+                    allowed: false,
+                    explicit_forbid: true,
+                    reason: format!("latent_runtime_guard_blocked: {}", verdict.reason),
+                };
+            }
+        }
+    }
+    resp
+}
+
+fn evaluate_cedar_fs_request_deterministic(
+    state: &CedarFsServerState,
+    req: &CedarFsIpcRequest,
+) -> CedarFsIpcResponse {
     if !constant_time_eq(&req.token, &state.auth_token) {
         return CedarFsIpcResponse {
             allowed: false,
@@ -727,6 +1390,13 @@ fn evaluate_cedar_fs_request(
             "cwd": state.cwd,
             "sandbox_mode": state.sandbox_mode,
             "is_wasm": false,
+            "is_packed": false,
+            "has_wx_violation": false,
+            "direct_syscall_count": 0i64,
+            "obfuscation_entropy_x100": 0i64,
+            "high_obfuscation_entropy": false,
+            "is_authenticode_signed": false,
+            "binary_format": "unknown",
         });
         let verdict =
             match state
@@ -1073,6 +1743,7 @@ async fn start_cedar_fs_control_server(
     cwd: &Path,
     sandbox_mode: SandboxMode,
     appcontainer_sid: Option<&str>,
+    runtime_monitor: Option<Arc<LiveRuntimeMonitor>>,
 ) -> Result<Option<CedarFsControlHandle>, String> {
     let Some(engine) = compile_policy_cedar_engine(policy)? else {
         return Ok(None);
@@ -1093,6 +1764,7 @@ async fn start_cedar_fs_control_server(
         cwd: cwd.to_string_lossy().to_string(),
         sandbox_mode: sandbox_mode.as_str().to_string(),
         auth_token: auth_token.clone(),
+        runtime_monitor,
     });
 
     #[cfg(windows)]
@@ -1255,9 +1927,91 @@ fn strip_matching_outer_quotes(mut s: &str) -> &str {
     }
 }
 
-fn extract_preflight_arg_candidate(unquoted_tok: &str) -> Option<&str> {
+fn strip_curl_form_param_suffix(s: &str) -> &str {
+    let mut best_end = s.len();
+    for (idx, _) in s.match_indices(';') {
+        let after = s[idx + 1..].trim_start();
+        if strip_prefix_ci(after, "type=").is_some()
+            || strip_prefix_ci(after, "filename=").is_some()
+            || strip_prefix_ci(after, "encoder=").is_some()
+            || strip_prefix_ci(after, "headers=").is_some()
+        {
+            best_end = idx;
+            break;
+        }
+    }
+    strip_matching_outer_quotes(s[..best_end].trim())
+}
+
+fn is_path_like_rhs(rhs: &str) -> bool {
+    let b = rhs.as_bytes();
+    rhs.starts_with(['/', '\\', '.', '~'])
+        || rhs.contains(['/', '\\'])
+        || (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':')
+}
+
+fn extract_preflight_arg_candidate_once(unquoted_tok: &str) -> Option<&str> {
+    if let Some(after_at) = unquoted_tok.strip_prefix('@') {
+        let cand = strip_curl_form_param_suffix(after_at);
+        return if cand.is_empty() { None } else { Some(cand) };
+    }
     if !unquoted_tok.starts_with('-') {
+        if let Some(after_slash) = unquoted_tok
+            .strip_prefix('/')
+            .filter(|rest| !rest.starts_with('/'))
+        {
+            let sep_pos = match (after_slash.find('='), after_slash.find(':')) {
+                (Some(e), Some(c)) => Some(e.min(c)),
+                (Some(e), None) => Some(e),
+                (None, Some(c)) => Some(c),
+                (None, None) => None,
+            };
+            if let Some(pos) = sep_pos {
+                let switch_name = &after_slash[..pos];
+                let mut bytes = switch_name.bytes();
+                let is_win_switch = bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
+                    && bytes.all(|b| {
+                        b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-' | b'+' | b'*')
+                    });
+                if is_win_switch {
+                    let cand = strip_matching_outer_quotes(&after_slash[pos + 1..]);
+                    return if cand.is_empty() { None } else { Some(cand) };
+                }
+            }
+        }
+        if let Some(eq_pos) = unquoted_tok.find('=') {
+            let lhs = unquoted_tok[..eq_pos].trim();
+            if !lhs.is_empty()
+                && lhs
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '[' | ']'))
+            {
+                let mut cand = strip_matching_outer_quotes(&unquoted_tok[eq_pos + 1..]);
+                if let Some(after_lt) = cand.strip_prefix('<').filter(|rest| !rest.ends_with('>')) {
+                    cand = strip_curl_form_param_suffix(after_lt);
+                }
+                return if cand.is_empty() { None } else { Some(cand) };
+            }
+        }
+        if let Some(at_pos) = unquoted_tok.find('@') {
+            let lhs = unquoted_tok[..at_pos].trim();
+            if !lhs.is_empty()
+                && lhs
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '[' | ']'))
+            {
+                let rhs = strip_curl_form_param_suffix(&unquoted_tok[at_pos + 1..]);
+                if !rhs.is_empty() && is_path_like_rhs(rhs) {
+                    return Some(rhs);
+                }
+            }
+        }
         return Some(unquoted_tok);
+    }
+    let ub = unquoted_tok.as_bytes();
+    if ub.len() >= 3 && ub[0] == b'-' && ub[1].is_ascii_alphabetic() && ub[2] == b'@' {
+        let cand = strip_matching_outer_quotes(&unquoted_tok[2..]);
+        return if cand.is_empty() { None } else { Some(cand) };
     }
     let sep_pos = match (unquoted_tok.find('='), unquoted_tok.find(':')) {
         (Some(e), Some(c)) => Some(e.min(c)),
@@ -1269,7 +2023,12 @@ fn extract_preflight_arg_candidate(unquoted_tok: &str) -> Option<&str> {
     if lhs.trim_start_matches('-').is_empty() {
         return None;
     }
-    let cand = strip_matching_outer_quotes(&unquoted_tok[sep_pos + 1..]);
+    let mut cand = strip_matching_outer_quotes(&unquoted_tok[sep_pos + 1..]);
+    if unquoted_tok.as_bytes()[sep_pos] == b'=' {
+        if let Some(after_lt) = cand.strip_prefix('<').filter(|rest| !rest.ends_with('>')) {
+            cand = strip_curl_form_param_suffix(after_lt);
+        }
+    }
     if cand.is_empty() {
         None
     } else {
@@ -1277,12 +2036,159 @@ fn extract_preflight_arg_candidate(unquoted_tok: &str) -> Option<&str> {
     }
 }
 
+fn extract_preflight_arg_candidate(unquoted_tok: &str) -> Option<&str> {
+    let mut cur = unquoted_tok;
+    for step in 0..4 {
+        let Some(next) = extract_preflight_arg_candidate_once(cur) else {
+            return if step > 0 && cur.contains(['/', '\\']) {
+                Some(cur)
+            } else {
+                None
+            };
+        };
+        if next == cur || next.len() >= cur.len() {
+            return Some(next);
+        }
+        cur = next;
+    }
+    Some(cur)
+}
+
+fn sha256_file_within_limit(path: &Path, require_mz: bool) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    const MAX_HASH_BYTES: u64 = 64 * 1024 * 1024;
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_HASH_BYTES {
+        return None;
+    }
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut buf = [0u8; 65536];
+    let n = f.read(&mut buf).ok()?;
+    if require_mz && (n < 2 || &buf[..2] != b"MZ") {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(&buf[..n]);
+    loop {
+        let m = f.read(&mut buf).ok()?;
+        if m == 0 {
+            break;
+        }
+        hasher.update(&buf[..m]);
+    }
+    Some(hex::encode(hasher.finalize()))
+}
+
+fn sha256_locked_file_for_byovd(
+    file: &mut std::fs::File,
+    canonical_path: &str,
+    file_size: u64,
+) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::collections::HashMap;
+    use std::io::{Read, Seek, SeekFrom};
+    use std::sync::{OnceLock, RwLock};
+
+    const MAX_NON_DRIVER_BYOVD_HASH_BYTES: u64 = 2 * 1024 * 1024;
+    const MAX_SYS_BYOVD_HASH_BYTES: u64 = 64 * 1024 * 1024;
+
+    let is_sys_driver = canonical_path.to_ascii_lowercase().ends_with(".sys");
+    let limit = if is_sys_driver {
+        MAX_SYS_BYOVD_HASH_BYTES
+    } else {
+        MAX_NON_DRIVER_BYOVD_HASH_BYTES
+    };
+    if file_size > limit {
+        return None;
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+    enum HashCacheKey {
+        #[cfg(windows)]
+        Windows(crate::security::executable_identity::KernelFileIdentityKey),
+        #[cfg(unix)]
+        Unix {
+            dev: u64,
+            ino: u64,
+            mtime_sec: i64,
+            mtime_nsec: i64,
+            size: u64,
+        },
+    }
+
+    static BYOVD_HASH_CACHE: OnceLock<RwLock<HashMap<HashCacheKey, String>>> = OnceLock::new();
+    let cache = BYOVD_HASH_CACHE.get_or_init(|| RwLock::new(HashMap::with_capacity(64)));
+
+    let cache_key: Option<HashCacheKey> = {
+        #[cfg(windows)]
+        {
+            crate::security::executable_identity::query_file_identity_key_from_file(file)
+                .map(HashCacheKey::Windows)
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            file.metadata().ok().map(|meta| HashCacheKey::Unix {
+                dev: meta.dev(),
+                ino: meta.ino(),
+                mtime_sec: meta.mtime(),
+                mtime_nsec: meta.mtime_nsec(),
+                size: file_size,
+            })
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            None
+        }
+    };
+
+    if let Some(ref key) = cache_key {
+        if let Ok(guard) = cache.read() {
+            if let Some(hit) = guard.get(key) {
+                return Some(hit.clone());
+            }
+        }
+    }
+
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut buf = [0u8; 65536];
+    let mut hasher = Sha256::new();
+    loop {
+        let m = file.read(&mut buf).ok()?;
+        if m == 0 {
+            break;
+        }
+        hasher.update(&buf[..m]);
+    }
+    let _ = file.seek(SeekFrom::Start(0));
+    let digest = hex::encode(hasher.finalize());
+
+    if let Some(key) = cache_key {
+        if let Ok(mut guard) = cache.write() {
+            if guard.len() >= 256 {
+                guard.clear();
+            }
+            guard.insert(key, digest.clone());
+        }
+    }
+
+    Some(digest)
+}
+
+struct PreflightOutcome {
+    canonical_stem: String,
+    resolved_exe: Option<PathBuf>,
+    locked_handles: Vec<crate::security::executable_identity::VerifiedExecutableHandle>,
+    rea_fact: Option<crate::security::rate_limit_backoff::ReaBinaryFact>,
+}
+
 fn run_preflight_gate(
     args: &OctopusRunArgs,
     policy: &LoadedOctopusPolicy,
     cwd: &Path,
     is_wasm: bool,
-) -> Result<(String, Option<PathBuf>), String> {
+) -> Result<PreflightOutcome, String> {
     let program = &args.command[0];
     let cmd_args = &args.command[1..];
 
@@ -1326,15 +2232,28 @@ fn run_preflight_gate(
             std::fs::canonicalize(&cand).unwrap_or(cand),
         ))
     } else {
+        if let Some((driver_path, driver_hash)) =
+            crate::arm::kernel_sentinel_arm::match_byovd_vulnerable_driver(Some(program), None)
+        {
+            return Err(format!(
+                "BYOVD vulnerable driver target '{}' is blocked (matched '{}' sha256:{})",
+                program, driver_path, driver_hash
+            ));
+        }
         let resolved = resolve_executable_on_path(program, cwd);
         if let Some(ref exe_path) = resolved {
-            if let Ok(probe) = DynamicBinaryMetadataProbe::probe_path(exe_path) {
-                if probe.is_privileged_target() {
-                    return Err(format!(
-                        "DynamicBinaryMetadataProbe blocked privileged executable '{}'",
-                        exe_path.display()
-                    ));
-                }
+            if let Some((driver_path, driver_hash)) =
+                crate::arm::kernel_sentinel_arm::match_byovd_vulnerable_driver(
+                    Some(&exe_path.to_string_lossy()),
+                    None,
+                )
+            {
+                return Err(format!(
+                    "BYOVD vulnerable driver executable '{}' is blocked (matched '{}' sha256:{})",
+                    exe_path.display(),
+                    driver_path,
+                    driver_hash
+                ));
             }
         }
         resolved
@@ -1345,6 +2264,26 @@ fn run_preflight_gate(
     }
 
     let check_rtasp_token = |val: &str, orig_tok: &str| -> Result<(), String> {
+        if let Some((driver_path, driver_hash)) =
+            crate::arm::kernel_sentinel_arm::match_byovd_vulnerable_driver(Some(val), None)
+        {
+            return Err(format!(
+                "BYOVD vulnerable driver argument '{}' is blocked (matched '{}' sha256:{})",
+                orig_tok, driver_path, driver_hash
+            ));
+        }
+        if has_file_url_globbing(val) {
+            return Err(format!(
+                "URL globbing in file: URL argument '{}' is denied",
+                orig_tok
+            ));
+        }
+        if is_untrusted_windows_named_pipe_arg(val) {
+            return Err(format!(
+                "Untrusted Windows named-pipe kernel escape argument '{}' is denied",
+                orig_tok
+            ));
+        }
         #[cfg(windows)]
         if is_raw_admin_or_ipc_share_str(val) {
             return Err(format!(
@@ -1398,6 +2337,7 @@ fn run_preflight_gate(
     let is_python = !is_wasm && is_python_aliases(&prog_aliases);
 
     let mut skip_arg_indices = std::collections::HashSet::<usize>::new();
+    let mut inline_payload_indices = Vec::<usize>::new();
     let mut entry_script_idx: Option<usize> = None;
     if is_python {
         let mut i = 0;
@@ -1483,6 +2423,7 @@ fn run_preflight_gate(
             {
                 if i + 1 < cmd_args.len() {
                     skip_arg_indices.insert(i + 1);
+                    inline_payload_indices.push(i + 1);
                 }
                 break;
             }
@@ -1524,6 +2465,191 @@ fn run_preflight_gate(
         }
     }
 
+    if !inline_payload_indices.is_empty() {
+        let has_write_hint = |payload: &str| -> bool {
+            let lower = payload.to_ascii_lowercase();
+            lower.contains('>')
+                || lower.split_whitespace().any(|w| {
+                    matches!(
+                        w.trim_matches(['"', '\'', ';', '&', '|']),
+                        "tee"
+                            | "cp"
+                            | "mv"
+                            | "rm"
+                            | "rmdir"
+                            | "del"
+                            | "erase"
+                            | "copy"
+                            | "xcopy"
+                            | "robocopy"
+                            | "move"
+                            | "ren"
+                            | "rename"
+                            | "rd"
+                            | "touch"
+                            | "truncate"
+                            | "mklink"
+                            | "ln"
+                            | "set-content"
+                            | "add-content"
+                            | "out-file"
+                    )
+                })
+        };
+        for idx in inline_payload_indices {
+            let payload = cmd_args[idx].as_str();
+            let write_hint = has_write_hint(payload);
+            for raw_sub in payload.split(|c: char| {
+                c.is_whitespace()
+                    || matches!(c, ';' | '&' | '|' | '>' | '<' | '(' | ')' | '`' | ',')
+            }) {
+                let sub = strip_matching_outer_quotes(raw_sub.trim());
+                if sub.is_empty() {
+                    continue;
+                }
+                let sub_cand = extract_preflight_arg_candidate(sub).unwrap_or(sub);
+                if sub_cand.is_empty() {
+                    continue;
+                }
+                check_rtasp_token(sub_cand, payload)?;
+
+                let sub_lower = sub_cand.to_ascii_lowercase();
+                if sub_lower.starts_with("http://")
+                    || sub_lower.starts_with("https://")
+                    || sub_lower.starts_with("ws://")
+                    || sub_lower.starts_with("wss://")
+                    || sub_lower.starts_with("ftp://")
+                {
+                    continue;
+                }
+
+                #[cfg(windows)]
+                let norm_sub_owned = strip_win_verbatim_and_local_unc_str(sub_cand);
+                #[cfg(windows)]
+                let norm_sub = norm_sub_owned.as_str();
+                #[cfg(not(windows))]
+                let norm_sub = sub_cand;
+
+                let p = Path::new(norm_sub);
+                let is_tilde = norm_sub == "~"
+                    || norm_sub.starts_with("~/")
+                    || (cfg!(windows) && norm_sub.starts_with("~\\"));
+                let is_win_drive = cfg!(windows)
+                    && norm_sub.len() >= 2
+                    && norm_sub.as_bytes()[0].is_ascii_alphabetic()
+                    && norm_sub.as_bytes()[1] == b':';
+                let is_path_like = is_tilde
+                    || is_win_drive
+                    || p.is_absolute()
+                    || norm_sub.contains('/')
+                    || norm_sub.contains('\\')
+                    || norm_sub.starts_with('.')
+                    || cwd.join(p).exists();
+                if !is_path_like {
+                    continue;
+                }
+
+                let abs = if let Some(exp) = expand_tilde_for_preflight(norm_sub) {
+                    exp
+                } else if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    cwd.join(p)
+                };
+                let lex_raw = strip_win_ads_and_trailing_dots_for_cedar(&abs.to_string_lossy());
+                #[cfg(windows)]
+                if is_raw_admin_or_ipc_share_str(sub_cand) || is_unc_admin_share_str(&lex_raw) {
+                    return Err(format!(
+                        "Windows administrative UNC share argument '{}' in shell payload is denied",
+                        sub_cand
+                    ));
+                }
+                let lex_clean = lexical_collapse_slashes(&lex_raw);
+                let mut check_paths = vec![lex_clean.clone()];
+                #[cfg(windows)]
+                if !is_tilde && !is_win_drive && !p.is_absolute() && p.has_root() {
+                    push_win_root_relative_candidates(norm_sub, &mut check_paths);
+                }
+                if let Ok(canon_pb) = std::fs::canonicalize(&abs) {
+                    let canon_stripped = strip_win_verbatim_prefix(canon_pb);
+                    let canon_raw = strip_win_ads_and_trailing_dots_for_cedar(
+                        &canon_stripped.to_string_lossy(),
+                    );
+                    let canon_clean = lexical_collapse_slashes(&canon_raw);
+                    if canon_clean != lex_clean {
+                        check_paths.push(canon_clean);
+                    }
+                }
+
+                if !policy.is_standalone_cedar {
+                    for cp in &check_paths {
+                        if json_deny_paths.iter().any(|dp| under_dir_norm(cp, dp)) {
+                            return Err(format!(
+                                "shell payload targets blocked policy filesystem.deny path '{}'",
+                                sub_cand
+                            ));
+                        }
+                    }
+                }
+
+                for cp in &check_paths {
+                    if let Some(kind) = classify_mandatory_write_deny_path(cp)
+                        .or_else(|| classify_pinned_parent_for_write_deny(cp))
+                    {
+                        return Err(format!(
+                            "MandatoryWriteDenyGuard blocked shell payload targeting protected path '{}' ({:?})",
+                            sub_cand, kind
+                        ));
+                    }
+                    let base = Path::new(cp)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    if write_hint && (base == ".env" || base.starts_with(".env.")) {
+                        return Err(format!(
+                            "MandatoryWriteDenyGuard blocked shell write payload targeting '{}'",
+                            sub_cand
+                        ));
+                    }
+                }
+
+                if let Some(ref cedar) = policy.cedar_engine {
+                    let action = if write_hint { "fs_write" } else { "fs_read" };
+                    for cand in &check_paths {
+                        let is_sensitive = classify_sensitive_system_path(cand).is_some();
+                        #[cfg(windows)]
+                        let norm_path = cand.to_ascii_lowercase();
+                        #[cfg(not(windows))]
+                        let norm_path = cand.clone();
+                        let ctx_val = if write_hint {
+                            serde_json::json!({
+                                "path": cand,
+                                "normalized_path": norm_path,
+                                "is_mandatory_deny": classify_mandatory_write_deny_path(cand).is_some(),
+                            })
+                        } else {
+                            serde_json::json!({
+                                "path": cand,
+                                "normalized_path": norm_path,
+                                "is_sensitive": is_sensitive,
+                            })
+                        };
+                        let verdict = cedar
+                            .evaluate("cli_runner", action, cand, "FilePath", ctx_val)
+                            .map_err(|e| format!("Cedar {} evaluation failed: {}", action, e))?;
+                        if !verdict.is_allowed && !verdict.determining_policies.is_empty() {
+                            return Err(format!(
+                                "Cedar policy explicitly forbids {} for shell payload argument '{}'",
+                                action, sub_cand
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if !policy.is_standalone_cedar || policy.cedar_engine.is_some() {
         for (idx, tok) in cmd_args.iter().enumerate() {
             if skip_arg_indices.contains(&idx) {
@@ -1537,212 +2663,263 @@ fn run_preflight_gate(
             if unquoted_tok.is_empty() {
                 continue;
             }
-            let Some(candidate_tok) = extract_preflight_arg_candidate(unquoted_tok) else {
+            let Some(first_candidate_tok) = extract_preflight_arg_candidate(unquoted_tok) else {
                 continue;
             };
-
-            let lower_tok = candidate_tok.to_ascii_lowercase();
-            if lower_tok.starts_with("http://")
-                || lower_tok.starts_with("https://")
-                || lower_tok.starts_with("ws://")
-                || lower_tok.starts_with("wss://")
-                || lower_tok.starts_with("ftp://")
-            {
-                continue;
-            }
-            #[cfg(windows)]
-            if candidate_tok.starts_with('/')
-                && !candidate_tok.starts_with("//")
-                && !candidate_tok[1..].contains(['/', '\\'])
-                && candidate_tok.len() <= 8
-                && !Path::new(candidate_tok).exists()
-            {
-                continue;
-            }
-
-            let p = Path::new(candidate_tok);
-            let is_tilde = candidate_tok == "~"
-                || candidate_tok.starts_with("~/")
-                || (cfg!(windows) && candidate_tok.starts_with("~\\"));
-            let is_win_drive = cfg!(windows)
-                && candidate_tok.len() >= 2
-                && candidate_tok.as_bytes()[0].is_ascii_alphabetic()
-                && candidate_tok.as_bytes()[1] == b':';
-            let is_path_candidate = is_tilde
-                || is_win_drive
-                || p.is_absolute()
-                || candidate_tok.contains('/')
-                || candidate_tok.contains('\\')
-                || cwd.join(p).exists();
-            if !is_path_candidate {
-                continue;
-            }
-
-            let abs = if let Some(exp) = expand_tilde_for_preflight(candidate_tok) {
-                exp
-            } else if is_win_drive && !candidate_tok[2..].starts_with(['/', '\\']) {
-                let cwd_s = cwd.to_string_lossy();
-                let cwd_clean = cwd_s.strip_prefix(r"\\?\").unwrap_or(&cwd_s);
-                let cwd_bytes = cwd_clean.as_bytes();
-                if cwd_bytes.len() >= 2
-                    && cwd_bytes[1] == b':'
-                    && cwd_bytes[0].eq_ignore_ascii_case(&candidate_tok.as_bytes()[0])
-                {
-                    let rel = &candidate_tok[2..];
-                    if rel.is_empty() {
-                        cwd.to_path_buf()
-                    } else {
-                        cwd.join(rel)
+            let mut candidate_list = vec![first_candidate_tok];
+            if canonical_stem == "curl" {
+                if let Some(at_pos) = first_candidate_tok.find('@') {
+                    let lhs = first_candidate_tok[..at_pos].trim();
+                    let rhs = strip_curl_form_param_suffix(&first_candidate_tok[at_pos + 1..]);
+                    if !lhs.is_empty()
+                        && !rhs.is_empty()
+                        && lhs.chars().all(|c| {
+                            c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '[' | ']')
+                        })
+                        && rhs != first_candidate_tok
+                        && cwd.join(rhs).exists()
+                    {
+                        candidate_list.push(rhs);
                     }
-                } else {
-                    p.to_path_buf()
                 }
-            } else if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                cwd.join(p)
-            };
+            }
+            for candidate_tok in candidate_list {
+                if candidate_tok != first_candidate_tok {
+                    check_rtasp_token(candidate_tok, tok)?;
+                }
 
-            #[cfg(windows)]
-            if is_raw_admin_or_ipc_share_str(candidate_tok) {
-                return Err(format!(
-                    "Windows administrative UNC share argument '{}' is denied",
-                    tok
-                ));
-            }
-            let lex_raw = strip_win_ads_and_trailing_dots_for_cedar(&abs.to_string_lossy());
-            #[cfg(windows)]
-            if is_unc_admin_share_str(&lex_raw) {
-                return Err(format!(
-                    "Windows administrative UNC share argument '{}' is denied",
-                    tok
-                ));
-            }
-            let lex_clean = lexical_collapse_slashes(&lex_raw);
-            let mut check_paths = vec![lex_clean.clone()];
-            if let Ok(canon_pb) = std::fs::canonicalize(&abs) {
-                let canon_stripped = strip_win_verbatim_prefix(canon_pb);
-                let canon_raw =
-                    strip_win_ads_and_trailing_dots_for_cedar(&canon_stripped.to_string_lossy());
+                let lower_tok = candidate_tok.to_ascii_lowercase();
+                if lower_tok.starts_with("http://")
+                    || lower_tok.starts_with("https://")
+                    || lower_tok.starts_with("ws://")
+                    || lower_tok.starts_with("wss://")
+                    || lower_tok.starts_with("ftp://")
+                {
+                    continue;
+                }
                 #[cfg(windows)]
-                if is_unc_admin_share_str(&canon_raw) {
+                if candidate_tok.starts_with('/')
+                    && !candidate_tok.starts_with("//")
+                    && !candidate_tok[1..].contains(['/', '\\'])
+                    && candidate_tok.len() <= 8
+                    && !Path::new(candidate_tok).exists()
+                {
+                    continue;
+                }
+
+                #[cfg(windows)]
+                let norm_cand_owned = strip_win_verbatim_and_local_unc_str(candidate_tok);
+                #[cfg(windows)]
+                let norm_cand = norm_cand_owned.as_str();
+                #[cfg(not(windows))]
+                let norm_cand = candidate_tok;
+
+                let p = Path::new(norm_cand);
+                let is_tilde = norm_cand == "~"
+                    || norm_cand.starts_with("~/")
+                    || (cfg!(windows) && norm_cand.starts_with("~\\"));
+                let is_win_drive = cfg!(windows)
+                    && norm_cand.len() >= 2
+                    && norm_cand.as_bytes()[0].is_ascii_alphabetic()
+                    && norm_cand.as_bytes()[1] == b':';
+                let is_path_candidate = is_tilde
+                    || is_win_drive
+                    || p.is_absolute()
+                    || norm_cand.contains('/')
+                    || norm_cand.contains('\\')
+                    || cwd.join(p).exists();
+                if !is_path_candidate {
+                    continue;
+                }
+
+                let abs = if let Some(exp) = expand_tilde_for_preflight(norm_cand) {
+                    exp
+                } else if is_win_drive && !norm_cand[2..].starts_with(['/', '\\']) {
+                    let cwd_s = cwd.to_string_lossy();
+                    let cwd_clean = cwd_s.strip_prefix(r"\\?\").unwrap_or(&cwd_s);
+                    let cwd_bytes = cwd_clean.as_bytes();
+                    if cwd_bytes.len() >= 2
+                        && cwd_bytes[1] == b':'
+                        && cwd_bytes[0].eq_ignore_ascii_case(&norm_cand.as_bytes()[0])
+                    {
+                        let rel = &norm_cand[2..];
+                        if rel.is_empty() {
+                            cwd.to_path_buf()
+                        } else {
+                            cwd.join(rel)
+                        }
+                    } else {
+                        p.to_path_buf()
+                    }
+                } else if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    cwd.join(p)
+                };
+
+                #[cfg(windows)]
+                if is_raw_admin_or_ipc_share_str(candidate_tok) {
                     return Err(format!(
                         "Windows administrative UNC share argument '{}' is denied",
                         tok
                     ));
                 }
-                let canon_clean = lexical_collapse_slashes(&canon_raw);
-                if canon_clean != lex_clean {
-                    check_paths.push(canon_clean);
+                if abs.is_file() {
+                    if let Some(hash) = sha256_file_within_limit(&abs, true) {
+                        if let Some((driver_path, driver_hash)) =
+                            crate::arm::kernel_sentinel_arm::match_byovd_vulnerable_driver(
+                                Some(&abs.to_string_lossy()),
+                                Some(&hash),
+                            )
+                        {
+                            return Err(format!(
+                                "BYOVD vulnerable driver file argument '{}' is blocked (matched '{}' sha256:{})",
+                                tok, driver_path, driver_hash
+                            ));
+                        }
+                    }
                 }
-            }
-
-            if !policy.is_standalone_cedar {
-                for cp in &check_paths {
-                    if json_deny_paths.iter().any(|dp| under_dir_norm(cp, dp)) {
+                let lex_raw = strip_win_ads_and_trailing_dots_for_cedar(&abs.to_string_lossy());
+                #[cfg(windows)]
+                if is_unc_admin_share_str(&lex_raw) {
+                    return Err(format!(
+                        "Windows administrative UNC share argument '{}' is denied",
+                        tok
+                    ));
+                }
+                let lex_clean = lexical_collapse_slashes(&lex_raw);
+                let mut check_paths = vec![lex_clean.clone()];
+                #[cfg(windows)]
+                if !is_tilde && !is_win_drive && !p.is_absolute() && p.has_root() {
+                    push_win_root_relative_candidates(norm_cand, &mut check_paths);
+                }
+                if let Ok(canon_pb) = std::fs::canonicalize(&abs) {
+                    let canon_stripped = strip_win_verbatim_prefix(canon_pb);
+                    let canon_raw = strip_win_ads_and_trailing_dots_for_cedar(
+                        &canon_stripped.to_string_lossy(),
+                    );
+                    #[cfg(windows)]
+                    if is_unc_admin_share_str(&canon_raw) {
                         return Err(format!(
-                            "argument '{}' is blocked by policy filesystem.deny",
+                            "Windows administrative UNC share argument '{}' is denied",
                             tok
                         ));
                     }
-                }
-            }
-
-            if !is_python
-                && !is_wasm
-                && matches!(
-                    canonical_stem.as_str(),
-                    "rm" | "rmdir"
-                        | "unlink"
-                        | "mv"
-                        | "move"
-                        | "ren"
-                        | "rename"
-                        | "del"
-                        | "erase"
-                        | "rd"
-                        | "mklink"
-                        | "ln"
-                )
-            {
-                for cp in &check_paths {
-                    if let Some(kind) = classify_pinned_parent_for_write_deny(cp) {
-                        return Err(format!(
-                            "MandatoryWriteDenyGuard blocked '{}' targeting protected path '{}' ({:?})",
-                            canonical_stem, tok, kind
-                        ));
+                    let canon_clean = lexical_collapse_slashes(&canon_raw);
+                    if canon_clean != lex_clean {
+                        check_paths.push(canon_clean);
                     }
                 }
-            }
 
-            if let Some(ref cedar) = policy.cedar_engine {
-                let is_entry_script = entry_script_idx == Some(idx);
-                let enforce_default_deny = !is_entry_script
-                    && (policy.is_standalone_cedar || cedar.has_permit_action_policy("fs_read"));
-                let mut all_allowed = true;
-
-                for cand in &check_paths {
-                    let is_sensitive = classify_sensitive_system_path(cand).is_some();
-                    #[cfg(windows)]
-                    let norm_path = cand.to_ascii_lowercase();
-                    #[cfg(not(windows))]
-                    let norm_path = cand.clone();
-
-                    let verdict = cedar
-                        .evaluate(
-                            "cli_runner",
-                            "fs_read",
-                            cand,
-                            "FilePath",
-                            serde_json::json!({
-                                "path": cand,
-                                "normalized_path": norm_path,
-                                "is_sensitive": is_sensitive,
-                            }),
-                        )
-                        .map_err(|e| format!("Cedar fs_read evaluation failed: {}", e))?;
-                    if !verdict.is_allowed && !verdict.determining_policies.is_empty() {
-                        return Err(format!(
-                            "Cedar policy explicitly forbids fs_read for argument '{}'",
-                            tok
-                        ));
+                if !policy.is_standalone_cedar {
+                    for cp in &check_paths {
+                        if json_deny_paths.iter().any(|dp| under_dir_norm(cp, dp)) {
+                            return Err(format!(
+                                "argument '{}' is blocked by policy filesystem.deny",
+                                tok
+                            ));
+                        }
                     }
-                    let mut cand_allowed = verdict.is_allowed;
-                    #[cfg(windows)]
-                    if norm_path != *cand {
-                        let verdict_lower = cedar
+                }
+
+                if !is_python
+                    && !is_wasm
+                    && matches!(
+                        canonical_stem.as_str(),
+                        "rm" | "rmdir"
+                            | "unlink"
+                            | "mv"
+                            | "move"
+                            | "ren"
+                            | "rename"
+                            | "del"
+                            | "erase"
+                            | "rd"
+                            | "mklink"
+                            | "ln"
+                    )
+                {
+                    for cp in &check_paths {
+                        if let Some(kind) = classify_pinned_parent_for_write_deny(cp) {
+                            return Err(format!(
+                                "MandatoryWriteDenyGuard blocked '{}' targeting protected path '{}' ({:?})",
+                                canonical_stem, tok, kind
+                            ));
+                        }
+                    }
+                }
+
+                if let Some(ref cedar) = policy.cedar_engine {
+                    let is_entry_script = entry_script_idx == Some(idx);
+                    let enforce_default_deny = !is_entry_script
+                        && (policy.is_standalone_cedar
+                            || cedar.has_permit_action_policy("fs_read"));
+                    let mut all_allowed = true;
+
+                    for cand in &check_paths {
+                        let is_sensitive = classify_sensitive_system_path(cand).is_some();
+                        #[cfg(windows)]
+                        let norm_path = cand.to_ascii_lowercase();
+                        #[cfg(not(windows))]
+                        let norm_path = cand.clone();
+
+                        let verdict = cedar
                             .evaluate(
                                 "cli_runner",
                                 "fs_read",
-                                &norm_path,
+                                cand,
                                 "FilePath",
                                 serde_json::json!({
-                                    "path": norm_path,
+                                    "path": cand,
                                     "normalized_path": norm_path,
                                     "is_sensitive": is_sensitive,
                                 }),
                             )
                             .map_err(|e| format!("Cedar fs_read evaluation failed: {}", e))?;
-                        if !verdict_lower.is_allowed
-                            && !verdict_lower.determining_policies.is_empty()
-                        {
+                        if !verdict.is_allowed && !verdict.determining_policies.is_empty() {
                             return Err(format!(
                                 "Cedar policy explicitly forbids fs_read for argument '{}'",
                                 tok
                             ));
                         }
-                        cand_allowed = cand_allowed || verdict_lower.is_allowed;
+                        #[allow(unused_mut)]
+                        let mut cand_allowed = verdict.is_allowed;
+                        #[cfg(windows)]
+                        if norm_path != *cand {
+                            let verdict_lower = cedar
+                                .evaluate(
+                                    "cli_runner",
+                                    "fs_read",
+                                    &norm_path,
+                                    "FilePath",
+                                    serde_json::json!({
+                                        "path": norm_path,
+                                        "normalized_path": norm_path,
+                                        "is_sensitive": is_sensitive,
+                                    }),
+                                )
+                                .map_err(|e| format!("Cedar fs_read evaluation failed: {}", e))?;
+                            if !verdict_lower.is_allowed
+                                && !verdict_lower.determining_policies.is_empty()
+                            {
+                                return Err(format!(
+                                    "Cedar policy explicitly forbids fs_read for argument '{}'",
+                                    tok
+                                ));
+                            }
+                            cand_allowed = cand_allowed || verdict_lower.is_allowed;
+                        }
+                        if !cand_allowed {
+                            all_allowed = false;
+                        }
                     }
-                    if !cand_allowed {
-                        all_allowed = false;
-                    }
-                }
 
-                if !all_allowed && enforce_default_deny {
-                    return Err(format!(
-                        "Cedar policy denied fs_read for argument '{}'",
-                        tok
-                    ));
+                    if !all_allowed && enforce_default_deny {
+                        return Err(format!(
+                            "Cedar policy denied fs_read for argument '{}'",
+                            tok
+                        ));
+                    }
                 }
             }
         }
@@ -1781,7 +2958,184 @@ fn run_preflight_gate(
         }
     }
 
+    let bin_cfg = &policy.json_policy.binary_integrity;
+    let check_catalog_sig = bin_cfg.require_signed_binaries || policy.cedar_engine.is_some();
+    let mut locked_handles: Vec<crate::security::executable_identity::VerifiedExecutableHandle> =
+        Vec::new();
+    let mut rea_verdict_opt: Option<crate::security::rea_binary_gate::BinaryIntegrityVerdict> =
+        None;
+    let mut rea_fact_opt: Option<crate::security::rate_limit_backoff::ReaBinaryFact> = None;
+
+    if !is_wasm {
+        if let Some(ref exe_path) = resolved_exe {
+            let mut handle =
+                crate::security::executable_identity::open_and_lock_executable_for_cli(
+                    exe_path, program,
+                )
+                .map_err(|e| format!("pre-spawn executable lock failed: {}", e))?;
+            let byovd_hash = sha256_locked_file_for_byovd(
+                &mut handle.locked_file,
+                &handle.metadata.canonical_path,
+                handle.metadata.file_size,
+            );
+            if let Some((driver_path, driver_hash)) =
+                crate::arm::kernel_sentinel_arm::match_byovd_vulnerable_driver(
+                    Some(&handle.metadata.canonical_path),
+                    byovd_hash.as_deref(),
+                )
+            {
+                return Err(format!(
+                    "BYOVD vulnerable driver executable '{}' is blocked (matched '{}' sha256:{})",
+                    handle.metadata.canonical_path, driver_path, driver_hash
+                ));
+            }
+
+            let mut verdict = crate::security::rea_binary_gate::inspect_locked_file(
+                &mut handle.locked_file,
+                Path::new(&handle.metadata.canonical_path),
+                handle.metadata.file_size,
+                &handle.metadata.normalized_stem,
+                check_catalog_sig,
+            )?;
+            // 1-level shebang unwrap on Unix/scripts so interpreter binaries are also gated & locked
+            if verdict.format == crate::security::rea_binary_gate::BinaryFormat::ScriptShebang {
+                if let Some(ref interp) = verdict.shebang_interpreter {
+                    if let Some(interp_path) = resolve_executable_on_path(interp, cwd) {
+                        let mut interp_handle =
+                            crate::security::executable_identity::open_and_lock_executable_for_cli(
+                                &interp_path,
+                                interp,
+                            )
+                            .map_err(|e| {
+                                format!("pre-spawn shebang interpreter lock failed: {}", e)
+                            })?;
+                        let interp_byovd_hash = sha256_locked_file_for_byovd(
+                            &mut interp_handle.locked_file,
+                            &interp_handle.metadata.canonical_path,
+                            interp_handle.metadata.file_size,
+                        );
+                        if let Some((driver_path, driver_hash)) =
+                            crate::arm::kernel_sentinel_arm::match_byovd_vulnerable_driver(
+                                Some(&interp_handle.metadata.canonical_path),
+                                interp_byovd_hash.as_deref(),
+                            )
+                        {
+                            return Err(format!(
+                                "BYOVD vulnerable driver interpreter '{}' is blocked (matched '{}' sha256:{})",
+                                interp_handle.metadata.canonical_path, driver_path, driver_hash
+                            ));
+                        }
+                        let interp_verdict = crate::security::rea_binary_gate::inspect_locked_file(
+                            &mut interp_handle.locked_file,
+                            Path::new(&interp_handle.metadata.canonical_path),
+                            interp_handle.metadata.file_size,
+                            &interp_handle.metadata.normalized_stem,
+                            check_catalog_sig,
+                        )?;
+                        verdict = interp_verdict;
+                        locked_handles.push(handle);
+                        handle = interp_handle;
+                    }
+                }
+            }
+
+            let stem_lower = canonical_stem.to_ascii_lowercase();
+            let exec_stem_lower = handle.metadata.normalized_stem.to_ascii_lowercase();
+            let canonical_path_lower = handle.metadata.canonical_path.to_ascii_lowercase();
+            let direct_syscalls_exempt = bin_cfg.allow_direct_syscalls_for.iter().any(|entry| {
+                let e = entry.trim().to_ascii_lowercase();
+                !e.is_empty()
+                    && (e == stem_lower
+                        || e == exec_stem_lower
+                        || prog_aliases.iter().any(|a| a.eq_ignore_ascii_case(&e))
+                        || canonical_path_lower == e
+                        || canonical_path_lower.ends_with(&format!("/{}", e))
+                        || canonical_path_lower.ends_with(&format!("\\{}", e)))
+            });
+
+            let rea_policy = crate::security::rate_limit_backoff::PreSpawnReaPolicy {
+                enabled: bin_cfg.enabled,
+                require_signed_binaries: bin_cfg.require_signed_binaries,
+                block_packed: bin_cfg.block_packed,
+                block_wx_sections: bin_cfg.block_wx_sections,
+                block_direct_syscalls: bin_cfg.block_direct_syscalls && !direct_syscalls_exempt,
+                max_allowed_direct_syscalls: bin_cfg.max_allowed_direct_syscalls,
+                entropy_threshold: bin_cfg.entropy_threshold,
+            };
+
+            let fact = verdict.to_rea_binary_fact(0);
+            let gate_verdict = crate::security::rate_limit_backoff::global_rete_engine()
+                .evaluate_pre_spawn_rea_gate(
+                    fact.clone(),
+                    verdict.has_wx_violation,
+                    verdict.has_raw_size_anomaly,
+                    &verdict.header_anomalies,
+                    verdict.format,
+                    &rea_policy,
+                );
+            if bin_cfg.enabled && !gate_verdict.allowed {
+                return Err(format!(
+                    "Pre-spawn REA binary gate blocked '{}' ({}): {}",
+                    program,
+                    verdict.format.as_str(),
+                    gate_verdict.reasons.join("; ")
+                ));
+            }
+            if let Ok(probe) =
+                DynamicBinaryMetadataProbe::probe_locked_file(&mut handle.locked_file)
+            {
+                if probe.is_privileged_target() {
+                    return Err(format!(
+                        "DynamicBinaryMetadataProbe blocked privileged executable '{}'",
+                        handle.metadata.canonical_path
+                    ));
+                }
+            }
+            rea_verdict_opt = Some(verdict);
+            rea_fact_opt = Some(fact);
+            locked_handles.push(handle);
+        } else if bin_cfg.enabled && bin_cfg.require_signed_binaries {
+            return Err(format!(
+                "executable '{}' could not be resolved for pre-spawn REA gate",
+                program
+            ));
+        }
+    }
+
     if let Some(ref cedar) = policy.cedar_engine {
+        let (
+            is_packed,
+            has_wx_violation,
+            direct_syscall_count,
+            obfuscation_entropy_x100,
+            high_obfuscation_entropy,
+            is_authenticode_signed,
+            binary_format,
+        ) = if let Some(ref rv) = rea_verdict_opt {
+            (
+                rv.is_packed,
+                rv.has_wx_violation,
+                rv.direct_syscall_count as i64,
+                (rv.obfuscation_entropy * 100.0).round() as i64,
+                rv.obfuscation_entropy >= bin_cfg.entropy_threshold,
+                rv.is_authenticode_signed || rv.is_code_signed,
+                rv.format.as_str().to_string(),
+            )
+        } else {
+            (
+                false,
+                false,
+                0i64,
+                0i64,
+                false,
+                false,
+                if is_wasm {
+                    "wasm".to_string()
+                } else {
+                    "unknown".to_string()
+                },
+            )
+        };
         let verdict = cedar
             .evaluate(
                 "cli_runner",
@@ -1795,6 +3149,13 @@ fn run_preflight_gate(
                     "cwd": cwd.to_string_lossy().to_string(),
                     "sandbox_mode": args.sandbox.as_str(),
                     "is_wasm": is_wasm,
+                    "is_packed": is_packed,
+                    "has_wx_violation": has_wx_violation,
+                    "direct_syscall_count": direct_syscall_count,
+                    "obfuscation_entropy_x100": obfuscation_entropy_x100,
+                    "high_obfuscation_entropy": high_obfuscation_entropy,
+                    "is_authenticode_signed": is_authenticode_signed,
+                    "binary_format": binary_format,
                 }),
             )
             .map_err(|e| format!("Cedar exec evaluation failed: {}", e))?;
@@ -1810,7 +3171,12 @@ fn run_preflight_gate(
         }
     }
 
-    Ok((canonical_stem, resolved_exe))
+    Ok(PreflightOutcome {
+        canonical_stem,
+        resolved_exe,
+        locked_handles,
+        rea_fact: rea_fact_opt,
+    })
 }
 fn create_python_audit_guard(
     policy: &LoadedOctopusPolicy,
@@ -8752,6 +10118,16 @@ pub async fn execute_from_args(args: &[String]) -> i32 {
 }
 
 fn emit_preflight_denial(args: &OctopusRunArgs, start: Instant, label: &str, msg: String) -> i32 {
+    emit_preflight_denial_with_sbom(args, start, label, msg, None)
+}
+
+fn emit_preflight_denial_with_sbom(
+    args: &OctopusRunArgs,
+    start: Instant,
+    label: &str,
+    msg: String,
+    sbom_guard: Option<SbomGuardSummary>,
+) -> i32 {
     if args.json_output {
         emit_json_summary(&JsonRunSummary {
             status: "denied_preflight".to_string(),
@@ -8765,6 +10141,9 @@ fn emit_preflight_denial(args: &OctopusRunArgs, start: Instant, label: &str, msg
             stderr: msg.clone(),
             egress_events: Vec::new(),
             diagnostic: Some(msg),
+            virtual_patch_shield: None,
+            sbom_guard,
+            runtime_guard: None,
         });
     } else {
         eprintln!("[octopus] DENY {}: {}", label, msg);
@@ -8802,6 +10181,41 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
         );
         return emit_preflight_denial(&args, start, "cwd", msg);
     }
+    if let Err(reason) = check_no_reparse_or_symlink(&raw_cwd, "--cwd") {
+        return emit_preflight_denial(&args, start, "cwd-reparse", reason);
+    }
+    for allow_w in &policy.json_policy.filesystem.allow_write {
+        let trimmed = allow_w.trim();
+        let resolved_w = if let Some(exp) = expand_tilde_for_preflight(trimmed) {
+            exp
+        } else {
+            let p = Path::new(trimmed);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                raw_cwd.join(p)
+            }
+        };
+        if let Err(reason) = check_no_reparse_or_symlink(&resolved_w, "filesystem.allow_write") {
+            return emit_preflight_denial(&args, start, "allow-write-reparse", reason);
+        }
+    }
+    for allow_r in &policy.json_policy.filesystem.allow_read {
+        let trimmed = allow_r.trim();
+        let resolved_r = if let Some(exp) = expand_tilde_for_preflight(trimmed) {
+            exp
+        } else {
+            let p = Path::new(trimmed);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                raw_cwd.join(p)
+            }
+        };
+        if let Err(reason) = check_no_reparse_or_symlink(&resolved_r, "filesystem.allow_read") {
+            return emit_preflight_denial(&args, start, "allow-read-reparse", reason);
+        }
+    }
     let cwd = strip_win_verbatim_prefix(std::fs::canonicalize(&raw_cwd).unwrap_or(raw_cwd));
     let cwd_str = cwd.to_string_lossy().to_string();
     if let Some(kind) = classify_sensitive_system_path(&cwd_str) {
@@ -8827,13 +10241,132 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
         );
     }
 
+    if args.baseline_sbom.is_some() ^ args.sbom.is_some() {
+        return emit_preflight_denial(
+            &args,
+            start,
+            "sbom-guard",
+            "both --baseline-sbom <PATH> and --sbom <PATH> are required together".to_string(),
+        );
+    }
+    if args.sbom_intent.is_some() && args.sbom.is_none() {
+        return emit_preflight_denial(
+            &args,
+            start,
+            "sbom-guard",
+            "--sbom-intent requires --baseline-sbom and --sbom".to_string(),
+        );
+    }
+
+    let loaded_shield = if args.latent_weights.is_some() || args.sbom.is_some() {
+        match load_shield_for_cli(args.latent_weights.as_deref()) {
+            Ok(s) => Some(s),
+            Err(msg) => {
+                return emit_preflight_denial(&args, start, "latent-weights", msg);
+            }
+        }
+    } else {
+        None
+    };
+
     let is_wasm = is_wasm_or_wat_target(&args.command[0]);
-    let (canonical_stem, resolved_exe) = match run_preflight_gate(&args, &policy, &cwd, is_wasm) {
+    let shield_posture = crate::security::virtual_patch_shield::current_shield_posture();
+    let shield_active = shield_posture.is_shield_active_with_degraded_policy(
+        policy
+            .json_policy
+            .virtual_patch_shield
+            .fail_closed_on_degraded_telemetry,
+    );
+    let wasm_promotion_requested = args.wasm_promote
+        || args.sandbox == SandboxMode::WasmStrict
+        || policy.json_policy.virtual_patch_shield.promote_wasm_on_cve;
+    if !is_wasm && wasm_promotion_requested && shield_active {
+        return emit_preflight_denial(
+            &args,
+            start,
+            "virtual-patch-shield",
+            format!(
+                "Zero-Reboot Virtual-Patching Shield is active (reboot_pending={}, telemetry_degraded={}, cves={}); native command '{}' denied—promote workload to a .wasm/.wat Tier-1 Wasmtime guest",
+                shield_posture.reboot_pending,
+                shield_posture.telemetry_degraded_fail_closed,
+                shield_posture.unpatched_cve_ids.len(),
+                args.command[0]
+            ),
+        );
+    }
+
+    let preflight = match run_preflight_gate(&args, &policy, &cwd, is_wasm) {
         Ok(v) => v,
         Err(reason) => {
             return emit_preflight_denial(&args, start, "preflight", reason);
         }
     };
+    let canonical_stem = preflight.canonical_stem;
+    let resolved_exe = preflight.resolved_exe;
+    let locked_handles = preflight.locked_handles;
+    let rea_fact = preflight.rea_fact;
+
+    if !is_wasm && resolved_exe.is_none() {
+        return emit_preflight_denial(
+            &args,
+            start,
+            "preflight",
+            format!(
+                "executable '{}' could not be resolved for pre-spawn REA gate",
+                args.command[0]
+            ),
+        );
+    }
+
+    // Gate 1: Pure-Rust UnifiedSecurityShield CycloneDX SBOM Supply-Chain Gate.
+    // Runs strictly AFTER deterministic preflight checks (Cedar/RT-ASP/VirtualPatchShield/R7 REA)
+    // and strictly BEFORE Wasmtime Store instantiation or OS sandbox/child spawn (tighten-only).
+    let sbom_summary: Option<SbomGuardSummary> =
+        if let (Some(ref base_path), Some(ref cand_path)) = (&args.baseline_sbom, &args.sbom) {
+            let Some(ref shield) = loaded_shield else {
+                return emit_preflight_denial(
+                    &args,
+                    start,
+                    "sbom-guard",
+                    "internal error: latent shield unavailable".to_string(),
+                );
+            };
+            let intent = args.sbom_intent.unwrap_or(SbomIntent::Patch);
+            let summary = match evaluate_gate1_sbom_pair(shield, base_path, cand_path, intent) {
+                Ok(s) => s,
+                Err(msg) => {
+                    return emit_preflight_denial(&args, start, "sbom-guard", msg);
+                }
+            };
+            if summary.block_execution {
+                let deny_msg = format!(
+                "blocked_by_octopus_policy: {} (surprise={:.6}, threshold={:.6}, merkle_root={})",
+                summary.reason,
+                summary.surprise_score,
+                summary.threshold,
+                summary.audit_merkle_root
+            );
+                return emit_preflight_denial_with_sbom(
+                    &args,
+                    start,
+                    "sbom-guard",
+                    deny_msg,
+                    Some(summary),
+                );
+            }
+            Some(summary)
+        } else {
+            None
+        };
+
+    let runtime_guard_arc: Option<Arc<AgentRuntimeGuard>> = loaded_shield
+        .as_ref()
+        .map(|s| Arc::new(s.runtime_guard.clone()))
+        .or_else(|| {
+            UnifiedSecurityShield::cached_default()
+                .ok()
+                .map(|s| Arc::new(s.runtime_guard.clone()))
+        });
 
     let timeout_secs = args
         .timeout_secs
@@ -8848,6 +10381,7 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
             &policy,
             timeout_secs,
             args.json_output,
+            runtime_guard_arc,
         )
         .await
         {
@@ -8877,6 +10411,15 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
                         stderr: outcome.diagnostic.clone().unwrap_or_default(),
                         egress_events: Vec::new(),
                         diagnostic: outcome.diagnostic,
+                        virtual_patch_shield: outcome
+                            .receipt
+                            .as_ref()
+                            .map(|r| r.virtual_patch_shield_active),
+                        sbom_guard: sbom_summary,
+                        runtime_guard: outcome
+                            .receipt
+                            .as_ref()
+                            .and_then(|r| r.runtime_guard_verdict.clone()),
                     });
                 }
                 outcome.exit_code
@@ -8895,6 +10438,9 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
                         stderr: msg.clone(),
                         egress_events: Vec::new(),
                         diagnostic: Some(msg),
+                        virtual_patch_shield: Some(shield_active),
+                        sbom_guard: sbom_summary,
+                        runtime_guard: None,
                     });
                 } else {
                     eprintln!("[octopus] DENY wasm: {}", msg);
@@ -8904,9 +10450,13 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
         };
     }
 
+    let runtime_monitor: Option<Arc<LiveRuntimeMonitor>> = runtime_guard_arc
+        .as_ref()
+        .map(|g| Arc::new(LiveRuntimeMonitor::new(Arc::clone(g))));
+
     #[cfg(windows)]
     let mut ac_profile: Option<crate::security::windows_sandbox::PreparedAppContainerProfile> =
-        if args.sandbox == SandboxMode::Strict {
+        if args.sandbox.is_strict() {
             match crate::security::windows_sandbox::PreparedAppContainerProfile::prepare_appcontainer_profile() {
                 Ok(p) => Some(p),
                 Err(e) => {
@@ -8924,6 +10474,9 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
                             stderr: msg.clone(),
                             egress_events: Vec::new(),
                             diagnostic: Some(msg),
+                            virtual_patch_shield: Some(shield_active),
+                            sbom_guard: sbom_summary.clone(),
+                            runtime_guard: None,
                         });
                     } else {
                         eprintln!("[octopus] {}", msg);
@@ -8953,31 +10506,41 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
     #[cfg(not(windows))]
     let ac_sid_opt: Option<&str> = None;
 
-    let cedar_fs_handle =
-        match start_cedar_fs_control_server(&policy, &cwd, args.sandbox, ac_sid_opt).await {
-            Ok(h) => h,
-            Err(e) => {
-                let msg = format!("ERROR starting Cedar FS control IPC: {}", e);
-                if args.json_output {
-                    emit_json_summary(&JsonRunSummary {
-                        status: "sandbox_error".to_string(),
-                        exit_code: EXIT_SANDBOX_FAILURE,
-                        timed_out: false,
-                        sandbox: args.sandbox.as_str().to_string(),
-                        backend: "cedar-fs-ipc".to_string(),
-                        pid: None,
-                        duration_ms: start.elapsed().as_millis() as u64,
-                        stdout: String::new(),
-                        stderr: msg.clone(),
-                        egress_events: Vec::new(),
-                        diagnostic: Some(msg),
-                    });
-                } else {
-                    eprintln!("[octopus] {}", msg);
-                }
-                return EXIT_SANDBOX_FAILURE;
+    let cedar_fs_handle = match start_cedar_fs_control_server(
+        &policy,
+        &cwd,
+        args.sandbox,
+        ac_sid_opt,
+        runtime_monitor.clone(),
+    )
+    .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            let msg = format!("ERROR starting Cedar FS control IPC: {}", e);
+            if args.json_output {
+                emit_json_summary(&JsonRunSummary {
+                    status: "sandbox_error".to_string(),
+                    exit_code: EXIT_SANDBOX_FAILURE,
+                    timed_out: false,
+                    sandbox: args.sandbox.as_str().to_string(),
+                    backend: "cedar-fs-ipc".to_string(),
+                    pid: None,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    stdout: String::new(),
+                    stderr: msg.clone(),
+                    egress_events: Vec::new(),
+                    diagnostic: Some(msg),
+                    virtual_patch_shield: Some(shield_active),
+                    sbom_guard: sbom_summary,
+                    runtime_guard: None,
+                });
+            } else {
+                eprintln!("[octopus] {}", msg);
             }
-        };
+            return EXIT_SANDBOX_FAILURE;
+        }
+    };
     let cedar_ipc_port = cedar_fs_handle.as_ref().and_then(|h| {
         if h.pipe_name.is_none() && h.port > 0 {
             Some(h.port)
@@ -8986,8 +10549,32 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
         }
     });
 
-    let proxy = match start_loopback_proxy(&policy, args.json_output, cedar_ipc_port).await {
-        Ok(p) => p,
+    let proxy = match start_loopback_proxy_with_monitor(
+        &policy,
+        args.json_output,
+        cedar_ipc_port,
+        runtime_monitor.clone(),
+    )
+    .await
+    {
+        Ok(p) => {
+            if shield_active {
+                if let Some(pe) = p.cedar_engine() {
+                    let _ = crate::research_ingest::hotload_cve_forbid_policies_into_engine(
+                        pe,
+                        &shield_posture,
+                    );
+                }
+                let ports =
+                    crate::security::host_network_isolation::discover_active_octopus_ports();
+                let _ =
+                    crate::security::host_network_isolation::apply_virtual_patch_perimeter_shield(
+                        &shield_posture,
+                        &ports,
+                    );
+            }
+            p
+        }
         Err(e) => {
             if let Some(h) = cedar_fs_handle {
                 h.shutdown().await;
@@ -9006,6 +10593,9 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
                     stderr: msg.clone(),
                     egress_events: Vec::new(),
                     diagnostic: Some(msg),
+                    virtual_patch_shield: Some(shield_active),
+                    sbom_guard: sbom_summary,
+                    runtime_guard: None,
                 });
             } else {
                 eprintln!("[octopus] {}", msg);
@@ -9015,7 +10605,7 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
     };
 
     #[cfg(windows)]
-    let win_ac_blocked_proxy_port = if args.sandbox == SandboxMode::Strict && !ac_loopback_ok {
+    let win_ac_blocked_proxy_port = if args.sandbox.is_strict() && !ac_loopback_ok {
         Some(proxy.port)
     } else {
         None
@@ -9082,6 +10672,9 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
                         stderr: msg.clone(),
                         egress_events: Vec::new(),
                         diagnostic: Some(msg),
+                        virtual_patch_shield: Some(shield_active),
+                        sbom_guard: sbom_summary,
+                        runtime_guard: None,
                     });
                 } else {
                     eprintln!("[octopus] {}", msg);
@@ -9124,6 +10717,9 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
         cedar_ipc_port,
         timeout_opt,
         args.json_output,
+        locked_handles,
+        rea_fact,
+        runtime_monitor.clone(),
         #[cfg(windows)]
         ac_profile,
     )
@@ -9135,6 +10731,12 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
         h.shutdown().await;
     }
     drop(_py_guard_dir);
+
+    let runtime_guard_summary = runtime_monitor
+        .as_ref()
+        .and_then(|m| m.last_verdict())
+        .as_ref()
+        .map(RuntimeGuardVerdictSummary::from);
 
     match run_res {
         Ok(res) => {
@@ -9158,6 +10760,9 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
                     stderr: res.stderr,
                     egress_events,
                     diagnostic: res.diagnostic,
+                    virtual_patch_shield: Some(shield_active),
+                    sbom_guard: sbom_summary,
+                    runtime_guard: runtime_guard_summary,
                 });
             }
             res.exit_code
@@ -9176,6 +10781,9 @@ pub async fn execute_octopus_run(args: OctopusRunArgs) -> i32 {
                     stderr: e.clone(),
                     egress_events,
                     diagnostic: Some(e),
+                    virtual_patch_shield: Some(shield_active),
+                    sbom_guard: sbom_summary,
+                    runtime_guard: runtime_guard_summary,
                 });
             } else {
                 eprintln!("[octopus] DENY sandbox: {}", e);
@@ -9207,6 +10815,9 @@ async fn run_os_confined_child(
     cedar_ipc_port: Option<u16>,
     timeout: Option<Duration>,
     pipe_stdio: bool,
+    mut locked_handles: Vec<crate::security::executable_identity::VerifiedExecutableHandle>,
+    mut rea_fact: Option<crate::security::rate_limit_backoff::ReaBinaryFact>,
+    runtime_monitor: Option<Arc<LiveRuntimeMonitor>>,
     #[cfg(windows)] ac_profile: Option<
         crate::security::windows_sandbox::PreparedAppContainerProfile,
     >,
@@ -9283,6 +10894,28 @@ async fn run_os_confined_child(
                 .collect()
         };
         let ro_dirs = resolve_dirs(&policy.json_policy.filesystem.allow_read);
+        let deny_dirs: Vec<PathBuf> = policy
+            .json_policy
+            .filesystem
+            .deny
+            .iter()
+            .filter_map(|raw| {
+                let t = raw.trim();
+                if t.is_empty() {
+                    return None;
+                }
+                if let Some(exp) = expand_tilde_for_preflight(t) {
+                    Some(exp)
+                } else {
+                    let p = Path::new(t);
+                    Some(if p.is_absolute() {
+                        p.to_path_buf()
+                    } else {
+                        cwd.join(p)
+                    })
+                }
+            })
+            .collect();
         let mut rw_dirs = resolve_dirs(&policy.json_policy.filesystem.allow_write);
         if policy.is_standalone_cedar
             && rw_dirs.is_empty()
@@ -9299,6 +10932,15 @@ async fn run_os_confined_child(
             && ac_profile
                 .as_ref()
                 .is_some_and(|p| p.loopback_exempt_active());
+        let shield_active = crate::security::virtual_patch_shield::current_shield_posture()
+            .is_shield_active_with_degraded_policy(
+                policy
+                    .json_policy
+                    .virtual_patch_shield
+                    .fail_closed_on_degraded_telemetry,
+            );
+        let effective_disallow_win32k =
+            policy.json_policy.virtual_patch_shield.disallow_win32k && shield_active;
 
         let _ = (proxy_port, cedar_ipc_port);
         tokio::task::spawn_blocking(move || -> Result<ChildRunOutcome, String> {
@@ -9351,7 +10993,7 @@ async fn run_os_confined_child(
                 (None, None, None)
             };
 
-            if sandbox == SandboxMode::Strict {
+            if sandbox.is_strict() {
                 let spawn_res = spawn_appcontainer_in_job_with_io_prepared(
                     &program,
                     &args,
@@ -9361,9 +11003,11 @@ async fn run_os_confined_child(
                     &ro_dirs,
                     &rw_dirs,
                     &mandatory_ro_dirs,
+                    &deny_dirs,
                     pipe_stdio,
                     &job,
                     ac_profile,
+                    effective_disallow_win32k,
                 );
                 if let Some(hw) = ack_write_handle.take() {
                     unsafe { CloseHandle(hw) };
@@ -9371,41 +11015,102 @@ async fn run_os_confined_child(
                 let (child, out_f, err_f) = spawn_res
                     .map_err(|e| format!("Windows AppContainer strict sandbox failed: {}", e))?;
 
+                locked_handles.clear();
+                let pid = child.pid;
+                if let Some(mut fact) = rea_fact.take() {
+                    fact.pid = pid;
+                    crate::security::rate_limit_backoff::global_rete_engine().insert_rea_fact(fact);
+                }
+
                 let out_thr = spawn_read_thread(out_f);
                 let err_thr = spawn_read_thread(err_f);
                 let ack_thr = spawn_read_thread(ack_read_file);
-                let pid = child.pid;
-                let wait_res = child
-                    .wait_with_timeout(timeout)
-                    .map_err(|e| format!("wait on AppContainer child failed: {}", e))?;
-
-                let (exit_code, timed_out, diagnostic) = match wait_res {
-                    Some(code) => {
-                        let diag = if code == 0xC000_0135 || code == 0xC000_0022 {
-                            let exe_parent = Path::new(&program)
-                                .parent()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_else(|| program.clone());
-                            let msg = format!(
-                                "AppContainer strict child exited with 0x{:08X} ({}); '{}' may lack ALL APPLICATION PACKAGES (S-1-15-2-1) (RX) ACLs",
-                                code, code as i32, exe_parent
-                            );
-                            if !pipe_stdio {
-                                eprintln!("[octopus] {}", msg);
+                let deadline = timeout.map(|d| Instant::now() + d);
+                let mut runtime_blocked_reason: Option<String> = None;
+                let wait_res = loop {
+                    if let Some(ref mon) = runtime_monitor {
+                        if mon.is_tripped() {
+                            runtime_blocked_reason = mon.trip_reason().or_else(|| {
+                                Some("Gate 2 runtime telemetry guard tripped".to_string())
+                            });
+                            let _ = job.terminate(EXIT_SANDBOX_FAILURE as u32);
+                            break None;
+                        }
+                        if let Ok(sample) = crate::security::mercury_guard::MeasuredActuationSample::sample_from_job(
+                            &job,
+                            crate::security::mercury_guard::HostActuationPore::SubprocessSpawn,
+                            0.025,
+                        ) {
+                            if sample.total_processes_spawned > 4 {
+                                let child_procs_norm =
+                                    (sample.total_processes_spawned.saturating_sub(4) as f64)
+                                        .min(1.5);
+                                let verdict = mon.evaluate_snapshot(child_procs_norm, 0.10);
+                                if verdict.block_execution {
+                                    runtime_blocked_reason = Some(format!(
+                                        "{} (surprise={:.4}, threshold={:.4})",
+                                        verdict.reason, verdict.surprise_score, verdict.threshold
+                                    ));
+                                    let _ = job.terminate(EXIT_SANDBOX_FAILURE as u32);
+                                    break None;
+                                }
                             }
-                            Some(msg)
-                        } else {
-                            None
-                        };
-                        (code as i32, false, diag)
+                        }
                     }
-                    None => {
-                        let _ = job.terminate(EXIT_TIMEOUT as u32);
-                        (
-                            EXIT_TIMEOUT,
-                            true,
-                            Some("process terminated by WindowsJobObject timeout".to_string()),
-                        )
+                    let step = match deadline {
+                        Some(dl) => {
+                            let rem = dl.saturating_duration_since(Instant::now());
+                            if rem.is_zero() {
+                                break None;
+                            }
+                            rem.min(Duration::from_millis(25))
+                        }
+                        None => Duration::from_millis(25),
+                    };
+                    match child
+                        .wait_with_timeout(Some(step))
+                        .map_err(|e| format!("wait on AppContainer child failed: {}", e))?
+                    {
+                        Some(code) => break Some(code),
+                        None => continue,
+                    }
+                };
+
+                let (exit_code, timed_out, diagnostic) = if let Some(rt_msg) = runtime_blocked_reason {
+                    (
+                        EXIT_SANDBOX_FAILURE,
+                        false,
+                        Some(format!("Gate 2 runtime guard terminated child: {}", rt_msg)),
+                    )
+                } else {
+                    match wait_res {
+                        Some(code) => {
+                            let diag = if code == 0xC000_0135 || code == 0xC000_0022 {
+                                let exe_parent = Path::new(&program)
+                                    .parent()
+                                    .map(|p| p.display().to_string())
+                                    .unwrap_or_else(|| program.clone());
+                                let msg = format!(
+                                    "AppContainer strict child exited with 0x{:08X} ({}); '{}' may lack ALL APPLICATION PACKAGES (S-1-15-2-1) (RX) ACLs",
+                                    code, code as i32, exe_parent
+                                );
+                                if !pipe_stdio {
+                                    eprintln!("[octopus] {}", msg);
+                                }
+                                Some(msg)
+                            } else {
+                                None
+                            };
+                            (code as i32, false, diag)
+                        }
+                        None => {
+                            let _ = job.terminate(EXIT_TIMEOUT as u32);
+                            (
+                                EXIT_TIMEOUT,
+                                true,
+                                Some("process terminated by WindowsJobObject timeout".to_string()),
+                            )
+                        }
                     }
                 };
                 let stdout = out_thr.and_then(|h| h.join().ok()).unwrap_or_default();
@@ -9451,6 +11156,7 @@ async fn run_os_confined_child(
                     pipe_stdio,
                     false,
                     &job,
+                    effective_disallow_win32k,
                 );
                 if let Some(hw) = ack_write_handle.take() {
                     unsafe { CloseHandle(hw) };
@@ -9458,23 +11164,84 @@ async fn run_os_confined_child(
                 let (child, out_f, err_f) = spawn_res
                     .map_err(|e| format!("Windows de-elevated JobObject sandbox failed: {}", e))?;
 
+                locked_handles.clear();
+                let pid = child.pid;
+                if let Some(mut fact) = rea_fact.take() {
+                    fact.pid = pid;
+                    crate::security::rate_limit_backoff::global_rete_engine().insert_rea_fact(fact);
+                }
+
                 let out_thr = spawn_read_thread(out_f);
                 let err_thr = spawn_read_thread(err_f);
                 let ack_thr = spawn_read_thread(ack_read_file);
-                let pid = child.pid;
-                let wait_res = child
-                    .wait_with_timeout(timeout)
-                    .map_err(|e| format!("wait on de-elevated child failed: {}", e))?;
+                let deadline = timeout.map(|d| Instant::now() + d);
+                let mut runtime_blocked_reason: Option<String> = None;
+                let wait_res = loop {
+                    if let Some(ref mon) = runtime_monitor {
+                        if mon.is_tripped() {
+                            runtime_blocked_reason = mon.trip_reason().or_else(|| {
+                                Some("Gate 2 runtime telemetry guard tripped".to_string())
+                            });
+                            let _ = job.terminate(EXIT_SANDBOX_FAILURE as u32);
+                            break None;
+                        }
+                        if let Ok(sample) = crate::security::mercury_guard::MeasuredActuationSample::sample_from_job(
+                            &job,
+                            crate::security::mercury_guard::HostActuationPore::SubprocessSpawn,
+                            0.025,
+                        ) {
+                            if sample.total_processes_spawned > 4 {
+                                let child_procs_norm =
+                                    (sample.total_processes_spawned.saturating_sub(4) as f64)
+                                        .min(1.5);
+                                let verdict = mon.evaluate_snapshot(child_procs_norm, 0.10);
+                                if verdict.block_execution {
+                                    runtime_blocked_reason = Some(format!(
+                                        "{} (surprise={:.4}, threshold={:.4})",
+                                        verdict.reason, verdict.surprise_score, verdict.threshold
+                                    ));
+                                    let _ = job.terminate(EXIT_SANDBOX_FAILURE as u32);
+                                    break None;
+                                }
+                            }
+                        }
+                    }
+                    let step = match deadline {
+                        Some(dl) => {
+                            let rem = dl.saturating_duration_since(Instant::now());
+                            if rem.is_zero() {
+                                break None;
+                            }
+                            rem.min(Duration::from_millis(25))
+                        }
+                        None => Duration::from_millis(25),
+                    };
+                    match child
+                        .wait_with_timeout(Some(step))
+                        .map_err(|e| format!("wait on de-elevated child failed: {}", e))?
+                    {
+                        Some(code) => break Some(code),
+                        None => continue,
+                    }
+                };
 
-                let (exit_code, timed_out, diagnostic) = match wait_res {
-                    Some(code) => (code as i32, false, None),
-                    None => {
-                        let _ = job.terminate(EXIT_TIMEOUT as u32);
-                        (
-                            EXIT_TIMEOUT,
-                            true,
-                            Some("process terminated by WindowsJobObject timeout".to_string()),
-                        )
+                let (exit_code, timed_out, diagnostic) = if let Some(rt_msg) = runtime_blocked_reason {
+                    (
+                        EXIT_SANDBOX_FAILURE,
+                        false,
+                        Some(format!("Gate 2 runtime guard terminated child: {}", rt_msg)),
+                    )
+                } else {
+                    match wait_res {
+                        Some(code) => (code as i32, false, None),
+                        None => {
+                            let _ = job.terminate(EXIT_TIMEOUT as u32);
+                            (
+                                EXIT_TIMEOUT,
+                                true,
+                                Some("process terminated by WindowsJobObject timeout".to_string()),
+                            )
+                        }
                     }
                 };
                 let stdout = out_thr.and_then(|h| h.join().ok()).unwrap_or_default();
@@ -9533,11 +11300,12 @@ async fn run_os_confined_child(
             .clamp(64, 4096)
             * 1024
             * 1024) as u64;
-        let block_all_sockets = sandbox == SandboxMode::Strict
+        let block_all_sockets = sandbox.is_strict()
             && policy.json_policy.allowed_domains.is_empty()
             && !policy.is_standalone_cedar
             && cedar_ipc_port.is_none();
-        let strict_fail_closed = sandbox == SandboxMode::Strict;
+        let block_exotic_sockets = policy.json_policy.virtual_patch_shield.block_exotic_sockets;
+        let strict_fail_closed = sandbox.is_strict();
         let _ = proxy_port;
 
         let resolve_dirs = |raws: &[String]| -> Vec<PathBuf> {
@@ -9625,6 +11393,7 @@ async fn run_os_confined_child(
                         &mandatory_ro_dirs,
                         mem_bytes,
                         block_all_sockets,
+                        block_exotic_sockets,
                         strict_fail_closed,
                     )
                 });
@@ -9637,7 +11406,12 @@ async fn run_os_confined_child(
             let mut child = spawn_res.map_err(|e| {
                 format!("failed to spawn Linux sandboxed child '{}': {}", program, e)
             })?;
+            locked_handles.clear();
             let pid = child.id();
+            if let Some(mut fact) = rea_fact.take() {
+                fact.pid = pid;
+                crate::security::rate_limit_backoff::global_rete_engine().insert_rea_fact(fact);
+            }
 
             let out_thr = child.stdout.take().map(|mut s| {
                 std::thread::spawn(move || {
@@ -9663,7 +11437,21 @@ async fn run_os_confined_child(
 
             let deadline = timeout.map(|d| Instant::now() + d);
             let mut timed_out = false;
+            let mut runtime_blocked_reason: Option<String> = None;
             let exit_code = loop {
+                if let Some(ref mon) = runtime_monitor {
+                    if mon.is_tripped() {
+                        runtime_blocked_reason = mon.trip_reason().or_else(|| {
+                            Some("Gate 2 runtime telemetry guard tripped".to_string())
+                        });
+                        unsafe {
+                            libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+                        }
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break EXIT_SANDBOX_FAILURE;
+                    }
+                }
                 match child.try_wait() {
                     Ok(Some(status)) => break status.code().unwrap_or(1),
                     Ok(None) => {
@@ -9711,7 +11499,9 @@ async fn run_os_confined_child(
                 pid: Some(pid),
                 stdout,
                 stderr,
-                diagnostic: if timed_out {
+                diagnostic: if let Some(rt_msg) = runtime_blocked_reason {
+                    Some(format!("Gate 2 runtime guard terminated child: {}", rt_msg))
+                } else if timed_out {
                     Some("process terminated by Linux timeout".to_string())
                 } else {
                     None
@@ -9724,6 +11514,7 @@ async fn run_os_confined_child(
 
     #[cfg(target_os = "macos")]
     {
+        let _ = sandbox;
         use crate::security::macos_sandbox::{
             kill_macos_process_subtree, spawn_macos_seatbelt_process_with_stdio,
             SandboxedMacosConfig,
@@ -9808,7 +11599,12 @@ async fn run_os_confined_child(
             }
             let mut proc_handle =
                 spawn_res.map_err(|e| format!("macOS Seatbelt spawn failed: {}", e))?;
+            locked_handles.clear();
             let pid = proc_handle.root_pid;
+            if let Some(mut fact) = rea_fact.take() {
+                fact.pid = pid;
+                crate::security::rate_limit_backoff::global_rete_engine().insert_rea_fact(fact);
+            }
             let mut child = proc_handle
                 .take_child()
                 .ok_or_else(|| "missing macOS child handle".to_string())?;
@@ -9837,7 +11633,19 @@ async fn run_os_confined_child(
 
             let deadline = timeout.map(|d| Instant::now() + d);
             let mut timed_out = false;
+            let mut runtime_blocked_reason: Option<String> = None;
             let exit_code = loop {
+                if let Some(ref mon) = runtime_monitor {
+                    if mon.is_tripped() {
+                        runtime_blocked_reason = mon.trip_reason().or_else(|| {
+                            Some("Gate 2 runtime telemetry guard tripped".to_string())
+                        });
+                        let _ = kill_macos_process_subtree(pid);
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break EXIT_SANDBOX_FAILURE;
+                    }
+                }
                 match child.try_wait() {
                     Ok(Some(status)) => break status.code().unwrap_or(1),
                     Ok(None) => {
@@ -9883,7 +11691,9 @@ async fn run_os_confined_child(
                 pid: Some(pid),
                 stdout,
                 stderr,
-                diagnostic: if timed_out {
+                diagnostic: if let Some(rt_msg) = runtime_blocked_reason {
+                    Some(format!("Gate 2 runtime guard terminated child: {}", rt_msg))
+                } else if timed_out {
                     Some("process terminated by macOS Seatbelt timeout".to_string())
                 } else {
                     None
@@ -9894,7 +11704,171 @@ async fn run_os_confined_child(
         .map_err(|e| format!("blocking macOS worker panicked: {}", e))?
     }
 
-    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    #[cfg(any(target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    {
+        use crate::security::bsd_sandbox::{
+            apply_bsd_pre_exec_confinement, build_bsd_confinement_posture,
+        };
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        let program = program.to_string();
+        let args = args.to_vec();
+        let cwd = cwd.to_path_buf();
+        let env_pairs = env_pairs.to_vec();
+        let mem_bytes = (policy
+            .json_policy
+            .limits
+            .memory_mb
+            .unwrap_or(512)
+            .clamp(64, 4096)
+            * 1024
+            * 1024) as u64;
+        let allow_loopback = !policy.json_policy.allowed_domains.is_empty()
+            || policy.is_standalone_cedar
+            || cedar_ipc_port.is_some();
+        let _ = (proxy_port, py_guard_dir);
+
+        let resolve_dirs = |raws: &[String]| -> Vec<PathBuf> {
+            raws.iter()
+                .filter_map(|r| {
+                    let t = r.trim();
+                    if t.is_empty() || t.starts_with('~') {
+                        return None;
+                    }
+                    let p = Path::new(t);
+                    Some(if p.is_absolute() {
+                        p.to_path_buf()
+                    } else {
+                        cwd.join(p)
+                    })
+                })
+                .collect()
+        };
+        let ro_dirs = resolve_dirs(&policy.json_policy.filesystem.allow_read);
+        let mut rw_dirs = resolve_dirs(&policy.json_policy.filesystem.allow_write);
+        rw_dirs.push(cwd.clone());
+        let posture = build_bsd_confinement_posture(
+            std::env::consts::OS,
+            sandbox.is_strict(),
+            allow_loopback,
+            mem_bytes,
+            &ro_dirs,
+            &rw_dirs,
+        );
+
+        tokio::task::spawn_blocking(move || -> Result<ChildRunOutcome, String> {
+            use std::io::Read;
+            let mut cmd = Command::new(&program);
+            cmd.args(&args).current_dir(&cwd).env_clear();
+            for (k, v) in &env_pairs {
+                cmd.env(k, v);
+            }
+            if pipe_stdio {
+                cmd.stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+            } else {
+                cmd.stdin(Stdio::inherit())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit());
+            }
+            let posture_for_exec = posture.clone();
+            unsafe {
+                cmd.pre_exec(move || apply_bsd_pre_exec_confinement(&posture_for_exec));
+            }
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| format!("failed to spawn BSD confined child: {}", e))?;
+            locked_handles.clear();
+            let pid = child.id();
+            if let Some(mut fact) = rea_fact.take() {
+                fact.pid = pid;
+                crate::security::rate_limit_backoff::global_rete_engine().insert_rea_fact(fact);
+            }
+            let out_thr = child.stdout.take().map(|mut s| {
+                std::thread::spawn(move || {
+                    let mut buf = Vec::new();
+                    let _ = s.read_to_end(&mut buf);
+                    String::from_utf8_lossy(&buf).to_string()
+                })
+            });
+            let err_thr = child.stderr.take().map(|mut s| {
+                std::thread::spawn(move || {
+                    let mut buf = Vec::new();
+                    let _ = s.read_to_end(&mut buf);
+                    String::from_utf8_lossy(&buf).to_string()
+                })
+            });
+            let deadline = timeout.map(|d| Instant::now() + d);
+            let mut timed_out = false;
+            let mut runtime_blocked_reason: Option<String> = None;
+            let status = loop {
+                if let Some(ref mon) = runtime_monitor {
+                    if mon.is_tripped() {
+                        runtime_blocked_reason = mon
+                            .trip_reason()
+                            .or_else(|| Some("Gate 2 runtime telemetry guard tripped".to_string()));
+                        let _ = child.kill();
+                        break child
+                            .wait()
+                            .map_err(|e| format!("wait after Gate 2 kill failed: {}", e))?;
+                    }
+                }
+                if let Some(st) = child
+                    .try_wait()
+                    .map_err(|e| format!("wait on BSD child failed: {}", e))?
+                {
+                    break st;
+                }
+                if let Some(dl) = deadline {
+                    if Instant::now() >= dl {
+                        timed_out = true;
+                        let _ = child.kill();
+                        break child
+                            .wait()
+                            .map_err(|e| format!("wait after kill failed: {}", e))?;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(15));
+            };
+            let stdout = out_thr.and_then(|h| h.join().ok()).unwrap_or_default();
+            let stderr = err_thr.and_then(|h| h.join().ok()).unwrap_or_default();
+            let exit_code = if runtime_blocked_reason.is_some() {
+                EXIT_SANDBOX_FAILURE
+            } else if timed_out {
+                EXIT_TIMEOUT
+            } else {
+                status.code().unwrap_or(EXIT_SANDBOX_FAILURE)
+            };
+            Ok(ChildRunOutcome {
+                exit_code,
+                timed_out,
+                backend: format!("bsd-{}", posture.os_name),
+                pid: Some(pid),
+                stdout,
+                stderr,
+                diagnostic: if let Some(rt_msg) = runtime_blocked_reason {
+                    Some(format!("Gate 2 runtime guard terminated child: {}", rt_msg))
+                } else if timed_out {
+                    Some("process terminated by BSD confinement timeout".to_string())
+                } else {
+                    None
+                },
+            })
+        })
+        .await
+        .map_err(|e| format!("blocking BSD worker panicked: {}", e))?
+    }
+
+    #[cfg(not(any(
+        windows,
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    )))]
     {
         let _ = (
             program,
@@ -9908,6 +11882,8 @@ async fn run_os_confined_child(
             cedar_ipc_port,
             timeout,
             pipe_stdio,
+            locked_handles,
+            rea_fact,
         );
         Err("OS sandbox containment unsupported on this target OS".to_string())
     }
@@ -10017,27 +11993,123 @@ mod iter19_path_norm_tests {
         assert_eq!(extract_preflight_arg_candidate("-f:"), None);
         assert_eq!(extract_preflight_arg_candidate("--:"), None);
         assert_eq!(extract_preflight_arg_candidate("-I"), None);
+        assert_eq!(
+            extract_preflight_arg_candidate(r"of=\\.\pipe\evil"),
+            Some(r"\\.\pipe\evil")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("out=//host/admin$"),
+            Some("//host/admin$")
+        );
+        assert_eq!(extract_preflight_arg_candidate("FOO=bar"), Some("bar"));
+        assert_eq!(
+            extract_preflight_arg_candidate("https://example.com/a?q=1"),
+            Some("https://example.com/a?q=1")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"/out:\\.\pipe\evil"),
+            Some(r"\\.\pipe\evil")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"/out=\\.\pipe\evil"),
+            Some(r"\\.\pipe\evil")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"/LOG:\\.\pipe\evil"),
+            Some(r"\\.\pipe\evil")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r#"/out:"\\.\pipe\evil""#),
+            Some(r"\\.\pipe\evil")
+        );
+        assert_eq!(extract_preflight_arg_candidate("/out:"), None);
+        assert_eq!(extract_preflight_arg_candidate("/out="), None);
+        assert_eq!(
+            extract_preflight_arg_candidate("/usr/local/bin:foo"),
+            Some("/usr/local/bin:foo")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("/usr/bin/foo+bar:baz"),
+            Some("/usr/bin/foo+bar:baz")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("/tmp/a=b"),
+            Some("/tmp/a=b")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("/+foo:bar"),
+            Some("/+foo:bar")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("/*foo:bar"),
+            Some("/*foo:bar")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"/LOG+:\\.\pipe\evil"),
+            Some(r"\\.\pipe\evil")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"/UNILOG+:secret_dir\robo_out.log"),
+            Some(r"secret_dir\robo_out.log")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"/l*v:\\.\pipe\evil"),
+            Some(r"\\.\pipe\evil")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"/l*+:\\.\pipe\evil"),
+            Some(r"\\.\pipe\evil")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"/p:OutDir=\\.\pipe\evil"),
+            Some(r"\\.\pipe\evil")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r#"/p:OutDir="\\.\pipe\evil""#),
+            Some(r"\\.\pipe\evil")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"--define:OUT=\\.\pipe\evil"),
+            Some(r"\\.\pipe\evil")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"/out:of=\\.\pipe\evil"),
+            Some(r"\\.\pipe\evil")
+        );
+        assert_eq!(extract_preflight_arg_candidate("/p:OutDir="), None);
+        assert_eq!(extract_preflight_arg_candidate("/p:OutDir=\"\""), None);
+        assert_eq!(
+            extract_preflight_arg_candidate("/p:OutDir=/tmp/a=b"),
+            Some("/tmp/a=b")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("/p:OutDir=/usr/bin/foo+bar:baz"),
+            Some("/usr/bin/foo+bar:baz")
+        );
     }
 
     #[test]
     fn evaluate_cedar_fs_request_collapses_dotdot_traversal() {
-        let cedar_src = r#"
+        let ws_prefix = if cfg!(windows) { "c:/ws" } else { "C:/ws" };
+        let cedar_src = format!(
+            r#"
 permit (
     principal,
     action == Octopus::Action::"fs_read",
     resource is Octopus::FilePath
-) when {
-    context has normalized_path && context.normalized_path like "c:/ws/allowed/*"
-};
+) when {{
+    context has normalized_path && context.normalized_path like "{ws_prefix}/allowed/*"
+}};
 forbid (
     principal,
     action == Octopus::Action::"fs_read",
     resource is Octopus::FilePath
-) when {
-    context has normalized_path && context.normalized_path like "c:/ws/denied/*"
-};
-"#;
-        let engine = CedarPolicyEngine::from_custom_policy_set(cedar_src).expect("cedar parse");
+) when {{
+    context has normalized_path && context.normalized_path like "{ws_prefix}/denied/*"
+}};
+"#
+        );
+        let engine = CedarPolicyEngine::from_custom_policy_set(&cedar_src).expect("cedar parse");
         let state = CedarFsServerState {
             engine,
             is_standalone_cedar: true,
@@ -10047,6 +12119,7 @@ forbid (
             cwd: "C:/ws".to_string(),
             sandbox_mode: "standard".to_string(),
             auth_token: "tok123".to_string(),
+            runtime_monitor: None,
         };
         let deny_req = CedarFsIpcRequest {
             token: "tok123".to_string(),
@@ -10103,6 +12176,7 @@ permit (
             cwd: "C:/ws".to_string(),
             sandbox_mode: "standard".to_string(),
             auth_token: "tok123".to_string(),
+            runtime_monitor: None,
         };
 
         for pinned in [
@@ -10167,5 +12241,845 @@ permit (
             "mandatory write-deny '.git/hooks/pre-commit' must be unconditionally forbidden: {}",
             hook_resp.reason
         );
+    }
+
+    #[test]
+    fn named_pipe_and_nested_reparse_preflight_clamps() {
+        for blocked_pipe in [
+            r"\\.\pipe\evil",
+            r"\\?\pipe\evil",
+            r"\\?\GLOBALROOT\Device\NamedPipe\evil",
+            r"\\.\GLOBALROOT\Device\NamedPipe\evil",
+            "//?/globalroot/device/namedpipe/evil",
+            r"\??\pipe\evil",
+            r"\\?\GLOBAL\pipe\evil",
+            r"\\127.0.0.1\pipe\evil",
+            "//localhost/pipe/evil",
+            r"\\?\UNC\127.0.0.1\pipe\evil",
+            r"\\?\GLOBALROOT\Device\Mup\127.0.0.1\pipe\evil",
+            r"\\?\GLOBAL\GLOBALROOT\Device\NamedPipe\evil",
+            r"\\.\GLOBAL\GLOBALROOT\Device\NamedPipe\evil",
+            r"\??\GLOBALROOT\Device\NamedPipe\evil",
+            r"\??\GLOBALROOT\Device\Mup\127.0.0.1\pipe\evil",
+            r"\??\UNC\127.0.0.1\pipe\evil",
+            r"\\?\GLOBAL\Device\NamedPipe\evil",
+            r"\\.\GLOBAL\Device\NamedPipe\evil",
+            "//./device/namedpipe/evil",
+            "//?/device/namedpipe/evil",
+            r"\??\GLOBAL\GLOBALROOT\Device\NamedPipe\evil",
+            r"\??\GLOBAL\UNC\127.0.0.1\pipe\evil",
+            r"\??\GLOBAL\Device\NamedPipe\evil",
+            r"\\?\GLOBAL\GLOBALROOT\Device\Mup\127.0.0.1\pipe\evil",
+            r"\\?\GLOBALROOT\GLOBAL??\pipe\evil",
+            r"\\.\GLOBALROOT\GLOBAL??\pipe\evil",
+            r"\??\GLOBALROOT\GLOBAL??\pipe\evil",
+            r"\\?\GLOBALROOT\GLOBAL??\GLOBAL\pipe\evil",
+            r"\\?\GLOBALROOT\GLOBAL??\UNC\127.0.0.1\pipe\evil",
+            r"\\?\GLOBALROOT\DosDevices\pipe\evil",
+            r"\\.\GLOBALROOT\DosDevices\pipe\evil",
+            r"\??\GLOBALROOT\DosDevices\pipe\evil",
+            r"\\?\GLOBALROOT\DosDevices\UNC\127.0.0.1\pipe\evil",
+            r"\\?\\GLOBALROOT\Device\NamedPipe\evil",
+            "//127.0.0.1//pipe/evil",
+            r"\\127.0.0.1\\pipe\evil",
+            r"\Device\Mup\;LanmanRedirector\;Z:0\127.0.0.1\pipe\evil",
+            r"\\?\GLOBALROOT\Device\Mup\;LanmanRedirector\;Z:0\127.0.0.1\pipe\evil",
+            "file:////./pipe/evil",
+            "file:////127.0.0.1/pipe/evil",
+            r"\\.\GLOBAL\..\pipe\evil",
+            r"\\.\C:\..\pipe\evil",
+            r"\\.\foo\..\pipe\evil",
+            r"\\.\..\pipe\evil",
+            r"\\.\GLOBALROOT\..\pipe\evil",
+            r"\\.\.\pipe\evil",
+            r"\\.\foo\..\GLOBALROOT\Device\NamedPipe\evil",
+            r"\\.\foo\..\GLOBALROOT\GLOBAL??\pipe\evil",
+            r"\\.\foo\bar\..\..\pipe\evil",
+            "//./foo/../pipe/evil",
+            "file:////./foo/../pipe/evil",
+            "file://localhost//./pipe/evil",
+            "file://localhost/./pipe/evil",
+            "file://localhost//./foo/../pipe/evil",
+            "file://localhost//?/pipe/evil",
+            "file://localhost/?/pipe/evil",
+            "file://localhost/./foo/../pipe/evil",
+            "file:///./pipe/evil",
+            "file:///./foo/../pipe/evil",
+            "file://localhost/%2e/pipe/evil",
+            "file:///%2e/pipe/evil",
+            "file://localhost//./%70ipe/evil",
+            "file://localhost/%2e%5cpipe%5cevil",
+            "file:///%2e%00/pipe/evil",
+        ] {
+            assert!(
+                is_untrusted_windows_named_pipe_arg(blocked_pipe),
+                "must reject named pipe variant: {blocked_pipe}"
+            );
+        }
+        for allowed_arg in [
+            "https://example.com/pipe/stream",
+            "https://example.com/pipe/health",
+            "http://127.0.0.1:8080/pipe/health",
+            "https://example.com/device/namedpipe/status",
+            "normal_file.txt",
+            "C:\\Users\\demo\\workspace\\pipe_notes.txt",
+            r"\\?\C:\workspace\pipe\app.py",
+            r"\\?\C:\workspace\..\pipe\app.py",
+            "///pipe/evil",
+            "file:///usr/bin/python",
+            "file:///workspace/ok.txt",
+        ] {
+            assert!(
+                !is_untrusted_windows_named_pipe_arg(allowed_arg),
+                "must not false-positive on: {allowed_arg}"
+            );
+        }
+
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:///usr/bin/python"),
+            "/usr/bin/python"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:///workspace/ok.txt"),
+            "/workspace/ok.txt"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:///%ZZ/pipe/evil"),
+            "/%zz/pipe/evil"
+        );
+        assert_eq!(normalize_windows_device_namespace_str("file:///%"), "/%");
+
+        #[cfg(windows)]
+        {
+            for blocked_share in [
+                r"\\127.0.0.1\ADMIN$",
+                r"\\127.0.0.1\IPC$",
+                r"\\?\GLOBAL\GLOBALROOT\Device\Mup\127.0.0.1\ipc$",
+                r"\\.\GLOBAL\GLOBALROOT\Device\Mup\127.0.0.1\admin$",
+                r"\??\GLOBALROOT\Device\Mup\127.0.0.1\ipc$",
+                r"\??\GLOBALROOT\Device\LanmanRedirector\127.0.0.1\admin$",
+                r"\??\UNC\127.0.0.1\ipc$",
+                r"\??\GLOBAL\UNC\127.0.0.1\admin$",
+                r"\\?\GLOBALROOT\GLOBAL??\UNC\127.0.0.1\admin$",
+                r"\\?\GLOBALROOT\GLOBAL??\UNC\127.0.0.1\ipc$",
+                r"\\?\GLOBALROOT\DosDevices\UNC\127.0.0.1\admin$",
+                "//127.0.0.1//admin$",
+                r"\\127.0.0.1\\ipc$",
+                r"\\?\GLOBALROOT\Device\Mup\;LanmanRedirector\;Z:0\127.0.0.1\ipc$",
+                r"\\?\GLOBALROOT\Device\Mup\;LanmanRedirector\;Z:0000000000012345\127.0.0.1\admin$",
+                "file:////127.0.0.1/admin$",
+                r"\\.\foo\..\UNC\127.0.0.1\ipc$",
+                r"\\.\foo\..\GLOBALROOT\GLOBAL??\UNC\127.0.0.1\ipc$",
+                r"\\.\foo\..\UNC\127.0.0.1\admin$\evil_new.txt",
+                r"\\.\foo\..\UNC\127.0.0.1\c$",
+                r"\\127.0.0.1\c$",
+                "file://localhost//./UNC/127.0.0.1/c$",
+                "file://localhost/./UNC/127.0.0.1/c$",
+                "file://localhost//?/UNC/127.0.0.1/c$",
+                "file:///./UNC/127.0.0.1/c$",
+                "file://localhost/%2e/UNC/127.0.0.1/c$",
+                "file:///%2e/UNC/127.0.0.1/c$",
+            ] {
+                assert!(
+                    is_raw_admin_or_ipc_share_str(blocked_share),
+                    "must reject stacked admin/ipc share variant: {blocked_share}"
+                );
+            }
+            for allowed_share in [
+                "https://example.com/admin$/health",
+                "http://127.0.0.1:8080/ipc$/status",
+                "HTTP://127.0.0.1:8080/admin$/health",
+                r"C:\Users\demo\admin$\notes.txt",
+                r"\\127.0.0.1\C$\workspace\ok.txt",
+                "///admin$",
+                "file:///usr/bin/python",
+                "file:///workspace/ok.txt",
+            ] {
+                assert!(
+                    !is_raw_admin_or_ipc_share_str(allowed_share),
+                    "must not false-positive admin/ipc share on: {allowed_share}"
+                );
+            }
+
+            for blocked_unc in [
+                r"\??\UNC\host\c$\Windows",
+                r"\??\GLOBAL\UNC\host\c$\Windows",
+                r"\\127.0.0.1\\c$\Windows",
+                r"\\?\GLOBAL\GLOBAL\UNC\127.0.0.1\c$\Windows\evil_new.txt",
+                r"\\?\GLOBALROOT\Device\Mup\127.0.0.1\c$\Windows\evil_new.txt",
+                r"\\.\foo\..\UNC\127.0.0.1\c$",
+                "file:///./UNC/127.0.0.1/c$",
+                "file://localhost/%2e/UNC/127.0.0.1/c$",
+            ] {
+                assert!(
+                    is_unc_admin_share_str(blocked_unc),
+                    "must detect stacked UNC $-share: {blocked_unc}"
+                );
+            }
+            assert!(!is_unc_admin_share_str("///c$/Windows"));
+            assert!(!is_unc_admin_share_str("HTTP://127.0.0.1:8080/c$/health"));
+
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str(
+                    r"\\?\GLOBAL\GLOBAL\UNC\127.0.0.1\c$\Windows\evil_new.txt"
+                ),
+                "c:/Windows/evil_new.txt"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str(
+                    r"\\?\GLOBALROOT\Device\Mup\127.0.0.1\c$\Windows\evil_new.txt"
+                ),
+                "c:/Windows/evil_new.txt"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str(r"\\127.0.0.1\\c$\Windows"),
+                "c:/Windows"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str(r"\??\UNC\host\c$\Windows"),
+                "//host/c$/Windows"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str(r"\\.\foo\..\C:\Windows\evil_new.txt"),
+                "C:/Windows/evil_new.txt"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str(r"\\.\foo\..\C:\denied_dir\evil_new.txt"),
+                "C:/denied_dir/evil_new.txt"
+            );
+            let expected_sys_root = std::env::var("SystemRoot")
+                .or_else(|_| std::env::var("WINDIR"))
+                .unwrap_or_else(|_| "C:/Windows".to_string())
+                .replace('\\', "/")
+                .trim_end_matches('/')
+                .to_string();
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str(
+                    r"\\.\foo\..\UNC\127.0.0.1\admin$\evil_new.txt"
+                ),
+                format!("{expected_sys_root}/evil_new.txt")
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str(r"\\.\foo\..\UNC\127.0.0.1\c$"),
+                "c:/"
+            );
+            assert_eq!(
+                normalize_windows_device_namespace_str(r"\\?\C:\workspace\..\pipe\app.py"),
+                "//?/c:/workspace/../pipe/app.py"
+            );
+            assert_eq!(
+                normalize_windows_device_namespace_str(r"\\.\foo\..\.."),
+                "//./"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file://localhost//./C:/Windows/win.ini"),
+                "C:/Windows/win.ini"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file:///./C:/Windows/win.ini"),
+                "C:/Windows/win.ini"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file://localhost/%2e/C:/Windows/win.ini"),
+                "C:/Windows/win.ini"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file:///%2e/C:/Windows/win.ini"),
+                "C:/Windows/win.ini"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file:///usr/bin/python"),
+                "/usr/bin/python"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file:///workspace/ok.txt"),
+                "/workspace/ok.txt"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file://localhost/C:/Windows/win.ini"),
+                "C:/Windows/win.ini"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file://localhost//C:/Windows/win.ini"),
+                "C:/Windows/win.ini"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file://localhost/C$/workspace/ok.txt"),
+                "C:/workspace/ok.txt"
+            );
+            assert!(!is_raw_admin_or_ipc_share_str(
+                "file://localhost/C$/workspace/ok.txt"
+            ));
+            assert!(!is_untrusted_windows_named_pipe_arg(
+                "file://localhost/workspace/ok.txt"
+            ));
+        }
+
+        let tmp = std::env::temp_dir().join(format!(
+            "octo_reparse_unit_{}_{}",
+            std::process::id(),
+            rand::random::<u32>()
+        ));
+        let normal_dir = tmp.join("normal").join("nested");
+        std::fs::create_dir_all(&normal_dir).expect("create normal dir");
+        assert!(
+            check_no_reparse_or_symlink(&normal_dir, "--cwd").is_ok(),
+            "normal dir must pass reparse check"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn file_url_variants_normalize_and_preserve_posix_controls() {
+        // 1. Single-slash file:/... scheme (Windows drive, device namespace, pipe, and POSIX controls)
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:/C:/Windows/win.ini"),
+            "c:/windows/win.ini"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:/./C:/Windows/win.ini"),
+            "//./c:/windows/win.ini"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:/%2e/C:/Windows/win.ini"),
+            "//./c:/windows/win.ini"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:/usr/bin/python"),
+            "/usr/bin/python"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:/workspace/ok.txt"),
+            "/workspace/ok.txt"
+        );
+        assert!(is_untrusted_windows_named_pipe_arg("file:/./pipe/evil"));
+        assert!(is_untrusted_windows_named_pipe_arg("file:/%2e/pipe/evil"));
+
+        // 2. Two-slash Windows drive file://<drive>:/... and file://<drive>|/...
+        assert_eq!(
+            normalize_windows_device_namespace_str("file://C:/Windows/win.ini"),
+            "c:/windows/win.ini"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file://C|/Windows/win.ini"),
+            "c:/windows/win.ini"
+        );
+
+        // 3. Local loopback authorities (127.0.0.1, [::1], localhost.localdomain)
+        for host in ["localhost", "127.0.0.1", "[::1]", "localhost.localdomain"] {
+            assert_eq!(
+                normalize_windows_device_namespace_str(&format!(
+                    "file://{host}/C:/Windows/win.ini"
+                )),
+                "c:/windows/win.ini",
+                "host={host}"
+            );
+            assert_eq!(
+                normalize_windows_device_namespace_str(&format!(
+                    "file://{host}/C|/Windows/win.ini"
+                )),
+                "c:/windows/win.ini",
+                "host={host}"
+            );
+            assert_eq!(
+                normalize_windows_device_namespace_str(&format!(
+                    "file://{host}/./C:/Windows/win.ini"
+                )),
+                "//./c:/windows/win.ini",
+                "host={host}"
+            );
+            assert!(
+                is_untrusted_windows_named_pipe_arg(&format!("file://{host}/pipe/evil")),
+                "host={host} pipe"
+            );
+            assert!(
+                is_untrusted_windows_named_pipe_arg(&format!("file://{host}/./pipe/evil")),
+                "host={host} ./pipe"
+            );
+            assert!(
+                is_untrusted_windows_named_pipe_arg(&format!("file://{host}/%2e/pipe/evil")),
+                "host={host} %2e/pipe"
+            );
+        }
+
+        // 4. Pre-drive lexical . / .. traversal & preserved ./ / ?/ Win32 device prefixes
+        for trav in [
+            "file:///foo/../C:/Windows/win.ini",
+            "file:///../C:/Windows/win.ini",
+            "file:///%2e%2e/C:/Windows/win.ini",
+            "file:///C:/../../Windows/win.ini",
+            "file://localhost/foo/../C:/Windows/win.ini",
+            "file://localhost/../C:/Windows/win.ini",
+            "file://localhost/%2e%2e/C:/Windows/win.ini",
+            "file://127.0.0.1/foo/../C:/Windows/win.ini",
+        ] {
+            assert_eq!(
+                normalize_windows_device_namespace_str(trav),
+                "c:/windows/win.ini",
+                "traversal={trav}"
+            );
+        }
+        assert!(is_untrusted_windows_named_pipe_arg(
+            "file:///./foo/../pipe/evil"
+        ));
+        assert!(is_untrusted_windows_named_pipe_arg(
+            "file:///foo/.././pipe/evil"
+        ));
+        assert!(!is_untrusted_windows_named_pipe_arg(
+            "file:///foo/.././workspace/ok.txt"
+        ));
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:///foo/.././workspace/ok.txt"),
+            "/workspace/ok.txt"
+        );
+
+        // 5. Windows X| drive-pipe alias
+        for pipe_drive in [
+            "file:///C|/Windows/win.ini",
+            "file://localhost/C|/Windows/win.ini",
+            "file:/C|/Windows/win.ini",
+            "file://C|/Windows/win.ini",
+        ] {
+            assert_eq!(
+                normalize_windows_device_namespace_str(pipe_drive),
+                "c:/windows/win.ini",
+                "drive_pipe={pipe_drive}"
+            );
+        }
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:///./C|/Windows/win.ini"),
+            "//./c:/windows/win.ini"
+        );
+
+        // 7. Medium dead-code prefix cleanup (UNC, GLOBALROOT, GLOBAL, DosDevices, Device)
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:///UNC/127.0.0.1/c$"),
+            "//127.0.0.1/c$"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:///GLOBALROOT/Device/NamedPipe/evil"),
+            "/device/namedpipe/evil"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:///Device/NamedPipe/evil"),
+            "/device/namedpipe/evil"
+        );
+        assert!(is_untrusted_windows_named_pipe_arg(
+            "file:///GLOBALROOT/Device/NamedPipe/evil"
+        ));
+        assert!(is_untrusted_windows_named_pipe_arg(
+            "file:///Device/NamedPipe/evil"
+        ));
+        assert!(is_untrusted_windows_named_pipe_arg(
+            "file:///GLOBAL/pipe/evil"
+        ));
+        assert!(is_untrusted_windows_named_pipe_arg(
+            "file:///DosDevices/pipe/evil"
+        ));
+
+        // Benign POSIX controls preserved
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:///usr/bin/python"),
+            "/usr/bin/python"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:///workspace/ok.txt"),
+            "/workspace/ok.txt"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:/usr/bin/python"),
+            "/usr/bin/python"
+        );
+        assert!(!is_untrusted_windows_named_pipe_arg("file:/usr/bin/python"));
+        assert!(!is_untrusted_windows_named_pipe_arg(
+            "file:/workspace/ok.txt"
+        ));
+
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file:///./C|/Windows/win.ini"),
+                "C:/Windows/win.ini"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file:/./C:/Windows/win.ini"),
+                "C:/Windows/win.ini"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file://C:/Windows/win.ini"),
+                "C:/Windows/win.ini"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file://127.0.0.1/./C:/Windows/win.ini"),
+                "C:/Windows/win.ini"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file:///./Users/demo/secret_dir/flag.txt"),
+                "/Users/demo/secret_dir/flag.txt"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file://127.0.0.1/Windows/win.ini"),
+                "/Windows/win.ini"
+            );
+            assert_eq!(
+                strip_win_verbatim_and_local_unc_str("file://localhost/Windows/win.ini"),
+                "/Windows/win.ini"
+            );
+            assert!(is_raw_admin_or_ipc_share_str("file:///UNC/127.0.0.1/c$"));
+            assert!(is_unc_admin_share_str("file:///UNC/127.0.0.1/c$"));
+            assert!(is_raw_admin_or_ipc_share_str("file://127.0.0.1/c$"));
+            assert!(is_unc_admin_share_str("file://127.0.0.1/c$"));
+            assert!(is_raw_admin_or_ipc_share_str("file://[::1]/c$"));
+            assert!(is_raw_admin_or_ipc_share_str(
+                "file://localhost.localdomain/c$"
+            ));
+        }
+    }
+
+    #[test]
+    fn curl_file_url_globbing_and_four_slash_drive_tests() {
+        for glob_url in [
+            "file:///C:/{Windows}/win.ini",
+            "file:///{C}:/Windows/win.ini",
+            "file:/{C}:/{Windows}/win.ini",
+            "file://localhost/{C}:/{Windows}/win.ini",
+            "file://127.0.0.1/{C}:/{Windows}/win.ini",
+            "file:///./{C}:/{Windows}/win.ini",
+            "file:///{Windows}/win.ini",
+            "file:///C:/{Windows,Foo}/win.ini",
+            "file:///C:/[W-W]indows/win.ini",
+            "file:///[C-C]:/Windows/win.ini",
+            "file:///parent/{secret_dir}/flag.txt",
+            "file:///parent/[s-s]ecret_dir/flag.txt",
+            "file:///{C}:/secret_dir/flag.txt",
+            "file:////C:/{Windows}/win.ini",
+            "file://[C-C]:/Windows/win.ini",
+            "file://[C-C]/Windows/win.ini",
+            "file://[::1]/[W-W]indows/win.ini",
+            "file://[::1]/{Windows}/win.ini",
+            "file:///[::1]/workspace/ok.txt",
+        ] {
+            assert!(
+                has_file_url_globbing(glob_url),
+                "must detect URL globbing in file URL: {glob_url}"
+            );
+        }
+
+        for benign_url in [
+            "file://[::1]/workspace/ok.txt",
+            "file://[0:0:0:0:0:0:0:1]/workspace/ok.txt",
+            "file://[::ffff:127.0.0.1]/workspace/ok.txt",
+            "file:///usr/bin/python",
+            "file:///workspace/ok.txt",
+            "file:/usr/bin/python",
+            "https://example.com/{foo}",
+            "https://example.com/[a-z]/bar",
+            "http://127.0.0.1:8080/items/{id}",
+        ] {
+            assert!(
+                !has_file_url_globbing(benign_url),
+                "must not false-positive globbing on benign URL: {benign_url}"
+            );
+        }
+
+        // 4+-slash Windows drive canonicalization polish
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:////C:/Windows/win.ini"),
+            "c:/windows/win.ini"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file:////C|/Windows/win.ini"),
+            "c:/windows/win.ini"
+        );
+        assert_eq!(
+            normalize_windows_device_namespace_str("file://///C:/Windows/win.ini"),
+            "c:/windows/win.ini"
+        );
+    }
+
+    #[test]
+    fn curl_at_file_and_form_candidate_extraction_tests() {
+        assert_eq!(
+            extract_preflight_arg_candidate(r"@secret_dir\flag.txt"),
+            Some(r"secret_dir\flag.txt")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"@C:\Windows\win.ini"),
+            Some(r"C:\Windows\win.ini")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("f=@secret_dir/flag.txt"),
+            Some("secret_dir/flag.txt")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"f=<secret_dir\flag.txt"),
+            Some(r"secret_dir\flag.txt")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r#"f=@C:\Windows\win.ini;type=text/plain"#),
+            Some(r"C:\Windows\win.ini")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(
+                r#"f=@"secret_dir/flag.txt";filename=ok.txt;type=text/plain"#
+            ),
+            Some("secret_dir/flag.txt")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r#"f=<"secret_dir/flag.txt";encoder=base64"#),
+            Some("secret_dir/flag.txt")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("-Ff=@secret_dir/flag.txt"),
+            Some("secret_dir/flag.txt")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("-Ff=<secret_dir/flag.txt"),
+            Some("secret_dir/flag.txt")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("-d@secret_dir/flag.txt"),
+            Some("secret_dir/flag.txt")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"-d@C:\Windows\win.ini"),
+            Some(r"C:\Windows\win.ini")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("--data-binary=@secret_dir/flag.txt"),
+            Some("secret_dir/flag.txt")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("name@secret_dir/flag.txt"),
+            Some("secret_dir/flag.txt")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate(r"name@C:\Windows\win.ini"),
+            Some(r"C:\Windows\win.ini")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("--data-urlencode=name@secret_dir/flag.txt"),
+            Some("secret_dir/flag.txt")
+        );
+        assert_eq!(extract_preflight_arg_candidate("@-"), None);
+        assert_eq!(
+            extract_preflight_arg_candidate("user@example.com"),
+            Some("user@example.com")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("@scope/pkg"),
+            Some("scope/pkg")
+        );
+        assert_eq!(
+            extract_preflight_arg_candidate("https://user@example.com/pipe/health"),
+            Some("https://user@example.com/pipe/health")
+        );
+    }
+
+    #[test]
+    fn preflight_gate_blocks_curl_glob_and_exfil_flags_preserves_benign() {
+        let tmp = std::env::temp_dir().join(format!(
+            "octo_curl_preflight_{}_{}",
+            std::process::id(),
+            rand::random::<u32>()
+        ));
+        let secret_dir = tmp.join("secret_dir");
+        std::fs::create_dir_all(&secret_dir).expect("create secret_dir");
+        std::fs::write(secret_dir.join("flag.txt"), "TOP_SECRET_DATA").expect("write flag.txt");
+        std::fs::write(tmp.join("ok.txt"), "BENIGN_OK").expect("write ok.txt");
+
+        let mut json_policy = crate::cli::policy::OctopusRunPolicy::default();
+        json_policy.allowed_domains = vec!["127.0.0.1:8080".to_string()];
+        json_policy.filesystem.deny = vec![
+            secret_dir.to_string_lossy().to_string(),
+            if cfg!(windows) {
+                r"C:\Windows".to_string()
+            } else {
+                "/etc/shadow".to_string()
+            },
+        ];
+
+        let policy = crate::cli::policy::LoadedOctopusPolicy {
+            policy_path: tmp.join("policy.json"),
+            is_standalone_cedar: false,
+            has_filesystem_section: true,
+            json_policy,
+            denied_cidrs: Vec::new(),
+            cedar_engine: None,
+        };
+
+        let run_gate = |command: Vec<String>, cwd: &Path| {
+            let args = crate::cli::OctopusRunArgs {
+                policy_path: tmp.join("policy.json"),
+                sandbox: crate::cli::SandboxMode::Standard,
+                wasm_promote: false,
+                timeout_secs: Some(15),
+                cwd: Some(cwd.to_path_buf()),
+                json_output: false,
+                baseline_sbom: None,
+                sbom: None,
+                sbom_intent: None,
+                latent_weights: None,
+                command,
+            };
+            run_preflight_gate(&args, &policy, cwd, false)
+        };
+
+        for glob_url in [
+            "file:///C:/{Windows}/win.ini",
+            "file:///{C}:/Windows/win.ini",
+            "file:/{C}:/{Windows}/win.ini",
+            "file://localhost/{C}:/{Windows}/win.ini",
+            "file://127.0.0.1/{C}:/{Windows}/win.ini",
+            "file:///./{C}:/{Windows}/win.ini",
+            "file:///{Windows}/win.ini",
+            "file:///C:/{Windows,Foo}/win.ini",
+            "file:///C:/[W-W]indows/win.ini",
+            "file:///[C-C]:/Windows/win.ini",
+            "file:////C:/{Windows}/win.ini",
+        ] {
+            let res = run_gate(
+                vec!["curl".to_string(), "-s".to_string(), glob_url.to_string()],
+                &tmp,
+            );
+            assert!(
+                res.is_err(),
+                "curl file URL glob '{glob_url}' must be denied in preflight"
+            );
+        }
+
+        let denied_rel = "secret_dir/flag.txt";
+        let denied_abs = secret_dir.join("flag.txt").to_string_lossy().to_string();
+        for blocked_cmd in [
+            vec![
+                "curl",
+                "-s",
+                "-d",
+                &format!("@{denied_abs}"),
+                "http://127.0.0.1:8080/up",
+            ],
+            vec![
+                "curl",
+                "-s",
+                "-d",
+                &format!("@{denied_rel}"),
+                "http://127.0.0.1:8080/up",
+            ],
+            vec![
+                "curl",
+                "-s",
+                "--data-binary",
+                &format!("@{denied_abs}"),
+                "http://127.0.0.1:8080/up",
+            ],
+            vec![
+                "curl",
+                "-s",
+                "--data-ascii",
+                &format!("@{denied_abs}"),
+                "http://127.0.0.1:8080/up",
+            ],
+            vec![
+                "curl",
+                "-s",
+                "--data-urlencode",
+                &format!("@{denied_abs}"),
+                "http://127.0.0.1:8080/up",
+            ],
+            vec![
+                "curl",
+                "-s",
+                "--data-urlencode",
+                &format!("name@{denied_rel}"),
+                "http://127.0.0.1:8080/up",
+            ],
+            vec![
+                "curl",
+                "-s",
+                "-F",
+                &format!("f=@{denied_abs}"),
+                "http://127.0.0.1:8080/up",
+            ],
+            vec![
+                "curl",
+                "-s",
+                "-F",
+                &format!("f=<{denied_abs}"),
+                "http://127.0.0.1:8080/up",
+            ],
+            vec![
+                "curl",
+                "-s",
+                "-F",
+                &format!("f=@{denied_abs};type=text/plain"),
+                "http://127.0.0.1:8080/up",
+            ],
+            vec![
+                "curl",
+                "-s",
+                &format!("-d@{denied_rel}"),
+                "http://127.0.0.1:8080/up",
+            ],
+            vec![
+                "curl",
+                "-s",
+                &format!("-d@{denied_abs}"),
+                "http://127.0.0.1:8080/up",
+            ],
+        ] {
+            let cmd_vec = blocked_cmd.into_iter().map(|s| s.to_string()).collect();
+            let res = run_gate(cmd_vec, &tmp);
+            assert!(
+                res.is_err(),
+                "exfil curl command must be denied in preflight"
+            );
+        }
+
+        // Bare filename with --data-urlencode name@flag.txt when cwd == secret_dir
+        let bare_res = run_gate(
+            vec![
+                "curl".to_string(),
+                "-s".to_string(),
+                "--data-urlencode".to_string(),
+                "name@flag.txt".to_string(),
+                "http://127.0.0.1:8080/up".to_string(),
+            ],
+            &secret_dir,
+        );
+        assert!(
+            bare_res.is_err(),
+            "bare curl --data-urlencode name@flag.txt inside denied cwd must be denied"
+        );
+
+        // Benign controls must pass preflight
+        for ok_cmd in [
+            vec!["curl", "-s", "file://[::1]/workspace/ok.txt"],
+            vec!["curl", "-s", "file:///usr/bin/python"],
+            vec!["curl", "-s", "file:///workspace/ok.txt"],
+            vec!["curl", "-s", "file:/usr/bin/python"],
+            vec!["curl", "-s", "https://example.com/{foo}"],
+            vec!["curl", "-s", "-d", "@-", "http://127.0.0.1:8080/up"],
+            vec![
+                "curl",
+                "-s",
+                "-d",
+                "hello=world",
+                "http://127.0.0.1:8080/up",
+            ],
+            vec!["echo", "user@example.com"],
+            vec!["echo", "@scope/pkg"],
+            vec!["echo", "https://example.com/pipe/health"],
+        ] {
+            let cmd_vec: Vec<String> = ok_cmd.iter().map(|s| (*s).to_string()).collect();
+            let res = run_gate(cmd_vec.clone(), &tmp);
+            assert!(
+                res.is_ok(),
+                "benign command {:?} must pass preflight: {:?}",
+                cmd_vec,
+                res.err()
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

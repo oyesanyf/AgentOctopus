@@ -43,6 +43,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -241,15 +242,16 @@ class LocalCedarFallbackEngine:
 class OctopusTargetClient:
     """Client for testing live Agent Octopus runtime endpoints with fast fallback."""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:5005"):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: Optional[str] = None):
+        resolved = base_url or os.environ.get("OCTOPUS_TARGET_URL", "http://127.0.0.1:3030")
+        self.base_url = resolved.rstrip("/")
         self.is_online = False
 
     def _http_req(self, method: str, url: str, body: Optional[bytes] = None, headers: Optional[Dict[str, str]] = None, timeout: float = 1.0) -> Tuple[int, str, bytes]:
         import http.client
         import urllib.parse
         parsed = urllib.parse.urlsplit(url)
-        conn = http.client.HTTPConnection(parsed.hostname or "127.0.0.1", parsed.port or 5005, timeout=timeout)
+        conn = http.client.HTTPConnection(parsed.hostname or "127.0.0.1", parsed.port or 3030, timeout=timeout)
         target = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
         conn.request(method, target, body=body, headers=headers or {})
         resp = conn.getresponse()
@@ -260,8 +262,12 @@ class OctopusTargetClient:
         return status, reason, raw_bytes
 
     def check_health(self) -> Dict[str, Any]:
-        for port in [5005, 5006, 5000, 5001, 5002, 5050]:
-            candidate_url = f"http://127.0.0.1:{port}"
+        candidates = [self.base_url]
+        for port in [3030, 5005, 5006, 5000, 5001, 5002, 5050]:
+            candidate = f"http://127.0.0.1:{port}"
+            if candidate not in candidates:
+                candidates.append(candidate)
+        for candidate_url in candidates:
             url = f"{candidate_url}/api/status"
             try:
                 status, _, raw_bytes = self._http_req(
@@ -417,14 +423,19 @@ class ExhaustiveTestOrchestrator:
 
     def __init__(
         self,
-        target_url: str = "http://127.0.0.1:5000",
+        target_url: Optional[str] = None,
         ollama_url: str = "http://127.0.0.1:11434",
-        strix_path: str = r"d:\tools\strix.exe",
+        strix_path: Optional[str] = None,
         fuzz_factor: int = 10,
     ):
-        self.target = OctopusTargetClient(target_url)
+        self.target = OctopusTargetClient(target_url or os.environ.get("OCTOPUS_TARGET_URL", "http://127.0.0.1:3030"))
         self.ollama = OllamaClient(ollama_url)
-        self.strix_path = strix_path
+        self.strix_path = (
+            strix_path
+            or os.environ.get("OCTOPUS_STRIX_BIN")
+            or shutil.which("strix")
+            or os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "strix.exe")
+        )
         self.fuzz_factor = fuzz_factor
         self.results: List[TestResult] = []
 
@@ -2576,13 +2587,15 @@ class ExhaustiveTestOrchestrator:
         # 1. Check test runner script and vector repositories
         candidate_paths = [
             os.path.abspath(__file__),
-            r"d:\tools\strix_llm_adversarial_tester.py",
             os.path.abspath("tests/strix_llm_adversarial_tester.py"),
             os.path.abspath("tests/cedar_policy_tests.rs"),
             os.path.abspath("tests/continuous_security_rl_tests.rs"),
             os.path.abspath("tests/governor_tests.rs"),
             os.path.abspath("tests/math_validator_tests.rs"),
         ]
+        extra_tester = os.environ.get("OCTOPUS_EXTRA_TESTER_PATH")
+        if extra_tester:
+            candidate_paths.insert(1, extra_tester)
         seen_paths = set()
         for p in candidate_paths:
             if os.path.exists(p) and p not in seen_paths:
@@ -2620,11 +2633,12 @@ class ExhaustiveTestOrchestrator:
             log_warn("  ⚠ PyRIT AI Red-Teaming Engine not installed (Native fallback engine active)")
 
         # 2. Check external red-teaming tools
+        tools_dir = os.environ.get("OCTOPUS_TOOLS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools"))
         tool_checks = {
             "Strix Multi-Agent Scanner": self.strix_path,
-            "Trivy Vulnerability Scanner": r"d:\tools\trivy.exe",
-            "Yara64 Rule Engine": r"d:\tools\yara64.exe",
-            "Nmap Security Scanner": r"d:\tools\nmap.exe",
+            "Trivy Vulnerability Scanner": os.environ.get("OCTOPUS_TRIVY_BIN") or shutil.which("trivy") or os.path.join(tools_dir, "trivy.exe"),
+            "Yara64 Rule Engine": os.environ.get("OCTOPUS_YARA_BIN") or shutil.which("yara64") or os.path.join(tools_dir, "yara64.exe"),
+            "Nmap Security Scanner": os.environ.get("OCTOPUS_NMAP_BIN") or shutil.which("nmap") or os.path.join(tools_dir, "nmap.exe"),
         }
         for name, path in tool_checks.items():
             exists = os.path.exists(path)
@@ -2831,9 +2845,13 @@ class ExhaustiveTestOrchestrator:
 
 def main():
     parser = argparse.ArgumentParser(description="Agent Octopus Exhaustive Multi-Framework Boundary Verification Suite")
-    parser.add_argument("--target", default="http://127.0.0.1:5005", help="Base URL of target Agent Octopus node")
+    parser.add_argument("--target", default=os.environ.get("OCTOPUS_TARGET_URL", "http://127.0.0.1:3030"), help="Base URL of target Agent Octopus node")
     parser.add_argument("--ollama", default="http://127.0.0.1:11434", help="Base URL of Ollama inference daemon")
-    parser.add_argument("--strix", default=r"d:\tools\strix.exe", help="Path to Strix security scanning binary")
+    parser.add_argument(
+        "--strix",
+        default=os.environ.get("OCTOPUS_STRIX_BIN") or shutil.which("strix") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "strix.exe"),
+        help="Path to Strix security scanning binary",
+    )
     parser.add_argument("--fuzz-factor", type=int, default=25, help="Multiplication factor for test permutations (MAX STRENGTH: 25)")
     parser.add_argument("--skip-strix", action="store_true", help="Omit external Strix binary invocation")
     parser.add_argument("--pyrit", action="store_true", help="Execute PyRIT-specific AI Red-Teaming suite")

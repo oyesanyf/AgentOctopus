@@ -85,6 +85,8 @@ notify = "6.1"
 crossbeam-channel = "0.5"
 aho-corasick = "1.1"
 memchr = "2.7"
+ndarray = { version = "0.16", features = ["serde"] }
+rand_distr = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -105,6 +107,13 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
 
 [lints.clippy]
 field_reassign_with_default = "allow"

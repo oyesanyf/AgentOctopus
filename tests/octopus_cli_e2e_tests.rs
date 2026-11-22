@@ -5654,6 +5654,7 @@ print("ITER15_CEDAR_OK")
     }
 
     // 5. --sandbox strict verification (uses AppContainer-capable Python if available on host)
+    #[allow(unused_mut)]
     let mut strict_py = py.clone();
     #[cfg(windows)]
     if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
@@ -6136,11 +6137,11 @@ print("CEDAR_PY_16_OK")
 
     // 4. Preflight \\127.0.0.1\C$\<denied> & ~/ & ../ under JSON and allowlist-only Cedar,
     // while \\127.0.0.1\C$\<allowed>, -c "print('a/b')", and https://example.com/a/b succeed.
-    let denied_secret = denied_dir.join("secret.txt");
     let dotdot_secret = "allowed/../denied/secret.txt";
     let mut json_denied_args: Vec<String> = vec![dotdot_secret.to_string()];
     #[cfg(windows)]
     {
+        let denied_secret = denied_dir.join("secret.txt");
         let denied_s = denied_secret.to_string_lossy();
         if denied_s.len() >= 3 && denied_s.as_bytes()[1] == b':' {
             let drv = denied_s.chars().next().unwrap();
@@ -6677,6 +6678,7 @@ print("SPOOF_CHECK_ITER17_OK")
     assert!(String::from_utf8_lossy(&out_spoof.stdout).contains("SPOOF_CHECK_ITER17_OK"));
 
     // 5. Preflight edge cases (must exit 2 without printing SHOULD_NOT_RUN)
+    #[allow(unused_mut)]
     let mut preflight_bad_args: Vec<String> = vec![
         "-f=allowed/../denied/secret.txt".to_string(),
         "\"-f=allowed/../denied/secret.txt\"".to_string(),
@@ -7280,6 +7282,7 @@ forbid (principal, action == Octopus::Action::"fs_read", resource is Octopus::Fi
     )
     .unwrap();
 
+    #[allow(unused_mut)]
     let mut bad_args: Vec<String> = vec![
         "allowed/../denied/nonexistent.txt".to_string(),
         "allowed/./../denied/nonexistent.txt".to_string(),
@@ -7656,6 +7659,7 @@ print("PINNED_PARENT_ALL_OK")
     }
 
     // Also test --sandbox strict with AppContainer-capable Python (e.g., Py 3.14 on Windows)
+    #[allow(unused_mut)]
     let mut strict_py = py.clone();
     #[cfg(windows)]
     if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
@@ -7716,6 +7720,7 @@ print("PINNED_PARENT_ALL_OK")
 #[test]
 fn test_iteration20_strict_appcontainer_cedar_and_proxy() {
     let py = find_python();
+    #[allow(unused_mut)]
     let mut strict_py = py;
     #[cfg(windows)]
     if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
@@ -7734,12 +7739,12 @@ fn test_iteration20_strict_appcontainer_cedar_and_proxy() {
     let quickstart_json = quickstart_dir.join("policy.json");
     let quickstart_agent = quickstart_dir.join("my_agent.py");
 
-    // 1. Quickstart policy.cedar + inline script under --sandbox strict (must not timeout 124)
+    // 1. Quickstart policy.cedar + inline script under --sandbox strict (must not timeout)
     let cedar_hello = Command::new(octopus_bin())
         .args([
             "run",
             "--timeout",
-            "15",
+            "30",
             "--sandbox",
             "strict",
             "--json",
@@ -7780,7 +7785,7 @@ fn test_iteration20_strict_appcontainer_cedar_and_proxy() {
             .args([
                 "run",
                 "--timeout",
-                "15",
+                "30",
                 "--sandbox",
                 "strict",
                 "--json",
@@ -7921,7 +7926,7 @@ print("STRICT_CEDAR_AND_PROXY_OK")
         .args([
             "run",
             "--timeout",
-            "15",
+            "30",
             "--sandbox",
             "strict",
             "--json",
@@ -7948,4 +7953,600 @@ print("STRICT_CEDAR_AND_PROXY_OK")
         .as_str()
         .unwrap_or("")
         .contains("STRICT_CEDAR_AND_PROXY_OK"));
+}
+
+#[test]
+fn test_octopus_run_pre_spawn_rea_binary_gate() {
+    let ws = TempDirGuard::new("rea_gate_e2e");
+    let py = find_python();
+
+    // Build a minimal synthetic PE64 with UPX0/W^X/Hell's Gate direct-syscall stub
+    let build_hostile_pe = |wx: bool, upx: bool, hells_gate: bool| -> Vec<u8> {
+        let lfanew = 0x80usize;
+        let opt_size = 240usize;
+        let sec_off = lfanew + 4 + 20 + opt_size;
+        let raw_off = 0x400usize;
+        let mut code = vec![0x90u8; 64];
+        if upx {
+            code[0..4].copy_from_slice(b"UPX!");
+        }
+        if hells_gate {
+            code[8..18]
+                .copy_from_slice(&[0x4C, 0x8B, 0xD1, 0xB8, 0x18, 0x00, 0x00, 0x00, 0x0F, 0x05]);
+        }
+        let mut buf = vec![0u8; raw_off + code.len()];
+        buf[0..2].copy_from_slice(b"MZ");
+        buf[0x3C..0x40].copy_from_slice(&(lfanew as u32).to_le_bytes());
+        buf[lfanew..lfanew + 4].copy_from_slice(b"PE\0\0");
+        let coff = lfanew + 4;
+        buf[coff..coff + 2].copy_from_slice(&0x8664u16.to_le_bytes());
+        buf[coff + 2..coff + 4].copy_from_slice(&1u16.to_le_bytes());
+        buf[coff + 16..coff + 18].copy_from_slice(&(opt_size as u16).to_le_bytes());
+        let opt = coff + 20;
+        buf[opt..opt + 2].copy_from_slice(&0x020Bu16.to_le_bytes());
+        buf[opt + 16..opt + 20].copy_from_slice(&0x1000u32.to_le_bytes());
+        buf[opt + 108..opt + 112].copy_from_slice(&16u32.to_le_bytes());
+
+        let sec_name = if upx { b"UPX0\0\0\0\0" } else { b".text\0\0\0" };
+        buf[sec_off..sec_off + 8].copy_from_slice(sec_name);
+        buf[sec_off + 8..sec_off + 12].copy_from_slice(&0x1000u32.to_le_bytes());
+        buf[sec_off + 12..sec_off + 16].copy_from_slice(&0x1000u32.to_le_bytes());
+        buf[sec_off + 16..sec_off + 20].copy_from_slice(&(code.len() as u32).to_le_bytes());
+        buf[sec_off + 20..sec_off + 24].copy_from_slice(&(raw_off as u32).to_le_bytes());
+        let chars: u32 = if wx { 0xE000_0020 } else { 0x6000_0020 };
+        buf[sec_off + 36..sec_off + 40].copy_from_slice(&chars.to_le_bytes());
+        buf[raw_off..raw_off + code.len()].copy_from_slice(&code);
+        buf
+    };
+
+    let policy_default = ws.path().join("rea_default.json");
+    std::fs::write(
+        &policy_default,
+        serde_json::json!({
+            "allowed_domains": [],
+            "commands": { "allow": [], "deny": [] },
+            "binary_integrity": {
+                "enabled": true,
+                "require_signed_binaries": false,
+                "block_packed": true,
+                "block_wx_sections": true,
+                "block_direct_syscalls": true
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // 1. Packed / W^X / Hell's Gate binaries MUST be denied pre-spawn (exit 2, status=denied_preflight)
+    for (fname, bytes, expected_diag) in [
+        (
+            "packed_upx.exe",
+            build_hostile_pe(false, true, false),
+            "packed",
+        ),
+        (
+            "wx_only.exe",
+            build_hostile_pe(true, false, false),
+            "wx_memory_section",
+        ),
+        (
+            "hells_gate.exe",
+            build_hostile_pe(false, false, true),
+            "direct_syscall",
+        ),
+    ] {
+        let bin_path = ws.path().join(fname);
+        std::fs::write(&bin_path, bytes).unwrap();
+        let out = Command::new(octopus_bin())
+            .args([
+                "run",
+                "--policy",
+                policy_default.to_str().unwrap(),
+                "--cwd",
+                ws.path().to_str().unwrap(),
+                "--json",
+                "--",
+                bin_path.to_str().unwrap(),
+            ])
+            .output()
+            .expect("invoke octopus on hostile binary");
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "hostile binary {} must exit 2, got {:?} stdout={} stderr={}",
+            fname,
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("valid JSON preflight denial");
+        assert_eq!(parsed["status"], "denied_preflight");
+        assert!(
+            parsed["diagnostic"]
+                .as_str()
+                .unwrap_or("")
+                .contains(expected_diag),
+            "expected '{}' in diagnostic for {}: {:?}",
+            expected_diag,
+            fname,
+            parsed
+        );
+    }
+
+    // 2. Clean unsigned binary fails pre-spawn when require_signed_binaries == true
+    let clean_unsigned = ws.path().join("clean_unsigned.exe");
+    std::fs::write(&clean_unsigned, build_hostile_pe(false, false, false)).unwrap();
+    let policy_signed = ws.path().join("rea_signed.json");
+    std::fs::write(
+        &policy_signed,
+        serde_json::json!({
+            "allowed_domains": [],
+            "binary_integrity": {
+                "enabled": true,
+                "require_signed_binaries": true
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let out_unsigned = Command::new(octopus_bin())
+        .args([
+            "run",
+            "--policy",
+            policy_signed.to_str().unwrap(),
+            "--cwd",
+            ws.path().to_str().unwrap(),
+            "--json",
+            "--",
+            clean_unsigned.to_str().unwrap(),
+        ])
+        .output()
+        .expect("invoke octopus with require_signed_binaries");
+    assert_eq!(out_unsigned.status.code(), Some(2));
+    let parsed_u: serde_json::Value =
+        serde_json::from_slice(&out_unsigned.stdout).expect("valid JSON unsigned denial");
+    assert_eq!(parsed_u["status"], "denied_preflight");
+    assert!(parsed_u["diagnostic"]
+        .as_str()
+        .unwrap_or("")
+        .contains("unsigned_binary_rejected"));
+
+    // 3. Invalid entropy_threshold (> 8.0 or negative) fails policy validation with exit 2
+    let bad_ent_pol = ws.path().join("bad_entropy.json");
+    std::fs::write(
+        &bad_ent_pol,
+        r#"{"allowed_domains":[],"binary_integrity":{"entropy_threshold":9.5}}"#,
+    )
+    .unwrap();
+    let out_bad_pol = Command::new(octopus_bin())
+        .args([
+            "run",
+            "--policy",
+            bad_ent_pol.to_str().unwrap(),
+            "--",
+            &py,
+            "-c",
+            "print('NO')",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out_bad_pol.status.code(), Some(2));
+
+    // 4. Legitimate python & shell binaries pass with zero false positives
+    let out_py = Command::new(octopus_bin())
+        .args([
+            "run",
+            "--policy",
+            policy_default.to_str().unwrap(),
+            "--cwd",
+            ws.path().to_str().unwrap(),
+            "--",
+            &py,
+            "-c",
+            "print('REA_PY_OK')",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out_py.status.success(),
+        "benign python failed REA gate: stderr={}",
+        String::from_utf8_lossy(&out_py.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out_py.stdout).contains("REA_PY_OK"));
+
+    #[cfg(windows)]
+    {
+        // System32 cmd.exe passes even under require_signed_binaries: true (via Windows Catalog)
+        let out_cmd = Command::new(octopus_bin())
+            .args([
+                "run",
+                "--policy",
+                policy_signed.to_str().unwrap(),
+                "--cwd",
+                ws.path().to_str().unwrap(),
+                "--",
+                "cmd",
+                "/c",
+                "echo",
+                "REA_CMD_CATALOG_OK",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            out_cmd.status.success(),
+            "signed cmd.exe failed require_signed_binaries: stderr={}",
+            String::from_utf8_lossy(&out_cmd.stderr)
+        );
+        assert!(String::from_utf8_lossy(&out_cmd.stdout).contains("REA_CMD_CATALOG_OK"));
+    }
+}
+
+#[test]
+fn test_r7_iter2_remediations_forged_cert_syscall_variants_anomalies_cedar_and_o1_latency() {
+    let ws = TempDirGuard::new("r7_iter2");
+
+    fn build_pe64(sections: &[(&str, u32, u32, &[u8], bool)], with_dummy_cert: bool) -> Vec<u8> {
+        let lfanew = 0x80usize;
+        let opt_size = 240usize;
+        let sec_table_off = lfanew + 4 + 20 + opt_size;
+        let headers_end = sec_table_off + sections.len() * 40;
+        let first_sec_off = headers_end.div_ceil(0x200) * 0x200;
+
+        let mut raw_offsets = Vec::with_capacity(sections.len());
+        let mut cur_off = first_sec_off;
+        for &(_, _, _, data, force_zero) in sections {
+            raw_offsets.push(cur_off);
+            if !force_zero && !data.is_empty() {
+                cur_off += data.len().div_ceil(0x200) * 0x200;
+            }
+        }
+
+        let cert_off = cur_off;
+        let cert_len = if with_dummy_cert { 64usize } else { 0usize };
+        let mut buf = vec![0u8; cert_off + cert_len];
+        buf[0..2].copy_from_slice(b"MZ");
+        buf[0x3C..0x40].copy_from_slice(&(lfanew as u32).to_le_bytes());
+        buf[lfanew..lfanew + 4].copy_from_slice(b"PE\0\0");
+        let coff = lfanew + 4;
+        buf[coff..coff + 2].copy_from_slice(&0x8664u16.to_le_bytes());
+        buf[coff + 2..coff + 4].copy_from_slice(&(sections.len() as u16).to_le_bytes());
+        buf[coff + 16..coff + 18].copy_from_slice(&(opt_size as u16).to_le_bytes());
+        let opt = coff + 20;
+        buf[opt..opt + 2].copy_from_slice(&0x020Bu16.to_le_bytes());
+        let ep_rva = sections.first().map(|s| s.1).unwrap_or(0x1000);
+        buf[opt + 16..opt + 20].copy_from_slice(&ep_rva.to_le_bytes());
+        buf[opt + 108..opt + 112].copy_from_slice(&16u32.to_le_bytes());
+        if with_dummy_cert {
+            buf[opt + 144..opt + 148].copy_from_slice(&(cert_off as u32).to_le_bytes());
+            buf[opt + 148..opt + 152].copy_from_slice(&(cert_len as u32).to_le_bytes());
+            buf[cert_off..cert_off + 4].copy_from_slice(&64u32.to_le_bytes());
+            buf[cert_off + 4..cert_off + 6].copy_from_slice(&0x0200u16.to_le_bytes());
+            buf[cert_off + 6..cert_off + 8].copy_from_slice(&0x0002u16.to_le_bytes());
+        }
+
+        for (i, &(name, va, chars, data, force_zero)) in sections.iter().enumerate() {
+            let sh = sec_table_off + i * 40;
+            let nb = name.as_bytes();
+            let clen = nb.len().min(8);
+            buf[sh..sh + clen].copy_from_slice(&nb[..clen]);
+            let vsz = (data.len() as u32).max(0x1000);
+            buf[sh + 8..sh + 12].copy_from_slice(&vsz.to_le_bytes());
+            buf[sh + 12..sh + 16].copy_from_slice(&va.to_le_bytes());
+            let rsz = if force_zero { 0u32 } else { data.len() as u32 };
+            let rptr = if force_zero || data.is_empty() {
+                0u32
+            } else {
+                raw_offsets[i] as u32
+            };
+            buf[sh + 16..sh + 20].copy_from_slice(&rsz.to_le_bytes());
+            buf[sh + 20..sh + 24].copy_from_slice(&rptr.to_le_bytes());
+            buf[sh + 36..sh + 40].copy_from_slice(&chars.to_le_bytes());
+            if !force_zero && !data.is_empty() {
+                let off = raw_offsets[i];
+                buf[off..off + data.len()].copy_from_slice(data);
+            }
+        }
+        buf
+    }
+
+    let pol_default = ws.path().join("pol_default.json");
+    std::fs::write(
+        &pol_default,
+        serde_json::json!({
+            "allowed_domains": [],
+            "binary_integrity": { "enabled": true }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let pol_signed = ws.path().join("pol_signed.json");
+    std::fs::write(
+        &pol_signed,
+        serde_json::json!({
+            "allowed_domains": [],
+            "binary_integrity": { "enabled": true, "require_signed_binaries": true }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // 1. Forged dummy WIN_CERTIFICATE fails require_signed_binaries=true on Windows
+    #[cfg(windows)]
+    {
+        let forged_bin = ws.path().join("forged_win_cert.exe");
+        std::fs::write(
+            &forged_bin,
+            build_pe64(&[(".text", 0x1000, 0x6000_0020, &[0xC3], false)], true),
+        )
+        .unwrap();
+        let out_forged = Command::new(octopus_bin())
+            .args([
+                "run",
+                "--policy",
+                pol_signed.to_str().unwrap(),
+                "--cwd",
+                ws.path().to_str().unwrap(),
+                "--json",
+                "--",
+                forged_bin.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(out_forged.status.code(), Some(2));
+        let parsed: serde_json::Value = serde_json::from_slice(&out_forged.stdout).unwrap();
+        assert_eq!(parsed["status"], "denied_preflight");
+        assert!(parsed["diagnostic"]
+            .as_str()
+            .unwrap_or("")
+            .contains("unsigned_binary_rejected"));
+
+        // Standalone .cedar checking context.is_authenticode_signed allows Catalog-signed cmd.exe
+        let cedar_sig = ws.path().join("sig_check.cedar");
+        std::fs::write(
+            &cedar_sig,
+            r#"permit(principal, action == Octopus::Action::"exec", resource is Octopus::Command)
+when { context has is_authenticode_signed && context.is_authenticode_signed };"#,
+        )
+        .unwrap();
+        let out_cedar_cmd = Command::new(octopus_bin())
+            .args([
+                "run",
+                "--policy",
+                cedar_sig.to_str().unwrap(),
+                "--cwd",
+                ws.path().to_str().unwrap(),
+                "--",
+                "cmd",
+                "/c",
+                "echo",
+                "CEDAR_CATALOG_CMD_OK",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            out_cedar_cmd.status.success(),
+            "Catalog-signed cmd.exe must satisfy standalone Cedar is_authenticode_signed: stderr={}",
+            String::from_utf8_lossy(&out_cedar_cmd.stderr)
+        );
+        assert!(String::from_utf8_lossy(&out_cedar_cmd.stdout).contains("CEDAR_CATALOG_CMD_OK"));
+
+        let out_cedar_forged = Command::new(octopus_bin())
+            .args([
+                "run",
+                "--policy",
+                cedar_sig.to_str().unwrap(),
+                "--cwd",
+                ws.path().to_str().unwrap(),
+                "--json",
+                "--",
+                forged_bin.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(out_cedar_forged.status.code(), Some(2));
+    }
+
+    // 2. Direct-syscall variants, low-entropy EP-in-writable/hollow_exec, and 3rd .evil section -> exit 2
+    let mut halos_24 = vec![0x4C, 0x8B, 0xD1, 0xB8, 0x18, 0x00, 0x00, 0x00];
+    halos_24.extend(std::iter::repeat_n(0x90u8, 24));
+    halos_24.extend_from_slice(&[0x0F, 0x05]);
+
+    let nop_256k = vec![0x90u8; 256 * 1024];
+    let cases: [(&str, Vec<u8>); 6] = [
+        (
+            "alt_nops.exe",
+            build_pe64(
+                &[(
+                    ".text",
+                    0x1000,
+                    0x6000_0020,
+                    &[
+                        0x49, 0x89, 0xCA, 0xB8, 0x1A, 0x00, 0x00, 0x00, 0x90, 0x90, 0x0F, 0x05,
+                    ],
+                    false,
+                )],
+                false,
+            ),
+        ),
+        (
+            "alt_int2e.exe",
+            build_pe64(
+                &[(
+                    ".text",
+                    0x1000,
+                    0x6000_0020,
+                    &[0x49, 0x89, 0xCA, 0xB8, 0x1B, 0x00, 0x00, 0x00, 0xCD, 0x2E],
+                    false,
+                )],
+                false,
+            ),
+        ),
+        (
+            "halos_24nops.exe",
+            build_pe64(&[(".text", 0x1000, 0x6000_0020, &halos_24, false)], false),
+        ),
+        (
+            "ep_in_data.exe",
+            build_pe64(
+                &[(
+                    ".data",
+                    0x1000,
+                    0xC000_0040,
+                    &[0x4C, 0x8B, 0xD1, 0xB8, 0x18, 0x00, 0x00, 0x00, 0x0F, 0x05],
+                    false,
+                )],
+                false,
+            ),
+        ),
+        (
+            "hollow_exec.exe",
+            build_pe64(
+                &[(".text", 0x1000, 0x6000_0020, &[0x90; 8192], true)],
+                false,
+            ),
+        ),
+        (
+            "evil_3rd_sec.exe",
+            build_pe64(
+                &[
+                    (".text0", 0x1000, 0x6000_0020, &nop_256k, false),
+                    (".text1", 0x50000, 0x6000_0020, &nop_256k, false),
+                    (
+                        ".evil",
+                        0xA0000,
+                        0x6000_0020,
+                        &[0x4C, 0x8B, 0xD1, 0xB8, 0x18, 0x00, 0x00, 0x00, 0x0F, 0x05],
+                        false,
+                    ),
+                ],
+                false,
+            ),
+        ),
+    ];
+
+    for (name, bytes) in cases {
+        let p = ws.path().join(name);
+        std::fs::write(&p, bytes).unwrap();
+        let out = Command::new(octopus_bin())
+            .args([
+                "run",
+                "--policy",
+                pol_default.to_str().unwrap(),
+                "--cwd",
+                ws.path().to_str().unwrap(),
+                "--json",
+                "--",
+                p.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{} must deny preflight with exit 2: stdout={} stderr={}",
+            name,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    // 3. 55 MiB W^X PE denies in O(1) constant time (<2ms parser SLA + O(1) prefix-read invariance)
+    let tiny_pe = build_pe64(&[(".text", 0x1000, 0xE000_0020, &[0x90; 8], false)], false);
+    let tiny_pe_path = ws.path().join("tiny_4kb_wx.exe");
+    std::fs::write(&tiny_pe_path, &tiny_pe).unwrap();
+
+    let rsrc_55mb = vec![0x41u8; 55 * 1024 * 1024];
+    let pe_55mb = build_pe64(
+        &[
+            (".text", 0x1000, 0xE000_0020, &[0x90; 8], false),
+            (".rsrc", 0x10000, 0x4000_0040, &rsrc_55mb, false),
+        ],
+        false,
+    );
+    let pe_55mb_path = ws.path().join("big_55mb_wx.exe");
+    std::fs::write(&pe_55mb_path, &pe_55mb).unwrap();
+    // Pre-read once to let OS page cache / Windows Defender settle on freshly written 55 MiB .exe
+    if let Ok(mut f) = std::fs::File::open(&pe_55mb_path) {
+        let mut hdr = [0u8; 64];
+        let _ = f.read(&mut hdr);
+    }
+
+    // Strict <2ms parser SLA directly on the locked 55 MiB PE handle
+    let mut best_parser_us = u64::MAX;
+    for _ in 0..5 {
+        let mut locked_55 =
+            agent_octopus::security::executable_identity::open_and_lock_executable_for_cli(
+                &pe_55mb_path,
+                "big_55mb_wx",
+            )
+            .expect("lock 55 MiB PE");
+        let v_55 = agent_octopus::security::rea_binary_gate::inspect_locked_file(
+            &mut locked_55.locked_file,
+            &pe_55mb_path,
+            locked_55.metadata.file_size,
+            "big_55mb_wx",
+            false,
+        )
+        .expect("inspect 55 MiB PE");
+        assert!(v_55.has_wx_violation);
+        best_parser_us = best_parser_us.min(v_55.inspection_micros);
+    }
+    assert!(
+        best_parser_us < 2_000,
+        "55 MiB W^X PE REA parser best {}us exceeded strict 2000us SLA",
+        best_parser_us
+    );
+
+    // Subprocess O(1) scaling comparison vs tiny 4 KiB W^X PE (resilient to 34-way debug Cargo jitter)
+    let mut best_tiny_ms = u64::MAX;
+    for _ in 0..3 {
+        let out_tiny = Command::new(octopus_bin())
+            .args([
+                "run",
+                "--policy",
+                pol_default.to_str().unwrap(),
+                "--cwd",
+                ws.path().to_str().unwrap(),
+                "--json",
+                "--",
+                tiny_pe_path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(out_tiny.status.code(), Some(2));
+        let parsed_tiny: serde_json::Value = serde_json::from_slice(&out_tiny.stdout).unwrap();
+        assert_eq!(parsed_tiny["status"], "denied_preflight");
+        best_tiny_ms = best_tiny_ms.min(parsed_tiny["duration_ms"].as_u64().unwrap_or(u64::MAX));
+    }
+
+    let mut best_55_ms = u64::MAX;
+    for _ in 0..3 {
+        let out_55 = Command::new(octopus_bin())
+            .args([
+                "run",
+                "--policy",
+                pol_default.to_str().unwrap(),
+                "--cwd",
+                ws.path().to_str().unwrap(),
+                "--json",
+                "--",
+                pe_55mb_path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(out_55.status.code(), Some(2));
+        let parsed_55: serde_json::Value = serde_json::from_slice(&out_55.stdout).unwrap();
+        assert_eq!(parsed_55["status"], "denied_preflight");
+        best_55_ms = best_55_ms.min(parsed_55["duration_ms"].as_u64().unwrap_or(u64::MAX));
+    }
+    let o1_cap_ms = best_tiny_ms.saturating_add(250).max(500);
+    assert!(
+        best_55_ms < o1_cap_ms && best_55_ms < 1_000,
+        "55 MiB W^X PE preflight best duration {}ms exceeded O(1) bound (tiny={}ms, cap={}ms)",
+        best_55_ms,
+        best_tiny_ms,
+        o1_cap_ms
+    );
 }

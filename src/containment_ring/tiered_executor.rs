@@ -21,6 +21,9 @@ use crate::security::breakouts::{
 use crate::security::executable_identity::{
     ExecutableIdentityVerifier, VerifiedExecutableMetadata,
 };
+use crate::security::latent_shield::{
+    AgentRuntimeGuard, RuntimeGuardVerdictSummary, RuntimeTelemetry, UnifiedSecurityShield,
+};
 use crate::security::mercury_guard::{
     HostActuationPore, MeasuredActuationSample, MercuryContainmentEngine, MercuryEvaluationResult,
     KERNEL_IO_COALESCENCE_BUDGET_BYTES,
@@ -79,6 +82,8 @@ pub struct TieredExecutionReceipt {
     pub job_io_sample: Option<MeasuredActuationSample>,
     pub mercury_evaluation: MercuryEvaluationResult,
     pub zero_mi_output: ZeroMiProjectionResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_guard_verdict: Option<RuntimeGuardVerdictSummary>,
 }
 
 /// Pure-Rust Hybrid Execution Dispatcher routing agent tools between Tier 1 (Wasmtime)
@@ -88,16 +93,29 @@ pub struct TieredExecutionDispatcher {
     mercury: Arc<MercuryContainmentEngine>,
     technical_guard: TechnicalBreakoutGuard,
     executable_verifier: ExecutableIdentityVerifier,
+    runtime_guard: Arc<AgentRuntimeGuard>,
 }
 
 impl TieredExecutionDispatcher {
     pub fn try_new(mercury: Arc<MercuryContainmentEngine>) -> Result<Self, OctopusSecurityError> {
+        let runtime_guard = match UnifiedSecurityShield::cached_default() {
+            Ok(s) => Arc::new(s.runtime_guard.clone()),
+            Err(_) => {
+                Arc::new(UnifiedSecurityShield::train_deterministic_default(42).runtime_guard)
+            }
+        };
         Ok(Self {
             wasm_tier1: WasmTier1Executor::try_new()?,
             mercury,
             technical_guard: TechnicalBreakoutGuard::default(),
             executable_verifier: ExecutableIdentityVerifier::new(),
+            runtime_guard,
         })
+    }
+
+    pub fn with_runtime_guard(mut self, guard: Arc<AgentRuntimeGuard>) -> Self {
+        self.runtime_guard = guard;
+        self
     }
 
     pub fn wasm_tier1(&self) -> &WasmTier1Executor {
@@ -115,6 +133,26 @@ impl TieredExecutionDispatcher {
         } else {
             ExecutionTier::Tier1InProcessWasm
         }
+    }
+
+    /// Posture-aware tier classification: promotes to Tier 1 Wasmtime whenever a `.wat`
+    /// implementation exists or `native_command` is absent, and fails closed when
+    /// `posture.is_shield_active()` & `promote_wasm_on_cve` disallow raw Tier-2 native execution.
+    pub fn classify_tier_with_posture(
+        req: &TieredToolRequest,
+        posture: &crate::security::virtual_patch_shield::KernelShieldPosture,
+        promote_wasm_on_cve: bool,
+    ) -> Result<ExecutionTier, OctopusSecurityError> {
+        if req.custom_wat.is_some() || req.native_command.is_none() {
+            return Ok(ExecutionTier::Tier1InProcessWasm);
+        }
+        if promote_wasm_on_cve && posture.is_shield_active() {
+            return Err(OctopusSecurityError::IsolationViolation(
+                "Zero-Reboot Virtual-Patching Shield active: native Tier-2 command rejected; Tier-1 Wasmtime guest required"
+                    .to_string(),
+            ));
+        }
+        Ok(ExecutionTier::Tier2NativeWin32Confinement)
     }
 
     /// Dispatches a tool request through the Control Plane checks into Tier 1 or Tier 2.
@@ -148,6 +186,7 @@ impl TieredExecutionDispatcher {
             scratchpad_root: req.scratchpad_root.clone(),
             allow_scratch_write: req.allow_scratch_write,
             mesh_context: mesh_context.clone(),
+            runtime_guard: Some(Arc::clone(&self.runtime_guard)),
             ..WasmSandboxLimits::default()
         };
 
@@ -206,6 +245,51 @@ impl TieredExecutionDispatcher {
             )));
         }
 
+        let tier1_rt_telemetry = RuntimeTelemetry {
+            file_reads_norm: (wasm_receipt.scratch_bytes_read as f64 / (2.0 * 1024.0 * 1024.0))
+                .min(1.5),
+            file_writes_norm: (wasm_receipt.scratch_bytes_written as f64 / (1024.0 * 1024.0))
+                .min(1.5),
+            child_procs_norm: if wasm_receipt.blocked_escape_attempts.len() > 8 {
+                (1.0 + (wasm_receipt.blocked_escape_attempts.len() - 9) as f64 * 0.15).min(1.5)
+            } else {
+                0.0
+            },
+            net_sockets_norm: ((wasm_receipt.mesh_calls_attempted as f64 * 0.04)
+                + (wasm_receipt.mesh_bytes_exchanged as f64 / (2.0 * 1024.0 * 1024.0)))
+                .min(1.5),
+            mem_delta_norm: ((wasm_receipt.peak_linear_memory_bytes.saturating_sub(65_536)) as f64
+                / (8.0 * 1024.0 * 1024.0))
+                .min(1.5),
+            prompt_entropy_norm: (0.20
+                + (wasm_receipt.raw_output.len() as f64 / (1024.0 * 1024.0)))
+                .min(1.2),
+        };
+        let tier1_action = if wasm_receipt.mesh_calls_attempted > 0 {
+            ndarray::Array1::from_vec(vec![0.0, 0.0, 1.0])
+        } else if wasm_receipt.scratch_bytes_written > 0 {
+            ndarray::Array1::from_vec(vec![0.0, 1.0, 0.0])
+        } else {
+            ndarray::Array1::from_vec(vec![1.0, 0.0, 0.0])
+        };
+        let rt_verdict = self.runtime_guard.evaluate_step(
+            &RuntimeTelemetry::idle_initial(),
+            &tier1_action,
+            &tier1_rt_telemetry,
+        );
+        if rt_verdict.block_execution {
+            return Err(OctopusSecurityError::BreakoutDetected(format!(
+                "TIER1_GATE2_RUNTIME_GUARD_BLOCKED [{}]: {} (surprise={:.4}, threshold={:.4})",
+                req.agent_id, rt_verdict.reason, rt_verdict.surprise_score, rt_verdict.threshold
+            )));
+        }
+        let runtime_guard_verdict = Some(
+            wasm_receipt
+                .runtime_guard_verdict
+                .clone()
+                .unwrap_or_else(|| RuntimeGuardVerdictSummary::from(&rt_verdict)),
+        );
+
         let zero_mi = wasm_receipt.zero_mi_projection.clone();
         Ok(TieredExecutionReceipt {
             agent_id: req.agent_id.clone(),
@@ -220,6 +304,7 @@ impl TieredExecutionDispatcher {
             job_io_sample: None,
             mercury_evaluation: mercury_eval,
             zero_mi_output: zero_mi,
+            runtime_guard_verdict,
         })
     }
 
@@ -336,6 +421,32 @@ impl TieredExecutionDispatcher {
             )));
         }
 
+        let tier2_telemetry = RuntimeTelemetry {
+            file_reads_norm: (job_sample.read_transfer_bytes as f64 / (16.0 * 1024.0 * 1024.0))
+                .min(1.5),
+            file_writes_norm: (job_sample.write_transfer_bytes as f64 / (8.0 * 1024.0 * 1024.0))
+                .min(1.5),
+            child_procs_norm: ((job_sample.total_processes_spawned.saturating_sub(2)) as f64 / 3.0)
+                .min(1.5),
+            net_sockets_norm: (job_sample.other_transfer_bytes as f64 / (16.0 * 1024.0 * 1024.0))
+                .min(1.5),
+            mem_delta_norm: 0.0,
+            prompt_entropy_norm: 0.20,
+        };
+        let tier2_action = ndarray::Array1::from_vec(vec![1.0, 0.0, 0.0]);
+        let rt_verdict = self.runtime_guard.evaluate_step(
+            &RuntimeTelemetry::idle_initial(),
+            &tier2_action,
+            &tier2_telemetry,
+        );
+        if rt_verdict.block_execution {
+            return Err(OctopusSecurityError::BreakoutDetected(format!(
+                "TIER2_GATE2_RUNTIME_GUARD_BLOCKED [{}]: {} (surprise={:.4}, threshold={:.4})",
+                req.agent_id, rt_verdict.reason, rt_verdict.surprise_score, rt_verdict.threshold
+            )));
+        }
+        let runtime_guard_verdict = Some(RuntimeGuardVerdictSummary::from(&rt_verdict));
+
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -363,6 +474,7 @@ impl TieredExecutionDispatcher {
             job_io_sample: Some(job_sample),
             mercury_evaluation: mercury_eval,
             zero_mi_output: zero_mi,
+            runtime_guard_verdict,
         })
     }
 }

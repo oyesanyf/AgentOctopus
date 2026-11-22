@@ -4,6 +4,7 @@ use crate::containment_ring::egress_proxy::{
 };
 use crate::security::cedar_arm::CedarPolicyEngine;
 use crate::security::host_network_isolation::is_blocked_quarantine_port;
+use crate::security::latent_shield::{LiveRuntimeMonitor, RuntimeEventKind};
 use crate::security::safeagents_client::{
     host_port_pattern_matches, is_denied_resolved_ip_with_local, local_host_interface_ips,
     resolve_and_pin_allowed_host, validate_http_request_target, CredentialSentinelMasker, IpCidr,
@@ -48,6 +49,7 @@ struct ProxyState {
     local_ips: Vec<IpAddr>,
     events: Mutex<Vec<EgressEventRecord>>,
     quiet_stderr: bool,
+    runtime_monitor: Option<Arc<LiveRuntimeMonitor>>,
 }
 
 pub struct LoopbackProxyHandle {
@@ -59,6 +61,10 @@ pub struct LoopbackProxyHandle {
 }
 
 impl LoopbackProxyHandle {
+    pub fn cedar_engine(&self) -> Option<&CedarPolicyEngine> {
+        self.state.cedar_engine.as_ref()
+    }
+
     pub fn events_snapshot(&self) -> Vec<EgressEventRecord> {
         self.state
             .events
@@ -81,6 +87,15 @@ pub async fn start_loopback_proxy(
     policy: &LoadedOctopusPolicy,
     quiet_stderr: bool,
     cedar_ipc_port: Option<u16>,
+) -> Result<LoopbackProxyHandle, String> {
+    start_loopback_proxy_with_monitor(policy, quiet_stderr, cedar_ipc_port, None).await
+}
+
+pub async fn start_loopback_proxy_with_monitor(
+    policy: &LoadedOctopusPolicy,
+    quiet_stderr: bool,
+    cedar_ipc_port: Option<u16>,
+    runtime_monitor: Option<Arc<LiveRuntimeMonitor>>,
 ) -> Result<LoopbackProxyHandle, String> {
     let mut kept_listeners = Vec::new();
     let mut chosen_listener = None;
@@ -153,46 +168,52 @@ pub async fn start_loopback_proxy(
     child_env.push(("NO_PROXY".to_string(), String::new()));
     child_env.push(("no_proxy".to_string(), String::new()));
 
-    let cedar_engine =
-        if policy.cedar_engine.is_some() {
-            if policy.is_standalone_cedar {
-                let txt = std::fs::read_to_string(&policy.policy_path)
-                    .map_err(|e| format!("failed to reload Cedar policy: {}", e))?;
+    let cedar_engine = if policy.cedar_engine.is_some() {
+        if policy.is_standalone_cedar {
+            let txt = std::fs::read_to_string(&policy.policy_path)
+                .map_err(|e| format!("failed to reload Cedar policy: {}", e))?;
+            Some(
+                CedarPolicyEngine::from_validated_policy_set(&txt)
+                    .map_err(|e| format!("failed to compile Cedar policy: {}", e))?,
+            )
+        } else {
+            let mut chunks = Vec::new();
+            if let Some(ref cf) = policy.json_policy.cedar_file {
+                let p = if std::path::Path::new(cf).is_absolute() {
+                    std::path::PathBuf::from(cf)
+                } else {
+                    policy
+                        .policy_path
+                        .parent()
+                        .map(|par| par.join(cf))
+                        .unwrap_or_else(|| std::path::PathBuf::from(cf))
+                };
+                chunks.push(
+                    std::fs::read_to_string(&p).map_err(|e| {
+                        format!("failed to read cedar_file '{}': {}", p.display(), e)
+                    })?,
+                );
+            }
+            if let Some(ref inline) = policy.json_policy.cedar_policy {
+                chunks.push(inline.clone());
+            }
+            if chunks.is_empty() {
+                None
+            } else {
                 Some(
-                    CedarPolicyEngine::from_validated_policy_set(&txt)
+                    CedarPolicyEngine::from_validated_policy_set(&chunks.join("\n"))
                         .map_err(|e| format!("failed to compile Cedar policy: {}", e))?,
                 )
-            } else {
-                let mut chunks = Vec::new();
-                if let Some(ref cf) = policy.json_policy.cedar_file {
-                    let p = if std::path::Path::new(cf).is_absolute() {
-                        std::path::PathBuf::from(cf)
-                    } else {
-                        policy
-                            .policy_path
-                            .parent()
-                            .map(|par| par.join(cf))
-                            .unwrap_or_else(|| std::path::PathBuf::from(cf))
-                    };
-                    chunks.push(std::fs::read_to_string(&p).map_err(|e| {
-                        format!("failed to read cedar_file '{}': {}", p.display(), e)
-                    })?);
-                }
-                if let Some(ref inline) = policy.json_policy.cedar_policy {
-                    chunks.push(inline.clone());
-                }
-                if chunks.is_empty() {
-                    None
-                } else {
-                    Some(
-                        CedarPolicyEngine::from_validated_policy_set(&chunks.join("\n"))
-                            .map_err(|e| format!("failed to compile Cedar policy: {}", e))?,
-                    )
-                }
             }
-        } else {
-            None
-        };
+        }
+    } else if crate::security::virtual_patch_shield::current_shield_posture().is_shield_active() {
+        Some(
+            CedarPolicyEngine::from_empty()
+                .map_err(|e| format!("failed to initialize shield Cedar engine: {}", e))?,
+        )
+    } else {
+        None
+    };
 
     let state = Arc::new(ProxyState {
         proxy_port,
@@ -207,6 +228,7 @@ pub async fn start_loopback_proxy(
         local_ips: local_host_interface_ips(),
         events: Mutex::new(Vec::new()),
         quiet_stderr,
+        runtime_monitor,
     });
 
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
@@ -717,6 +739,34 @@ fn parse_connect_authority(target: &str) -> Result<(String, u16), String> {
     Ok((trimmed.to_string(), 443))
 }
 
+fn is_rfc9110_tchar(b: u8) -> bool {
+    matches!(
+        b,
+        b'!' | b'#'
+            | b'$'
+            | b'%'
+            | b'&'
+            | b'\''
+            | b'*'
+            | b'+'
+            | b'-'
+            | b'.'
+            | b'^'
+            | b'_'
+            | b'`'
+            | b'|'
+            | b'~'
+            | b'0'..=b'9'
+            | b'a'..=b'z'
+            | b'A'..=b'Z'
+    )
+}
+
+fn has_forbidden_http_ctl(s: &str) -> bool {
+    s.bytes()
+        .any(|b| b == 0 || b == b'\r' || b == b'\n' || (b < 0x20 && b != b'\t') || b == 0x7f)
+}
+
 async fn read_http_request(
     stream: &mut TcpStream,
 ) -> Result<Option<(String, String, String, Vec<(String, String)>, Vec<u8>)>, (u16, String)> {
@@ -753,16 +803,28 @@ async fn read_http_request(
     let req_line = lines
         .next()
         .ok_or_else(|| (400, "missing_request_line".to_string()))?;
+    if has_forbidden_http_ctl(req_line) {
+        return Err((400, "invalid_control_char_in_request_line".to_string()));
+    }
     let mut parts = req_line.split_whitespace();
     let method = parts
         .next()
         .ok_or_else(|| (400, "missing_http_method".to_string()))?
         .to_string();
+    if method.is_empty() || !method.bytes().all(is_rfc9110_tchar) {
+        return Err((400, "invalid_http_method".to_string()));
+    }
     let target = parts
         .next()
         .ok_or_else(|| (400, "missing_http_target".to_string()))?
         .to_string();
+    if target.is_empty() || has_forbidden_http_ctl(&target) {
+        return Err((400, "invalid_http_target".to_string()));
+    }
     let version = parts.next().unwrap_or("HTTP/1.1").to_string();
+    if has_forbidden_http_ctl(&version) || parts.next().is_some() {
+        return Err((400, "malformed_http_request_line".to_string()));
+    }
 
     let mut headers = Vec::new();
     let mut content_length: usize = 0;
@@ -772,25 +834,35 @@ async fn read_http_request(
         if line.is_empty() {
             continue;
         }
-        if let Some((k, v)) = line.split_once(':') {
-            let key = k.trim().to_string();
-            let val = v.trim().to_string();
-            if key.eq_ignore_ascii_case("content-length") {
-                if seen_content_length {
-                    return Err((400, "duplicate_content_length_rejected".to_string()));
-                }
-                seen_content_length = true;
-                content_length = val
-                    .parse::<usize>()
-                    .map_err(|_| (400, "invalid_content_length".to_string()))?;
-                if content_length > MAX_BODY_BYTES {
-                    return Err((400, "http_body_too_large".to_string()));
-                }
-            } else if key.eq_ignore_ascii_case("transfer-encoding") {
-                seen_transfer_encoding = true;
-            }
-            headers.push((key, val));
+        if has_forbidden_http_ctl(line) {
+            return Err((400, "invalid_control_char_in_http_header".to_string()));
         }
+        let Some((k, v)) = line.split_once(':') else {
+            return Err((400, "malformed_http_header_line".to_string()));
+        };
+        if k.is_empty() || !k.bytes().all(is_rfc9110_tchar) {
+            return Err((400, "invalid_http_header_name".to_string()));
+        }
+        let key = k.to_string();
+        let val = v.trim().to_string();
+        if has_forbidden_http_ctl(&val) {
+            return Err((400, "invalid_http_header_value".to_string()));
+        }
+        if key.eq_ignore_ascii_case("content-length") {
+            if seen_content_length {
+                return Err((400, "duplicate_content_length_rejected".to_string()));
+            }
+            seen_content_length = true;
+            content_length = val
+                .parse::<usize>()
+                .map_err(|_| (400, "invalid_content_length".to_string()))?;
+            if content_length > MAX_BODY_BYTES {
+                return Err((400, "http_body_too_large".to_string()));
+            }
+        } else if key.eq_ignore_ascii_case("transfer-encoding") {
+            seen_transfer_encoding = true;
+        }
+        headers.push((key, val));
     }
     if seen_transfer_encoding && seen_content_length {
         return Err((
@@ -866,6 +938,22 @@ async fn handle_proxy_connection(mut client: TcpStream, state: Arc<ProxyState>) 
                     return;
                 }
             };
+        if let Some(ref monitor) = state.runtime_monitor {
+            let verdict =
+                monitor.record_and_evaluate(RuntimeEventKind::NetworkEgress, 0, 0.02, 0.22);
+            if verdict.block_execution {
+                send_blocked_json(
+                    &mut client,
+                    &state,
+                    &method,
+                    &target,
+                    403,
+                    &format!("latent_runtime_guard_blocked: {}", verdict.reason),
+                )
+                .await;
+                return;
+            }
+        }
         match connect_pinned_addrs(&pinned_addrs).await {
             Ok(mut upstream) => {
                 record_event(
@@ -1078,6 +1166,27 @@ async fn handle_proxy_connection(mut client: TcpStream, state: Arc<ProxyState>) 
         return;
     }
 
+    if let Some(ref monitor) = state.runtime_monitor {
+        let verdict = monitor.record_and_evaluate(
+            RuntimeEventKind::NetworkEgress,
+            body.len() as u64,
+            0.02,
+            0.22,
+        );
+        if verdict.block_execution {
+            send_blocked_json(
+                &mut client,
+                &state,
+                &method,
+                &target,
+                403,
+                &format!("latent_runtime_guard_blocked: {}", verdict.reason),
+            )
+            .await;
+            return;
+        }
+    }
+
     let (unmasked_headers, unmasked_body) =
         match state
             .masker
@@ -1135,6 +1244,21 @@ async fn handle_proxy_connection(mut client: TcpStream, state: Arc<ProxyState>) 
         }
         if lower == "host" {
             has_host = true;
+        }
+        if has_forbidden_http_ctl(k)
+            || has_forbidden_http_ctl(v)
+            || !k.bytes().all(is_rfc9110_tchar)
+        {
+            send_blocked_json(
+                &mut client,
+                &state,
+                &method,
+                &target,
+                400,
+                "invalid_upstream_header_rejected",
+            )
+            .await;
+            return;
         }
         req_buf.extend_from_slice(format!("{}: {}\r\n", k, v).as_bytes());
     }

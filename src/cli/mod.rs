@@ -1,8 +1,10 @@
+pub mod latent_shield;
 pub mod policy;
 pub mod proxy;
 pub mod run;
 pub mod wasm_runner;
 
+use crate::security::latent_shield::SbomIntent;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -15,6 +17,8 @@ pub const EXIT_TIMEOUT: i32 = 124;
 pub enum SandboxMode {
     Standard,
     Strict,
+    #[serde(rename = "wasm-strict")]
+    WasmStrict,
 }
 
 impl SandboxMode {
@@ -22,7 +26,12 @@ impl SandboxMode {
         match self {
             SandboxMode::Standard => "standard",
             SandboxMode::Strict => "strict",
+            SandboxMode::WasmStrict => "wasm-strict",
         }
+    }
+
+    pub fn is_strict(&self) -> bool {
+        matches!(self, SandboxMode::Strict | SandboxMode::WasmStrict)
     }
 }
 
@@ -30,9 +39,14 @@ impl SandboxMode {
 pub struct OctopusRunArgs {
     pub policy_path: PathBuf,
     pub sandbox: SandboxMode,
+    pub wasm_promote: bool,
     pub timeout_secs: Option<u64>,
     pub cwd: Option<PathBuf>,
     pub json_output: bool,
+    pub baseline_sbom: Option<PathBuf>,
+    pub sbom: Option<PathBuf>,
+    pub sbom_intent: Option<SbomIntent>,
+    pub latent_weights: Option<PathBuf>,
     pub command: Vec<String>,
 }
 
@@ -61,6 +75,8 @@ pub fn print_octopus_help() {
          \x20 hook         Evaluate or install AI coding-agent RT-ASP hooks\n\
          \x20 mcp-proxy    Run stdio MCP JSON-RPC RT-ASP sanitizer proxy\n\
          \x20 siquery      Run relational EDR / process / socket audit query\n\
+         \x20 sbom-guard   Run UnifiedSecurityShield Gate 1 SBOM or Gate 2 runtime step check (alias: latent-shield)\n\
+         \x20 kernel-patch Scan kernel CVEs/KEVs, inspect livepatch/reboot shield, or apply OS patches\n\
          \x20 isolate      Engage host-level network KillSwitch\n\
          \x20 restore      Disarm host-level network KillSwitch\n\
          \x20 service      Manage native OS background service\n\
@@ -74,14 +90,19 @@ pub fn print_octopus_run_help() {
     println!(
         "octopus run — Execute a workload under deterministic Cedar + OS/Wasmtime + Egress Proxy containment\n\n\
          USAGE:\n\
-         \x20 octopus run --policy <PATH> [--sandbox <strict|standard>] [--timeout <SECS>] [--cwd <DIR>] [--json] -- <COMMAND> [ARGS...]\n\n\
+         \x20 octopus run --policy <PATH> [--sandbox <strict|standard|wasm-strict>] [--wasm-promote] [--timeout <SECS>] [--cwd <DIR>] [--baseline-sbom <PATH> --sbom <PATH>] [--sbom-intent <patch|minor|refactor>] [--latent-weights <PATH>] [--json] -- <COMMAND> [ARGS...]\n\n\
          OPTIONS:\n\
-         \x20 --policy <PATH>            Path to .json or .cedar containment policy (required)\n\
-         \x20 --sandbox <strict|standard> OS sandbox posture (default: standard)\n\
-         \x20 --timeout <SECS>           Wall-clock timeout in seconds (0 disables timeout; default: policy or 60)\n\
-         \x20 --cwd <DIR>                Working directory for the contained workload\n\
-         \x20 --json                     Emit a structured JSON containment summary\n\
-         \x20 -h, --help                 Print this help message\n\n\
+         \x20 --policy <PATH>                        Path to .json or .cedar containment policy (required)\n\
+         \x20 --sandbox <strict|standard|wasm-strict> OS/Wasmtime sandbox posture (default: standard; wasm-strict enforces Wasmtime when shield is active, else strict OS containment)\n\
+         \x20 --wasm-promote                         Fail closed unless target is a .wasm/.wat guest when Virtual-Patch Shield is active\n\
+         \x20 --timeout <SECS>                       Wall-clock timeout in seconds (0 disables timeout; default: policy or 60)\n\
+         \x20 --cwd <DIR>                            Working directory for the contained workload\n\
+         \x20 --baseline-sbom <PATH>                 Baseline CycloneDX SBOM JSON for pre-spawn Gate 1 diff\n\
+         \x20 --sbom <PATH>                          Candidate CycloneDX SBOM JSON for pre-spawn Gate 1 diff\n\
+         \x20 --sbom-intent <patch|minor|refactor>   Declared release intent for Gate 1 SBOM check (default: patch)\n\
+         \x20 --latent-weights <PATH>                Custom UnifiedSecurityShield JSON weights file\n\
+         \x20 --json                                 Emit a structured JSON containment summary\n\
+         \x20 -h, --help                             Print this help message\n\n\
          NOTES:\n\
          \x20 - Fails closed with exit code 2 on missing/invalid policy, missing '--', or blocked pre-flight checks.\n\
          \x20 - Target .wasm / .wat files execute directly inside the Tier 1 Wasmtime sandbox."
@@ -100,9 +121,8 @@ pub fn parse_octopus_cli(args: &[String]) -> CliParseResult {
         "run" => {}
         "verify" | "--verify" | "--check" | "-v" | "status" | "protocols" | "hook"
         | "mcp-proxy" | "siquery" | "killswitch" | "isolate" | "engage" | "restore" | "disarm"
-        | "service" | "--service" | "start" | "serve" | "ui" | "patch-kernel" | "kernel-patch" => {
-            return CliParseResult::Delegate(first.to_string())
-        }
+        | "service" | "--service" | "start" | "serve" | "ui" | "patch-kernel" | "kernel-patch"
+        | "sbom-guard" | "latent-shield" => return CliParseResult::Delegate(first.to_string()),
         other => {
             return CliParseResult::Invalid(format!("unknown subcommand or option '{}'", other));
         }
@@ -121,9 +141,14 @@ pub fn parse_octopus_cli(args: &[String]) -> CliParseResult {
 
     let mut policy_path: Option<PathBuf> = None;
     let mut sandbox = SandboxMode::Standard;
+    let mut wasm_promote = false;
     let mut timeout_secs: Option<u64> = None;
     let mut cwd: Option<PathBuf> = None;
     let mut json_output = false;
+    let mut baseline_sbom: Option<PathBuf> = None;
+    let mut sbom: Option<PathBuf> = None;
+    let mut sbom_intent: Option<SbomIntent> = None;
+    let mut latent_weights: Option<PathBuf> = None;
 
     let mut i = 0;
     while i < flag_slice.len() {
@@ -198,6 +223,77 @@ pub fn parse_octopus_cli(args: &[String]) -> CliParseResult {
             }
             cwd = Some(PathBuf::from(val));
             i += 1;
+        } else if arg == "--baseline-sbom" {
+            let Some(val) = flag_slice.get(i + 1) else {
+                return CliParseResult::Invalid("missing value for '--baseline-sbom'".to_string());
+            };
+            if val.trim().is_empty() {
+                return CliParseResult::Invalid(
+                    "'--baseline-sbom' value cannot be empty".to_string(),
+                );
+            }
+            baseline_sbom = Some(PathBuf::from(val));
+            i += 2;
+        } else if let Some(val) = arg.strip_prefix("--baseline-sbom=") {
+            if val.trim().is_empty() {
+                return CliParseResult::Invalid(
+                    "'--baseline-sbom' value cannot be empty".to_string(),
+                );
+            }
+            baseline_sbom = Some(PathBuf::from(val));
+            i += 1;
+        } else if arg == "--sbom" {
+            let Some(val) = flag_slice.get(i + 1) else {
+                return CliParseResult::Invalid("missing value for '--sbom'".to_string());
+            };
+            if val.trim().is_empty() {
+                return CliParseResult::Invalid("'--sbom' value cannot be empty".to_string());
+            }
+            sbom = Some(PathBuf::from(val));
+            i += 2;
+        } else if let Some(val) = arg.strip_prefix("--sbom=") {
+            if val.trim().is_empty() {
+                return CliParseResult::Invalid("'--sbom' value cannot be empty".to_string());
+            }
+            sbom = Some(PathBuf::from(val));
+            i += 1;
+        } else if arg == "--sbom-intent" {
+            let Some(val) = flag_slice.get(i + 1) else {
+                return CliParseResult::Invalid("missing value for '--sbom-intent'".to_string());
+            };
+            match SbomIntent::parse(val) {
+                Ok(intent) => sbom_intent = Some(intent),
+                Err(e) => return CliParseResult::Invalid(e.to_string()),
+            }
+            i += 2;
+        } else if let Some(val) = arg.strip_prefix("--sbom-intent=") {
+            match SbomIntent::parse(val) {
+                Ok(intent) => sbom_intent = Some(intent),
+                Err(e) => return CliParseResult::Invalid(e.to_string()),
+            }
+            i += 1;
+        } else if arg == "--latent-weights" {
+            let Some(val) = flag_slice.get(i + 1) else {
+                return CliParseResult::Invalid("missing value for '--latent-weights'".to_string());
+            };
+            if val.trim().is_empty() {
+                return CliParseResult::Invalid(
+                    "'--latent-weights' value cannot be empty".to_string(),
+                );
+            }
+            latent_weights = Some(PathBuf::from(val));
+            i += 2;
+        } else if let Some(val) = arg.strip_prefix("--latent-weights=") {
+            if val.trim().is_empty() {
+                return CliParseResult::Invalid(
+                    "'--latent-weights' value cannot be empty".to_string(),
+                );
+            }
+            latent_weights = Some(PathBuf::from(val));
+            i += 1;
+        } else if arg == "--wasm-promote" {
+            wasm_promote = true;
+            i += 1;
         } else if arg == "--json" {
             json_output = true;
             i += 1;
@@ -225,9 +321,14 @@ pub fn parse_octopus_cli(args: &[String]) -> CliParseResult {
     CliParseResult::Run(OctopusRunArgs {
         policy_path,
         sandbox,
+        wasm_promote,
         timeout_secs,
         cwd,
         json_output,
+        baseline_sbom,
+        sbom,
+        sbom_intent,
+        latent_weights,
         command,
     })
 }
@@ -236,8 +337,9 @@ fn parse_sandbox_mode(val: &str) -> Result<SandboxMode, String> {
     match val.trim().to_ascii_lowercase().as_str() {
         "standard" => Ok(SandboxMode::Standard),
         "strict" => Ok(SandboxMode::Strict),
+        "wasm-strict" => Ok(SandboxMode::WasmStrict),
         other => Err(format!(
-            "invalid '--sandbox' value '{}': expected 'strict' or 'standard'",
+            "invalid '--sandbox' value '{}': expected 'strict', 'standard', or 'wasm-strict'",
             other
         )),
     }
@@ -333,6 +435,313 @@ pub async fn dispatch_operational_subcommand(cli_args: &[String]) -> Option<i32>
                 }
             }
         }
+        "hook" => {
+            if cli_args
+                .iter()
+                .skip(2)
+                .any(|a| a == "--help" || a == "-h" || a == "help")
+            {
+                println!(
+                    "octopus hook — Evaluate or install AI coding-agent RT-ASP hooks\n\n\
+                     USAGE:\n\
+                     \x20 octopus hook evaluate [--agent <claude|cursor|copilot|opencode|mcp>] [--event <NAME>] [--post]\n\
+                     \x20 octopus hook install [--workspace <DIR>] [--agents <claude,cursor,copilot,opencode>]\n"
+                );
+                return Some(0);
+            }
+            let hook_sub = cli_args.get(2).map(|s| s.as_str()).unwrap_or("evaluate");
+            if hook_sub == "install" {
+                use crate::security::agent_hooks::{install_agent_hooks, SupportedAgentKind};
+                let mut workspace_path =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let mut agents = Vec::new();
+                let mut i = 3;
+                while i < cli_args.len() {
+                    if cli_args[i] == "--workspace" || cli_args[i] == "-w" {
+                        if let Some(w) = cli_args.get(i + 1) {
+                            workspace_path = std::path::PathBuf::from(w);
+                            i += 1;
+                        }
+                    } else if cli_args[i] == "--agents" || cli_args[i] == "-a" {
+                        if let Some(a_list) = cli_args.get(i + 1) {
+                            for a in a_list.split(',') {
+                                if let Some(kind) = SupportedAgentKind::from_str(a.trim()) {
+                                    agents.push(kind);
+                                }
+                            }
+                            i += 1;
+                        }
+                    }
+                    i += 1;
+                }
+                if agents.is_empty() {
+                    agents = vec![
+                        SupportedAgentKind::Claude,
+                        SupportedAgentKind::Cursor,
+                        SupportedAgentKind::Copilot,
+                        SupportedAgentKind::OpenCode,
+                    ];
+                }
+                let current_exe =
+                    std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("octopus"));
+                match install_agent_hooks(&workspace_path, &agents, &current_exe) {
+                    Ok(configs) => {
+                        println!(
+                            "Installed AgentOctopus hooks across {} config(s):",
+                            configs.len()
+                        );
+                        for c in configs {
+                            println!("  - {}", c.display());
+                        }
+                        Some(0)
+                    }
+                    Err(e) => {
+                        eprintln!("[octopus] error: failed to install agent hooks: {}", e);
+                        Some(EXIT_SANDBOX_FAILURE)
+                    }
+                }
+            } else if hook_sub == "evaluate" || hook_sub.starts_with('-') {
+                use crate::security::agent_hooks::{
+                    evaluate_hook_synchronously, format_claude_response, format_copilot_response,
+                    format_cursor_response, format_mcp_error_response, format_opencode_response,
+                    parse_claude_request, parse_copilot_request, parse_cursor_request,
+                    parse_mcp_call_request, parse_opencode_request, SupportedAgentKind,
+                };
+                use std::io::{IsTerminal, Read};
+
+                if cli_args.len() == 2 && std::io::stdin().is_terminal() {
+                    println!(
+                        "octopus hook — Evaluate or install AI coding-agent RT-ASP hooks\n\
+                         Run 'octopus hook --help' for usage."
+                    );
+                    return Some(0);
+                }
+
+                let mut agent = SupportedAgentKind::Claude;
+                let mut event_name = "PreToolUse".to_string();
+                let mut is_post = false;
+                let mut i = if hook_sub == "evaluate" { 3 } else { 2 };
+                while i < cli_args.len() {
+                    if cli_args[i] == "--agent" {
+                        if let Some(a) = cli_args.get(i + 1) {
+                            if let Some(k) = SupportedAgentKind::from_str(a) {
+                                agent = k;
+                            } else {
+                                eprintln!(
+                                    "[octopus] error: unknown hook agent '{}' (expected claude|cursor|copilot|opencode|mcp)",
+                                    a
+                                );
+                                return Some(EXIT_PREFLIGHT_DENIED);
+                            }
+                            i += 1;
+                        }
+                    } else if cli_args[i] == "--event" {
+                        if let Some(ev) = cli_args.get(i + 1) {
+                            event_name = ev.clone();
+                            if ev.eq_ignore_ascii_case("post")
+                                || ev.to_ascii_lowercase().contains("after")
+                            {
+                                is_post = true;
+                            }
+                            i += 1;
+                        }
+                    } else if cli_args[i] == "--post" {
+                        is_post = true;
+                    }
+                    i += 1;
+                }
+
+                let mut input = String::new();
+                let _ = std::io::stdin().read_to_string(&mut input);
+
+                let req = match agent {
+                    SupportedAgentKind::Claude => parse_claude_request(&input, is_post),
+                    SupportedAgentKind::Cursor => parse_cursor_request(&input, &event_name),
+                    SupportedAgentKind::Copilot => parse_copilot_request(&input, &event_name),
+                    SupportedAgentKind::OpenCode => parse_opencode_request(&input),
+                    SupportedAgentKind::Mcp => parse_mcp_call_request(&input),
+                };
+
+                let req = match req {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("[octopus] error parsing hook input: {}", e);
+                        return Some(EXIT_SANDBOX_FAILURE);
+                    }
+                };
+
+                let decision = evaluate_hook_synchronously(&req);
+                let (exit_code, output) = match agent {
+                    SupportedAgentKind::Claude => format_claude_response(&decision),
+                    SupportedAgentKind::Cursor => format_cursor_response(&decision),
+                    SupportedAgentKind::Copilot => format_copilot_response(&decision),
+                    SupportedAgentKind::OpenCode => format_opencode_response(&decision),
+                    SupportedAgentKind::Mcp => {
+                        if decision.allowed {
+                            (0, String::new())
+                        } else {
+                            let rpc_id = req.rpc_id.clone().unwrap_or(serde_json::Value::Null);
+                            (0, format_mcp_error_response(&rpc_id, &decision))
+                        }
+                    }
+                };
+
+                if !output.is_empty() {
+                    println!("{}", output);
+                }
+                Some(exit_code)
+            } else {
+                eprintln!(
+                    "[octopus] error: unknown hook subcommand '{}'\nRun 'octopus hook --help' for usage.",
+                    hook_sub
+                );
+                Some(EXIT_PREFLIGHT_DENIED)
+            }
+        }
+        "killswitch" => {
+            let sub = cli_args.get(2).map(|s| s.as_str()).unwrap_or("status");
+            match sub {
+                "--help" | "-h" | "help" => {
+                    println!("USAGE: octopus killswitch [status|isolate|engage|restore|disarm|protocols]");
+                    Some(0)
+                }
+                "status" => {
+                    let st = crate::security::global_host_killswitch().status();
+                    println!("{}", serde_json::to_string_pretty(&st).unwrap_or_default());
+                    Some(0)
+                }
+                "isolate" | "engage" => {
+                    match crate::security::global_host_killswitch()
+                        .engage("cli_operator", "Manual CLI host isolation")
+                    {
+                        Ok(st) => {
+                            println!(
+                                "Containment Engaged: {} (Level: {}, Hash: {})",
+                                st.backend_engine, st.containment_level, st.state_hash
+                            );
+                            Some(0)
+                        }
+                        Err(e) => {
+                            eprintln!("Containment Engagement Failed: {}", e);
+                            Some(EXIT_SANDBOX_FAILURE)
+                        }
+                    }
+                }
+                "restore" | "disarm" => {
+                    match crate::security::global_host_killswitch()
+                        .disarm("cli_operator", "Manual CLI host restoration")
+                    {
+                        Ok(st) => {
+                            println!(
+                                "Disarm Successful (Level: {}, Hash: {})",
+                                st.containment_level, st.state_hash
+                            );
+                            Some(0)
+                        }
+                        Err(e) => {
+                            eprintln!("Disarm Failed: {}", e);
+                            Some(EXIT_SANDBOX_FAILURE)
+                        }
+                    }
+                }
+                "protocols" => {
+                    let summary = crate::security::UniversalProtocolCatalog::catalog_json_summary();
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&summary).unwrap_or_default()
+                    );
+                    Some(0)
+                }
+                other => {
+                    eprintln!(
+                        "[octopus] error: unknown killswitch action '{}' (expected status|isolate|restore|protocols)",
+                        other
+                    );
+                    Some(EXIT_PREFLIGHT_DENIED)
+                }
+            }
+        }
+        "start" | "serve" | "ui" => {
+            if cli_args.iter().skip(2).any(|a| a == "--help" || a == "-h") {
+                println!("USAGE: octopus {} [--port <PORT>] [--open-browser]", first);
+                return Some(0);
+            }
+            let open_browser_requested = cli_args
+                .iter()
+                .any(|a| a == "--open-browser" || a == "--browser");
+            let mut preferred_port: u16 = 3030;
+            for i in 2..cli_args.len() {
+                if (cli_args[i] == "--port" || cli_args[i] == "-p") && i + 1 < cli_args.len() {
+                    if let Ok(p) = cli_args[i + 1].parse::<u16>() {
+                        if p != 0 && p != 5000 {
+                            preferred_port = p;
+                        }
+                    }
+                } else if let Some(val) = cli_args[i].strip_prefix("--port=") {
+                    if let Ok(p) = val.parse::<u16>() {
+                        if p != 0 && p != 5000 {
+                            preferred_port = p;
+                        }
+                    }
+                }
+            }
+            let selected_port = crate::web::select_available_loopback_port(preferred_port);
+            let addr = format!("127.0.0.1:{}", selected_port);
+            if open_browser_requested {
+                let bootstrap_nonce = crate::web::request_guard::issue_bootstrap_nonce();
+                let url_for_browser = format!(
+                    "http://127.0.0.1:{}/?bootstrap={}",
+                    selected_port, bootstrap_nonce
+                );
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+                    #[cfg(target_os = "windows")]
+                    {
+                        let mut explorer = std::process::Command::new("explorer");
+                        explorer.arg(&url_for_browser);
+                        let _ = crate::security::spawn_hidden(&mut explorer, "cli: open dashboard");
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        let _ = std::process::Command::new("xdg-open")
+                            .arg(&url_for_browser)
+                            .spawn();
+                    }
+                });
+            }
+            println!(
+                "Starting AgentOctopus Web Dashboard on {} (headless: {})...",
+                addr, !open_browser_requested
+            );
+            match crate::web::start_web_server(&addr).await {
+                Ok(()) => Some(0),
+                Err(e) => {
+                    eprintln!("[octopus] Web server failed: {}", e);
+                    Some(EXIT_SANDBOX_FAILURE)
+                }
+            }
+        }
+        "sbom-guard" | "latent-shield" => {
+            let sub_args = cli_args.get(2..).unwrap_or(&[]);
+            Some(crate::cli::latent_shield::execute_sbom_guard_cli(sub_args))
+        }
+        "patch-kernel" | "kernel-patch" => {
+            let sub_args = cli_args.get(2..).unwrap_or(&[]);
+            let parsed = match crate::security::kernel_patcher::parse_patch_kernel_args(sub_args) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("[octopus] error: {}", e);
+                    return Some(EXIT_PREFLIGHT_DENIED);
+                }
+            };
+            match crate::security::kernel_patcher::execute_patch_kernel_cli(&parsed).await {
+                Ok(()) => Some(0),
+                Err(e) => {
+                    eprintln!("[octopus] error: {}", e);
+                    Some(EXIT_SANDBOX_FAILURE)
+                }
+            }
+        }
         "mcp-proxy" => {
             use crate::security::agent_hooks::{
                 evaluate_hook_synchronously, format_mcp_error_response, parse_mcp_call_request,
@@ -362,6 +771,12 @@ pub async fn dispatch_operational_subcommand(cli_args: &[String]) -> Option<i32>
             }
             Some(0)
         }
-        _ => None,
+        other => {
+            eprintln!(
+                "[octopus] error: unhandled subcommand '{}'\nRun 'octopus --help' for usage.",
+                other
+            );
+            Some(EXIT_PREFLIGHT_DENIED)
+        }
     }
 }

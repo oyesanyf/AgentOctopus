@@ -13,13 +13,13 @@ pub enum HarnessComponentKind {
     Memory,
     /// c4: tool_descriptions/tool_guidance.md
     ToolGuidance,
-    /// c5: sub_agents/<name>/AGENT.md
+    /// c5: `sub_agents/<name>/AGENT.md`
     Subagents,
-    /// c6: skills/<name>/SKILL.md + skills/<name>/scripts/*
+    /// c6: `skills/<name>/SKILL.md` + `skills/<name>/scripts/*`
     Skills,
-    /// c7: scripts/<name>.py
+    /// c7: `scripts/<name>.py`
     Scripts,
-    /// c8: plugin/<name>.ts or hooks.json
+    /// c8: `plugin/<name>.ts` or `hooks.json`
     Plugins,
 }
 

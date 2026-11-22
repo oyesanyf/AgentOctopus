@@ -147,16 +147,17 @@ async fn test_adversarial_actuator_single_use_high_concurrency_race() {
 
     // Spawn 25 concurrent tasks all racing to execute the same tool with the exact same seal
     const CONCURRENCY: usize = 25;
+    let dispatcher = Arc::new(new_test_dispatcher());
     let mut handles = Vec::with_capacity(CONCURRENCY);
 
     for _ in 0..CONCURRENCY {
         let r = Arc::clone(&ring);
         let s = Arc::clone(&seal);
+        let d = Arc::clone(&dispatcher);
         let p = payload.clone();
         let sdir = scratch_dir.clone();
 
         handles.push(tokio::spawn(async move {
-            let dispatcher = new_test_dispatcher();
             let mut ticket = r
                 .issue_dirac_ticket("doc_extractor", TEST_RESOURCE, 50_000, None)
                 .await
@@ -173,16 +174,8 @@ async fn test_adversarial_actuator_single_use_high_concurrency_race() {
                 allow_scratch_write: false,
             };
 
-            r.execute_tool_with_cage_seal(
-                &mut ticket,
-                &s,
-                TEST_RESOURCE,
-                &req,
-                &dispatcher,
-                None,
-                None,
-            )
-            .await
+            r.execute_tool_with_cage_seal(&mut ticket, &s, TEST_RESOURCE, &req, &d, None, None)
+                .await
         }));
     }
 
@@ -231,6 +224,7 @@ async fn test_adversarial_actuator_multi_trial_concurrency_stability() {
         std::env::temp_dir().join(format!("octopus_multi_trial_{}", std::process::id()));
     const TRIALS: usize = 10;
     const TASKS_PER_TRIAL: usize = 16;
+    let dispatcher = Arc::new(new_test_dispatcher());
 
     for trial in 1..=TRIALS {
         let payload = format!("INVOICE #9002.{trial}: Trial Stability Run").into_bytes();
@@ -252,11 +246,11 @@ async fn test_adversarial_actuator_multi_trial_concurrency_stability() {
         for _ in 0..TASKS_PER_TRIAL {
             let r = Arc::clone(&ring);
             let s = Arc::clone(&seal);
+            let d = Arc::clone(&dispatcher);
             let p = payload.clone();
             let sdir = scratch_dir.clone();
 
             handles.push(tokio::spawn(async move {
-                let dispatcher = new_test_dispatcher();
                 let mut ticket = r
                     .issue_dirac_ticket("doc_extractor", TEST_RESOURCE, 50_000, None)
                     .await
@@ -273,16 +267,8 @@ async fn test_adversarial_actuator_multi_trial_concurrency_stability() {
                     allow_scratch_write: false,
                 };
 
-                r.execute_tool_with_cage_seal(
-                    &mut ticket,
-                    &s,
-                    TEST_RESOURCE,
-                    &req,
-                    &dispatcher,
-                    None,
-                    None,
-                )
-                .await
+                r.execute_tool_with_cage_seal(&mut ticket, &s, TEST_RESOURCE, &req, &d, None, None)
+                    .await
             }));
         }
 
@@ -336,15 +322,16 @@ async fn test_adversarial_actuator_cross_arm_fleet_concurrency_race() {
         now,
     ));
 
+    let dispatcher = Arc::new(new_test_dispatcher());
     let mut handles = Vec::new();
     for ring in rings {
         let r = Arc::clone(&ring);
         let s = Arc::clone(&seal);
+        let d = Arc::clone(&dispatcher);
         let p = payload.clone();
         let sdir = scratch_dir.clone();
 
         handles.push(tokio::spawn(async move {
-            let dispatcher = new_test_dispatcher();
             let mut ticket = r
                 .issue_dirac_ticket("doc_extractor", TEST_RESOURCE, 50_000, None)
                 .await
@@ -361,16 +348,8 @@ async fn test_adversarial_actuator_cross_arm_fleet_concurrency_race() {
                 allow_scratch_write: false,
             };
 
-            r.execute_tool_with_cage_seal(
-                &mut ticket,
-                &s,
-                TEST_RESOURCE,
-                &req,
-                &dispatcher,
-                None,
-                None,
-            )
-            .await
+            r.execute_tool_with_cage_seal(&mut ticket, &s, TEST_RESOURCE, &req, &d, None, None)
+                .await
         }));
     }
 
@@ -429,17 +408,18 @@ async fn test_adversarial_actuator_concurrency_with_fiscal_settlement() {
     ));
 
     const WORKERS: usize = 12;
+    let dispatcher = Arc::new(new_test_dispatcher());
     let mut handles = Vec::with_capacity(WORKERS);
 
     for _ in 0..WORKERS {
         let r = Arc::clone(&ring);
         let s = Arc::clone(&seal);
+        let d = Arc::clone(&dispatcher);
         let p = payload.clone();
         let sdir = scratch_dir.clone();
         let did = debit_receipt.debit_id.clone();
 
         handles.push(tokio::spawn(async move {
-            let dispatcher = new_test_dispatcher();
             let mut ticket = r
                 .issue_dirac_ticket("doc_extractor", TEST_RESOURCE, 50_000, None)
                 .await
@@ -461,7 +441,7 @@ async fn test_adversarial_actuator_concurrency_with_fiscal_settlement() {
                 &s,
                 TEST_RESOURCE,
                 &req,
-                &dispatcher,
+                &d,
                 None,
                 Some(&did),
             )

@@ -8,9 +8,9 @@
 //! This module provides:
 //! - [`current_token_posture`] / [`TokenPosture::of_process`]: real `GetTokenInformation` inspection
 //!   (`TokenElevation`, `TokenIntegrityLevel`, `TokenGroups`, `TokenPrivileges`).
-//! - [`create_deelevated_token`]: `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN)` with
+//! - `create_deelevated_token`: `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN)` with
 //!   `BUILTIN\Administrators` set to deny-only and the integrity label lowered to Medium.
-//! - [`spawn_deelevated`]: `CreateProcessAsUserW` in `CREATE_SUSPENDED` state; the *child's* token is
+//! - `spawn_deelevated`: `CreateProcessAsUserW` in `CREATE_SUSPENDED` state; the *child's* token is
 //!   re-inspected **before** `ResumeThread` and the process is terminated (never resumed) if it is
 //!   elevated, above Medium integrity, has Administrators enabled, or holds any dangerous privilege.
 //! - [`relaunch_deelevated_or_fail`]: used at the top of `start.exe` / `agent_octopus` `main`.
@@ -279,6 +279,31 @@ mod sys {
         ) -> BOOL;
         pub fn SetHandleInformation(hObject: HANDLE, dwMask: u32, dwFlags: u32) -> BOOL;
         pub fn GetStdHandle(nStdHandle: u32) -> HANDLE;
+        pub fn InitializeProcThreadAttributeList(
+            lpAttributeList: *mut c_void,
+            dwAttributeCount: u32,
+            dwFlags: u32,
+            lpSize: *mut usize,
+        ) -> BOOL;
+        pub fn UpdateProcThreadAttribute(
+            lpAttributeList: *mut c_void,
+            dwFlags: u32,
+            Attribute: usize,
+            lpValue: *const c_void,
+            cbSize: usize,
+            lpPreviousValue: *mut c_void,
+            lpReturnSize: *mut usize,
+        ) -> BOOL;
+        pub fn DeleteProcThreadAttributeList(lpAttributeList: *mut c_void);
+    }
+
+    pub const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    pub struct STARTUPINFOEXW {
+        pub StartupInfo: STARTUPINFOW,
+        pub lpAttributeList: *mut c_void,
     }
 }
 
@@ -844,6 +869,7 @@ fn build_sorted_utf16_env_block(env_pairs: &[(String, String)]) -> Vec<u16> {
 /// Spawns `command_line` under [`create_deelevated_token`] bound to `job` (`WindowsJobObject`),
 /// passing explicit `cwd`, sanitized `env_pairs`, and either inherited or piped stdio handles.
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_deelevated_in_job_with_io(
     application_name: Option<&str>,
     command_line: &str,
@@ -852,6 +878,7 @@ pub fn spawn_deelevated_in_job_with_io(
     pipe_stdio: bool,
     hide_window: bool,
     job: &crate::security::windows_sandbox::WindowsJobObject,
+    disallow_win32k: bool,
 ) -> Result<
     (
         DeelevatedChild,
@@ -863,8 +890,9 @@ pub fn spawn_deelevated_in_job_with_io(
     use std::os::windows::io::{FromRawHandle, RawHandle};
     let token = create_deelevated_token()?;
 
-    let mut si: sys::STARTUPINFOW = unsafe { std::mem::zeroed() };
-    si.cb = std::mem::size_of::<sys::STARTUPINFOW>() as u32;
+    let mut si_ex: sys::STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+    si_ex.StartupInfo.cb = std::mem::size_of::<sys::STARTUPINFOEXW>() as u32;
+    let si = &mut si_ex.StartupInfo;
 
     let mut out_read: sys::HANDLE = std::ptr::null_mut();
     let mut out_write: sys::HANDLE = std::ptr::null_mut();
@@ -941,7 +969,47 @@ pub fn spawn_deelevated_in_job_with_io(
     });
     let env_block: Option<Vec<u16>> = env_pairs.map(build_sorted_utf16_env_block);
 
-    let mut flags = sys::CREATE_SUSPENDED | sys::CREATE_UNICODE_ENVIRONMENT;
+    let mut mitigation_policy: u64 =
+        crate::security::windows_sandbox::compute_windows_mitigation_policy_mask(
+            disallow_win32k,
+            disallow_win32k
+                || crate::security::virtual_patch_shield::current_shield_posture()
+                    .is_shield_active(),
+        );
+    let mut attr_size: usize = 0;
+    unsafe {
+        sys::InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+    }
+    if attr_size == 0 {
+        close_pipes(&[out_read, out_write, err_read, err_write]);
+        return Err(last_err("InitializeProcThreadAttributeList size probe"));
+    }
+    let mut attr_buf = vec![0u8; attr_size];
+    let attr_list = attr_buf.as_mut_ptr().cast::<std::ffi::c_void>();
+    if unsafe { sys::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) } == 0 {
+        close_pipes(&[out_read, out_write, err_read, err_write]);
+        return Err(last_err("InitializeProcThreadAttributeList init"));
+    }
+    if unsafe {
+        sys::UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            crate::security::windows_sandbox::PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+            (&mut mitigation_policy as *mut u64).cast::<std::ffi::c_void>(),
+            std::mem::size_of::<u64>(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        unsafe { sys::DeleteProcThreadAttributeList(attr_list) };
+        close_pipes(&[out_read, out_write, err_read, err_write]);
+        return Err(last_err("UpdateProcThreadAttribute(MITIGATION_POLICY)"));
+    }
+    si_ex.lpAttributeList = attr_list;
+
+    let mut flags =
+        sys::CREATE_SUSPENDED | sys::CREATE_UNICODE_ENVIRONMENT | sys::EXTENDED_STARTUPINFO_PRESENT;
     if hide_window {
         flags |= sys::CREATE_NO_WINDOW;
     }
@@ -959,10 +1027,11 @@ pub fn spawn_deelevated_in_job_with_io(
                 .as_ref()
                 .map_or(std::ptr::null(), |v| v.as_ptr() as *const std::ffi::c_void),
             wide_cwd.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()),
-            &si,
+            &si_ex.StartupInfo,
             &mut pi,
         )
     };
+    unsafe { sys::DeleteProcThreadAttributeList(attr_list) };
 
     // Close write ends in parent regardless of spawn result
     close_pipes(&[out_write, err_write]);

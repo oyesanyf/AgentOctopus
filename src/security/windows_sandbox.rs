@@ -3,6 +3,33 @@ use sha2::Digest;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+/// Win32 `PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY` (`0x0002_0007`) for `UpdateProcThreadAttribute`.
+pub const PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY: usize = 0x0002_0007;
+/// `PROCESS_CREATION_MITIGATION_POLICY_WIN32K_SYSTEM_CALL_DISABLE_ALWAYS_ON` (bit 28).
+pub const PROCESS_CREATION_MITIGATION_POLICY_WIN32K_SYSTEM_CALL_DISABLE_ALWAYS_ON: u64 = 1u64 << 28;
+/// `PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON` (bit 32).
+pub const PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON: u64 = 1u64 << 32;
+/// `PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_REMOTE_ALWAYS_ON` (bit 52).
+pub const PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_REMOTE_ALWAYS_ON: u64 = 1u64 << 52;
+/// `PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_LOW_LABEL_ALWAYS_ON` (bit 56).
+pub const PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_LOW_LABEL_ALWAYS_ON: u64 = 1u64 << 56;
+/// `PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_PREFER_SYSTEM32_ALWAYS_ON` (bit 60).
+pub const PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_PREFER_SYSTEM32_ALWAYS_ON: u64 = 1u64 << 60;
+
+/// Computes the deterministic Windows `PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY` bitmask
+/// for confined child processes (pure cross-OS helper).
+#[must_use]
+pub fn compute_windows_mitigation_policy_mask(disallow_win32k: bool, shield_active: bool) -> u64 {
+    let mut mask = PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON
+        | PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_REMOTE_ALWAYS_ON
+        | PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_LOW_LABEL_ALWAYS_ON
+        | PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_PREFER_SYSTEM32_ALWAYS_ON;
+    if disallow_win32k && shield_active {
+        mask |= PROCESS_CREATION_MITIGATION_POLICY_WIN32K_SYSTEM_CALL_DISABLE_ALWAYS_ON;
+    }
+    mask
+}
+
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 #[cfg(windows)]
@@ -104,6 +131,38 @@ pub mod win32 {
             SecurityDescriptor: *mut *mut c_void,
             SecurityDescriptorSize: *mut u32,
         ) -> BOOL;
+        pub fn ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            SecurityDescriptor: *const c_void,
+            RequestedStringSDRevision: DWORD,
+            SecurityInformation: DWORD,
+            StringSecurityDescriptor: *mut PWSTR,
+            StringSecurityDescriptorLen: *mut DWORD,
+        ) -> BOOL;
+        pub fn GetNamedSecurityInfoW(
+            pObjectName: *const u16,
+            ObjectType: DWORD,
+            SecurityInfo: DWORD,
+            ppsidOwner: *mut PSID,
+            ppsidGroup: *mut PSID,
+            ppDacl: *mut *mut c_void,
+            ppSacl: *mut *mut c_void,
+            ppSecurityDescriptor: *mut *mut c_void,
+        ) -> DWORD;
+        pub fn SetNamedSecurityInfoW(
+            pObjectName: *mut u16,
+            ObjectType: DWORD,
+            SecurityInfo: DWORD,
+            psidOwner: PSID,
+            psidGroup: PSID,
+            pDacl: *mut c_void,
+            pSacl: *mut c_void,
+        ) -> DWORD;
+        pub fn GetSecurityDescriptorDacl(
+            pSecurityDescriptor: *const c_void,
+            lpbDaclPresent: *mut BOOL,
+            pDacl: *mut *mut c_void,
+            lpbDaclDefaulted: *mut BOOL,
+        ) -> BOOL;
     }
 
     #[link(name = "kernel32")]
@@ -154,6 +213,12 @@ pub mod win32 {
             lpStartupInfo: *const c_void,
             lpProcessInformation: *mut windows_sys::Win32::System::Threading::PROCESS_INFORMATION,
         ) -> BOOL;
+        pub fn CreateMutexW(
+            lpMutexAttributes: *const c_void,
+            bInitialOwner: BOOL,
+            lpName: *const u16,
+        ) -> HANDLE;
+        pub fn ReleaseMutex(hMutex: HANDLE) -> BOOL;
     }
 }
 
@@ -572,6 +637,639 @@ unsafe fn free_network_isolation_config(count: win32::DWORD, arr: *mut win32::SI
 }
 
 #[cfg(windows)]
+const APPCONTAINER_ACL_MUTEX_NAME: &str = "Local\\AgentOctopus_AppContainer_ACL_Lock";
+#[cfg(windows)]
+const APPCONTAINER_LOOPBACK_MUTEX_NAME: &str = "Local\\AgentOctopus_AppContainer_Loopback_Lock";
+#[cfg(windows)]
+const APPCONTAINER_MUTEX_TIMEOUT_MS: u32 = 30_000;
+
+#[cfg(windows)]
+struct Win32NamedMutexGuard {
+    handle: HANDLE,
+}
+
+#[cfg(windows)]
+impl Win32NamedMutexGuard {
+    fn acquire(name: &str, timeout_ms: u32) -> Result<Self, OctopusSecurityError> {
+        const WAIT_OBJECT_0: u32 = 0x0000_0000;
+        const WAIT_ABANDONED: u32 = 0x0000_0080;
+        const WAIT_TIMEOUT: u32 = 0x0000_0102;
+
+        let wide_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        let handle = unsafe { win32::CreateMutexW(std::ptr::null(), 0, wide_name.as_ptr()) };
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            let err = unsafe { win32::GetLastError() };
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "FAIL-CLOSED: CreateMutexW('{}') failed (OS Error {})",
+                name, err
+            )));
+        }
+
+        let rc = unsafe { win32::WaitForSingleObject(handle, timeout_ms) };
+        match rc {
+            WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(Self { handle }),
+            WAIT_TIMEOUT => {
+                unsafe { CloseHandle(handle) };
+                Err(OctopusSecurityError::IsolationViolation(format!(
+                    "FAIL-CLOSED: Timed out after {}ms waiting for Windows named mutex '{}'",
+                    timeout_ms, name
+                )))
+            }
+            _ => {
+                let err = unsafe { win32::GetLastError() };
+                unsafe { CloseHandle(handle) };
+                Err(OctopusSecurityError::IsolationViolation(format!(
+                    "FAIL-CLOSED: WaitForSingleObject('{}') failed (rc=0x{:08X}, OS Error {})",
+                    name, rc, err
+                )))
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Win32NamedMutexGuard {
+    fn drop(&mut self) {
+        if !self.handle.is_null() && self.handle != INVALID_HANDLE_VALUE {
+            unsafe {
+                let _ = win32::ReleaseMutex(self.handle);
+                CloseHandle(self.handle);
+            }
+            self.handle = std::ptr::null_mut();
+        }
+    }
+}
+
+#[cfg(windows)]
+fn run_icacls_output_locked(
+    _acl_lock: &Win32NamedMutexGuard,
+    path: &std::path::Path,
+    extra_args: &[&str],
+) -> Result<std::process::Output, OctopusSecurityError> {
+    std::process::Command::new("icacls")
+        .arg(path)
+        .args(extra_args)
+        .output()
+        .map_err(|e| {
+            OctopusSecurityError::IsolationViolation(format!(
+                "FAIL-CLOSED: failed to invoke icacls on '{}': {}",
+                path.display(),
+                e
+            ))
+        })
+}
+
+#[cfg(windows)]
+fn has_only_inherited_aces_locked(acl_lock: &Win32NamedMutexGuard, path: &std::path::Path) -> bool {
+    let Ok(out) = run_icacls_output_locked(acl_lock, path, &[]) else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut saw_ace = false;
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("Successfully processed") {
+            continue;
+        }
+        // Lines with ACEs contain `:(...)` (e.g., `NT AUTHORITY\SYSTEM:(I)(F)`).
+        if let Some(colon_idx) = trimmed.rfind(':') {
+            let perms = &trimmed[colon_idx + 1..];
+            if perms.starts_with('(') {
+                saw_ace = true;
+                if !perms.contains("(I)") {
+                    return false;
+                }
+            }
+        }
+    }
+    saw_ace
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
+struct PreIsolationAclSnapshot {
+    original_inherited_only: bool,
+    #[serde(default)]
+    original_protected: bool,
+    #[serde(default)]
+    original_explicit_sddl_aces: Vec<String>,
+}
+
+#[cfg(windows)]
+fn is_transient_appcontainer_sddl_sid(sid: &str) -> bool {
+    let lower = sid.trim().to_ascii_lowercase();
+    if let Some(tail) = lower.strip_prefix("s-1-15-2-") {
+        let sub_count = tail.split('-').filter(|seg| !seg.is_empty()).count();
+        return sub_count >= 2;
+    }
+    false
+}
+
+#[cfg(windows)]
+fn parse_pre_isolation_dacl_sddl(dacl_sddl: &str) -> Option<(bool, Vec<String>)> {
+    let rest = dacl_sddl.trim().strip_prefix("D:")?;
+    if rest.eq_ignore_ascii_case("NO_ACCESS_CONTROL") || rest.is_empty() {
+        return Some((false, Vec::new()));
+    }
+    let first_paren = rest.find('(').unwrap_or(rest.len());
+    let flags_str = &rest[..first_paren];
+    let original_protected = flags_str.contains('P');
+
+    let mut explicit_aces = Vec::new();
+    let bytes = rest.as_bytes();
+    let mut i = first_paren;
+    while i < bytes.len() {
+        if bytes[i] == b'(' {
+            let start = i;
+            let mut depth = 0usize;
+            while i < bytes.len() {
+                if bytes[i] == b'(' {
+                    depth += 1;
+                } else if bytes[i] == b')' {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        i += 1;
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            let ace = &rest[start..i];
+            if ace.len() >= 2 && ace.starts_with('(') && ace.ends_with(')') {
+                let inner = &ace[1..ace.len() - 1];
+                let parts: Vec<&str> = inner.split(';').collect();
+                if parts.len() >= 6 {
+                    let ace_flags = parts[1].trim();
+                    let is_inherited = ace_flags
+                        .as_bytes()
+                        .chunks(2)
+                        .any(|chunk| chunk.eq_ignore_ascii_case(b"ID"));
+                    let trustee_sid = parts[5].trim();
+                    if !is_inherited && !is_transient_appcontainer_sddl_sid(trustee_sid) {
+                        explicit_aces.push(ace.to_string());
+                    }
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    Some((original_protected, explicit_aces))
+}
+
+#[cfg(windows)]
+fn capture_pre_isolation_acl_locked(
+    acl_lock: &Win32NamedMutexGuard,
+    path: &std::path::Path,
+) -> PreIsolationAclSnapshot {
+    const SE_FILE_OBJECT: u32 = 1;
+    const DACL_SECURITY_INFORMATION: u32 = 0x0000_0004;
+    const SDDL_REVISION_1: u32 = 1;
+
+    use std::os::windows::ffi::OsStrExt;
+    let wide_path: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut p_dacl: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mut p_sd: *mut std::ffi::c_void = std::ptr::null_mut();
+    let rc = unsafe {
+        win32::GetNamedSecurityInfoW(
+            wide_path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut p_dacl,
+            std::ptr::null_mut(),
+            &mut p_sd,
+        )
+    };
+    if rc == 0 && !p_sd.is_null() {
+        let mut p_str_sd: win32::PWSTR = std::ptr::null_mut();
+        let mut str_len: u32 = 0;
+        let ok = unsafe {
+            win32::ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                p_sd,
+                SDDL_REVISION_1,
+                DACL_SECURITY_INFORMATION,
+                &mut p_str_sd,
+                &mut str_len,
+            )
+        };
+        let mut parsed_opt = None;
+        if ok != 0 && !p_str_sd.is_null() {
+            let mut len = 0usize;
+            unsafe {
+                while *p_str_sd.add(len) != 0 {
+                    len += 1;
+                }
+                let slice = std::slice::from_raw_parts(p_str_sd, len);
+                let sddl = String::from_utf16_lossy(slice);
+                parsed_opt = parse_pre_isolation_dacl_sddl(&sddl);
+                win32::LocalFree(p_str_sd as *mut std::ffi::c_void);
+            }
+        }
+        unsafe { win32::LocalFree(p_sd) };
+        if let Some((original_protected, original_explicit_sddl_aces)) = parsed_opt {
+            let original_inherited_only =
+                !original_protected && original_explicit_sddl_aces.is_empty();
+            return PreIsolationAclSnapshot {
+                original_inherited_only,
+                original_protected,
+                original_explicit_sddl_aces,
+            };
+        }
+    }
+
+    PreIsolationAclSnapshot {
+        original_inherited_only: has_only_inherited_aces_locked(acl_lock, path),
+        original_protected: false,
+        original_explicit_sddl_aces: Vec::new(),
+    }
+}
+
+#[cfg(windows)]
+fn apply_sddl_dacl_locked(
+    _acl_lock: &Win32NamedMutexGuard,
+    target: &std::path::Path,
+    original_protected: bool,
+    explicit_aces: &[String],
+) -> bool {
+    const SE_FILE_OBJECT: u32 = 1;
+    const DACL_SECURITY_INFORMATION: u32 = 0x0000_0004;
+    const PROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x8000_0000;
+    const UNPROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x2000_0000;
+    const SDDL_REVISION_1: u32 = 1;
+
+    use std::os::windows::ffi::OsStrExt;
+    let mut sddl = String::from(if original_protected { "D:P" } else { "D:" });
+    for ace in explicit_aces {
+        sddl.push_str(ace);
+    }
+    let wide_sddl: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut p_sd: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mut sd_size: u32 = 0;
+    if unsafe {
+        win32::ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            wide_sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut p_sd,
+            &mut sd_size,
+        )
+    } == 0
+        || p_sd.is_null()
+    {
+        return false;
+    }
+
+    let mut dacl_present: win32::BOOL = 0;
+    let mut p_dacl: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mut dacl_defaulted: win32::BOOL = 0;
+    let got_dacl = unsafe {
+        win32::GetSecurityDescriptorDacl(p_sd, &mut dacl_present, &mut p_dacl, &mut dacl_defaulted)
+    };
+    if got_dacl == 0 || dacl_present == 0 {
+        unsafe { win32::LocalFree(p_sd) };
+        return false;
+    }
+
+    let mut wide_path: Vec<u16> = target
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let sec_info = DACL_SECURITY_INFORMATION
+        | if original_protected {
+            PROTECTED_DACL_SECURITY_INFORMATION
+        } else {
+            UNPROTECTED_DACL_SECURITY_INFORMATION
+        };
+    let rc = unsafe {
+        win32::SetNamedSecurityInfoW(
+            wide_path.as_mut_ptr(),
+            SE_FILE_OBJECT,
+            sec_info,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            p_dacl,
+            std::ptr::null_mut(),
+        )
+    };
+    unsafe { win32::LocalFree(p_sd) };
+    rc == 0
+}
+
+#[cfg(windows)]
+fn restore_target_pre_acl_locked(
+    acl_lock: &Win32NamedMutexGuard,
+    target: &std::path::Path,
+    snap: &PreIsolationAclSnapshot,
+) {
+    if !snap.original_protected && snap.original_explicit_sddl_aces.is_empty() {
+        let _ = run_icacls_output_locked(acl_lock, target, &["/reset", "/Q"]);
+        return;
+    }
+    if apply_sddl_dacl_locked(
+        acl_lock,
+        target,
+        snap.original_protected,
+        &snap.original_explicit_sddl_aces,
+    ) {
+        return;
+    }
+    if !snap.original_protected {
+        let _ = run_icacls_output_locked(acl_lock, target, &["/inheritance:e", "/Q"]);
+    }
+}
+
+#[cfg(windows)]
+fn icacls_line_has_other_appcontainer_sid(
+    line: &str,
+    own_sid: &str,
+    own_container_name: Option<&str>,
+) -> bool {
+    const PREFIX: &str = "s-1-15-2-";
+    const MONIKER_PREFIX: &str = "application package authority\\";
+    let own_lower = own_sid.to_ascii_lowercase();
+    let lower = line.to_ascii_lowercase();
+    if let Some(mpos) = lower.find(MONIKER_PREFIX) {
+        let after = &lower[mpos + MONIKER_PREFIX.len()..];
+        let moniker = after.split(':').next().unwrap_or(after).trim();
+        let is_own = own_container_name
+            .map(|name| moniker.eq_ignore_ascii_case(name))
+            .unwrap_or(false);
+        if moniker.starts_with("agentoctopus.") && !is_own {
+            return true;
+        }
+    }
+    let mut rest = lower.as_str();
+    while let Some(pos) = rest.find(PREFIX) {
+        let cand = &rest[pos..];
+        let tail = &cand[PREFIX.len()..];
+        let tail_end = tail
+            .find(|c: char| !c.is_ascii_digit() && c != '-')
+            .unwrap_or(tail.len());
+        let sid_end = PREFIX.len() + tail_end;
+        let sid = &cand[..sid_end];
+        let sub_count = if tail_end == 0 {
+            0
+        } else {
+            tail[..tail_end]
+                .split('-')
+                .filter(|seg| !seg.is_empty())
+                .count()
+        };
+        // Ignore well-known S-1-15-2-1 (ALL APPLICATION PACKAGES) and S-1-15-2-2 (ALL RESTRICTED),
+        // plus our own package SID.
+        if sub_count >= 2 && sid != own_lower {
+            return true;
+        }
+        rest = &cand[sid_end..];
+    }
+    false
+}
+
+#[cfg(windows)]
+fn norm_acl_cmp_path(p: &std::path::Path) -> String {
+    let resolved = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let s = resolved.to_string_lossy().replace('\\', "/");
+    let s = s.strip_prefix("//?/").unwrap_or(&s);
+    s.trim_end_matches('/').to_ascii_lowercase()
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+struct AppContainerLedgerActor {
+    sid: String,
+    container_name: String,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+struct AppContainerAclLedgerEntry {
+    original_inherited_only: bool,
+    #[serde(default)]
+    original_protected: bool,
+    #[serde(default)]
+    original_explicit_sddl_aces: Vec<String>,
+    target_path: String,
+    active_containers: Vec<AppContainerLedgerActor>,
+    pending_restore: bool,
+    ancestor_paths: Vec<String>,
+}
+
+#[cfg(windows)]
+impl AppContainerAclLedgerEntry {
+    fn snapshot(&self) -> PreIsolationAclSnapshot {
+        PreIsolationAclSnapshot {
+            original_inherited_only: self.original_inherited_only,
+            original_protected: self.original_protected,
+            original_explicit_sddl_aces: self.original_explicit_sddl_aces.clone(),
+        }
+    }
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+struct AppContainerAclLedger {
+    entries: std::collections::BTreeMap<String, AppContainerAclLedgerEntry>,
+}
+
+#[cfg(windows)]
+fn acl_ledger_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("agentoctopus_ac_acl_ledger.json")
+}
+
+#[cfg(windows)]
+fn load_acl_ledger_locked(_acl_lock: &Win32NamedMutexGuard) -> AppContainerAclLedger {
+    let path = acl_ledger_path();
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return AppContainerAclLedger::default();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+#[cfg(windows)]
+fn save_acl_ledger_locked(_acl_lock: &Win32NamedMutexGuard, ledger: &AppContainerAclLedger) {
+    let path = acl_ledger_path();
+    if ledger.entries.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return;
+    }
+    if let Ok(json) = serde_json::to_string(ledger) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+#[cfg(windows)]
+fn collect_relevant_ancestors(
+    target: &std::path::Path,
+    candidate_ancestors: &[std::path::PathBuf],
+) -> Vec<std::path::PathBuf> {
+    let target_norm = norm_acl_cmp_path(target);
+    let mut dirs_to_check: Vec<std::path::PathBuf> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    if let Some(parent) = target.parent() {
+        if parent.exists() {
+            let pn = norm_acl_cmp_path(parent);
+            if seen.insert(pn) {
+                dirs_to_check.push(parent.to_path_buf());
+            }
+        }
+    }
+    for gp in candidate_ancestors {
+        if !gp.exists() {
+            continue;
+        }
+        let gpn = norm_acl_cmp_path(gp);
+        if !gpn.is_empty() && target_norm.starts_with(&format!("{}/", gpn)) && seen.insert(gpn) {
+            dirs_to_check.push(gp.clone());
+        }
+    }
+    dirs_to_check
+}
+
+#[cfg(windows)]
+fn validate_ledger_entry_live_locked(
+    acl_lock: &Win32NamedMutexGuard,
+    entry: &mut AppContainerAclLedgerEntry,
+    candidate_ancestors: &[std::path::PathBuf],
+) -> bool {
+    let target = std::path::Path::new(&entry.target_path);
+    if !target.exists() && std::fs::symlink_metadata(target).is_err() {
+        return false;
+    }
+    let mut check_paths = collect_relevant_ancestors(target, candidate_ancestors);
+    let mut seen: std::collections::HashSet<String> =
+        check_paths.iter().map(|p| norm_acl_cmp_path(p)).collect();
+    for ap in &entry.ancestor_paths {
+        let p = std::path::PathBuf::from(ap);
+        if p.exists() {
+            let pn = norm_acl_cmp_path(&p);
+            if seen.insert(pn) {
+                check_paths.push(p);
+            }
+        }
+    }
+
+    let mut live_sids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut any_ac_sid_on_ancestors = false;
+
+    for dir in &check_paths {
+        let Ok(out) = run_icacls_output_locked(acl_lock, dir, &[]) else {
+            // Fail-safe: keep entry if icacls inspection fails.
+            return true;
+        };
+        if !out.status.success() {
+            return true;
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with("Successfully processed") {
+                continue;
+            }
+            let lower = trimmed.to_ascii_lowercase();
+            if icacls_line_has_other_appcontainer_sid(trimmed, "", None) {
+                any_ac_sid_on_ancestors = true;
+            }
+            for actor in &entry.active_containers {
+                let sid_l = actor.sid.to_ascii_lowercase();
+                let moniker_l = format!(
+                    "application package authority\\{}",
+                    actor.container_name.to_ascii_lowercase()
+                );
+                if lower.contains(&sid_l) || lower.contains(&moniker_l) {
+                    live_sids.insert(sid_l);
+                }
+            }
+        }
+    }
+
+    entry
+        .active_containers
+        .retain(|a| live_sids.contains(&a.sid.to_ascii_lowercase()));
+
+    if !entry.active_containers.is_empty() {
+        return true;
+    }
+
+    if entry.pending_restore {
+        if any_ac_sid_on_ancestors {
+            return true;
+        }
+        // Orphaned pending_restore with zero active AppContainer SIDs left on ancestors: restore now.
+        let snap = entry.snapshot();
+        restore_target_pre_acl_locked(acl_lock, target, &snap);
+    }
+    false
+}
+
+#[cfg(windows)]
+fn ancestors_have_other_appcontainer_sid_locked(
+    acl_lock: &Win32NamedMutexGuard,
+    target: &std::path::Path,
+    granted_paths: &[std::path::PathBuf],
+    own_sid: &str,
+    own_container_name: Option<&str>,
+) -> bool {
+    let dirs_to_check = collect_relevant_ancestors(target, granted_paths);
+
+    for dir in dirs_to_check {
+        let Ok(out) = run_icacls_output_locked(acl_lock, &dir, &[]) else {
+            // Fail-safe: if inspection fails while another container may be active, defer /reset
+            return true;
+        };
+        if !out.status.success() {
+            return true;
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with("Successfully processed") {
+                continue;
+            }
+            if icacls_line_has_other_appcontainer_sid(trimmed, own_sid, own_container_name) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+fn run_icacls_locked(
+    _acl_lock: &Win32NamedMutexGuard,
+    path: &std::path::Path,
+    op_flag: &str,
+    arg_val: &str,
+) -> Result<bool, OctopusSecurityError> {
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .arg(op_flag)
+        .arg(arg_val)
+        .arg("/Q")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| {
+            OctopusSecurityError::IsolationViolation(format!(
+                "FAIL-CLOSED: failed to invoke icacls on '{}': {}",
+                path.display(),
+                e
+            ))
+        })?;
+    Ok(status.success())
+}
+
+#[cfg(windows)]
 fn revoke_appcontainer_loopback_exemption(sid_str: &str) {
     let wide_sid: Vec<u16> = sid_str.encode_utf16().chain(std::iter::once(0)).collect();
     let mut target_psid: win32::PSID = std::ptr::null_mut();
@@ -580,6 +1278,13 @@ fn revoke_appcontainer_loopback_exemption(sid_str: &str) {
     {
         return;
     }
+    let Ok(_lb_lock) = Win32NamedMutexGuard::acquire(
+        APPCONTAINER_LOOPBACK_MUTEX_NAME,
+        APPCONTAINER_MUTEX_TIMEOUT_MS,
+    ) else {
+        unsafe { win32::LocalFree(target_psid) };
+        return;
+    };
     unsafe {
         if let Some((hmod, get_fn, set_fn)) = load_network_isolation_fns() {
             let mut count: win32::DWORD = 0;
@@ -659,6 +1364,12 @@ impl PreparedAppContainerProfile {
         if self.already_loopback_exempt || self.loopback_exempt_added {
             return true;
         }
+        let Ok(_lb_lock) = Win32NamedMutexGuard::acquire(
+            APPCONTAINER_LOOPBACK_MUTEX_NAME,
+            APPCONTAINER_MUTEX_TIMEOUT_MS,
+        ) else {
+            return false;
+        };
         unsafe {
             let Some((hmod, get_fn, set_fn)) = load_network_isolation_fns() else {
                 return false;
@@ -1252,10 +1963,15 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
         Reserved: 0,
     };
 
-    // Calculate required buffer size for attribute list
+    let mut mitigation_policy: u64 = compute_windows_mitigation_policy_mask(
+        false,
+        crate::security::virtual_patch_shield::current_shield_posture().is_shield_active(),
+    );
+
+    // Calculate required buffer size for attribute list (SECURITY_CAPABILITIES + MITIGATION_POLICY)
     let mut attr_size: usize = 0;
     unsafe {
-        win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+        win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 2, 0, &mut attr_size);
     }
     if attr_size == 0 {
         unsafe { win32::FreeSid(psid) };
@@ -1269,7 +1985,7 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
     let mut attr_buf: Vec<u8> = vec![0u8; attr_size];
     let attr_list = attr_buf.as_mut_ptr() as *mut std::ffi::c_void;
     let init_ok =
-        unsafe { win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) };
+        unsafe { win32::InitializeProcThreadAttributeList(attr_list, 2, 0, &mut attr_size) };
     if init_ok == 0 {
         unsafe { win32::FreeSid(psid) };
         rollback_appcontainer_profile(&container_name);
@@ -1299,6 +2015,28 @@ pub fn spawn_quarantined_worker_in_job_and_appcontainer(
         rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(format!(
             "FAIL-CLOSED: UpdateProcThreadAttribute failed with error {}",
+            unsafe { win32::GetLastError() }
+        )));
+    }
+    if unsafe {
+        win32::UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+            (&mut mitigation_policy as *mut u64).cast::<std::ffi::c_void>(),
+            std::mem::size_of::<u64>(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        unsafe {
+            win32::DeleteProcThreadAttributeList(attr_list);
+            win32::FreeSid(psid);
+        };
+        rollback_appcontainer_profile(&container_name);
+        return Err(OctopusSecurityError::IsolationViolation(format!(
+            "FAIL-CLOSED: UpdateProcThreadAttribute(MITIGATION_POLICY) failed with error {}",
             unsafe { win32::GetLastError() }
         )));
     }
@@ -1680,9 +2418,19 @@ pub fn spawn_tier2_appcontainer_command(
         Reserved: 0,
     };
 
+    // Note: `spawn_tier2_appcontainer_command` launches `CREATE_NO_WINDOW` without piped stdio,
+    // which triggers `conhost.exe` initialization inside the AppContainer; `NO_LOW_LABEL` causes
+    // `STATUS_DLL_INIT_FAILED` (`0xC0000142`) on `conhost`/console attaches, so retain
+    // `EXTENSION_POINT_DISABLE | IMAGE_LOAD_NO_REMOTE | IMAGE_LOAD_PREFER_SYSTEM32`.
+    let mut mitigation_policy: u64 = compute_windows_mitigation_policy_mask(
+        false,
+        crate::security::virtual_patch_shield::current_shield_posture().is_shield_active(),
+    )
+        & !PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_LOW_LABEL_ALWAYS_ON;
+
     let mut attr_size: usize = 0;
     unsafe {
-        win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+        win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 2, 0, &mut attr_size);
     }
     if attr_size == 0 {
         unsafe { win32::FreeSid(psid) };
@@ -1694,7 +2442,7 @@ pub fn spawn_tier2_appcontainer_command(
 
     let mut attr_buf = vec![0u8; attr_size];
     let attr_list = attr_buf.as_mut_ptr() as *mut std::ffi::c_void;
-    if unsafe { win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) } == 0 {
+    if unsafe { win32::InitializeProcThreadAttributeList(attr_list, 2, 0, &mut attr_size) } == 0 {
         unsafe { win32::FreeSid(psid) };
         rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(
@@ -1722,6 +2470,27 @@ pub fn spawn_tier2_appcontainer_command(
         rollback_appcontainer_profile(&container_name);
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES) failed".to_string(),
+        ));
+    }
+    if unsafe {
+        win32::UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+            (&mut mitigation_policy as *mut u64).cast::<std::ffi::c_void>(),
+            std::mem::size_of::<u64>(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        unsafe {
+            win32::DeleteProcThreadAttributeList(attr_list);
+            win32::FreeSid(psid);
+        }
+        rollback_appcontainer_profile(&container_name);
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED: UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY) failed".to_string(),
         ));
     }
 
@@ -1962,6 +2731,7 @@ pub struct AppContainerChildHandle {
     pub posture: crate::security::token_posture::TokenPosture,
     pub appcontainer_verification: AppContainerTokenVerification,
     granted_acl_paths: Vec<std::path::PathBuf>,
+    reset_inheritance_paths: Vec<(std::path::PathBuf, PreIsolationAclSnapshot)>,
     loopback_exempt_added: bool,
     process: HANDLE,
 }
@@ -2007,20 +2777,164 @@ impl AppContainerChildHandle {
 }
 
 #[cfg(windows)]
-fn revoke_appcontainer_acls(package_sid: &str, paths: &[std::path::PathBuf]) {
+fn revoke_appcontainer_acls(
+    package_sid: &str,
+    container_name: &str,
+    paths: &[std::path::PathBuf],
+    reset_paths: &[(std::path::PathBuf, PreIsolationAclSnapshot)],
+) {
+    // Never run icacls /remove or /reset unlocked (nor panic in Drop) if mutex acquisition fails.
+    let Ok(acl_lock) =
+        Win32NamedMutexGuard::acquire(APPCONTAINER_ACL_MUTEX_NAME, APPCONTAINER_MUTEX_TIMEOUT_MS)
+    else {
+        return;
+    };
     let sid_arg = format!("*{}", package_sid);
-    for p in paths {
-        if p.exists() {
-            let _ = std::process::Command::new("icacls")
-                .arg(p)
-                .arg("/remove")
-                .arg(&sid_arg)
-                .arg("/Q")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
+    for (p, _) in reset_paths.iter().rev() {
+        if p.exists() || std::fs::symlink_metadata(p).is_ok() {
+            let _ = run_icacls_locked(&acl_lock, p, "/remove", &sid_arg);
         }
     }
+    for p in paths.iter().rev() {
+        if p.exists() || std::fs::symlink_metadata(p).is_ok() {
+            let _ = run_icacls_locked(&acl_lock, p, "/remove", &sid_arg);
+        }
+    }
+
+    let mut ledger = load_acl_ledger_locked(&acl_lock);
+    let own_sid_lower = package_sid.to_ascii_lowercase();
+
+    let mut restore_order: Vec<&(std::path::PathBuf, PreIsolationAclSnapshot)> =
+        reset_paths.iter().collect();
+    restore_order.sort_by(|(pa, _), (pb, _)| {
+        let na = norm_acl_cmp_path(pa);
+        let nb = norm_acl_cmp_path(pb);
+        na.len().cmp(&nb.len()).then_with(|| na.cmp(&nb))
+    });
+    for (p, fallback_snap) in restore_order {
+        let tn = norm_acl_cmp_path(p);
+        let entry_opt = ledger.entries.get_mut(&tn);
+        let effective_snap = entry_opt
+            .as_ref()
+            .map(|e| e.snapshot())
+            .unwrap_or_else(|| fallback_snap.clone());
+
+        let mut combined_ancestors: Vec<std::path::PathBuf> = paths.to_vec();
+        if let Some(entry) = entry_opt.as_ref() {
+            for ap in &entry.ancestor_paths {
+                combined_ancestors.push(std::path::PathBuf::from(ap));
+            }
+        }
+
+        if p.exists() || std::fs::symlink_metadata(p).is_ok() {
+            // Defer /reset or explicit-ACL restoration if another active AppContainer SID remains on a parent
+            // or workspace ancestor so the surviving peer container cannot inherit access to denied targets.
+            if ancestors_have_other_appcontainer_sid_locked(
+                &acl_lock,
+                p,
+                &combined_ancestors,
+                package_sid,
+                Some(container_name),
+            ) {
+                if let Some(entry) = ledger.entries.get_mut(&tn) {
+                    entry
+                        .active_containers
+                        .retain(|a| !a.sid.eq_ignore_ascii_case(&own_sid_lower));
+                    entry.pending_restore = true;
+                    let mut seen: std::collections::HashSet<String> = entry
+                        .ancestor_paths
+                        .iter()
+                        .map(|s| norm_acl_cmp_path(std::path::Path::new(s)))
+                        .collect();
+                    for anc in collect_relevant_ancestors(p, paths) {
+                        let an = norm_acl_cmp_path(&anc);
+                        if seen.insert(an) {
+                            entry.ancestor_paths.push(anc.to_string_lossy().to_string());
+                        }
+                    }
+                } else {
+                    let anc_strs = collect_relevant_ancestors(p, paths)
+                        .into_iter()
+                        .map(|ap| ap.to_string_lossy().to_string())
+                        .collect();
+                    ledger.entries.insert(
+                        tn,
+                        AppContainerAclLedgerEntry {
+                            original_inherited_only: effective_snap.original_inherited_only,
+                            original_protected: effective_snap.original_protected,
+                            original_explicit_sddl_aces: effective_snap
+                                .original_explicit_sddl_aces
+                                .clone(),
+                            target_path: p.to_string_lossy().to_string(),
+                            active_containers: Vec::new(),
+                            pending_restore: true,
+                            ancestor_paths: anc_strs,
+                        },
+                    );
+                }
+                continue;
+            }
+            restore_target_pre_acl_locked(&acl_lock, p, &effective_snap);
+        }
+        ledger.entries.remove(&tn);
+    }
+
+    // Check all pending-restore ledger entries (including nested targets like
+    // `.git` -> `.git/hooks` and `.git/modules/sub/hooks`) shallowest path first
+    // in a fixed-point loop so restoring a parent unblocks its children.
+    let mut pending_keys: Vec<String> = ledger
+        .entries
+        .iter()
+        .filter(|(_, e)| e.pending_restore)
+        .map(|(k, _)| k.clone())
+        .collect();
+    pending_keys.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+
+    loop {
+        let mut progressed = false;
+        let mut remaining = Vec::with_capacity(pending_keys.len());
+        for key in pending_keys {
+            let Some(entry) = ledger.entries.get(&key).cloned() else {
+                continue;
+            };
+            let target = std::path::Path::new(&entry.target_path);
+            if !target.exists() && std::fs::symlink_metadata(target).is_err() {
+                ledger.entries.remove(&key);
+                progressed = true;
+                continue;
+            }
+            let mut combined_ancestors: Vec<std::path::PathBuf> = paths.to_vec();
+            for ap in &entry.ancestor_paths {
+                combined_ancestors.push(std::path::PathBuf::from(ap));
+            }
+            if !ancestors_have_other_appcontainer_sid_locked(
+                &acl_lock,
+                target,
+                &combined_ancestors,
+                "",
+                None,
+            ) {
+                restore_target_pre_acl_locked(&acl_lock, target, &entry.snapshot());
+                ledger.entries.remove(&key);
+                progressed = true;
+            } else {
+                remaining.push(key);
+            }
+        }
+        pending_keys = remaining;
+        if !progressed || pending_keys.is_empty() {
+            break;
+        }
+    }
+
+    // Prune stale ledger entries (including `pending_restore == false` from hard-killed processes)
+    // whose `target_path` no longer exists on disk so deleted temp dirs never accumulate.
+    ledger.entries.retain(|_, entry| {
+        let p = std::path::Path::new(&entry.target_path);
+        p.exists() || std::fs::symlink_metadata(p).is_ok()
+    });
+
+    save_acl_ledger_locked(&acl_lock, &ledger);
 }
 
 #[cfg(windows)]
@@ -2028,13 +2942,23 @@ impl Drop for AppContainerChildHandle {
     fn drop(&mut self) {
         if !self.process.is_null() && self.process != INVALID_HANDLE_VALUE {
             unsafe {
+                const WAIT_TIMEOUT: u32 = 0x0000_0102;
+                if win32::WaitForSingleObject(self.process, 0) == WAIT_TIMEOUT {
+                    let _ = win32::TerminateProcess(self.process, 1);
+                    let _ = win32::WaitForSingleObject(self.process, 2000);
+                }
                 CloseHandle(self.process);
             }
         }
         if self.loopback_exempt_added {
             revoke_appcontainer_loopback_exemption(&self.package_sid);
         }
-        revoke_appcontainer_acls(&self.package_sid, &self.granted_acl_paths);
+        revoke_appcontainer_acls(
+            &self.package_sid,
+            &self.container_name,
+            &self.granted_acl_paths,
+            &self.reset_inheritance_paths,
+        );
         rollback_appcontainer_profile(&self.container_name);
     }
 }
@@ -2072,9 +2996,11 @@ pub fn spawn_appcontainer_in_job_with_io(
         allow_read_dirs,
         allow_write_dirs,
         mandatory_ro_dirs,
+        &[],
         pipe_stdio,
         job,
         None,
+        false,
     )
 }
 
@@ -2093,9 +3019,11 @@ pub fn spawn_appcontainer_in_job_with_io_prepared(
     allow_read_dirs: &[std::path::PathBuf],
     allow_write_dirs: &[std::path::PathBuf],
     mandatory_ro_dirs: &[std::path::PathBuf],
+    deny_paths: &[std::path::PathBuf],
     pipe_stdio: bool,
     job: &WindowsJobObject,
     prepared: Option<PreparedAppContainerProfile>,
+    disallow_win32k: bool,
 ) -> Result<
     (
         AppContainerChildHandle,
@@ -2158,67 +3086,322 @@ pub fn spawn_appcontainer_in_job_with_io_prepared(
             (cn, ss, p, false, false)
         };
 
-    let cleanup_profile = |acl_paths: &[std::path::PathBuf]| {
-        if loopback_exempt_added {
-            revoke_appcontainer_loopback_exemption(&sid_str);
-        }
-        revoke_appcontainer_acls(&sid_str, acl_paths);
-        rollback_appcontainer_profile(&container_name);
-    };
-
-    // Best-effort grant AppContainer SID ACLs on declared user directories so scripts/cwd are readable/writable.
+    let mut reset_inheritance_paths: Vec<(std::path::PathBuf, PreIsolationAclSnapshot)> =
+        Vec::new();
     let mut granted_acl_paths = Vec::new();
-    let sid_grant_rx = format!("*{}:(OI)(CI)RX", sid_str);
-    let sid_grant_m = format!("*{}:(OI)(CI)M", sid_str);
-    let mut try_grant = |path: &std::path::Path, perm: &str| {
-        if path.exists() {
-            if let Ok(st) = std::process::Command::new("icacls")
-                .arg(path)
-                .arg("/grant")
-                .arg(perm)
-                .arg("/Q")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
+    let cleanup_profile =
+        |acl_paths: &[std::path::PathBuf],
+         reset_paths: &[(std::path::PathBuf, PreIsolationAclSnapshot)]| {
+            if loopback_exempt_added {
+                revoke_appcontainer_loopback_exemption(&sid_str);
+            }
+            revoke_appcontainer_acls(&sid_str, &container_name, acl_paths, reset_paths);
+            rollback_appcontainer_profile(&container_name);
+        };
+
+    let acl_setup_res: Result<(), OctopusSecurityError> = (|| {
+        let acl_lock = Win32NamedMutexGuard::acquire(
+            APPCONTAINER_ACL_MUTEX_NAME,
+            APPCONTAINER_MUTEX_TIMEOUT_MS,
+        )?;
+
+        let candidate_granted_dirs: Vec<std::path::PathBuf> = allow_read_dirs
+            .iter()
+            .chain(std::iter::once(&cwd.to_path_buf()))
+            .chain(allow_write_dirs.iter())
+            .chain(mandatory_ro_dirs.iter())
+            .filter(|p| p.exists())
+            .cloned()
+            .collect();
+        let granted_norms: Vec<String> = candidate_granted_dirs
+            .iter()
+            .map(|p| norm_acl_cmp_path(p))
+            .collect();
+        let is_under_granted = |target: &std::path::Path| -> bool {
+            let tn = norm_acl_cmp_path(target);
+            granted_norms
+                .iter()
+                .any(|gn| !gn.is_empty() && (tn == *gn || tn.starts_with(&format!("{}/", gn))))
+        };
+
+        // Inspect inheritance posture on existing deny / mandatory write-deny targets BEFORE granting
+        // parent ACLs so cleanup_profile can restore their exact pre-sandbox inheritance state.
+        // Consult the shared ACL ledger so staggered concurrent AppContainers inherit the true
+        // pre-sandbox inheritance state rather than sampling a peer's mid-run `/inheritance:d`.
+        let mut ledger = load_acl_ledger_locked(&acl_lock);
+        let mut recorded_pre_norms: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let own_actor = AppContainerLedgerActor {
+            sid: sid_str.clone(),
+            container_name: container_name.clone(),
+        };
+        let mut record_pre_acl = |target: &std::path::Path| {
+            if (target.exists() || std::fs::symlink_metadata(target).is_ok())
+                && is_under_granted(target)
             {
-                if st.success() && !granted_acl_paths.contains(&path.to_path_buf()) {
-                    granted_acl_paths.push(path.to_path_buf());
+                let tn = norm_acl_cmp_path(target);
+                if recorded_pre_norms.insert(tn.clone()) {
+                    let relevant_ancestors =
+                        collect_relevant_ancestors(target, &candidate_granted_dirs);
+                    let ancestor_strs: Vec<String> = relevant_ancestors
+                        .iter()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect();
+
+                    let mut existing_snap = None;
+                    if let Some(entry) = ledger.entries.get_mut(&tn) {
+                        if validate_ledger_entry_live_locked(
+                            &acl_lock,
+                            entry,
+                            &candidate_granted_dirs,
+                        ) {
+                            existing_snap = Some(entry.snapshot());
+                            if !entry
+                                .active_containers
+                                .iter()
+                                .any(|a| a.sid.eq_ignore_ascii_case(&own_actor.sid))
+                            {
+                                entry.active_containers.push(own_actor.clone());
+                            }
+                            entry.pending_restore = false;
+                            let mut seen_anc: std::collections::HashSet<String> = entry
+                                .ancestor_paths
+                                .iter()
+                                .map(|s| norm_acl_cmp_path(std::path::Path::new(s)))
+                                .collect();
+                            for anc in &relevant_ancestors {
+                                let an = norm_acl_cmp_path(anc);
+                                if seen_anc.insert(an) {
+                                    entry.ancestor_paths.push(anc.to_string_lossy().to_string());
+                                }
+                            }
+                        } else {
+                            ledger.entries.remove(&tn);
+                        }
+                    }
+
+                    let snap = match existing_snap {
+                        Some(orig) => orig,
+                        None => {
+                            let orig = capture_pre_isolation_acl_locked(&acl_lock, target);
+                            ledger.entries.insert(
+                                tn,
+                                AppContainerAclLedgerEntry {
+                                    original_inherited_only: orig.original_inherited_only,
+                                    original_protected: orig.original_protected,
+                                    original_explicit_sddl_aces: orig
+                                        .original_explicit_sddl_aces
+                                        .clone(),
+                                    target_path: target.to_string_lossy().to_string(),
+                                    active_containers: vec![own_actor.clone()],
+                                    pending_restore: false,
+                                    ancestor_paths: ancestor_strs,
+                                },
+                            );
+                            orig
+                        }
+                    };
+                    reset_inheritance_paths.push((target.to_path_buf(), snap));
+                }
+            }
+        };
+        for dp in deny_paths {
+            record_pre_acl(dp);
+        }
+        for wdir in allow_write_dirs {
+            if !wdir.is_dir() {
+                continue;
+            }
+            for rel in [
+                ".git",
+                ".git/hooks",
+                ".git/modules",
+                ".git/config",
+                ".gitmodules",
+                ".gitconfig",
+                ".githooks",
+                ".vscode",
+                ".idea",
+                ".claude/commands",
+                ".claude/agents",
+                ".mcp.json",
+                ".ripgreprc",
+                ".bashrc",
+                ".bash_profile",
+                ".zshrc",
+                ".zprofile",
+                ".profile",
+                ".env",
+            ] {
+                record_pre_acl(&wdir.join(rel));
+            }
+            if let Ok(entries) = std::fs::read_dir(wdir) {
+                for entry in entries.flatten() {
+                    let name_lower = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                    if name_lower.starts_with(".env.") && entry.path().is_file() {
+                        record_pre_acl(&entry.path());
+                    }
                 }
             }
         }
-    };
-    for p in allow_read_dirs {
-        try_grant(p, &sid_grant_rx);
-    }
-    try_grant(cwd, &sid_grant_rx);
-    for p in allow_write_dirs {
-        try_grant(p, &sid_grant_m);
-    }
-    if let Some(exe_parent) = std::path::Path::new(application_name).parent() {
-        try_grant(exe_parent, &sid_grant_rx);
-    }
-    for p in mandatory_ro_dirs {
-        let granted = p.exists()
-            && std::process::Command::new("icacls")
-                .arg(p)
-                .arg("/grant")
-                .arg(&sid_grant_rx)
-                .arg("/Q")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_ok_and(|st| st.success());
-        if !granted {
-            unsafe { win32::FreeSid(psid) };
-            cleanup_profile(&granted_acl_paths);
-            return Err(OctopusSecurityError::IsolationViolation(format!(
-                "FAIL-CLOSED: failed to grant AppContainer (RX) ACL on mandatory guard directory '{}'",
-                p.display()
-            )));
+        save_acl_ledger_locked(&acl_lock, &ledger);
+
+        // Best-effort grant AppContainer SID ACLs on declared user directories so scripts/cwd are readable/writable.
+        let sid_grant_rx = format!("*{}:(OI)(CI)RX", sid_str);
+        let sid_grant_m = format!("*{}:(OI)(CI)M", sid_str);
+        let mut try_grant =
+            |path: &std::path::Path, perm: &str| -> Result<(), OctopusSecurityError> {
+                if path.exists()
+                    && run_icacls_locked(&acl_lock, path, "/grant", perm)?
+                    && !granted_acl_paths.contains(&path.to_path_buf())
+                {
+                    granted_acl_paths.push(path.to_path_buf());
+                }
+                Ok(())
+            };
+        for p in allow_read_dirs {
+            try_grant(p, &sid_grant_rx)?;
         }
-        if !granted_acl_paths.contains(&p.to_path_buf()) {
-            granted_acl_paths.push(p.to_path_buf());
+        try_grant(cwd, &sid_grant_rx)?;
+        for p in allow_write_dirs {
+            try_grant(p, &sid_grant_m)?;
         }
+        if let Some(exe_parent) = std::path::Path::new(application_name).parent() {
+            try_grant(exe_parent, &sid_grant_rx)?;
+        }
+        for p in mandatory_ro_dirs {
+            let granted = if p.exists() {
+                run_icacls_locked(&acl_lock, p, "/grant", &sid_grant_rx)?
+            } else {
+                false
+            };
+            if !granted {
+                return Err(OctopusSecurityError::IsolationViolation(format!(
+                    "FAIL-CLOSED: failed to grant AppContainer (RX) ACL on mandatory guard directory '{}'",
+                    p.display()
+                )));
+            }
+            if !granted_acl_paths.contains(&p.to_path_buf()) {
+                granted_acl_paths.push(p.to_path_buf());
+            }
+        }
+
+        // Break inheritance on mandatory write-deny and `filesystem.deny` targets inside granted
+        // directories, strip the inherited package SID, and (for mandatory write-deny not covered by
+        // `filesystem.deny`) grant ONLY read-only (RX) so Windows AppContainer AccessCheck fails closed
+        // at the kernel boundary. Mandatory write-deny RX runs BEFORE `deny_paths` (None) isolation
+        // and skips any target under `deny_paths` so `filesystem.deny` is never overwritten with RX.
+        let deny_norms: Vec<String> = deny_paths
+            .iter()
+            .filter(|dp| dp.exists() || std::fs::symlink_metadata(dp).is_ok())
+            .map(|dp| norm_acl_cmp_path(dp))
+            .collect();
+        let is_denied_target = |target: &std::path::Path| -> bool {
+            let tn = norm_acl_cmp_path(target);
+            deny_norms
+                .iter()
+                .any(|dn| !dn.is_empty() && (tn == *dn || tn.starts_with(&format!("{}/", dn))))
+        };
+        let sid_remove_arg = format!("*{}", sid_str);
+        let isolate_target_acl = |target: &std::path::Path,
+                                  ro_grant_perm: Option<&str>,
+                                  fail_closed: bool|
+         -> Result<(), OctopusSecurityError> {
+            if !target.exists() && std::fs::symlink_metadata(target).is_err() {
+                return Ok(());
+            }
+            let inh_out = run_icacls_output_locked(&acl_lock, target, &["/inheritance:d", "/Q"]);
+            let inh_ok = matches!(&inh_out, Ok(o) if o.status.success());
+            let rem_ok = matches!(
+                run_icacls_locked(&acl_lock, target, "/remove", &sid_remove_arg),
+                Ok(true)
+            );
+            let grant_ok = match ro_grant_perm {
+                Some(perm) => matches!(
+                    run_icacls_locked(&acl_lock, target, "/grant", perm),
+                    Ok(true)
+                ),
+                None => true,
+            };
+            if !(inh_ok && rem_ok && grant_ok) && fail_closed {
+                return Err(OctopusSecurityError::IsolationViolation(format!(
+                    "FAIL-CLOSED: failed to isolate AppContainer ACL on '{}'",
+                    target.display()
+                )));
+            }
+            Ok(())
+        };
+
+        let sid_ro_dir = format!("*{}:(OI)(CI)RX", sid_str);
+        let sid_ro_file = format!("*{}:RX", sid_str);
+
+        for wdir in allow_write_dirs {
+            if !wdir.is_dir() {
+                continue;
+            }
+            for sub_dir in [
+                ".git",
+                ".git/hooks",
+                ".git/modules",
+                ".githooks",
+                ".vscode",
+                ".idea",
+                ".claude/commands",
+                ".claude/agents",
+            ] {
+                let target = wdir.join(sub_dir);
+                if target.is_dir() && !is_denied_target(&target) {
+                    isolate_target_acl(&target, Some(&sid_ro_dir), true)?;
+                }
+            }
+            for sub_file in [
+                ".git/config",
+                ".gitmodules",
+                ".gitconfig",
+                ".mcp.json",
+                ".ripgreprc",
+                ".bashrc",
+                ".bash_profile",
+                ".zshrc",
+                ".zprofile",
+                ".profile",
+                ".env",
+            ] {
+                let target = wdir.join(sub_file);
+                if target.is_file() && !is_denied_target(&target) {
+                    isolate_target_acl(&target, Some(&sid_ro_file), true)?;
+                }
+            }
+            if let Ok(entries) = std::fs::read_dir(wdir) {
+                for entry in entries.flatten() {
+                    let name_lower = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                    let entry_path = entry.path();
+                    if name_lower.starts_with(".env.")
+                        && entry_path.is_file()
+                        && !is_denied_target(&entry_path)
+                    {
+                        isolate_target_acl(&entry_path, Some(&sid_ro_file), true)?;
+                    }
+                }
+            }
+        }
+
+        for dp in deny_paths {
+            if !dp.exists() && std::fs::symlink_metadata(dp).is_err() {
+                continue;
+            }
+            if is_under_granted(dp) {
+                isolate_target_acl(dp, None, true)?;
+            }
+        }
+
+        Ok(())
+    })();
+
+    if let Err(e) = acl_setup_res {
+        unsafe { win32::FreeSid(psid) };
+        cleanup_profile(&granted_acl_paths, &reset_inheritance_paths);
+        return Err(e);
     }
 
     let mut cap_sids: Vec<win32::PSID> = Vec::new();
@@ -2258,14 +3441,20 @@ pub fn spawn_appcontainer_in_job_with_io_prepared(
         Reserved: 0,
     };
 
+    let mut mitigation_policy: u64 = compute_windows_mitigation_policy_mask(
+        disallow_win32k,
+        disallow_win32k
+            || crate::security::virtual_patch_shield::current_shield_posture().is_shield_active(),
+    );
+
     let mut attr_size: usize = 0;
     unsafe {
-        win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+        win32::InitializeProcThreadAttributeList(std::ptr::null_mut(), 2, 0, &mut attr_size);
     }
     if attr_size == 0 {
         free_cap_sids(&cap_sids);
         unsafe { win32::FreeSid(psid) };
-        cleanup_profile(&granted_acl_paths);
+        cleanup_profile(&granted_acl_paths, &reset_inheritance_paths);
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: InitializeProcThreadAttributeList size query failed".to_string(),
         ));
@@ -2273,10 +3462,10 @@ pub fn spawn_appcontainer_in_job_with_io_prepared(
 
     let mut attr_buf = vec![0u8; attr_size];
     let attr_list = attr_buf.as_mut_ptr() as *mut std::ffi::c_void;
-    if unsafe { win32::InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size) } == 0 {
+    if unsafe { win32::InitializeProcThreadAttributeList(attr_list, 2, 0, &mut attr_size) } == 0 {
         free_cap_sids(&cap_sids);
         unsafe { win32::FreeSid(psid) };
-        cleanup_profile(&granted_acl_paths);
+        cleanup_profile(&granted_acl_paths, &reset_inheritance_paths);
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: InitializeProcThreadAttributeList init failed".to_string(),
         ));
@@ -2299,9 +3488,31 @@ pub fn spawn_appcontainer_in_job_with_io_prepared(
             win32::FreeSid(psid);
         }
         free_cap_sids(&cap_sids);
-        cleanup_profile(&granted_acl_paths);
+        cleanup_profile(&granted_acl_paths, &reset_inheritance_paths);
         return Err(OctopusSecurityError::IsolationViolation(
             "FAIL-CLOSED: UpdateProcThreadAttribute(SECURITY_CAPABILITIES) failed".to_string(),
+        ));
+    }
+    if unsafe {
+        win32::UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+            (&mut mitigation_policy as *mut u64).cast::<std::ffi::c_void>(),
+            std::mem::size_of::<u64>(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        unsafe {
+            win32::DeleteProcThreadAttributeList(attr_list);
+            win32::FreeSid(psid);
+        }
+        free_cap_sids(&cap_sids);
+        cleanup_profile(&granted_acl_paths, &reset_inheritance_paths);
+        return Err(OctopusSecurityError::IsolationViolation(
+            "FAIL-CLOSED: UpdateProcThreadAttribute(MITIGATION_POLICY) failed".to_string(),
         ));
     }
 
@@ -2333,7 +3544,7 @@ pub fn spawn_appcontainer_in_job_with_io_prepared(
                 win32::FreeSid(psid);
             }
             free_cap_sids(&cap_sids);
-            cleanup_profile(&granted_acl_paths);
+            cleanup_profile(&granted_acl_paths, &reset_inheritance_paths);
             return Err(OctopusSecurityError::IsolationViolation(
                 "FAIL-CLOSED: CreatePipe(stdout) failed".to_string(),
             ));
@@ -2346,7 +3557,7 @@ pub fn spawn_appcontainer_in_job_with_io_prepared(
                 win32::FreeSid(psid);
             }
             free_cap_sids(&cap_sids);
-            cleanup_profile(&granted_acl_paths);
+            cleanup_profile(&granted_acl_paths, &reset_inheritance_paths);
             return Err(OctopusSecurityError::IsolationViolation(
                 "FAIL-CLOSED: CreatePipe(stderr) failed".to_string(),
             ));
@@ -2457,7 +3668,7 @@ pub fn spawn_appcontainer_in_job_with_io_prepared(
         let err = unsafe { win32::GetLastError() };
         close_pipes(&[out_read, err_read]);
         unsafe { win32::FreeSid(psid) };
-        cleanup_profile(&granted_acl_paths);
+        cleanup_profile(&granted_acl_paths, &reset_inheritance_paths);
         return Err(OctopusSecurityError::IsolationViolation(format!(
             "FAIL-CLOSED: CreateProcessW in AppContainer '{}' for '{}' failed (OS Error {})",
             container_name, application_name, err
@@ -2471,7 +3682,7 @@ pub fn spawn_appcontainer_in_job_with_io_prepared(
             CloseHandle(pi.hThread);
         }
         close_pipes(&[out_read, err_read]);
-        cleanup_profile(&granted_acl_paths);
+        cleanup_profile(&granted_acl_paths, &reset_inheritance_paths);
         reason
     };
 
@@ -2535,6 +3746,7 @@ pub fn spawn_appcontainer_in_job_with_io_prepared(
             posture,
             appcontainer_verification: ac_verification,
             granted_acl_paths,
+            reset_inheritance_paths,
             loopback_exempt_added,
             process: pi.hProcess,
         },

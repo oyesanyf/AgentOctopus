@@ -11,13 +11,51 @@ $env:AGENT_OCTOPUS_SKIP_POST_COMMIT_HOOK = "1"
 
 # 1. Mandatory Fail-Closed Repository Boundary Check (Zero Fallback Slugs)
 $ExpectedRepoRoot = "D:/harfile/AgentOctopus"
-$ExpectedOriginUrl = "https://github.com/oyesanyf/AgentOctopus.git"
+$ExpectedOriginUrl = "https://github.com/oyesanyf/AgentOctopus"
 $ExpectedRepoSlug = "oyesanyf/AgentOctopus"
+
+function Invoke-GitQuiet {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$GitArgs
+    )
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $rawOut = @(& git @GitArgs 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    $stdoutLines = @($rawOut | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
+    $allLines = @($rawOut | ForEach-Object { $_.ToString() })
+    return [pscustomobject]@{
+        ExitCode  = $exitCode
+        Output    = ($stdoutLines -join "`n").Trim()
+        AllOutput = ($allLines -join "`n").Trim()
+    }
+}
+
+function Invoke-GitChecked {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$GitArgs
+    )
+    $res = Invoke-GitQuiet $GitArgs
+    if ($res.ExitCode -ne 0) {
+        $detail = if ($res.AllOutput) { $res.AllOutput } else { "(no output)" }
+        throw "git $($GitArgs -join ' ') failed with exit code $($res.ExitCode): $detail"
+    }
+    if ($res.AllOutput) {
+        Write-Host $res.AllOutput
+    }
+    return $res
+}
 
 $gitWorks = $false
 try {
-    $testGit = & git --version 2>$null
-    if ($LASTEXITCODE -eq 0 -and $testGit) { $gitWorks = $true }
+    $verRes = Invoke-GitQuiet @("--version")
+    if ($verRes.ExitCode -eq 0 -and $verRes.Output) { $gitWorks = $true }
 } catch {}
 if (-not $gitWorks) {
     $candidateGitDirs = @(
@@ -33,8 +71,9 @@ if (-not $gitWorks) {
     }
 }
 
-$repoRootRaw = (& git rev-parse --show-toplevel 2>$null)
-if ($LASTEXITCODE -ne 0 -or -not $repoRootRaw) {
+$rootRes = Invoke-GitQuiet @("rev-parse", "--show-toplevel")
+$repoRootRaw = $rootRes.Output
+if ($rootRes.ExitCode -ne 0 -or -not $repoRootRaw) {
     Write-Error "[FATAL] Not inside a Git repository. Refusing to continue."
     exit 1
 }
@@ -44,14 +83,16 @@ if ($repoRoot -ine $ExpectedRepoRoot) {
     exit 1
 }
 
-$originUrlRaw = (& git remote get-url origin 2>$null)
-if ($LASTEXITCODE -ne 0 -or -not $originUrlRaw) {
+$originRes = Invoke-GitQuiet @("remote", "get-url", "origin")
+$originUrlRaw = $originRes.Output
+if ($originRes.ExitCode -ne 0 -or -not $originUrlRaw) {
     Write-Error "[FATAL] Could not resolve 'origin' remote URL. Aborting fail-closed."
     exit 1
 }
 $originUrl = $originUrlRaw.Trim()
-if ($originUrl -ne $ExpectedOriginUrl) {
-    Write-Error "[FATAL] Origin URL mismatch! '$originUrl' != '$ExpectedOriginUrl'. Aborting fail-closed."
+$originUrlNormalized = $originUrl -replace '\.git$', ''
+if ($originUrlNormalized -ne $ExpectedOriginUrl) {
+    Write-Error "[FATAL] Origin URL mismatch! '$originUrl' (normalized '$originUrlNormalized') != '$ExpectedOriginUrl' (or '.git'). Aborting fail-closed."
     exit 1
 }
 
@@ -87,39 +128,44 @@ try {
     $branchName = "pr/solo-" + (Get-Date -Format "yyyyMMdd-HHmmss")
     Write-Host "[1/5] Preparing Solo-PR branch $branchName for $ExpectedRepoSlug..." -ForegroundColor Cyan
 
-    git fetch origin main --quiet
-    $uncommitted = (git status --porcelain)
-    $headSha = (git rev-parse HEAD).Trim()
-    $originMainSha = (git rev-parse origin/main).Trim()
+    $null = Invoke-GitChecked @("fetch", "origin", "main", "--quiet")
+    $uncommitted = (Invoke-GitChecked @("status", "--porcelain")).Output
+    $headSha = (Invoke-GitChecked @("rev-parse", "HEAD")).Output.Trim()
+    $originMainSha = (Invoke-GitChecked @("rev-parse", "origin/main")).Output.Trim()
+    $hadAheadMain = ($headSha -ne $originMainSha)
 
     if ($uncommitted) {
-        Write-Host "Detected uncommitted changes. Staging and committing to $branchName..." -ForegroundColor Yellow
+        if ($hadAheadMain) {
+            Write-Host "Detected local commit(s) ahead of origin/main AND uncommitted changes. Staging onto $branchName..." -ForegroundColor Yellow
+        } else {
+            Write-Host "Detected uncommitted changes. Staging and committing to $branchName..." -ForegroundColor Yellow
+        }
         Wait-GitLock
-        git checkout -b $branchName
+        $null = Invoke-GitChecked @("checkout", "-b", $branchName)
         Start-Sleep -Milliseconds 400
         Wait-GitLock
-        git add -A
+        $null = Invoke-GitChecked @("add", "-A")
         Wait-GitLock
-        git commit -F $titleTempFile
-    } elseif ($headSha -ne $originMainSha) {
+        $null = Invoke-GitChecked @("commit", "-F", $titleTempFile)
+    } elseif ($hadAheadMain) {
         Write-Host "Detected local commit(s) ahead of origin/main. Moving to $branchName and resetting local main..." -ForegroundColor Yellow
         Wait-GitLock
-        git branch $branchName HEAD
+        $null = Invoke-GitChecked @("branch", $branchName, "HEAD")
         Wait-GitLock
-        git reset --hard origin/main
+        $null = Invoke-GitChecked @("reset", "--hard", "origin/main")
         Wait-GitLock
-        git checkout $branchName
+        $null = Invoke-GitChecked @("checkout", $branchName)
     } else {
         Write-Host "Working tree clean and HEAD matches origin/main. Creating empty commit on $branchName..." -ForegroundColor Yellow
         Wait-GitLock
-        git checkout -b $branchName
+        $null = Invoke-GitChecked @("checkout", "-b", $branchName)
         Start-Sleep -Milliseconds 300
         Wait-GitLock
-        git commit --allow-empty -F $titleTempFile
+        $null = Invoke-GitChecked @("commit", "--allow-empty", "-F", $titleTempFile)
     }
 
     Write-Host "[2/5] Pushing $branchName to origin..." -ForegroundColor Cyan
-    git push -u origin $branchName
+    $null = Invoke-GitChecked @("push", "-u", "origin", $branchName)
 
     $pythonExe = if (Test-Path "C:\Users\oyesanyf\AppData\Local\Programs\Python\Python312\py312.exe") {
         "C:\Users\oyesanyf\AppData\Local\Programs\Python\Python312\py312.exe"
@@ -246,10 +292,20 @@ print(f"Merged PR #{pr_num} successfully!")
     }
 
     Write-Host "Cleaning up remote branch $branchName and syncing local main..." -ForegroundColor Cyan
-    git push origin --delete $branchName 2>$null | Out-Null
-    git checkout main
-    git pull origin main --ff-only
-    git branch -D $branchName 2>$null | Out-Null
+    $null = Invoke-GitQuiet @("push", "origin", "--delete", $branchName)
+    $null = Invoke-GitChecked @("fetch", "origin", "main", "--quiet")
+    $null = Invoke-GitChecked @("checkout", "main")
+    $mergeRes = Invoke-GitQuiet @("merge", "--ff-only", "origin/main")
+    if ($mergeRes.ExitCode -ne 0) {
+        $diffRes = Invoke-GitQuiet @("diff", "--quiet", $branchName, "origin/main")
+        if ($diffRes.ExitCode -eq 0) {
+            Write-Host "Local main held pre-squash commit(s) now landed on origin/main; aligning local main to origin/main..." -ForegroundColor Yellow
+            $null = Invoke-GitChecked @("reset", "--hard", "origin/main")
+        } else {
+            $null = Invoke-GitChecked @("pull", "origin", "main", "--ff-only")
+        }
+    }
+    $null = Invoke-GitQuiet @("branch", "-D", $branchName)
     Write-Host "SUCCESS! Shipped via reviewed Pull Request and synced local main." -ForegroundColor Green
 } finally {
     Remove-Item -Force $titleTempFile -ErrorAction SilentlyContinue

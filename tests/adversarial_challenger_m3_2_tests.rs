@@ -664,9 +664,12 @@ fn test_adversarial_m3_concurrency_race_resistance() {
 
     let mut handles = Vec::new();
 
+    let consumed_ok = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
     // 1. Validator threads (concurrent action evaluations)
     for t_id in 0..NUM_VALIDATOR_THREADS {
         let state_clone = Arc::clone(&state);
+        let consumed_ok_clone = Arc::clone(&consumed_ok);
         handles.push(thread::spawn(move || {
             for i in 0..ITERATIONS_PER_THREAD {
                 let req_payload = serde_json::json!({
@@ -693,13 +696,24 @@ fn test_adversarial_m3_concurrency_race_resistance() {
                 assert_eq!(eval.verdict, GovernanceVerdict::Allow);
                 assert!(eval.seal.is_some(), "ALLOW verdict must issue routing seal");
 
-                // Immediately consume the issued seal
+                // Immediately consume the issued seal; concurrent policy ingestion between
+                // validate_action and consume_seal legitimately rotates active_policy_version
+                // and must fail closed with 409 POLICY_VERSION_MISMATCH.
                 let seal_json = serde_json::to_string(&eval.seal.unwrap()).unwrap();
-                let (c_status, _) = handle_cage_consume_seal(&state_clone, &seal_json);
-                assert_eq!(
-                    c_status, "200 OK",
-                    "Thread {t_id} iteration {i}: seal consumption must succeed"
-                );
+                let (c_status, c_body) = handle_cage_consume_seal(&state_clone, &seal_json);
+                if c_status == "409 Conflict" {
+                    let err_val: Value = serde_json::from_str(&c_body).expect("parse 409 body");
+                    assert_eq!(
+                        err_val["code"], "POLICY_VERSION_MISMATCH",
+                        "Thread {t_id} iteration {i}: 409 during concurrent policy rotation must be POLICY_VERSION_MISMATCH, got: {c_body}"
+                    );
+                } else {
+                    assert_eq!(
+                        c_status, "200 OK",
+                        "Thread {t_id} iteration {i}: seal consumption must succeed or fail closed on version rotation, got {c_status}: {c_body}"
+                    );
+                    consumed_ok_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
             }
         }));
     }
@@ -760,6 +774,11 @@ fn test_adversarial_m3_concurrency_race_resistance() {
         h.join()
             .expect("Thread joined cleanly with zero panics or deadlocks");
     }
+
+    assert!(
+        consumed_ok.load(std::sync::atomic::Ordering::Relaxed) > 0,
+        "At least some seal consumptions must succeed under concurrent policy rotation"
+    );
 
     // Final consistency check
     let (final_status, final_body) = handle_cage_policy_version(&state);

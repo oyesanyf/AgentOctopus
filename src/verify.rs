@@ -99,7 +99,6 @@ pub struct SubsystemVerifier;
 impl SubsystemVerifier {
     /// Executes all 7 diagnostic phases in memory.
     pub async fn run_all() -> Result<VerificationReport, String> {
-        std::env::set_var("OCTOPUS_SELF_DIAGNOSTIC", "1");
         let total_start = Instant::now();
         let mut phases = Vec::new();
 
@@ -632,10 +631,21 @@ impl SubsystemVerifier {
             ));
         }
 
-        // Verify Unconditional Disarm Hook
-        let disarm_res = execute_host_disarm_unauthenticated();
-        if disarm_res.is_err() {
-            info!("Disarm note: {:?}", disarm_res);
+        // Verify Unconditional Disarm Hook without triggering UAC or mutating global state when non-elevated
+        if crate::security::host_network_isolation::is_current_process_elevated() {
+            let disarm_res = execute_host_disarm_unauthenticated();
+            if disarm_res.is_err() {
+                info!("Disarm note: {:?}", disarm_res);
+            }
+        } else {
+            let tmp_ledger = std::env::temp_dir()
+                .join(format!("verify_phase7_ledger_{}.json", std::process::id()));
+            let mgr = HostKillSwitchManager::new(Some(tmp_ledger.clone()));
+            let _ = mgr.disarm(
+                "service_shutdown",
+                "Self-diagnostic non-elevated service shutdown disarm hook verification",
+            );
+            let _ = std::fs::remove_file(&tmp_ledger);
         }
 
         Ok(())

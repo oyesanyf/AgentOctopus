@@ -27,10 +27,17 @@ async fn main() {
             let code = execute_octopus_run(run_args).await;
             std::process::exit(code);
         }
-        CliParseResult::Delegate(_) => {
-            let code = dispatch_operational_subcommand(&cli_args)
-                .await
-                .unwrap_or(EXIT_PREFLIGHT_DENIED);
+        CliParseResult::Delegate(sub) => {
+            let code = match dispatch_operational_subcommand(&cli_args).await {
+                Some(c) => c,
+                None => {
+                    eprintln!(
+                        "[octopus] error: subcommand '{}' is not implemented.\nRun 'octopus --help' for usage.",
+                        sub
+                    );
+                    EXIT_PREFLIGHT_DENIED
+                }
+            };
             std::process::exit(code);
         }
     }

@@ -21,7 +21,7 @@ impl TimeUnit {
     }
 }
 
-/// A closed temporal window: within <amount><unit>
+/// A closed temporal window: `within <amount><unit>`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TemporalWindow {
     pub amount: u64,
@@ -121,17 +121,17 @@ pub enum AggregateExpr {
 /// Dogwood Temporal AST
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TemporalExpr {
-    /// formerly within <window> <atom>
+    /// `formerly within <window> <atom>`
     Formerly {
         window: TemporalWindow,
         body: Box<TemporalExpr>,
     },
-    /// previous within <window> <atom>
+    /// `previous within <window> <atom>`
     Previous {
         window: TemporalWindow,
         body: Box<TemporalExpr>,
     },
-    /// <left> since within <window> <right>
+    /// `<left> since within <window> <right>`
     Since {
         left: Box<TemporalExpr>,
         window: TemporalWindow,

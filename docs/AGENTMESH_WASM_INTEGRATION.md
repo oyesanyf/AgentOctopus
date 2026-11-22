@@ -1,6 +1,10 @@
 # Google AgentMesh (`v0.2.0`) x AgentOctopus (`wasmtime v49.0.4`) Zero-Socket Sandbox Integration
 
+**Docs:** [Hub](README.md) | [Architecture & Security](ARCHITECTURE_AND_SECURITY_MODEL.md) | [Kernel Shield](KERNEL_PATCHING_AND_ZERO_BREAKOUT_SHIELD.md) | [CLI & Policy](CLI_AND_POLICY_REFERENCE.md) | [Operations & API](OPERATIONS_AND_API_GUIDE.md) | [AgentMesh + Wasm](AGENTMESH_WASM_INTEGRATION.md) | [Red Teaming](ADVERSARIAL_DEFENSE_AND_RED_TEAMING.md) | [Root README](../README.md)
+
 > **Upstream Issue Alignment**: Built for [`google/agentmesh#734`](https://github.com/google/agentmesh/issues/734) (*"Help wanted: real-world integrations, examples and tests across gateways, IdPs, sandboxes and clouds"*), [`google/agentmesh#887`](https://github.com/google/agentmesh/pull/887) (merged: Wasmtime sandbox on the mesh under its own identity), [`google/agentmesh#897`](https://github.com/google/agentmesh/pull/897) (out-of-band `SecuritySignalEvent` containment webhook contract), and the [AgentMesh Security Architecture](https://google.github.io/agentmesh/docs/contributing/security-architecture/).
+
+> **Related AgentOctopus Guides**: [Documentation Hub](README.md) &bull; [Architecture and Security Model](ARCHITECTURE_AND_SECURITY_MODEL.md) &bull; [Kernel Patching and Zero-Breakout Shield](KERNEL_PATCHING_AND_ZERO_BREAKOUT_SHIELD.md#1-no-break-out-eliminating-local-kernel-eop-and-sandbox-escape-surfaces) (Tier-1 Wasm promotion against host kernel syscall CVEs) &bull; [CLI and Policy Reference](CLI_AND_POLICY_REFERENCE.md)
 
 ---
 

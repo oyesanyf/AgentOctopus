@@ -95,7 +95,7 @@ pub fn select_available_loopback_port(preferred_port: u16) -> u16 {
     3030
 }
 
-/// Starts the Agent Octopus Web Server, listening across dual-stack loopback (IPv4 127.0.0.1 and IPv6 [::1])
+/// Starts the Agent Octopus Web Server, listening across dual-stack loopback (IPv4 `127.0.0.1` and IPv6 `[::1]`)
 /// on the dynamically assigned or requested port (default 3030). If the requested port is in use,
 /// automatically tries the next available port. Never touches or binds port 5000.
 pub async fn start_web_server(addr: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -3788,12 +3788,14 @@ async fn run_periodic_kernel_scan_cycle_with_base_url(
     custom_base_url: Option<&str>,
 ) -> Result<usize, crate::security::kernel_patcher::PatcherError> {
     use crate::security::kernel_patcher::{
-        resolve_nvd_api_key, HostKernelInfo, KernelPatcher, PatcherError, ScanOptions,
+        discovery::detect_host_posture_snapshot, resolve_nvd_api_key, KernelPatcher, PatcherError,
+        ScanOptions,
     };
 
-    let host_kernel = tokio::task::spawn_blocking(HostKernelInfo::detect_host_kernel)
+    let snapshot = tokio::task::spawn_blocking(detect_host_posture_snapshot)
         .await
         .map_err(|e| PatcherError::DetectionFailed(e.to_string()))??;
+    let host_kernel = snapshot.host_kernel.clone();
 
     tracing::info!(
         "[KERNEL-SCANNER] Detected host OS: {} | Kernel: {} | CPE: {}",
@@ -3825,7 +3827,90 @@ async fn run_periodic_kernel_scan_cycle_with_base_url(
         Some(url) => KernelPatcher::with_base_url(url),
         None => KernelPatcher::new(),
     };
-    let findings = patcher.scan_kernel_vulnerabilities(&options).await?;
+    let coordinator = state.kernel_shield();
+
+    let findings = match patcher.scan_kernel_vulnerabilities(&options).await {
+        Ok(f) => f,
+        Err(err) => {
+            let http_status = match err {
+                PatcherError::RateLimited => Some(429),
+                _ => None,
+            };
+            let notice = err.to_string();
+            let receipt = coordinator.record_degraded_telemetry_with_reboot(
+                &host_kernel.os_family,
+                &host_kernel.cpe23,
+                &notice,
+                http_status,
+                Some(&snapshot.reboot_pending),
+            )?;
+            let shield_state = coordinator.state();
+
+            // Hot-load tighten-only CVE forbid(...) virtual patches into WebState.gateway without restart.
+            let global_posture = crate::security::virtual_patch_shield::current_shield_posture();
+            let _ = crate::research_ingest::hotload_cve_forbid_policies_into_engine(
+                state.gateway.engine(),
+                &global_posture,
+            );
+            if global_posture.is_shield_active() {
+                let _ = state
+                    .kernel_sentinel
+                    .enforce_byovd_virtual_patch_blocklist();
+                let ports =
+                    crate::security::host_network_isolation::discover_active_octopus_ports();
+                let _ =
+                    crate::security::host_network_isolation::apply_virtual_patch_perimeter_shield(
+                        &global_posture,
+                        &ports,
+                    );
+            }
+            let degraded_summary = KernelScanSummary {
+                scanned_at: chrono::Utc::now(),
+                host_kernel,
+                vulnerability_count: 0,
+                cisa_kev_count: 0,
+                vulnerabilities: Vec::new(),
+                telemetry_degraded_fail_closed: true,
+                scan_status: "degraded_fail_closed".to_string(),
+                scan_notice: Some(notice),
+                livepatch: Some(snapshot.livepatch),
+                reboot_pending: Some(snapshot.reboot_pending.clone()),
+                shield_locked_until_reboot: shield_state.shield_locked_until_reboot
+                    || snapshot.reboot_pending.shield_locked_until_reboot,
+                security_posture: Some(snapshot.security_posture),
+                virtual_patch_shield: Some(shield_state),
+                merkle_root: Some(receipt.merkle_root_hex),
+            };
+            let mut guard = state.latest_kernel_scan.write().await;
+            *guard = Some(degraded_summary);
+            return Err(err);
+        }
+    };
+
+    let receipt = coordinator.apply_scan_findings(
+        &host_kernel.os_family,
+        &host_kernel.cpe23,
+        &findings,
+        &snapshot.reboot_pending,
+    )?;
+    let shield_state = coordinator.state();
+
+    // Hot-load tighten-only CVE forbid(...) virtual patches into WebState.gateway without restart.
+    let global_posture = crate::security::virtual_patch_shield::current_shield_posture();
+    let _ = crate::research_ingest::hotload_cve_forbid_policies_into_engine(
+        state.gateway.engine(),
+        &global_posture,
+    );
+    if global_posture.is_shield_active() {
+        let _ = state
+            .kernel_sentinel
+            .enforce_byovd_virtual_patch_blocklist();
+        let ports = crate::security::host_network_isolation::discover_active_octopus_ports();
+        let _ = crate::security::host_network_isolation::apply_virtual_patch_perimeter_shield(
+            &global_posture,
+            &ports,
+        );
+    }
 
     let cisa_kev_count = findings.iter().filter(|v| v.is_cisa_kev).count();
     let vulnerability_count = findings.len();
@@ -3850,6 +3935,16 @@ async fn run_periodic_kernel_scan_cycle_with_base_url(
         vulnerability_count,
         cisa_kev_count,
         vulnerabilities: findings,
+        telemetry_degraded_fail_closed: false,
+        scan_status: "completed".to_string(),
+        scan_notice: None,
+        livepatch: Some(snapshot.livepatch),
+        reboot_pending: Some(snapshot.reboot_pending.clone()),
+        shield_locked_until_reboot: shield_state.shield_locked_until_reboot
+            || snapshot.reboot_pending.shield_locked_until_reboot,
+        security_posture: Some(snapshot.security_posture),
+        virtual_patch_shield: Some(shield_state),
+        merkle_root: Some(receipt.merkle_root_hex),
     };
     {
         let mut guard = state.latest_kernel_scan.write().await;
@@ -3950,7 +4045,9 @@ mod kernel_scanner_tests {
             }
         });
 
-        let state = WebState::default();
+        let state = WebState::default().with_kernel_shield(Arc::new(
+            crate::security::kernel_patcher::KernelShieldCoordinator::new(),
+        ));
         let mock_url = format!("http://127.0.0.1:{}/rest/json/cves/2.0", addr.port());
         let found = run_periodic_kernel_scan_cycle_with_base_url(&state, Some(&mock_url))
             .await
@@ -3966,5 +4063,42 @@ mod kernel_scanner_tests {
         assert_eq!(parsed["vulnerabilities"][0]["cve_id"], "CVE-2024-21338");
 
         server_task.abort();
+    }
+
+    #[tokio::test]
+    async fn test_periodic_kernel_scan_degrades_fail_closed_on_429_and_malformed_json() {
+        for (status_code, body) in [(429u16, "{}"), (500u16, "{}"), (200u16, "{bad_json")] {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind mock NVD");
+            let addr = listener.local_addr().unwrap();
+            let server_task = tokio::spawn(async move {
+                if let Ok((mut stream, _)) = listener.accept().await {
+                    let mut buf = [0u8; 1024];
+                    let _ = stream.read(&mut buf).await;
+                    let resp = format!(
+                        "HTTP/1.1 {status_code} ERR\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                }
+            });
+
+            let state = WebState::default().with_kernel_shield(Arc::new(
+                crate::security::kernel_patcher::KernelShieldCoordinator::new(),
+            ));
+            let mock_url = format!("http://127.0.0.1:{}/rest/json/cves/2.0", addr.port());
+            let res = run_periodic_kernel_scan_cycle_with_base_url(&state, Some(&mock_url)).await;
+            assert!(res.is_err());
+
+            let status_json = handle_kernel_patcher_status(&state).await;
+            let parsed: serde_json::Value = serde_json::from_str(&status_json).unwrap();
+            assert_eq!(parsed["status"], "degraded_fail_closed");
+            assert_eq!(parsed["telemetry_degraded_fail_closed"], true);
+            assert_eq!(parsed["shield_active"], true);
+            assert_eq!(parsed["vulnerability_count"], 0);
+            server_task.abort();
+        }
     }
 }

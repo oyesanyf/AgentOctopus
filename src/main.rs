@@ -22,6 +22,15 @@ async fn main() {
         std::process::exit(code);
     }
 
+    if matches!(
+        cli_args.get(1).map(|s| s.as_str()),
+        Some("sbom-guard" | "latent-shield")
+    ) {
+        let sub_args = cli_args.get(2..).unwrap_or(&[]);
+        let code = agent_octopus::cli::latent_shield::execute_sbom_guard_cli(sub_args);
+        std::process::exit(code);
+    }
+
     // 1. In-memory 7-phase self-diagnostics (--verify / --check / verify)
     if cli_args
         .iter()

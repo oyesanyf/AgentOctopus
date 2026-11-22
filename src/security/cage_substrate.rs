@@ -545,10 +545,13 @@ pub fn resolve_loopback_peer_pid(_peer_addr: SocketAddr, _bound_port: u16) -> Re
 
 /// Suspends a non-protected user-space process by PID (`NtSuspendProcess` on Windows, `SIGSTOP` on Unix).
 pub fn freeze_process_by_pid(pid: u32) -> Result<(), String> {
-    if pid <= 4 || pid == std::process::id() {
-        return Err(format!("Refusing to suspend protected/self PID {}", pid));
+    if pid <= 4 || pid == std::process::id() || pid > i32::MAX as u32 {
+        return Err(format!(
+            "Refusing to suspend protected/self/out-of-range PID {}",
+            pid
+        ));
     }
-    if std::env::var("RUST_TEST_THREADS").is_ok() || std::env::var("CARGO_PKG_NAME").is_ok() {
+    if cfg!(test) {
         return Ok(());
     }
 
@@ -596,10 +599,13 @@ pub fn freeze_process_by_pid(pid: u32) -> Result<(), String> {
 
 /// Resumes a previously suspended user-space process by PID (`NtResumeProcess` on Windows, `SIGCONT` on Unix).
 pub fn resume_process_by_pid(pid: u32) -> Result<(), String> {
+    if pid > i32::MAX as u32 {
+        return Err(format!("Refusing to resume out-of-range PID {}", pid));
+    }
     if pid <= 4 || pid == std::process::id() {
         return Ok(());
     }
-    if std::env::var("RUST_TEST_THREADS").is_ok() || std::env::var("CARGO_PKG_NAME").is_ok() {
+    if cfg!(test) {
         return Ok(());
     }
 
@@ -1383,6 +1389,8 @@ fn build_default_conformal_calibration(dim: usize) -> MultiSourceCalibration {
     }
 }
 
+pub type ProcessControlHook = Arc<dyn Fn(u32) -> Result<(), String> + Send + Sync>;
+
 pub struct CageSubstrateState {
     pub signing_key: Arc<SigningKey>,
     pub ed25519_kid: String,
@@ -1394,6 +1402,10 @@ pub struct CageSubstrateState {
     pub exposure_tracker: Arc<Cumulative24hTracker>,
     pub keyed_dose_tracker: Arc<KeyedCumulative24hTracker>,
     pub keyed_exposure_tracker: Arc<KeyedCumulative24hTracker>,
+    pub host_killswitch_override:
+        Option<Arc<crate::security::host_network_isolation::HostKillSwitchManager>>,
+    process_freezer_override: Option<ProcessControlHook>,
+    process_resumer_override: Option<ProcessControlHook>,
 }
 
 impl Default for CageSubstrateState {
@@ -1454,6 +1466,50 @@ impl CageSubstrateState {
             exposure_tracker: Arc::new(Cumulative24hTracker::new()),
             keyed_dose_tracker: Arc::new(KeyedCumulative24hTracker::new()),
             keyed_exposure_tracker: Arc::new(KeyedCumulative24hTracker::new()),
+            host_killswitch_override: None,
+            process_freezer_override: None,
+            process_resumer_override: None,
+        }
+    }
+
+    /// Builder method to supply an isolated `HostKillSwitchManager` (primarily for tests).
+    pub fn with_host_killswitch(
+        mut self,
+        mgr: Arc<crate::security::host_network_isolation::HostKillSwitchManager>,
+    ) -> Self {
+        self.host_killswitch_override = Some(mgr);
+        self
+    }
+
+    /// Builder method to inject non-OS process freeze/resume hooks (primarily for integration tests).
+    pub fn with_process_control_hooks(
+        mut self,
+        freezer: ProcessControlHook,
+        resumer: ProcessControlHook,
+    ) -> Self {
+        self.process_freezer_override = Some(freezer);
+        self.process_resumer_override = Some(resumer);
+        self
+    }
+
+    fn freeze_target_pid(&self, pid: u32) -> Result<(), String> {
+        match self.process_freezer_override.as_ref() {
+            Some(hook) => hook(pid),
+            None => freeze_process_by_pid(pid),
+        }
+    }
+
+    fn resume_target_pid(&self, pid: u32) -> Result<(), String> {
+        match self.process_resumer_override.as_ref() {
+            Some(hook) => hook(pid),
+            None => resume_process_by_pid(pid),
+        }
+    }
+
+    fn host_killswitch(&self) -> &crate::security::host_network_isolation::HostKillSwitchManager {
+        match self.host_killswitch_override.as_deref() {
+            Some(mgr) => mgr,
+            None => global_host_killswitch(),
         }
     }
 
@@ -1511,7 +1567,7 @@ impl CageSubstrateState {
 
     /// 3. `GET /v1/cage/attest`
     pub fn handle_attest(&self) -> (&'static str, String) {
-        let ks_status = global_host_killswitch().status();
+        let ks_status = self.host_killswitch().status();
         let pcr0 = hex::encode(Sha256::digest(b"PCR0_SECURE_BOOT"));
         let pcr1 = hex::encode(Sha256::digest(b"PCR1_PLATFORM_CONFIG"));
         let quote = hex::encode(Sha256::digest(
@@ -1796,7 +1852,10 @@ impl CageSubstrateState {
             return ("409 Conflict", substrate_err_json("REPLAY_DETECTED", &e));
         }
 
-        if let Err(e) = global_host_killswitch().engage("cage_governance", &req.trigger_reason) {
+        if let Err(e) = self
+            .host_killswitch()
+            .engage("cage_governance", &req.trigger_reason)
+        {
             return (
                 "500 Internal Server Error",
                 substrate_err_json(
@@ -1808,7 +1867,7 @@ impl CageSubstrateState {
 
         if let Some(pid) = req.target_pid {
             if pid > 0 {
-                let _ = freeze_process_by_pid(pid);
+                let _ = self.freeze_target_pid(pid);
             }
         }
 
@@ -2032,13 +2091,13 @@ impl CageSubstrateState {
         if let Some(lease) = removed_lease {
             if let Some(pid) = lease.target_pid {
                 if pid > 0 {
-                    let _ = resume_process_by_pid(pid);
+                    let _ = self.resume_target_pid(pid);
                 }
             }
         }
 
         if self.journal.unexpired_leases().is_empty() {
-            let _ = global_host_killswitch().disarm(
+            let _ = self.host_killswitch().disarm(
                 "cage_governance_quorum",
                 &format!(
                     "Quorum-governed release approved for workload '{}' (quorum count: {})",

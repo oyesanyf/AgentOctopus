@@ -1,10 +1,14 @@
-# Agent Octopus: Autonomous Swarm Breakout Defense & Multi-Framework Red Teaming Guide
+# Agent Octopus: Autonomous Swarm Breakout Defense and Multi-Framework Red Teaming Guide
+
+**Docs:** [Hub](README.md) | [Architecture & Security](ARCHITECTURE_AND_SECURITY_MODEL.md) | [Kernel Shield](KERNEL_PATCHING_AND_ZERO_BREAKOUT_SHIELD.md) | [CLI & Policy](CLI_AND_POLICY_REFERENCE.md) | [Operations & API](OPERATIONS_AND_API_GUIDE.md) | [AgentMesh + Wasm](AGENTMESH_WASM_INTEGRATION.md) | [Red Teaming](ADVERSARIAL_DEFENSE_AND_RED_TEAMING.md) | [Root README](../README.md)
 
 ## Overview
 
 Agent Octopus is a single-binary Rust deterministic agent containment runtime designed to neutralize autonomous swarm breakouts, lateral privilege escalation, and prompt injection attacks against LLMs and agentic microservices. It pairs with **`google/agentmesh`** ([`#887`](https://github.com/google/agentmesh/pull/887), [`#897`](https://github.com/google/agentmesh/pull/897)) as the host/process containment runtime while replacing multi-service Python governance gateways (such as **CAGE**).
 
-All allow/deny verdicts are enforced deterministically across four core layers: **RT-ASP Sanitizers**, **AWS Cedar v4.13** authorization policies, **Wasmtime v49.0.4** Tier-1 sandboxes, and cross-platform **OS Kernel Sandboxes** (Linux `seccomp-BPF` + Landlock LSM + `PR_SET_NO_NEW_PRIVS` + `RLIMIT_AS`, macOS Seatbelt, Windows AppContainer + de-elevated restricted tokens + Job Objects), backed by cryptographic append-only SHA-256 audit trails. Optional D3QN anomaly telemetry is **disabled by default** (`OCTOPUS_ENABLE_RL_ADVISORY=1`), strictly offline/advisory, and never gates allow/deny decisions.
+All allow/deny verdicts are enforced deterministically across four core layers: **RT-ASP Sanitizers**, **AWS Cedar v4.13** authorization policies, **Wasmtime v49.0.4** Tier-1 sandboxes, and cross-platform **OS Kernel Sandboxes** (Linux `seccomp-BPF` + Landlock LSM + `PR_SET_NO_NEW_PRIVS` + `RLIMIT_AS`, macOS Seatbelt, Windows AppContainer + de-elevated restricted tokens + Job Objects, BSD `unveil`/`pledge`/Capsicum), reinforced by the **R6 Zero-Reboot Kernel Shield**, **R7 `<2ms` Pre-Spawn REA Binary Gate**, **R8 Pure-Rust `UnifiedSecurityShield`**, and cryptographic append-only SHA-256 audit trails. Optional D3QN anomaly telemetry is **disabled by default** (`OCTOPUS_ENABLE_RL_ADVISORY=1`), strictly offline/advisory, and never gates allow/deny decisions.
+
+See also: [Documentation Hub](README.md) &bull; [Architecture and Security Model](ARCHITECTURE_AND_SECURITY_MODEL.md) &bull; [Kernel Patching and Zero-Breakout Shield](KERNEL_PATCHING_AND_ZERO_BREAKOUT_SHIELD.md) &bull; [CLI and Policy Reference](CLI_AND_POLICY_REFERENCE.md) &bull; [Operations and API Guide](OPERATIONS_AND_API_GUIDE.md).
 
 ### Dual-Layer Operating Model: Inline Gateway & Multi-Arm Enclave
 
@@ -27,7 +31,7 @@ So while it contains an entire isolated multi-agent execution environment, the f
 
 ---
 
-## 🐙 The 9 Specialized Arms Architecture
+## The Specialized Arms Architecture (9 Core Arms + Protocol Arms 106-107)
 
 | Arm | Operating Isolation | Permitted Boundary & Capabilities |
 | :--- | :--- | :--- |
@@ -45,7 +49,7 @@ So while it contains an entire isolated multi-agent execution environment, the f
 
 ---
 
-## 🛡️ Integrated Multi-Framework Red-Teaming Suites
+## Integrated Multi-Framework Red-Teaming Suites
 
 Agent Octopus integrates continuous verification harnesses across 19 industry red-teaming frameworks and auditing tools:
 
@@ -81,7 +85,7 @@ Agent Octopus integrates continuous verification harnesses across 19 industry re
 
 ---
 
-## 🚀 How to Use & Run Tests
+## How to Use and Run Tests
 
 ### 1. 1-Command Workload Containment CLI & Web Dashboard (`127.0.0.1:3030`)
 Run any workload directly under deterministic policy confinement:
@@ -132,7 +136,7 @@ cargo test --test octopus_cli_e2e_tests
 
 ---
 
-## 🍯 The Tarpit Decoy Defense Arm (`TarpitArm`)
+## The Tarpit Decoy Defense Arm (`TarpitArm`)
 
 The `TarpitArm` is Agent Octopus's active defense honeypot and compute exhaustion mechanism:
 
@@ -143,7 +147,7 @@ The `TarpitArm` is Agent Octopus's active defense honeypot and compute exhaustio
 
 ---
 
-## 📡 REST API Reference
+## REST API Reference
 
 All `/api/*` requests require the operator authentication header `X-Octopus-Token: <operator_token>` written to `logs/.octopus_operator_token` when the daemon starts.
 
@@ -215,7 +219,7 @@ Returns the complete list of security events along with SHA-256 verification sta
 
 ---
 
-## 🔒 Security Invariants Upheld
+## Security Invariants Upheld
 
 1. **Zero-Touch PATH & Environment**: Strictly process-scoped memory. No registry mutation.
 2. **Default-Deny Egress Invariant**: `NetworkArm`'s default Cedar baseline restricts outbound destinations to `google.com` and `www.google.com`, while `octopus run --policy <PATH>` enforces per-workload JSON/Cedar `allowed_domains` (default-deny, unconditionally blocking Cloud IMDS `169.254.169.254` and private/special-purpose CIDRs).

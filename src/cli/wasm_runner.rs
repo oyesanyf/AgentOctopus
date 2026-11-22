@@ -1,8 +1,15 @@
 use crate::cli::policy::LoadedOctopusPolicy;
+use crate::cli::run::{
+    compile_policy_cedar_engine, expand_tilde_for_preflight, lexical_collapse_slashes,
+    strip_win_ads_and_trailing_dots_for_cedar, strip_win_verbatim_prefix,
+};
 use crate::cli::{EXIT_PREFLIGHT_DENIED, EXIT_SANDBOX_FAILURE, EXIT_TIMEOUT};
 use crate::core::circuit_breaker::KillSwitch;
 use crate::core::types::OctopusSecurityError;
-use crate::security::wasm_tier1::{WasmExecutionReceipt, WasmSandboxLimits, WasmTier1Executor};
+use crate::security::latent_shield::AgentRuntimeGuard;
+use crate::security::wasm_tier1::{
+    WasmExecutionReceipt, WasmFsPolicy, WasmSandboxLimits, WasmTier1Executor,
+};
 use std::io::{IsTerminal, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,6 +35,7 @@ pub async fn execute_wasm_target(
     policy: &LoadedOctopusPolicy,
     timeout_secs: u64,
     json_output: bool,
+    runtime_guard: Option<Arc<AgentRuntimeGuard>>,
 ) -> Result<WasmRunOutcome, (i32, String)> {
     if !target_path.is_file() {
         return Err((
@@ -65,13 +73,82 @@ pub async fn execute_wasm_target(
         .clamp(64 * 1024, 64 * 1024 * 1024);
 
     let fuel_budget = policy.json_policy.limits.wasm_fuel.unwrap_or(2_000_000);
-    let allow_scratch_write = !policy.json_policy.filesystem.allow_write.is_empty();
+    let cedar_engine = compile_policy_cedar_engine(policy)
+        .map_err(|e| {
+            (
+                EXIT_PREFLIGHT_DENIED,
+                format!("blocked_by_octopus_policy: {}", e),
+            )
+        })?
+        .map(Arc::new);
+    let has_cedar_fs_write = policy.is_standalone_cedar
+        || cedar_engine
+            .as_ref()
+            .is_some_and(|e| e.has_permit_action_policy("fs_write"));
+    let allow_scratch_write = if policy.is_standalone_cedar {
+        has_cedar_fs_write
+    } else {
+        !policy.json_policy.filesystem.allow_write.is_empty()
+    };
+
+    let resolve_fs_entries = |items: &[String]| -> Vec<String> {
+        let mut out = Vec::new();
+        for raw in items {
+            let t = raw.trim();
+            if t.is_empty() {
+                continue;
+            }
+            let abs = if let Some(exp) = expand_tilde_for_preflight(t) {
+                exp
+            } else {
+                let p = Path::new(t);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    cwd.join(p)
+                }
+            };
+            let lex_raw = strip_win_ads_and_trailing_dots_for_cedar(&abs.to_string_lossy());
+            let lex_clean = lexical_collapse_slashes(&lex_raw);
+            if !lex_clean.is_empty() && !out.contains(&lex_clean) {
+                out.push(lex_clean);
+            }
+            if let Ok(canon_pb) = std::fs::canonicalize(&abs) {
+                let canon_stripped = strip_win_verbatim_prefix(canon_pb);
+                let canon_raw =
+                    strip_win_ads_and_trailing_dots_for_cedar(&canon_stripped.to_string_lossy());
+                let canon_clean = lexical_collapse_slashes(&canon_raw);
+                if !canon_clean.is_empty() && !out.contains(&canon_clean) {
+                    out.push(canon_clean);
+                }
+            }
+        }
+        out
+    };
+
+    let fs_policy = Arc::new(WasmFsPolicy {
+        enforce_filesystem_lists: !policy.is_standalone_cedar
+            && (policy.has_filesystem_section
+                || !policy.json_policy.filesystem.allow_read.is_empty()
+                || !policy.json_policy.filesystem.allow_write.is_empty()
+                || !policy.json_policy.filesystem.deny.is_empty()),
+        allow_read: resolve_fs_entries(&policy.json_policy.filesystem.allow_read),
+        allow_write: resolve_fs_entries(&policy.json_policy.filesystem.allow_write),
+        deny: resolve_fs_entries(&policy.json_policy.filesystem.deny),
+        is_standalone_cedar: policy.is_standalone_cedar,
+        cedar_engine,
+    });
+
+    let scratchpad_root =
+        strip_win_verbatim_prefix(std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()));
 
     let limits = WasmSandboxLimits {
         fuel_budget,
         max_linear_memory_bytes: memory_bytes,
-        scratchpad_root: cwd.to_path_buf(),
+        scratchpad_root,
         allow_scratch_write,
+        fs_policy: Some(fs_policy),
+        runtime_guard,
         ..WasmSandboxLimits::default()
     };
 

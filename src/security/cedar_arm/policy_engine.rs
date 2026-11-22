@@ -127,6 +127,19 @@ impl CedarPolicyEngine {
         })
     }
 
+    /// Creates an empty `CedarPolicyEngine` (for forbid-only runtime virtual-patch hot-load).
+    pub fn from_empty() -> Result<Self, CedarEngineError> {
+        let policy_set = PolicySet::new();
+        let entities = Entities::empty();
+        let schema = CedarSchema::default();
+        Ok(Self {
+            authorizer: Authorizer::new(),
+            policy_set: Arc::new(RwLock::new(policy_set)),
+            entities: Arc::new(RwLock::new(entities)),
+            schema,
+        })
+    }
+
     /// Creates a CedarPolicyEngine configured with custom policy rules (for testing / negative controls).
     pub fn from_custom_policy_set(policies: &str) -> Result<Self, CedarEngineError> {
         let policy_set = PolicySet::from_str(policies)
@@ -278,6 +291,72 @@ impl CedarPolicyEngine {
         let pid = cedar_policy::PolicyId::new(&id_str);
         let policy = Policy::parse(Some(pid), policy_text)
             .map_err(|e| CedarEngineError::PolicyParseError(e.to_string()))?;
+        policies
+            .add(policy)
+            .map_err(|e| CedarEngineError::PolicyParseError(e.to_string()))?;
+        Ok(id_str)
+    }
+
+    /// Monotonic tighten-only policy insertion: accepts ONLY `forbid` policies and validates
+    /// them in `ValidationMode::Strict` against `OCTOPUS_CEDAR_SCHEMA_JSON` before activating.
+    /// Rejects any `permit` policy or schema violation (Foolproof Invariant #4).
+    pub fn add_tighten_only_forbid_policy(
+        &self,
+        policy_id: Option<&str>,
+        policy_text: &str,
+    ) -> Result<String, CedarEngineError> {
+        let mut policies = self.policy_set.write().map_err(|_| {
+            CedarEngineError::EvaluationPanic("Cedar policy_set write lock poisoned".to_string())
+        })?;
+        let id_str = match policy_id {
+            Some(id) => id.to_string(),
+            None => {
+                let mut seq = policies.policies().count() + 1;
+                loop {
+                    let cand = format!("virtual_patch_forbid_{seq}");
+                    if !policies.policies().any(|p| p.id().to_string() == cand) {
+                        break cand;
+                    }
+                    seq += 1;
+                }
+            }
+        };
+        let pid = cedar_policy::PolicyId::new(&id_str);
+        let policy = Policy::parse(Some(pid), policy_text)
+            .map_err(|e| CedarEngineError::PolicyParseError(e.to_string()))?;
+
+        if !matches!(policy.effect(), cedar_policy::Effect::Forbid) {
+            return Err(CedarEngineError::PolicyParseError(
+                "Monotonic tighten-only violation: only Effect::Forbid policies are allowed"
+                    .to_string(),
+            ));
+        }
+
+        let mut validation_set = PolicySet::new();
+        validation_set
+            .add(policy.clone())
+            .map_err(|e| CedarEngineError::PolicyParseError(e.to_string()))?;
+        let report = super::policy_validator::CedarPolicyValidator::default()
+            .validate_policy_set(&validation_set);
+        if !report.is_valid {
+            return Err(CedarEngineError::PolicyParseError(format!(
+                "Cedar strict schema validation failed for virtual-patch forbid policy: {}",
+                report.validation_errors.join("; ")
+            )));
+        }
+
+        if let Some(existing) = policies.policies().find(|p| p.id().to_string() == id_str) {
+            if matches!(existing.effect(), cedar_policy::Effect::Forbid)
+                && existing.to_string() == policy.to_string()
+            {
+                return Ok(id_str);
+            }
+            return Err(CedarEngineError::PolicyParseError(format!(
+                "Policy ID collision: '{}' already exists as a non-identical or permit policy",
+                id_str
+            )));
+        }
+
         policies
             .add(policy)
             .map_err(|e| CedarEngineError::PolicyParseError(e.to_string()))?;

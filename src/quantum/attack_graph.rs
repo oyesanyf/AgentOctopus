@@ -269,7 +269,7 @@ impl AttackGraph {
         graph
     }
 
-    /// Computes the graph adjacency matrix where A[i][j] is the weight/exploit probability.
+    /// Computes the graph adjacency matrix where `A[i][j]` is the weight/exploit probability.
     pub fn adjacency_matrix(&self) -> Vec<Vec<f64>> {
         let n = self.nodes.len();
         let mut matrix = vec![vec![0.0; n]; n];

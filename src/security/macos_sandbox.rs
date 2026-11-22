@@ -121,6 +121,13 @@ pub fn generate_macos_seatbelt_profile(config: &SandboxedMacosConfig) -> String 
     profile.push_str("    (literal \"/dev/null\")\n");
     profile.push_str("    (literal \"/dev/tty\")\n");
     profile.push_str("    (literal \"/dev/dtracehelper\"))\n");
+    profile.push_str("(deny system-kext-load)\n");
+    profile.push_str("(deny iokit-open)\n");
+    profile.push_str("(deny system-fsctl)\n");
+    profile.push_str("(deny system-nfssvc)\n");
+    profile.push_str("(deny system-privilege)\n");
+    profile.push_str("(deny system-acct)\n");
+    profile.push_str("(deny system-swap)\n");
     profile.push_str("(allow file-read* file-map-executable\n");
     for base_path in [
         "/usr",
@@ -136,7 +143,6 @@ pub fn generate_macos_seatbelt_profile(config: &SandboxedMacosConfig) -> String 
         "/private/var/select",
         "/private/etc",
         "/etc",
-        "/dev",
     ] {
         profile.push_str(&format!("    (subpath \"{}\")\n", base_path));
     }

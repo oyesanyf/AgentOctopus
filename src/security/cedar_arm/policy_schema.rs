@@ -146,7 +146,14 @@ pub const OCTOPUS_CEDAR_SCHEMA_JSON: &str = r#"{
               "destination_port": { "type": "Long", "required": false },
               "scheme": { "type": "String", "required": false },
               "method": { "type": "String", "required": false },
-              "path": { "type": "String", "required": false }
+              "path": { "type": "String", "required": false },
+              "cve_id": { "type": "String", "required": false },
+              "is_cisa_kev": { "type": "Boolean", "required": false },
+              "kernel_surface": { "type": "String", "required": false },
+              "reboot_pending": { "type": "Boolean", "required": false },
+              "telemetry_degraded_fail_closed": { "type": "Boolean", "required": false },
+              "inbound_port": { "type": "Long", "required": false },
+              "protocol": { "type": "String", "required": false }
             }
           }
         }
@@ -207,7 +214,30 @@ pub const OCTOPUS_CEDAR_SCHEMA_JSON: &str = r#"{
             "type": "Record",
             "attributes": {
               "destination_host": { "type": "String", "required": true },
-              "destination_port": { "type": "Long", "required": false }
+              "destination_port": { "type": "Long", "required": false },
+              "cve_id": { "type": "String", "required": false },
+              "is_cisa_kev": { "type": "Boolean", "required": false },
+              "kernel_surface": { "type": "String", "required": false },
+              "reboot_pending": { "type": "Boolean", "required": false },
+              "telemetry_degraded_fail_closed": { "type": "Boolean", "required": false }
+            }
+          }
+        }
+      },
+      "inbound_perimeter": {
+        "appliesTo": {
+          "principalTypes": ["Agent"],
+          "resourceTypes": ["Host", "NetworkTarget"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "inbound_port": { "type": "Long", "required": true },
+              "protocol": { "type": "String", "required": false },
+              "cve_id": { "type": "String", "required": false },
+              "is_cisa_kev": { "type": "Boolean", "required": false },
+              "kernel_surface": { "type": "String", "required": false },
+              "reboot_pending": { "type": "Boolean", "required": false },
+              "telemetry_degraded_fail_closed": { "type": "Boolean", "required": false }
             }
           }
         }
@@ -224,7 +254,19 @@ pub const OCTOPUS_CEDAR_SCHEMA_JSON: &str = r#"{
               "args_joined": { "type": "String", "required": false },
               "cwd": { "type": "String", "required": false },
               "sandbox_mode": { "type": "String", "required": false },
-              "is_wasm": { "type": "Boolean", "required": false }
+              "is_wasm": { "type": "Boolean", "required": false },
+              "is_packed": { "type": "Boolean", "required": false },
+              "has_wx_violation": { "type": "Boolean", "required": false },
+              "direct_syscall_count": { "type": "Long", "required": false },
+              "obfuscation_entropy_x100": { "type": "Long", "required": false },
+              "high_obfuscation_entropy": { "type": "Boolean", "required": false },
+              "is_authenticode_signed": { "type": "Boolean", "required": false },
+              "binary_format": { "type": "String", "required": false },
+              "cve_id": { "type": "String", "required": false },
+              "is_cisa_kev": { "type": "Boolean", "required": false },
+              "kernel_surface": { "type": "String", "required": false },
+              "reboot_pending": { "type": "Boolean", "required": false },
+              "telemetry_degraded_fail_closed": { "type": "Boolean", "required": false }
             }
           }
         }
@@ -266,7 +308,12 @@ pub const OCTOPUS_CEDAR_SCHEMA_JSON: &str = r#"{
             "attributes": {
               "tool_name": { "type": "String", "required": true },
               "arguments_json": { "type": "String", "required": false },
-              "target": { "type": "String", "required": false }
+              "target": { "type": "String", "required": false },
+              "cve_id": { "type": "String", "required": false },
+              "is_cisa_kev": { "type": "Boolean", "required": false },
+              "kernel_surface": { "type": "String", "required": false },
+              "reboot_pending": { "type": "Boolean", "required": false },
+              "telemetry_degraded_fail_closed": { "type": "Boolean", "required": false }
             }
           }
         }

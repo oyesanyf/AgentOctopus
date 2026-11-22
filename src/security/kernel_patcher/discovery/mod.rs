@@ -1,5 +1,6 @@
-//! Host operating system and kernel discovery across Linux, Windows, and macOS.
+//! Host operating system and kernel discovery across Linux, Windows, macOS, and BSD.
 
+pub mod bsd;
 pub mod linux;
 pub mod macos;
 pub mod windows;
@@ -8,7 +9,7 @@ use super::cpe::{
     canonicalize_linux_kernel_version, canonicalize_macos_version, canonicalize_windows_cpe, Cpe23,
 };
 use super::error::PatcherError;
-use super::types::{HostKernelInfo, OsFamily};
+use super::types::{HostKernelInfo, HostKernelPostureSnapshot, OsFamily};
 
 /// Returns the compile-time host CPU architecture.
 #[inline]
@@ -31,11 +32,111 @@ pub fn detect_host_kernel() -> Result<HostKernelInfo, PatcherError> {
     {
         macos::detect_macos_host_kernel()
     }
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    #[cfg(any(target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    {
+        bsd::detect_bsd_host_kernel()
+    }
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    )))]
     {
         Err(PatcherError::UnsupportedPlatform(
             std::env::consts::OS.to_string(),
         ))
+    }
+}
+
+/// Probes host kernel, Linux distro CPE, livepatch state, reboot-pending state, and OS hardening posture.
+pub fn detect_host_posture_snapshot() -> Result<HostKernelPostureSnapshot, PatcherError> {
+    let host_kernel = detect_host_kernel()?;
+
+    #[cfg(target_os = "linux")]
+    {
+        let os_release = linux::detect_linux_os_release();
+        let distro = linux::classify_linux_distro(&os_release);
+        let distro_cpe23 = super::cpe::linux_distro_cpe23(&distro, &os_release.version_id);
+        let livepatch = linux::detect_linux_livepatch_sysfs();
+        let reboot_pending =
+            linux::detect_linux_reboot_pending(&host_kernel.kernel_release, &livepatch);
+        let security_posture = linux::detect_linux_security_posture(&livepatch);
+        Ok(HostKernelPostureSnapshot {
+            host_kernel,
+            distro: Some(distro),
+            distro_cpe23,
+            livepatch,
+            reboot_pending,
+            security_posture,
+        })
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let (security_posture, reboot_pending, livepatch) =
+            windows::query_windows_posture(&host_kernel.kernel_release);
+        Ok(HostKernelPostureSnapshot {
+            host_kernel,
+            distro: None,
+            distro_cpe23: None,
+            livepatch,
+            reboot_pending,
+            security_posture,
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let prod_ver = macos::sysctl_string("kern.osproductversion").ok();
+        let (security_posture, reboot_pending) =
+            macos::query_macos_posture(&host_kernel.kernel_release, prod_ver.as_deref());
+        Ok(HostKernelPostureSnapshot {
+            host_kernel,
+            distro: None,
+            distro_cpe23: None,
+            livepatch: super::types::LivepatchStatus::default(),
+            reboot_pending,
+            security_posture,
+        })
+    }
+
+    #[cfg(any(target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
+    {
+        let (security_posture, reboot_pending) =
+            bsd::query_bsd_posture(&host_kernel.kernel_release);
+        Ok(HostKernelPostureSnapshot {
+            host_kernel,
+            distro: None,
+            distro_cpe23: None,
+            livepatch: super::types::LivepatchStatus::default(),
+            reboot_pending,
+            security_posture,
+        })
+    }
+
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    )))]
+    {
+        Ok(HostKernelPostureSnapshot {
+            reboot_pending: super::types::RebootPendingStatus {
+                running_kernel: host_kernel.kernel_release.clone(),
+                ..Default::default()
+            },
+            host_kernel,
+            distro: None,
+            distro_cpe23: None,
+            livepatch: super::types::LivepatchStatus::default(),
+            security_posture: super::types::OsSecurityPosture::default(),
+        })
     }
 }
 

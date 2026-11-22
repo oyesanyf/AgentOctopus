@@ -88,6 +88,71 @@ pub struct RawAddPathRequest {
     pub image_path: [u16; 260],
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RawAddHashRequest {
+    pub sha256: [u8; 32],
+}
+
+/// Curated BYOVD (Bring Your Own Vulnerable Driver) paths & SHA-256 hashes blocked during
+/// Zero-Reboot Virtual-Patching Shield enforcement.
+pub const BYOVD_VULNERABLE_DRIVERS: &[(&str, &str)] = &[
+    (
+        r"C:\Windows\System32\drivers\RTCore64.sys",
+        "01aa278b07b58dc46c84bd0b1b5c8e9ee4e62ea0bf7a695862444af32e87f1fd",
+    ),
+    (
+        r"C:\Windows\System32\drivers\DBUtil_2_3.sys",
+        "0296e2ce999e67c76352613a718e11516fe1b0efc3ffdb8918fc999dd76a73a5",
+    ),
+    (
+        r"C:\Windows\System32\drivers\iqvw64e.sys",
+        "a0c044aa4c5b2f81b395c7b40bf65b55757d4b3c0b3a6c5cb32f28b0bc754d91",
+    ),
+    (
+        r"C:\Windows\System32\drivers\gdrv.sys",
+        "31f4cfb4c71da44120752721103a16512444c13c2ac2d857a7e6f13cb679b427",
+    ),
+];
+
+/// Cross-OS pure matcher checking whether a path/argument or SHA-256 digest matches any known
+/// BYOVD (Bring Your Own Vulnerable Driver) entry in `BYOVD_VULNERABLE_DRIVERS`.
+#[must_use]
+pub fn match_byovd_vulnerable_driver(
+    path_or_arg: Option<&str>,
+    sha256_hex: Option<&str>,
+) -> Option<(&'static str, &'static str)> {
+    if let Some(hash) = sha256_hex {
+        let trimmed_hash = hash.trim();
+        if !trimmed_hash.is_empty() {
+            if let Some(&(driver_path, driver_hash)) = BYOVD_VULNERABLE_DRIVERS
+                .iter()
+                .find(|&&(_, h)| h.eq_ignore_ascii_case(trimmed_hash))
+            {
+                return Some((driver_path, driver_hash));
+            }
+        }
+    }
+    if let Some(raw) = path_or_arg {
+        let norm = raw
+            .trim()
+            .trim_matches(['"', '\'', '`'])
+            .replace('/', "\\")
+            .to_ascii_lowercase();
+        if !norm.is_empty() {
+            let basename = norm.rsplit('\\').next().unwrap_or(norm.as_str());
+            for &(driver_path, driver_hash) in BYOVD_VULNERABLE_DRIVERS {
+                let d_norm = driver_path.to_ascii_lowercase();
+                let d_base = d_norm.rsplit('\\').next().unwrap_or(d_norm.as_str());
+                if norm == d_norm || basename == d_base || norm.ends_with(&format!("\\{d_base}")) {
+                    return Some((driver_path, driver_hash));
+                }
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KernelSentinelConfig {
     pub job_name: String,
@@ -441,6 +506,150 @@ impl KernelSentinelArm {
                     self.driver_rule_count.fetch_add(1, Ordering::SeqCst);
                     return Ok(());
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Adds a SHA-256 binary block hash into the Ring-0 kernel memory via `IOCTL_OSOOSI_ADD_BLOCK_HASH`.
+    pub fn add_kernel_block_hash(&self, sha256_hex: &str) -> Result<(), OctopusSecurityError> {
+        let decoded = hex::decode(sha256_hex.trim()).map_err(|e| {
+            OctopusSecurityError::IsolationViolation(format!(
+                "Invalid BYOVD SHA-256 hex '{sha256_hex}': {e}"
+            ))
+        })?;
+        let sha_arr: [u8; 32] = decoded.try_into().map_err(|_| {
+            OctopusSecurityError::IsolationViolation(format!(
+                "Invalid BYOVD SHA-256 length for '{sha256_hex}': expected 32 bytes"
+            ))
+        })?;
+        let req = RawAddHashRequest { sha256: sha_arr };
+
+        #[cfg(windows)]
+        if self.tier2_connected.load(Ordering::SeqCst) {
+            let wide_path: Vec<u16> = self
+                .config
+                .driver_device_name
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+
+            let handle: HANDLE = unsafe {
+                CreateFileW(
+                    wide_path.as_ptr(),
+                    FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL,
+                    0 as _,
+                )
+            };
+
+            if handle != INVALID_HANDLE_VALUE && !handle.is_null() {
+                let mut bytes_ret = 0u32;
+                let ok = unsafe {
+                    DeviceIoControl(
+                        handle,
+                        IOCTL_OSOOSI_ADD_BLOCK_HASH,
+                        &req as *const _ as *const std::ffi::c_void,
+                        std::mem::size_of::<RawAddHashRequest>() as u32,
+                        std::ptr::null_mut(),
+                        0,
+                        &mut bytes_ret,
+                        std::ptr::null_mut(),
+                    )
+                };
+                unsafe { CloseHandle(handle) };
+
+                if ok != 0 {
+                    self.driver_rule_count.fetch_add(1, Ordering::SeqCst);
+                    return Ok(());
+                }
+            }
+        }
+
+        let _ = req;
+        Ok(())
+    }
+
+    /// Pushes curated BYOVD vulnerable driver paths and SHA-256 hashes into `\\.\OsoosiDriver`
+    /// when attached, or returns deterministic Tier-1 fallback rule descriptors when absent.
+    pub fn enforce_byovd_virtual_patch_blocklist(
+        &self,
+    ) -> Result<Vec<String>, OctopusSecurityError> {
+        let mut applied = Vec::with_capacity(BYOVD_VULNERABLE_DRIVERS.len() * 2);
+        let ring0 = self.tier2_connected.load(Ordering::SeqCst);
+
+        for &(driver_path, sha256_hex) in BYOVD_VULNERABLE_DRIVERS {
+            self.add_kernel_block_rule(driver_path)?;
+            self.add_kernel_block_hash(sha256_hex)?;
+            let mode = if ring0 {
+                "ring0_ioctl"
+            } else {
+                "tier1_fallback"
+            };
+            applied.push(format!("{mode}:path:{driver_path}"));
+            applied.push(format!("{mode}:sha256:{sha256_hex}"));
+        }
+        Ok(applied)
+    }
+
+    /// Issues `IOCTL_OSOOSI_CLEAR_RULES` ONLY when `shield_locked_until_reboot` is false
+    /// (Foolproof Invariant #1 & #4: monotonic tighten-only guard).
+    pub fn clear_kernel_rules(&self) -> Result<(), OctopusSecurityError> {
+        if crate::security::virtual_patch_shield::current_shield_posture()
+            .shield_locked_until_reboot
+        {
+            return Err(OctopusSecurityError::IsolationViolation(
+                "Monotonic violation: refusing IOCTL_OSOOSI_CLEAR_RULES while shield_locked_until_reboot is active"
+                    .to_string(),
+            ));
+        }
+
+        #[cfg(windows)]
+        if self.tier2_connected.load(Ordering::SeqCst) {
+            let wide_path: Vec<u16> = self
+                .config
+                .driver_device_name
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+
+            let handle: HANDLE = unsafe {
+                CreateFileW(
+                    wide_path.as_ptr(),
+                    FILE_GENERIC_READ | FILE_GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL,
+                    0 as _,
+                )
+            };
+
+            if handle != INVALID_HANDLE_VALUE && !handle.is_null() {
+                let mut bytes_ret = 0u32;
+                let ok = unsafe {
+                    DeviceIoControl(
+                        handle,
+                        IOCTL_OSOOSI_CLEAR_RULES,
+                        std::ptr::null(),
+                        0,
+                        std::ptr::null_mut(),
+                        0,
+                        &mut bytes_ret,
+                        std::ptr::null_mut(),
+                    )
+                };
+                unsafe { CloseHandle(handle) };
+                if ok == 0 {
+                    return Err(OctopusSecurityError::IsolationViolation(
+                        "IOCTL_OSOOSI_CLEAR_RULES failed".to_string(),
+                    ));
+                }
+                self.driver_rule_count.store(0, Ordering::SeqCst);
             }
         }
 

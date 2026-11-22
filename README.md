@@ -85,20 +85,23 @@ octopus run --policy examples/quickstart/policy.json --sandbox strict -- python 
 ### CLI Synopsis & Exit Codes
 
 ```text
-octopus run --policy <PATH> [--sandbox <strict|standard>] [--timeout <SECS>] [--cwd <DIR>] [--json] -- <COMMAND> [ARGS...]
+octopus run --policy <PATH> [--sandbox <strict|standard|wasm-strict>] [--wasm-promote] [--timeout <SECS>] [--cwd <DIR>] [--baseline-sbom <PATH> --sbom <PATH>] [--sbom-intent <patch|minor|refactor>] [--latent-weights <PATH>] [--json] -- <COMMAND> [ARGS...]
 ```
 
 | Flag / Exit Code | Meaning |
 |---|---|
 | `--policy <PATH>` | Required `.json` or `.cedar` policy file (wildcards like `*` in `allowed_domains` fail closed). |
-| `--sandbox <strict\|standard>` | OS confinement profile (default: `standard`). |
+| `--sandbox <strict\|standard\|wasm-strict>` | OS or Wasm-enforced confinement profile (default: `standard`; `wasm-strict` + `--wasm-promote` enforce `.wasm`/`.wat` guests when the R6 Virtual-Patch Shield is active). |
 | `--timeout <SECS>` | Wall-clock execution limit (`0` disables; defaults to policy `limits.timeout_secs` or `60`). |
 | `--cwd <DIR>` | Working directory for the contained child process. |
-| `--json` | Emit single-line JSON execution summary (`status`, `sandbox`, `backend`, `egress_events`). |
+| `--baseline-sbom`, `--sbom`, `--sbom-intent`, `--latent-weights` | R8 Gate 1 pre-Wasmtime / pre-spawn CycloneDX SBOM supply-chain check (`patch\|minor\|refactor`) with embedded or custom `UnifiedSecurityShield` JSON weights. |
+| `--json` | Emit single-line `JsonRunSummary` (`status`, `sandbox`, `backend`, `egress_events`, `virtual_patch_shield`, `sbom_guard`, `runtime_guard`). |
 | Exit `0` (or child code) | Policy-permitted execution completed. |
 | Exit `1` | Sandbox or runtime enforcement failure. |
-| Exit `2` | Pre-flight fail-closed denial (missing/invalid policy, missing `--`, blocked command/path/RT-ASP gate). |
+| Exit `2` | Pre-flight fail-closed denial (missing/invalid policy, missing `--`, R7 REA binary gate, R8 SBOM gate, Cedar `exec`, or RT-ASP gate). |
 | Exit `124` | Deterministic timeout / KillSwitch epoch termination. |
+
+Full CLI & policy reference: [`docs/CLI_AND_POLICY_REFERENCE.md`](docs/CLI_AND_POLICY_REFERENCE.md).
 
 ---
 
@@ -152,15 +155,39 @@ flowchart LR
 
 ---
 
+## Documentation Index
+
+| Guide / Artifact | Focus |
+|---|---|
+| **[Documentation Hub & A–Z Index](docs/README.md)** | Role-based reading paths, full Rust source module map, and A–Z topic/anchor index covering R1–R8 |
+| **[Architecture & Security Model](docs/ARCHITECTURE_AND_SECURITY_MODEL.md)** | 4 Deterministic Pillars, R7 `<2ms` REA Binary Gate, R8 `UnifiedSecurityShield`, threat model |
+| **[Kernel Patching & Zero-Breakout Shield](docs/KERNEL_PATCHING_AND_ZERO_BREAKOUT_SHIELD.md)** | R6 multi-OS kernel CVE/KEV patcher (6 OS families, 17 Linux distros), No Break-Out / No Break-In shields, 5 Foolproof Invariants |
+| **[CLI & Policy Reference](docs/CLI_AND_POLICY_REFERENCE.md)** | All `octopus` subcommands, `run` flags, exit codes, `JsonRunSummary`, `OctopusRunPolicy`, 11-entity / 13-action Cedar schema |
+| **[Operations & API Guide](docs/OPERATIONS_AND_API_GUIDE.md)** | `127.0.0.1:3030` Web Dashboard, `X-Octopus-Token` REST API, Host KillSwitch, signed builds, troubleshooting |
+| **[AgentMesh x Wasm Integration](docs/AGENTMESH_WASM_INTEGRATION.md)** | `google/agentmesh v0.2.0` x `wasmtime v49.0.4` topology, OIDC/PEP bridge, 8 live E2E cases |
+| **[Adversarial Defense & Red Teaming](docs/ADVERSARIAL_DEFENSE_AND_RED_TEAMING.md)** | Multi-arm enclave, `TarpitArm` honey-tokens, 19 red-teaming suites, 74-language determinism |
+| **Examples & Reports** | [`examples/quickstart/`](examples/quickstart/policy.json), [`examples/agentmesh-wasm-sandbox/`](examples/agentmesh-wasm-sandbox/README.md), [`reports/vassilev_mathematical_validation.md`](reports/vassilev_mathematical_validation.md) |
+
+---
+
+## Pre-Spawn Binary, Supply-Chain, and Kernel Shields (R6–R8)
+
+- **R6 — Universal Multi-OS Kernel Patcher & Zero-Reboot Shield** ([`docs/KERNEL_PATCHING_AND_ZERO_BREAKOUT_SHIELD.md`](docs/KERNEL_PATCHING_AND_ZERO_BREAKOUT_SHIELD.md)): Maps running kernels across **6 OS families** and **17 Linux distributions** to NIST NVD 2.0 + CISA KEV, delegates updates to vendor rebootless livepatch engines (`canonical-livepatch`, `kpatch`, `ksplice`, `klp`, Windows Hotpatch) and pinned OS patchers (`UsoClient`, `apt-get`, `dnf`, `zypper`, `pacman`, `apk`, `softwareupdate`, `freebsd-update`, `syspatch`, `sysupgrade`) without unsafe ring-0 splicing, and keeps `shield_locked_until_reboot` & `telemetry_degraded_fail_closed` active to guarantee a kernel bug never allows break-out or break-in.
+- **R7 — `<2ms` Pure-Rust Pre-Spawn REA Binary Gate** ([`src/security/rea_binary_gate.rs`](src/security/rea_binary_gate.rs)): Inspects TOCTOU-locked PE/ELF/Mach-O/Wasm executable handles before child spawn (packers like UPX/VMP/Themida, `W^X` violations, entropy `>= 6.4` + anomaly, Authenticode/`LC_CODE_SIGNATURE`, Hell's/Halo's Gate & raw direct-syscall stubs) and feeds `ReaBinaryFact` into `ReteEngine` without heavy EDR disassembly bloat.
+- **R8 — Pure-Rust `UnifiedSecurityShield`** ([`src/security/latent_shield.rs`](src/security/latent_shield.rs)): Pure-Rust (`ndarray` + `rand_distr`, zero Python/BLAS) shared `LatentWorldModel` with embedded deterministic weights (`latent_shield_weights.json`) guarding CycloneDX SBOM transitions pre-Wasmtime (`--baseline-sbom` / `--sbom` / `octopus sbom-guard`) and live runtime telemetry steps (`AgentRuntimeGuard`). Strictly **tighten-only** and completely distinct from the optional offline/advisory D3QN appendix below.
+
+---
+
 ## Cross-Platform OS Enforcement & Host KillSwitch
 
-AgentOctopus enforces native OS confinement and zero-subprocess network isolation across all three major desktop/server platforms:
+AgentOctopus enforces native OS confinement and zero-subprocess network isolation across Linux, Windows, macOS, and BSD:
 
 | Platform | Process & Filesystem Confinement | Out-of-Band Host KillSwitch (`src/security/host_network_isolation.rs`) |
 |---|---|---|
-| **Linux** | `PR_SET_NO_NEW_PRIVS`, Landlock LSM (read-only system/interpreter dirs + declared `allow_read`/`allow_write`), 18-syscall `seccomp-BPF` socket filter (`EACCES`), `RLIMIT_AS` / `RLIMIT_CPU` / `RLIMIT_NOFILE` / `RLIMIT_CORE=0`, optional `CLONE_NEWNET` | Netlink blackhole route / socket isolation (zero `iptables`/`nft` subprocesses) |
-| **Windows** | `--sandbox standard`: de-elevated restricted token + `WindowsJobObject` (`ActiveProcessLimit`, `ProcessMemoryLimit`); `--sandbox strict`: ephemeral AppContainer (`S-1-15-2-...`) + Named Pipe Cedar FS IPC + `WindowsJobObject` | Windows Filtering Platform (WFP) 22/24-layer filters + BFE Registry enforcement (zero `netsh` subprocesses) |
-| **macOS** | Seatbelt SBPL `(version 1) (deny default)` with `/var` -> `/private/var` and `/tmp` -> `/private/tmp` canonicalization + `libproc` (`proc_listchildpids`) fixed-point descendant freezing | `/dev/pf` binary `ioctl` anchor isolation (zero `pfctl` subprocesses) |
+| **Linux** | `PR_SET_NO_NEW_PRIVS`, Landlock LSM (read-only system/interpreter dirs + declared `allow_read`/`allow_write`), `seccomp-BPF` (sockets + R6 CVE EoP/escape syscalls + `clone3`), `RLIMIT_AS` / `RLIMIT_CPU` / `RLIMIT_NOFILE` / `RLIMIT_CORE=0`, optional `CLONE_NEWNET` | Netlink blackhole route / `SOCK_DESTROY` + `nftables` virtual-patch shield |
+| **Windows** | `--sandbox standard`: de-elevated restricted token + `WindowsJobObject` (`ActiveProcessLimit`, `ProcessMemoryLimit`); `--sandbox strict`: ephemeral AppContainer (`S-1-15-2-...`) + Named Pipe Cedar FS IPC + `WindowsJobObject` + process mitigation mask + `\\.\OsoosiDriver` BYOVD blocklist | Windows Filtering Platform (WFP) 22/24-layer filters + BFE Registry enforcement (zero `netsh` subprocesses) |
+| **macOS** | Seatbelt SBPL `(version 1) (deny default)` with `/var` -> `/private/var`, `/tmp` -> `/private/tmp` canonicalization, `system-kext-load`/`iokit-open` clamps + `libproc` (`proc_listchildpids`) fixed-point descendant freezing | `/dev/pf` binary `ioctl` anchor isolation + `/sbin/pfctl` virtual-patch shield |
+| **BSD (`FreeBSD`, `OpenBSD`, `NetBSD`)** | OpenBSD `unveil()` + `pledge()`; FreeBSD `procctl(PROC_NO_NEW_PRIVS_CTL)` + Capsicum `cap_enter()`; NetBSD `setrlimit` | `/dev/pf` anchor isolation + native `freebsd-update` / `syspatch` / `sysupgrade` orchestration |
 
 ---
 
@@ -196,7 +223,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Operational CLI Subcommands & Web Dashboard (`http://127.0.0.1:3030`)
 
-In addition to `octopus run`, the `octopus` binary exposes operational subcommands: `verify`, `status`, `protocols`, `hook`, `mcp-proxy`, `siquery`, `isolate`, `restore`, and `service`.
+In addition to `octopus run`, the `octopus` binary exposes operational subcommands: `verify`, `status`, `protocols`, `hook`, `mcp-proxy`, `siquery`, `sbom-guard` (`latent-shield`), `kernel-patch` (`patch-kernel`), `isolate` (`engage`), `restore` (`disarm`), `killswitch`, `service`, and `start` (`serve`, `ui`). See [`docs/CLI_AND_POLICY_REFERENCE.md`](docs/CLI_AND_POLICY_REFERENCE.md) and [`docs/OPERATIONS_AND_API_GUIDE.md`](docs/OPERATIONS_AND_API_GUIDE.md).
 
 To inspect live telemetry, Cedar policy evaluation, Merkle audit verification, and adversarial red-team suites in the Web Dashboard (bound to **`127.0.0.1:3030`**):
 
@@ -245,6 +272,14 @@ cargo test --test octopus_cli_e2e_tests
 # AWS Cedar policy & AgentMesh integration suites
 cargo test --test cedar_policy_tests
 cargo test --test agentmesh_integration_tests
+
+# R6 Kernel Shield, R7 <2ms REA Binary Gate & R8 UnifiedSecurityShield suites
+cargo test --test virtual_patch_shield_tests
+cargo test --test rea_binary_gate_tests
+cargo test --test latent_security_shield_tests
+
+# Full 4-tier E2E release verification suite
+python -m tests.e2e_release --tier all -v
 ```
 
 ---

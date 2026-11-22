@@ -1,5 +1,6 @@
 //! NIST IR 7695 Common Platform Enumeration (CPE 2.3) formatting, escaping, and canonicalization.
 
+use super::types::{LinuxDistro, OsFamily};
 use serde::{Deserialize, Serialize};
 
 /// CPE 2.3 part classification component.
@@ -333,4 +334,60 @@ pub fn canonicalize_macos_version(raw: &str) -> String {
     } else {
         escape_cpe_attribute(clean)
     }
+}
+
+/// Canonicalizes FreeBSD / OpenBSD / NetBSD release strings (e.g. "14.1-RELEASE-p5" -> "14.1", "7.6" -> "7.6").
+#[must_use]
+pub fn canonicalize_bsd_version(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let prefix = trimmed.split(['-', ' ']).next().unwrap_or(trimmed).trim();
+    if prefix.is_empty() {
+        "*".to_string()
+    } else {
+        escape_cpe_attribute(prefix)
+    }
+}
+
+/// Generates a NIST IR 7695 CPE 2.3 string for any of the 17 classified Linux distributions.
+#[must_use]
+pub fn linux_distro_cpe23(distro: &LinuxDistro, version_id: &str) -> Option<String> {
+    let (vendor, product) = match distro {
+        LinuxDistro::Ubuntu => ("canonical", "ubuntu_linux"),
+        LinuxDistro::Debian => ("debian", "debian_linux"),
+        LinuxDistro::Kali => ("kali", "kali_linux"),
+        LinuxDistro::Rhel => ("redhat", "enterprise_linux"),
+        LinuxDistro::Fedora => ("fedoraproject", "fedora"),
+        LinuxDistro::Rocky => ("rockylinux", "rocky_linux"),
+        LinuxDistro::Alma => ("almalinux", "almalinux"),
+        LinuxDistro::CentOS => ("centos", "centos"),
+        LinuxDistro::AmazonLinux => ("amazon", "amazon_linux"),
+        LinuxDistro::OracleLinux => ("oracle", "linux"),
+        LinuxDistro::Sles => ("suse", "linux_enterprise_server"),
+        LinuxDistro::OpenSuse => ("opensuse", "opensuse"),
+        LinuxDistro::Arch => ("archlinux", "arch_linux"),
+        LinuxDistro::Alpine => ("alpinelinux", "alpine_linux"),
+        LinuxDistro::NixOS => ("nixos", "nixos"),
+        LinuxDistro::Gentoo => ("gentoo", "linux"),
+        LinuxDistro::Flatcar => ("kinvolk", "flatcar_container_linux"),
+        LinuxDistro::Unknown(_) => return None,
+    };
+    let ver = if version_id.trim().is_empty() {
+        "*".to_string()
+    } else {
+        escape_cpe_attribute(version_id)
+    };
+    Some(Cpe23::new_os(vendor, product, ver).to_formatted_string())
+}
+
+/// Generates a NIST IR 7695 CPE 2.3 string for FreeBSD, OpenBSD, or NetBSD.
+#[must_use]
+pub fn bsd_cpe23(family: &OsFamily, release: &str) -> Option<String> {
+    let (vendor, product) = match family {
+        OsFamily::FreeBSD => ("freebsd", "freebsd"),
+        OsFamily::OpenBSD => ("openbsd", "openbsd"),
+        OsFamily::NetBSD => ("netbsd", "netbsd"),
+        _ => return None,
+    };
+    let ver = canonicalize_bsd_version(release);
+    Some(Cpe23::new_os(vendor, product, ver).to_formatted_string())
 }

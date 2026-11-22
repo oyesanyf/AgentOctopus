@@ -31,4 +31,16 @@ pub enum PatcherError {
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Invalid input rejected by allowlist: {0}")]
+    InvalidInput(String),
+
+    #[error("Untrusted or missing patch binary: {0}")]
+    UntrustedOrMissingBinary(String),
+
+    #[error("Monotonic shield violation: {0}")]
+    MonotonicViolation(String),
+
+    #[error("Post-enforcement read-back verification failed: {0}")]
+    ReadBackVerificationFailed(String),
 }

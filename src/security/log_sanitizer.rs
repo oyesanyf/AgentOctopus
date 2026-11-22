@@ -73,14 +73,24 @@ impl LogSanitizer {
     /// Strips invisible unicode formatting characters, Bidi overrides, and Unicode Tag blocks
     /// commonly used in GhostJacking attacks to smuggle prompts past tokenizers or hide from humans.
     pub fn strip_dangerous_unicode(input: &str) -> String {
+        if input.is_ascii() {
+            return input.to_string();
+        }
         input
             .chars()
             .filter(|&c| {
                 match c {
-                    // Zero-width characters & BOM
-                    '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' | '\u{200E}' | '\u{200F}' => {
-                        false
-                    }
+                    // Zero-width, soft-hyphen, joiners & BOM
+                    '\u{00AD}'
+                    | '\u{034F}'
+                    | '\u{180E}'
+                    | '\u{200B}'
+                    | '\u{200C}'
+                    | '\u{200D}'
+                    | '\u{200E}'
+                    | '\u{200F}'
+                    | '\u{2060}'..='\u{2064}'
+                    | '\u{FEFF}' => false,
                     // Bidi overrides & isolates (prevent spoofing text direction)
                     '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' => false,
                     // Unicode Tag Characters (U+E0000 - U+E007F) used for hidden ASCII prompt smuggling
@@ -134,12 +144,20 @@ impl LogSanitizer {
     /// and suspicious link schemas (`javascript:`, `data:`, `vbscript:`).
     pub fn defang_markdown_and_exfiltration(input: &str) -> String {
         static RE_MD_IMAGE: OnceLock<Regex> = OnceLock::new();
+        static RE_MD_IMAGE_REF: OnceLock<Regex> = OnceLock::new();
+        static RE_MD_REF_DEF: OnceLock<Regex> = OnceLock::new();
         static RE_HTML_IMG: OnceLock<Regex> = OnceLock::new();
         static RE_DANGEROUS_SCHEME: OnceLock<Regex> = OnceLock::new();
 
-        let re_img = RE_MD_IMAGE.get_or_init(|| Regex::new(r#"!\[(.*?)\]\((.*?)\)"#).unwrap());
-        let re_html = RE_HTML_IMG
-            .get_or_init(|| Regex::new(r#"(?i)<img\s+[^>]*src=["']?([^"'>\s]+)[^>]*>"#).unwrap());
+        let re_img = RE_MD_IMAGE.get_or_init(|| Regex::new(r#"(?s)!\[(.*?)\]\((.*?)\)"#).unwrap());
+        let re_img_ref =
+            RE_MD_IMAGE_REF.get_or_init(|| Regex::new(r#"(?s)!\[([^\]]*)\]\[([^\]]*)\]"#).unwrap());
+        let re_ref_def = RE_MD_REF_DEF.get_or_init(|| {
+            Regex::new(r#"(?im)^[ ]{0,3}\[([^\]]+)\]:[ \t]*<?([^\s>]+)>?(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)]*\)))?[ \t]*$"#).unwrap()
+        });
+        let re_html = RE_HTML_IMG.get_or_init(|| {
+            Regex::new(r#"(?is)<img[\s/]+[^>]*?src\s*=\s*["']?([^"'>\s]+)[^>]*>"#).unwrap()
+        });
         let re_scheme = RE_DANGEROUS_SCHEME
             .get_or_init(|| Regex::new(r#"(?i)\b(javascript|data|vbscript|file):\S+"#).unwrap());
 
@@ -147,12 +165,56 @@ impl LogSanitizer {
         let s1 = re_img.replace_all(input, |caps: &regex::Captures| {
             format!(
                 "[DEFANGED_MD_IMG: alt=\"{}\", src=\"{}\"]",
-                &caps[1], &caps[2]
+                caps[1].trim(),
+                caps[2].trim()
             )
         });
 
+        // Defang reference-style Markdown image tags: ![alt][id] and matching [id]: url definitions
+        let mut img_ref_ids = std::collections::HashSet::new();
+        for caps in re_img_ref.captures_iter(&s1) {
+            let ref_label = if caps[2].trim().is_empty() {
+                caps[1].trim()
+            } else {
+                caps[2].trim()
+            };
+            if !ref_label.is_empty() {
+                img_ref_ids.insert(ref_label.to_ascii_lowercase());
+            }
+        }
+        let s1_ref = re_img_ref.replace_all(&s1, |caps: &regex::Captures| {
+            let ref_label = if caps[2].trim().is_empty() {
+                caps[1].trim()
+            } else {
+                caps[2].trim()
+            };
+            format!(
+                "[DEFANGED_MD_IMG_REF: alt=\"{}\", ref=\"{}\"]",
+                caps[1].trim(),
+                ref_label
+            )
+        });
+        let s1_full = if img_ref_ids.is_empty() {
+            s1_ref.into_owned()
+        } else {
+            re_ref_def
+                .replace_all(&s1_ref, |caps: &regex::Captures| {
+                    let id = caps[1].trim();
+                    if img_ref_ids.contains(&id.to_ascii_lowercase()) {
+                        format!(
+                            "[DEFANGED_MD_REF_DEF: id=\"{}\", src=\"{}\"]",
+                            id,
+                            caps[2].trim()
+                        )
+                    } else {
+                        caps[0].to_string()
+                    }
+                })
+                .into_owned()
+        };
+
         // Defang HTML img tags: <img ...> -> [DEFANGED_HTML_IMG: src="$1"]
-        let s2 = re_html.replace_all(&s1, |caps: &regex::Captures| {
+        let s2 = re_html.replace_all(&s1_full, |caps: &regex::Captures| {
             format!("[DEFANGED_HTML_IMG: src=\"{}\"]", &caps[1])
         });
 

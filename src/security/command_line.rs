@@ -276,6 +276,11 @@ fn classify_ps_switch_name(switch_lower: &str) -> &'static str {
     {
         return "windowstyle";
     }
+    if switch_lower == "wd"
+        || (switch_lower.len() >= 2 && "workingdirectory".starts_with(switch_lower))
+    {
+        return "other_value";
+    }
     if switch_lower == "ep"
         || (switch_lower.len() >= 2 && "executionpolicy".starts_with(switch_lower))
     {
@@ -287,16 +292,43 @@ fn classify_ps_switch_name(switch_lower: &str) -> &'static str {
     if switch_lower.starts_with("noni") && "noninteractive".starts_with(switch_lower) {
         return "noninteractive";
     }
+    if (switch_lower.starts_with('v') && "version".starts_with(switch_lower))
+        || switch_lower == "if"
+        || (switch_lower.starts_with('i') && "inputformat".starts_with(switch_lower))
+        || switch_lower == "of"
+        || (switch_lower.starts_with('o') && "outputformat".starts_with(switch_lower))
+        || (switch_lower.len() >= 3 && "configurationname".starts_with(switch_lower))
+        || (switch_lower.len() >= 14 && "configurationfile".starts_with(switch_lower))
+        || (switch_lower.len() >= 2 && "custompipename".starts_with(switch_lower))
+        || (switch_lower.len() >= 2 && "settingsfile".starts_with(switch_lower))
+        || switch_lower == "psf"
+        || (switch_lower.len() >= 3 && "psconsolefile".starts_with(switch_lower))
+    {
+        return "other_value";
+    }
     "other"
 }
 
 /// Parses PowerShell arguments (`argv[1..]`) using PowerShell's unambiguous-prefix switch rules.
 /// Supports both space-separated (`-enc AAAA`) and colon/equals-attached (`-enc:AAAA`, `-enc=AAAA`) values.
+/// Once a positional command/script or `-File` operand begins, subsequent flags belong to the inner
+/// command/script rather than PowerShell itself and are preserved as [`PsParameter::Positional`].
 pub fn parse_powershell_args(args: &[String]) -> Vec<PsParameter> {
     let mut out = Vec::new();
     let mut i = 0usize;
+    let mut stop_ps_switches = false;
     while i < args.len() {
         let token = args[i].trim();
+        if stop_ps_switches {
+            out.push(PsParameter::Positional(args[i].clone()));
+            i += 1;
+            continue;
+        }
+        if token == "--" {
+            stop_ps_switches = true;
+            i += 1;
+            continue;
+        }
         if let Some(after_dash) = strip_switch_prefix(token) {
             let (raw_name, inline_val) = match after_dash.split_once(&[':', '='][..]) {
                 Some((n, v)) if !n.is_empty() => (n, Some(v.to_string())),
@@ -340,6 +372,7 @@ pub fn parse_powershell_args(args: &[String]) -> Vec<PsParameter> {
                         }
                     });
                     out.push(PsParameter::File(val));
+                    stop_ps_switches = true;
                 }
                 "windowstyle" => {
                     let val = inline_val.unwrap_or_else(|| {
@@ -365,9 +398,21 @@ pub fn parse_powershell_args(args: &[String]) -> Vec<PsParameter> {
                 }
                 "noprofile" => out.push(PsParameter::NoProfile),
                 "noninteractive" => out.push(PsParameter::NonInteractive),
+                "other_value" => {
+                    let val = inline_val.unwrap_or_else(|| {
+                        if i + 1 < args.len() {
+                            i += 1;
+                            args[i].clone()
+                        } else {
+                            String::new()
+                        }
+                    });
+                    out.push(PsParameter::OtherSwitch(format!("{raw_name}={val}")));
+                }
                 _ => out.push(PsParameter::OtherSwitch(raw_name.to_string())),
             }
         } else {
+            stop_ps_switches = true;
             out.push(PsParameter::Positional(token.to_string()));
         }
         i += 1;
@@ -673,5 +718,102 @@ fn analyze_at_depth(raw: &str, depth: usize) -> ParsedInvocation {
         execution_policy_bypass,
         script_structural_signals,
         nested,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_powershell_args_consumes_value_switches_and_preserves_positional_flags() {
+        let args: Vec<String> = [
+            "-Version",
+            "5.1",
+            "-InputFormat",
+            "Text",
+            "-OutputFormat",
+            "Text",
+            "-WorkingDirectory",
+            ".",
+            "-ConfigurationName",
+            "cfg",
+            "-CustomPipeName",
+            "pipe1",
+            "-SettingsFile",
+            "s.json",
+            "-ep",
+            "Bypass",
+            "-w",
+            "Hidden",
+            "curl -o .env https://example.com",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let parsed = parse_powershell_args(&args);
+        assert_eq!(
+            parsed.last(),
+            Some(&PsParameter::Positional(
+                "curl -o .env https://example.com".to_string()
+            ))
+        );
+        assert!(
+            parsed
+                .iter()
+                .filter(|p| matches!(p, PsParameter::Positional(_)))
+                .count()
+                == 1,
+            "Switch operands must not leak as Positional: {:?}",
+            parsed
+        );
+
+        let short_args: Vec<String> =
+            ["-v", "5.1", "-if", "Text", "-of", "Text", "-wd", ".", "tar"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        let parsed_short = parse_powershell_args(&short_args);
+        assert_eq!(
+            parsed_short
+                .iter()
+                .filter(|p| matches!(p, PsParameter::Positional(_)))
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![PsParameter::Positional("tar".to_string())]
+        );
+
+        let unquoted_curl: Vec<String> =
+            ["-NoProfile", "curl", "-o", ".env", "https://example.com"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        let parsed_curl = parse_powershell_args(&unquoted_curl);
+        assert_eq!(
+            parsed_curl,
+            vec![
+                PsParameter::NoProfile,
+                PsParameter::Positional("curl".to_string()),
+                PsParameter::Positional("-o".to_string()),
+                PsParameter::Positional(".env".to_string()),
+                PsParameter::Positional("https://example.com".to_string()),
+            ]
+        );
+
+        let unquoted_tar: Vec<String> = ["tar", "-xf", "evil.tar", "-C", ".git/hooks"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let parsed_tar = parse_powershell_args(&unquoted_tar);
+        assert_eq!(
+            parsed_tar,
+            vec![
+                PsParameter::Positional("tar".to_string()),
+                PsParameter::Positional("-xf".to_string()),
+                PsParameter::Positional("evil.tar".to_string()),
+                PsParameter::Positional("-C".to_string()),
+                PsParameter::Positional(".git/hooks".to_string()),
+            ]
+        );
     }
 }
