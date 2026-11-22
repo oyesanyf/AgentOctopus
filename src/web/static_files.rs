@@ -276,6 +276,113 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
     .btn-secondary:hover { background: #4b5563; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    /* Modern Accessible Dialog & Responsive Container-Query Tables (Kernel Patcher & Firewall) */
+    dialog.kp-modal {
+      margin: auto;
+      padding: 0;
+      max-width: 560px;
+      width: calc(100% - 2rem);
+      border: 1px solid #334155;
+      border-radius: 0.75rem;
+      background: #0f172a;
+      color: var(--text-main);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.72);
+    }
+    dialog.kp-modal[open] {
+      display: flex;
+      flex-direction: column;
+    }
+    dialog.kp-modal:modal {
+      overscroll-behavior: contain;
+    }
+    dialog.kp-modal::backdrop {
+      background: rgba(2, 6, 23, 0.78);
+      backdrop-filter: blur(4px);
+      overflow: hidden;
+      overscroll-behavior: contain;
+    }
+    .kp-modal-form {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      padding: 1.35rem 1.5rem;
+    }
+    .kp-modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      padding-top: 0.5rem;
+      border-top: 1px solid #1e293b;
+    }
+    .kp-table-wrapper {
+      overflow-x: auto;
+      max-width: 100%;
+      container-type: inline-size;
+      border: 1px solid #334155;
+      border-radius: 0.5rem;
+      background: #0b1120;
+    }
+    .kp-table-wrapper:focus-visible {
+      outline: 2px solid var(--accent-cyan);
+      outline-offset: 2px;
+    }
+    .kp-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.84rem;
+    }
+    .kp-table thead {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #1e293b;
+    }
+    .kp-table th,
+    .kp-table td {
+      padding: 0.65rem 0.85rem;
+      text-align: left;
+      border-bottom: 1px solid #1e293b;
+      vertical-align: top;
+    }
+    .kp-table tbody th {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      background: #0f172a;
+      font-weight: 700;
+      color: #93c5fd;
+      white-space: nowrap;
+    }
+    @container (width < 600px) {
+      .kp-table thead {
+        display: none;
+      }
+      .kp-table tbody,
+      .kp-table tr,
+      .kp-table tbody th,
+      .kp-table td {
+        display: block;
+        width: 100%;
+      }
+      .kp-table tr {
+        border-bottom: 2px solid #334155;
+        padding: 0.5rem 0;
+      }
+      .kp-table tbody th {
+        position: static;
+        background: rgba(30, 41, 59, 0.75);
+        white-space: normal;
+      }
+      .kp-table td {
+        border-bottom: 1px dashed #1e293b;
+      }
+      .kp-table td:nth-child(2)::before { content: var(--label-2) ": "; font-weight: 700; color: var(--accent-cyan); }
+      .kp-table td:nth-child(3)::before { content: var(--label-3) ": "; font-weight: 700; color: var(--accent-cyan); }
+      .kp-table td:nth-child(4)::before { content: var(--label-4) ": "; font-weight: 700; color: var(--accent-cyan); }
+      .kp-table td:nth-child(5)::before { content: var(--label-5) ": "; font-weight: 700; color: var(--accent-cyan); }
+    }
+
     select, input, textarea {
       width: 100%;
       background: #1e293b;
@@ -689,6 +796,9 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
     <button class="btn btn-secondary" onclick="switchTab('universal-killswitch')" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; border: 1px solid #38bdf8; color: #7dd3fc; background: rgba(15, 23, 42, 0.85);">
       🌐 218 Protocols &rarr;
     </button>
+    <button class="btn btn-secondary" onclick="switchTab('kernel-patcher-view')" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; border: 1px solid #f59e0b; color: #fcd34d; background: rgba(120, 53, 15, 0.45);">
+      🩹 Kernel Patcher &rarr;
+    </button>
     <button class="btn btn-secondary" onclick="switchTab('rasp-shield')" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; border: 1px solid #10b981; color: #6ee7b7; background: rgba(6, 78, 59, 0.6);">
       ⚡ Open RT-ASP Shield &rarr;
     </button>
@@ -698,6 +808,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
 <nav>
   <div class="nav-tab active" onclick="switchTab('test-runner')">🧪 Test Runner &amp; Progression</div>
   <div class="nav-tab" onclick="switchTab('universal-killswitch')">🚨 Host KillSwitch (218 Protocols)</div>
+  <div class="nav-tab" onclick="switchTab('kernel-patcher-view')">🩹 Kernel Patcher &amp; Firewall</div>
   <div class="nav-tab" onclick="switchTab('runtime-feed')">⚡ Unified Runtime Activity</div>
   <div class="nav-tab" onclick="switchTab('cedar-sandbox')">🛡️ Cedar Policy Sandbox</div>
   <div class="nav-tab" onclick="switchTab('audit-viewer')">📜 Cryptographic Audit Log</div>
@@ -4144,6 +4255,153 @@ with urllib.request.urlopen(req) as resp:
     </div>
   </div>
 
+  <!-- TAB: KERNEL PATCHER & VIRTUAL-PATCH KERNEL FIREWALL -->
+  <div id="kernel-patcher-view" class="tab-content">
+    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+      <div class="breadcrumb-trail">
+        <a class="breadcrumb-link" href="javascript:void(0)" onclick="switchTab('test-runner')"><span>🏠</span> Dashboard</a>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-link" style="cursor: default; pointer-events: none;">OS Kernel &amp; Perimeter Defense</span>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-current"><span>🩹</span> Kernel Patcher &amp; Firewall</span>
+      </div>
+      <div class="breadcrumb-meta">
+        <span class="breadcrumb-badge">🪟 WUA COM + UAC / Hotpatch</span>
+        <span class="breadcrumb-badge purple">🔥 WFP / AF_NETLINK / /dev/pf</span>
+        <span class="breadcrumb-badge green">🌳 RFC 6962 Merkle Sealed</span>
+      </div>
+    </nav>
+
+    <div class="card" style="margin-bottom: 1.25rem;">
+      <div class="card-header">
+        <div>
+          <h2 style="margin: 0; font-size: 1.15rem;">🩹 Dynamic OS Kernel Patcher &amp; Virtual-Patch Firewall</h2>
+          <p style="margin: 0.35rem 0 0; color: var(--text-muted); font-size: 0.86rem;">
+            Real-time NVD/CISA KEV kernel CVE scanning, synchronous Windows Update Agent (WUA) COM &amp; Linux Livepatch orchestration, BYOVD loaded-driver SHA-256 verification, and zero-subprocess kernel firewall perimeter enforcement.
+          </p>
+        </div>
+        <span class="badge" id="kp-shield-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #10b981; font-weight: 800;">CHECKING POSTURE...</span>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0.9rem; margin-top: 1rem;">
+        <div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 0.5rem; padding: 0.9rem;">
+          <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Host Kernel &amp; CPE 2.3</div>
+          <div id="kp-kernel-os" style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-top: 0.35rem;">Detecting...</div>
+          <div id="kp-kernel-cpe" style="font-size: 0.76rem; color: #7dd3fc; font-family: monospace; margin-top: 0.25rem; word-break: break-all;">—</div>
+        </div>
+
+        <div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 0.5rem; padding: 0.9rem;">
+          <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Livepatch RAM &amp; Reboot Latch</div>
+          <div id="kp-livepatch-status" style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-top: 0.35rem;">Checking...</div>
+          <div id="kp-reboot-status" style="font-size: 0.78rem; color: #94a3b8; margin-top: 0.25rem;">—</div>
+        </div>
+
+        <div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 0.5rem; padding: 0.9rem;">
+          <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Kernel Hardening &amp; Hotpatch</div>
+          <div id="kp-hardening-status" style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-top: 0.35rem;">Checking...</div>
+          <div id="kp-hotpatch-status" style="font-size: 0.78rem; color: #94a3b8; margin-top: 0.25rem;">—</div>
+        </div>
+
+        <div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 0.5rem; padding: 0.9rem;">
+          <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Virtual-Patch Kernel Firewall</div>
+          <div id="kp-firewall-status" style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-top: 0.35rem;">Checking...</div>
+          <div id="kp-firewall-meta" style="font-size: 0.78rem; color: #94a3b8; margin-top: 0.25rem;">—</div>
+        </div>
+
+        <div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 0.5rem; padding: 0.9rem;">
+          <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Live BYOVD Driver Audit</div>
+          <div id="kp-byovd-status" style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-top: 0.35rem;">Checking...</div>
+          <div id="kp-byovd-meta" style="font-size: 0.78rem; color: #94a3b8; margin-top: 0.25rem;">—</div>
+        </div>
+
+        <div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 0.5rem; padding: 0.9rem;">
+          <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">CVE / CISA KEV &amp; Merkle Root</div>
+          <div id="kp-cve-counts" style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-top: 0.35rem;">0 CVEs (0 KEV)</div>
+          <div id="kp-merkle-root" style="font-size: 0.76rem; color: #a78bfa; font-family: monospace; margin-top: 0.25rem; word-break: break-all;">—</div>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 0.65rem; flex-wrap: wrap; align-items: center; margin-top: 1.15rem;">
+        <button class="btn" id="btn-kp-scan" onclick="triggerKernelScan()">🔍 Scan Kernel CVEs (NVD + KEV)</button>
+        <button class="btn btn-secondary" id="btn-kp-dryrun" onclick="previewKernelPatchPlan()">🧪 Preview Patch Plan (Dry-Run)</button>
+        <button class="btn btn-danger" id="btn-kp-apply" onclick="openKernelApplyDialog()">🩹 Apply OS Kernel Patch...</button>
+        <button class="btn btn-success" id="btn-kp-perimeter-engage" onclick="toggleVirtualPatchPerimeter('engage')">🛡️ Engage Virtual-Patch Firewall</button>
+        <button class="btn btn-secondary" id="btn-kp-perimeter-disarm" onclick="toggleVirtualPatchPerimeter('disarm')">🔓 Disarm Virtual-Patch Firewall</button>
+        <button class="btn btn-secondary" onclick="fetchKernelPatcherStatus()">🔄 Refresh Posture</button>
+      </div>
+
+      <div id="kp-action-feedback" aria-live="polite" style="margin-top: 0.85rem; font-size: 0.86rem; color: #94a3b8; min-height: 1.25rem;"></div>
+    </div>
+
+    <div class="card" style="margin-bottom: 1.25rem;">
+      <h3 id="kp-cve-table-heading" style="margin: 0 0 0.75rem; font-size: 1rem;">📋 Active Kernel CVE &amp; CISA KEV Advisories</h3>
+      <div tabindex="0" role="region" aria-labelledby="kp-cve-table-heading" class="kp-table-wrapper">
+        <table class="kp-table" style="--label-2: 'CVSS v3.1'; --label-3: 'CISA KEV'; --label-4: 'Action Due'; --label-5: 'Advisory Summary';">
+          <thead>
+            <tr>
+              <th scope="col">CVE ID</th>
+              <th scope="col">CVSS v3.1</th>
+              <th scope="col">CISA KEV</th>
+              <th scope="col">Action Due</th>
+              <th scope="col">Advisory Summary</th>
+            </tr>
+          </thead>
+          <tbody id="kp-cve-tbody">
+            <tr><td colspan="5" style="text-align: center; color: #94a3b8;">Click &ldquo;Scan Kernel CVEs&rdquo; to query NVD &amp; CISA KEV for this host kernel.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 1.25rem;">
+      <h3 id="kp-plan-table-heading" style="margin: 0 0 0.75rem; font-size: 1rem;">⚙️ OS Native Kernel Patch &amp; Livepatch Plan</h3>
+      <div tabindex="0" role="region" aria-labelledby="kp-plan-table-heading" class="kp-table-wrapper">
+        <table class="kp-table" style="--label-2: 'Executable / Engine'; --label-3: 'Arguments / Scope'; --label-4: 'Subsystem &amp; Privilege';">
+          <thead>
+            <tr>
+              <th scope="col">Step</th>
+              <th scope="col">Executable / Engine</th>
+              <th scope="col">Arguments / Scope</th>
+              <th scope="col">Subsystem &amp; Privilege</th>
+            </tr>
+          </thead>
+          <tbody id="kp-plan-tbody">
+            <tr><td colspan="4" style="text-align: center; color: #94a3b8;">Loading native OS kernel patch plan...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin: 0 0 0.65rem; font-size: 0.95rem;">🧾 Live Kernel Patcher, BYOVD &amp; Firewall Receipt Telemetry</h3>
+      <pre id="kp-receipt-json" style="margin: 0; padding: 0.85rem; background: #090d16; border: 1px solid #1e293b; border-radius: 8px; font-size: 0.78rem; color: #93c5fd; max-height: 320px; overflow: auto;">// Kernel patcher status and execution receipts render here</pre>
+    </div>
+
+    <dialog id="kp-apply-dialog" class="kp-modal" aria-labelledby="kp-apply-dialog-title">
+      <form method="dialog" class="kp-modal-form">
+        <h3 id="kp-apply-dialog-title" style="margin: 0; font-size: 1.1rem; color: #f8fafc;">⚠️ Confirm Live OS Kernel Patching</h3>
+        <p style="margin: 0; font-size: 0.88rem; color: #cbd5e1; line-height: 1.5;">
+          This triggers genuine native OS kernel updates: synchronous Windows Update Agent (WUA) COM Search/Download/Install via a one-shot UAC helper on Windows, or native livepatch &amp; security package manager remediation on Linux/macOS/BSD.
+        </p>
+        <div id="kp-dialog-plan-summary" style="padding: 0.65rem 0.85rem; background: #0b1120; border: 1px solid #334155; border-radius: 0.45rem; font-size: 0.8rem; color: #7dd3fc; font-family: monospace;">
+          Subsystem: Detecting...
+        </div>
+        <label style="display: flex; align-items: center; gap: 0.55rem; font-size: 0.85rem; color: #e2e8f0; cursor: pointer;">
+          <input type="checkbox" id="kp-opt-accept-eula" checked style="width: auto;">
+          <span>Auto-accept Microsoft / OS Update EULAs during live install</span>
+        </label>
+        <label style="display: flex; align-items: center; gap: 0.55rem; font-size: 0.85rem; color: #e2e8f0; cursor: pointer;">
+          <input type="checkbox" id="kp-opt-allow-uac" checked style="width: auto;">
+          <span>Allow one-shot Windows UAC helper (keeps AgentOctopus de-elevated)</span>
+        </label>
+        <div class="kp-modal-actions">
+          <button value="cancel" autofocus class="btn btn-secondary">Cancel</button>
+          <button value="apply" class="btn btn-danger">Confirm &amp; Apply OS Kernel Patch</button>
+        </div>
+      </form>
+    </dialog>
+  </div>
+
   <!-- TAB 18: SIQUERY SQL CONSOLE & 12-SWEEP EDR AUDIT -->
   <div id="siquery-console" class="tab-content">
     <nav class="breadcrumb-bar" aria-label="Breadcrumb">
@@ -4396,6 +4654,8 @@ with urllib.request.urlopen(req) as resp:
       } else if (tabId === 'universal-killswitch') {
         fetchKillSwitchStatus(true);
         loadUniversalProtocolCatalog();
+      } else if (tabId === 'kernel-patcher-view') {
+        fetchKernelPatcherStatus();
       } else if (tabId === 'siquery-console') {
         listSiqueryTables();
         fetchSiqueryEdrStatus();
@@ -9029,6 +9289,448 @@ def exfiltrate_credentials():
         kpiEl.textContent = String(data.telemetry.anomalies_detected ?? 0);
       }
     } catch (_) {}
+  }
+
+  // =========================================================================
+  // DYNAMIC KERNEL PATCHER & VIRTUAL-PATCH FIREWALL CONTROLS
+  // =========================================================================
+  let kpDialogListenerWired = false;
+  let kpLatestStatus = null;
+
+  function setKpFeedback(message, color = '#94a3b8') {
+    const fb = document.getElementById('kp-action-feedback');
+    if (fb) {
+      fb.style.color = color;
+      fb.textContent = message;
+    }
+  }
+
+  function wireKernelPatchDialog() {
+    if (kpDialogListenerWired) return;
+    const dialog = document.getElementById('kp-apply-dialog');
+    if (!dialog) return;
+    kpDialogListenerWired = true;
+    dialog.addEventListener('close', () => {
+      const outcome = dialog.returnValue;
+      dialog.returnValue = '';
+      if (outcome === 'apply') {
+        const acceptEula = Boolean(document.getElementById('kp-opt-accept-eula')?.checked);
+        const allowUac = Boolean(document.getElementById('kp-opt-allow-uac')?.checked);
+        applyKernelPatchConfirmed(acceptEula, allowUac);
+      }
+    });
+  }
+
+  function openKernelApplyDialog() {
+    wireKernelPatchDialog();
+    const dialog = document.getElementById('kp-apply-dialog');
+    const summaryEl = document.getElementById('kp-dialog-plan-summary');
+    if (summaryEl) {
+      const plan = kpLatestStatus && kpLatestStatus.available_patch_plan;
+      if (plan) {
+        const privLabel = plan.requires_elevation ? 'Administrator / root (UAC helper)' : 'Standard';
+        summaryEl.textContent = `Subsystem: ${plan.os_subsystem || 'OS Native'} | Steps: ${(plan.steps || []).length} | Privilege: ${privLabel}`;
+      } else {
+        summaryEl.textContent = 'Subsystem: Native OS Kernel Patcher (WUA COM / Livepatch)';
+      }
+    }
+    if (dialog && typeof dialog.showModal === 'function') {
+      dialog.showModal();
+    }
+  }
+
+  function renderKernelCveTable(vulns) {
+    const tbody = document.getElementById('kp-cve-tbody');
+    if (!tbody) return;
+    tbody.replaceChildren();
+    if (!Array.isArray(vulns) || vulns.length === 0) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5;
+      td.style.textAlign = 'center';
+      td.style.color = '#94a3b8';
+      td.textContent = 'No matching unpatched kernel CVEs currently reported for this host kernel.';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+    for (const v of vulns) {
+      const tr = document.createElement('tr');
+
+      const th = document.createElement('th');
+      th.scope = 'row';
+      th.textContent = String(v.cve_id || 'UNKNOWN');
+      tr.appendChild(th);
+
+      const tdScore = document.createElement('td');
+      const scoreText = v.cvss_v31_score != null ? `${Number(v.cvss_v31_score).toFixed(1)} (${v.cvss_v31_severity || 'N/A'})` : 'N/A';
+      tdScore.textContent = scoreText;
+      tr.appendChild(tdScore);
+
+      const tdKev = document.createElement('td');
+      tdKev.textContent = v.is_cisa_kev ? 'YES (ACTIVE EXPLOIT)' : 'No';
+      tdKev.style.color = v.is_cisa_kev ? '#f87171' : '#94a3b8';
+      tdKev.style.fontWeight = v.is_cisa_kev ? '700' : '400';
+      tr.appendChild(tdKev);
+
+      const tdDue = document.createElement('td');
+      tdDue.textContent = v.cisa_action_due || '—';
+      tr.appendChild(tdDue);
+
+      const tdDesc = document.createElement('td');
+      const summary = v.cisa_vulnerability_name || v.description || '—';
+      tdDesc.textContent = summary.length > 220 ? summary.slice(0, 217) + '...' : summary;
+      tr.appendChild(tdDesc);
+
+      tbody.appendChild(tr);
+    }
+  }
+
+  function renderKernelPatchPlanTable(plan) {
+    const tbody = document.getElementById('kp-plan-tbody');
+    if (!tbody) return;
+    tbody.replaceChildren();
+    if (!plan || !Array.isArray(plan.steps) || plan.steps.length === 0) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 4;
+      td.style.textAlign = 'center';
+      td.style.color = '#94a3b8';
+      td.textContent = 'No OS kernel patch plan available yet.';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+    plan.steps.forEach((step, idx) => {
+      const tr = document.createElement('tr');
+
+      const th = document.createElement('th');
+      th.scope = 'row';
+      th.textContent = `#${idx + 1}`;
+      tr.appendChild(th);
+
+      const tdBin = document.createElement('td');
+      tdBin.style.fontFamily = 'monospace';
+      tdBin.textContent = String(step.command || '—');
+      tr.appendChild(tdBin);
+
+      const tdArgs = document.createElement('td');
+      tdArgs.style.fontFamily = 'monospace';
+      tdArgs.textContent = Array.isArray(step.args) && step.args.length > 0 ? step.args.join(' ') : '(none)';
+      tr.appendChild(tdArgs);
+
+      const tdSub = document.createElement('td');
+      const privText = plan.requires_elevation ? 'Elevated / UAC' : 'Standard';
+      tdSub.textContent = `${step.os_subsystem || plan.os_subsystem || 'OS Native'} (${step.phase || 'patch'}) — ${privText}`;
+      tr.appendChild(tdSub);
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  function renderKernelPatcherState(data) {
+    kpLatestStatus = data;
+    const badge = document.getElementById('kp-shield-badge');
+    const locked = Boolean(data.shield_locked_until_reboot);
+    const active = Boolean(data.shield_active);
+
+    if (badge) {
+      if (locked) {
+        badge.textContent = '🔒 SHIELD LOCKED UNTIL REBOOT';
+        badge.style.background = 'rgba(239, 68, 68, 0.2)';
+        badge.style.color = '#fca5a5';
+        badge.style.borderColor = '#ef4444';
+      } else if (active) {
+        badge.textContent = '🛡️ VIRTUAL-PATCH SHIELD ACTIVE';
+        badge.style.background = 'rgba(245, 158, 11, 0.2)';
+        badge.style.color = '#fcd34d';
+        badge.style.borderColor = '#f59e0b';
+      } else {
+        badge.textContent = '🟢 KERNEL POSTURE NOMINAL';
+        badge.style.background = 'rgba(16, 185, 129, 0.2)';
+        badge.style.color = '#34d399';
+        badge.style.borderColor = '#10b981';
+      }
+    }
+
+    const disarmBtn = document.getElementById('btn-kp-perimeter-disarm');
+    if (disarmBtn) {
+      disarmBtn.disabled = locked;
+      disarmBtn.title = locked
+        ? 'Disarm refused: kernel reboot is still pending (shield_locked_until_reboot=true)'
+        : 'Remove targeted virtual-patch perimeter firewall rules';
+    }
+
+    const hk = data.host_kernel;
+    const osEl = document.getElementById('kp-kernel-os');
+    const cpeEl = document.getElementById('kp-kernel-cpe');
+    if (osEl) {
+      osEl.textContent = hk ? `${hk.os_family} ${hk.kernel_release} (${hk.architecture})` : 'Unavailable';
+    }
+    if (cpeEl) {
+      cpeEl.textContent = hk && hk.cpe23 ? hk.cpe23 : '—';
+    }
+
+    const lp = data.livepatch;
+    const rb = data.reboot_pending;
+    const lpEl = document.getElementById('kp-livepatch-status');
+    const rbEl = document.getElementById('kp-reboot-status');
+    if (lpEl) {
+      if (lp && lp.active_in_ram) {
+        lpEl.textContent = `Active in RAM (${lp.engine || 'livepatch'})`;
+        lpEl.style.color = '#34d399';
+      } else if (lp && lp.engine && lp.engine !== 'none') {
+        lpEl.textContent = `Detected (${lp.engine})`;
+        lpEl.style.color = '#cbd5e1';
+      } else {
+        lpEl.textContent = 'No livepatch active in RAM';
+        lpEl.style.color = '#94a3b8';
+      }
+    }
+    if (rbEl) {
+      if (rb && rb.reboot_required) {
+        const running = rb.running_kernel || 'running';
+        const installed = rb.newest_installed_kernel || 'staged';
+        rbEl.textContent = `Reboot pending (${running} -> ${installed}) | Lock=${locked}`;
+        rbEl.style.color = '#fca5a5';
+      } else {
+        rbEl.textContent = `No reboot pending | Lock=${locked}`;
+        rbEl.style.color = '#94a3b8';
+      }
+    }
+
+    const sp = data.security_posture;
+    const plan = data.available_patch_plan;
+    const hardEl = document.getElementById('kp-hardening-status');
+    const hotEl = document.getElementById('kp-hotpatch-status');
+    if (hardEl) {
+      if (sp) {
+        const flags = [];
+        if (sp.hvci_enabled != null) flags.push(`HVCI=${sp.hvci_enabled ? 'ON' : 'OFF'}`);
+        if (sp.vbs_enabled != null) flags.push(`VBS=${sp.vbs_enabled ? 'ON' : 'OFF'}`);
+        if (sp.lockdown_mode) flags.push(`Lockdown=${sp.lockdown_mode}`);
+        if (sp.sip_enabled != null) flags.push(`SIP=${sp.sip_enabled ? 'ON' : 'OFF'}`);
+        hardEl.textContent = flags.length ? flags.join(' | ') : 'Posture inspected';
+      } else {
+        hardEl.textContent = 'Not probed';
+      }
+    }
+    if (hotEl) {
+      if (sp && sp.hotpatch_enrolled) {
+        hotEl.textContent = 'Windows Hotpatch rebootless RAM patching enrolled';
+        hotEl.style.color = '#34d399';
+      } else if (plan && plan.rebootless_livepatch_preferred) {
+        hotEl.textContent = 'Rebootless livepatch path preferred';
+        hotEl.style.color = '#34d399';
+      } else {
+        hotEl.textContent = 'Standard kernel update / reboot cadence';
+        hotEl.style.color = '#94a3b8';
+      }
+    }
+
+    const fwEl = document.getElementById('kp-firewall-status');
+    const fwMeta = document.getElementById('kp-firewall-meta');
+    const filterCount = Number(data.active_vpatch_wfp_filter_count ?? 0);
+    const enforced = Boolean(data.perimeter_os_enforcement_applied);
+    const readback = Boolean(data.perimeter_readback_verified);
+    if (fwEl) {
+      fwEl.textContent = enforced
+        ? `ENFORCED (${filterCount} live filter${filterCount === 1 ? '' : 's'})`
+        : 'STANDBY / NOT ENFORCED';
+      fwEl.style.color = enforced ? '#34d399' : '#fbbf24';
+    }
+    if (fwMeta) {
+      fwMeta.textContent = `OS Read-Back Verified: ${readback ? 'YES' : 'NO'} | Status: ${data.status || 'unknown'}`;
+    }
+
+    const byovd = data.byovd_driver_audit;
+    const byovdEl = document.getElementById('kp-byovd-status');
+    const byovdMeta = document.getElementById('kp-byovd-meta');
+    if (byovdEl) {
+      if (byovd) {
+        const hits = Array.isArray(byovd.vulnerable_drivers_detected) ? byovd.vulnerable_drivers_detected.length : 0;
+        byovdEl.textContent = hits > 0
+          ? `⚠️ ${hits} BYOVD DRIVER HIT(S)`
+          : `✅ Clean (${byovd.loaded_drivers_scanned ?? 0} drivers hashed)`;
+        byovdEl.style.color = hits > 0 ? '#f87171' : '#34d399';
+      } else {
+        byovdEl.textContent = 'Not audited';
+      }
+    }
+    if (byovdMeta) {
+      byovdMeta.textContent = byovd
+        ? `Driver Bridge: ${byovd.driver_bridge_attached ? 'OsoosiDriver' : 'K32EnumDeviceDrivers'} | Blocklist: ${byovd.ms_vulnerable_driver_blocklist_enabled ? 'ON' : 'OFF/N/A'}`
+        : '—';
+    }
+
+    const cveEl = document.getElementById('kp-cve-counts');
+    const merkleEl = document.getElementById('kp-merkle-root');
+    if (cveEl) {
+      cveEl.textContent = `${data.vulnerability_count ?? 0} CVEs (${data.cisa_kev_count ?? 0} CISA KEV)`;
+      cveEl.style.color = Number(data.cisa_kev_count ?? 0) > 0 ? '#f87171' : '#f8fafc';
+    }
+    if (merkleEl) {
+      merkleEl.textContent = data.merkle_root_hex || data.merkle_root || 'No Merkle root sealed yet';
+    }
+
+    renderKernelCveTable(data.vulnerabilities || []);
+    renderKernelPatchPlanTable(data.available_patch_plan || null);
+
+    const receiptPre = document.getElementById('kp-receipt-json');
+    if (receiptPre) {
+      receiptPre.textContent = JSON.stringify({
+        status: data.status,
+        shield_active: data.shield_active,
+        shield_locked_until_reboot: data.shield_locked_until_reboot,
+        active_vpatch_wfp_filter_count: data.active_vpatch_wfp_filter_count,
+        perimeter_os_enforcement_applied: data.perimeter_os_enforcement_applied,
+        perimeter_readback_verified: data.perimeter_readback_verified,
+        last_patch_result: data.last_patch_result,
+        last_perimeter_receipt: data.last_perimeter_receipt,
+        byovd_driver_audit: data.byovd_driver_audit
+      }, null, 2);
+    }
+  }
+
+  async function fetchKernelPatcherStatus() {
+    wireKernelPatchDialog();
+    try {
+      const resp = await fetch('/api/kernel-patcher/status');
+      const data = await resp.json();
+      if (!resp.ok) {
+        setKpFeedback(`❌ Failed to load kernel patcher posture: ${data.message || resp.status}`, '#ef4444');
+        return;
+      }
+      renderKernelPatcherState(data);
+    } catch (e) {
+      setKpFeedback(`❌ Error loading kernel patcher status: ${e.message}`, '#ef4444');
+    }
+  }
+
+  async function triggerKernelScan() {
+    const btn = document.getElementById('btn-kp-scan');
+    if (btn) btn.disabled = true;
+    setKpFeedback('🔍 Scanning host kernel against NVD & CISA KEV feeds and refreshing virtual-patch rules...', '#38bdf8');
+    try {
+      const resp = await fetch('/api/kernel-patcher/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        renderKernelPatcherState(data);
+        setKpFeedback(`✅ Kernel CVE scan complete: ${data.vulnerability_count ?? 0} CVE(s), ${data.cisa_kev_count ?? 0} CISA KEV.`, '#34d399');
+      } else {
+        setKpFeedback(`❌ Kernel CVE scan failed: ${data.message || resp.status}`, '#ef4444');
+      }
+    } catch (e) {
+      setKpFeedback(`❌ Kernel scan request error: ${e.message}`, '#ef4444');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function previewKernelPatchPlan() {
+    setKpFeedback('🧪 Running non-destructive OS kernel patch dry-run preview (WUA COM / Livepatch)...', '#38bdf8');
+    try {
+      const resp = await fetch('/api/kernel-patcher/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dry_run: true,
+          confirm_apply: false,
+          allow_uac_delegation: false,
+          auto_accept_eula: false,
+          operator: 'webui_operator'
+        })
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        const receiptPre = document.getElementById('kp-receipt-json');
+        if (receiptPre) receiptPre.textContent = JSON.stringify(data, null, 2);
+        const stepCount = Array.isArray(data.steps) ? data.steps.length : 0;
+        setKpFeedback(`✅ Dry-run preview ready: ${data.os_subsystem || 'OS Native'} (${stepCount} planned step(s)).`, '#34d399');
+        await fetchKernelPatcherStatus();
+      } else {
+        setKpFeedback(`❌ Dry-run preview failed: ${data.message || resp.status}`, '#ef4444');
+      }
+    } catch (e) {
+      setKpFeedback(`❌ Dry-run request error: ${e.message}`, '#ef4444');
+    }
+  }
+
+  async function applyKernelPatchConfirmed(autoAcceptEula, allowUac) {
+    const btn = document.getElementById('btn-kp-apply');
+    if (btn) btn.disabled = true;
+    setKpFeedback('🩹 Applying OS kernel patches (accept Windows UAC prompt if requested; WUA COM / Livepatch running)...', '#fbbf24');
+    try {
+      const resp = await fetch('/api/kernel-patcher/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dry_run: false,
+          confirm_apply: true,
+          allow_uac_delegation: allowUac,
+          auto_accept_eula: autoAcceptEula,
+          operator: 'webui_operator'
+        })
+      });
+      const data = await resp.json();
+      const receiptPre = document.getElementById('kp-receipt-json');
+      if (receiptPre) receiptPre.textContent = JSON.stringify(data, null, 2);
+      if (resp.ok) {
+        setKpFeedback(
+          `✅ OS kernel patch execution finished: subsystem=${data.os_subsystem} success=${data.success} uac_delegated=${Boolean(data.uac_delegated)}`,
+          data.success ? '#34d399' : '#fbbf24'
+        );
+        await fetchKernelPatcherStatus();
+      } else {
+        setKpFeedback(`❌ Kernel patch apply rejected (${data.code || resp.status}): ${data.message || 'Unknown error'}`, '#ef4444');
+      }
+    } catch (e) {
+      setKpFeedback(`❌ Kernel patch request error: ${e.message}`, '#ef4444');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function toggleVirtualPatchPerimeter(action) {
+    setKpFeedback(
+      action === 'engage'
+        ? '🛡️ Engaging OS virtual-patch kernel firewall (accept Windows UAC prompt if requested)...'
+        : '🔓 Disarming OS virtual-patch kernel firewall (accept Windows UAC prompt if requested)...',
+      '#fbbf24'
+    );
+    try {
+      const resp = await fetch('/api/kernel-patcher/perimeter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: action,
+          allow_uac_delegation: true,
+          operator: 'webui_operator'
+        })
+      });
+      const data = await resp.json();
+      const receiptPre = document.getElementById('kp-receipt-json');
+      if (receiptPre) receiptPre.textContent = JSON.stringify(data, null, 2);
+      if (resp.ok) {
+        if (action === 'engage') {
+          setKpFeedback(
+            `✅ Virtual-patch firewall engaged: os_enforcement_applied=${Boolean(data.os_enforcement_applied)} readback_verified=${Boolean(data.readback_verified)}`,
+            '#34d399'
+          );
+        } else {
+          setKpFeedback(`✅ Virtual-patch firewall disarmed (${data.removed_rules ?? 0} rule(s) removed).`, '#34d399');
+        }
+        await fetchKernelPatcherStatus();
+      } else {
+        setKpFeedback(`❌ Perimeter ${action} failed (${data.code || resp.status}): ${data.message || 'Privilege or lock restriction'}`, '#ef4444');
+      }
+    } catch (e) {
+      setKpFeedback(`❌ Perimeter request error: ${e.message}`, '#ef4444');
+    }
   }
 </script>
 </body>

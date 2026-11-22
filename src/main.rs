@@ -138,7 +138,7 @@ async fn main() {
         std::process::exit(0);
     }
 
-    // 4. One-shot elevated WFP kernel helper delegation (`--wfp-kernel-apply engage|disarm`)
+    // 4. One-shot elevated WFP kernel helper delegation (`--wfp-kernel-apply engage|disarm|vpatch-engage|vpatch-disarm`)
     for i in 1..cli_args.len() {
         if cli_args[i] == "--wfp-kernel-apply" {
             let action = cli_args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
@@ -146,6 +146,20 @@ async fn main() {
                 Ok(()) => std::process::exit(0),
                 Err(e) => {
                     eprintln!("[WFP-HELPER-ERROR] {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        if cli_args[i] == "--kernel-patch-apply" {
+            let auto_accept = cli_args.iter().any(|a| a == "--accept-eula");
+            match agent_octopus::security::kernel_patcher::handle_kernel_patch_apply_cli(
+                auto_accept,
+            )
+            .await
+            {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("[KERNEL-PATCH-HELPER-ERROR] {}", e);
                     std::process::exit(1);
                 }
             }

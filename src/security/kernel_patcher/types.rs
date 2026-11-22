@@ -364,4 +364,8 @@ pub struct PatchExecutionResult {
     pub shield_locked_until_reboot: bool,
     #[serde(default)]
     pub audit_receipt: Option<PatchAuditReceipt>,
+    #[serde(default)]
+    pub wua_summary: Option<super::windows_wua::WuaExecutionSummary>,
+    #[serde(default)]
+    pub uac_delegated: bool,
 }

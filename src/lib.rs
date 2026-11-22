@@ -336,21 +336,23 @@ pub use security::{
 };
 
 pub use security::{
-    apply_virtual_patch_perimeter_shield, base64url_decode_no_pad, base64url_encode_no_pad,
-    build_linux_blackhole_route_msg, build_virtual_patch_perimeter_spec, canonicalize_jcs,
-    canonicalize_jcs_string, discover_active_octopus_ports, freeze_process_by_pid,
+    active_vpatch_wfp_filter_count, apply_virtual_patch_perimeter_shield,
+    apply_virtual_patch_perimeter_shield_with_options, base64url_decode_no_pad,
+    base64url_encode_no_pad, build_linux_blackhole_route_msg, build_linux_nft_vpatch_netlink_batch,
+    build_virtual_patch_perimeter_spec, canonicalize_jcs, canonicalize_jcs_string,
+    disarm_virtual_patch_perimeter_shield, discover_active_octopus_ports, freeze_process_by_pid,
     generate_bsd_darwin_pf_virtual_patch_rules, generate_linux_nftables_virtual_patch_rules,
     generate_macos_pf_quarantine_rules, global_host_killswitch, handle_wfp_kernel_apply_cli,
-    has_live_active_wfp_filters, resolve_loopback_peer_pid, resume_process_by_pid,
-    CageAttestationResponse, CageConformalBaselineResponse, CageConformalValidateRequest,
-    CageConformalValidateResponse, CageKeyManifestResolver, CageQuarantineReceiptResponse,
-    CageQuarantineReleaseReceiptResponse, CageQuarantineReleaseRequest, CageQuarantineRequest,
-    CageSubstrateState, Cumulative24hTracker, HostIsolationError, HostIsolationReceipt,
-    HostKillSwitchManager, HostKillSwitchStatus, JcsError, JournalData, JournalRecord, JwkKeyDto,
-    JwksResponse, KernelIsolationBackend, KernelPerimeterPatchSpec, KeyedCumulative24hTracker,
-    NonceReplayCache, OsiLayer, ProtocolDefinition, ProtocolDomain, ProtocolVectorType,
-    QuarantineJournal, QuarantineLease, SealedJournalEnvelope, UniversalProtocolCatalog,
-    VIRTUAL_PATCH_INBOUND_PORTS,
+    has_live_active_vpatch_wfp_filters, has_live_active_wfp_filters, resolve_loopback_peer_pid,
+    resume_process_by_pid, CageAttestationResponse, CageConformalBaselineResponse,
+    CageConformalValidateRequest, CageConformalValidateResponse, CageKeyManifestResolver,
+    CageQuarantineReceiptResponse, CageQuarantineReleaseReceiptResponse,
+    CageQuarantineReleaseRequest, CageQuarantineRequest, CageSubstrateState, Cumulative24hTracker,
+    HostIsolationError, HostIsolationReceipt, HostKillSwitchManager, HostKillSwitchStatus,
+    JcsError, JournalData, JournalRecord, JwkKeyDto, JwksResponse, KernelIsolationBackend,
+    KernelPerimeterPatchSpec, KeyedCumulative24hTracker, NonceReplayCache, OsiLayer,
+    ProtocolDefinition, ProtocolDomain, ProtocolVectorType, QuarantineJournal, QuarantineLease,
+    SealedJournalEnvelope, UniversalProtocolCatalog, VIRTUAL_PATCH_INBOUND_PORTS,
 };
 
 pub use security::{

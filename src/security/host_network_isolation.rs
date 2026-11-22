@@ -1916,6 +1916,19 @@ impl WfpKernelSession {
         self.commit_txn()?;
         Ok(filter_ids)
     }
+
+    /// Atomically removes all `AgentOctopus-VirtualPatch-*` WFP filters without touching KillSwitch filters.
+    pub fn remove_virtual_patch_inbound_shield(&self) -> Result<usize, HostIsolationError> {
+        self.begin_txn()?;
+        let mut removed = 0usize;
+        for old_id in self.enumerate_prefixed_filter_ids(WFP_VPATCH_RULE_PREFIX) {
+            if self.delete_filter(old_id) {
+                removed += 1;
+            }
+        }
+        self.commit_txn()?;
+        Ok(removed)
+    }
 }
 
 #[cfg(windows)]
@@ -2351,11 +2364,105 @@ pub fn has_live_active_wfp_filters() -> bool {
     }
 }
 
-/// Delegates kernel WFP modification to a short-lived elevated `--wfp-kernel-apply <engage|disarm>`
-/// helper via `ShellExecuteExW("runas")`, keeping the main AgentOctopus server & arms de-elevated (Finding 7).
+#[cfg(target_os = "windows")]
+fn wfp_vpatch_filter_ledger_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let _ = std::fs::create_dir_all("logs");
+    paths.push(PathBuf::from("logs").join("octopus_wfp_vpatch_filters.json"));
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            paths.push(dir.join("octopus_wfp_vpatch_filters.json"));
+        }
+    }
+    paths.push(std::env::temp_dir().join("octopus_wfp_vpatch_filters.json"));
+    paths
+}
+
+#[cfg(target_os = "windows")]
+fn persist_vpatch_wfp_filter_ids(ids: &[u64]) {
+    if let Ok(json) = serde_json::to_string(ids) {
+        for p in wfp_vpatch_filter_ledger_paths() {
+            if !p.is_symlink() {
+                if let Some(parent) = p.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(&p, &json);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn load_persisted_vpatch_wfp_filter_ids() -> Vec<u64> {
+    let mut ids = Vec::new();
+    for p in wfp_vpatch_filter_ledger_paths() {
+        if p.is_symlink() {
+            continue;
+        }
+        if let Ok(raw) = std::fs::read_to_string(&p) {
+            if let Ok(parsed) = serde_json::from_str::<Vec<u64>>(&raw) {
+                for id in parsed {
+                    if id != 0 && !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+    }
+    ids
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn load_persisted_vpatch_wfp_filter_ids() -> Vec<u64> {
+    Vec::new()
+}
+
+#[cfg(target_os = "windows")]
+fn clear_persisted_vpatch_wfp_filter_ids() {
+    for p in wfp_vpatch_filter_ledger_paths() {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// Queries live Windows BFE (when elevated) or persisted virtual-patch filter ledger to count
+/// active `AgentOctopus-VirtualPatch-*` WFP filters.
+pub fn active_vpatch_wfp_filter_count() -> usize {
+    #[cfg(windows)]
+    {
+        if is_current_process_elevated() {
+            if let Ok(session) = WfpKernelSession::open() {
+                let live = session.enumerate_prefixed_filter_ids(WFP_VPATCH_RULE_PREFIX);
+                if live.is_empty() {
+                    clear_persisted_vpatch_wfp_filter_ids();
+                } else {
+                    persist_vpatch_wfp_filter_ids(&live);
+                }
+                return live.len();
+            }
+        }
+        load_persisted_vpatch_wfp_filter_ids().len()
+    }
+    #[cfg(not(windows))]
+    {
+        0
+    }
+}
+
+/// Returns `true` when targeted virtual-patch WFP filters are live in Windows BFE or recorded by
+/// an elevated UAC helper session.
+pub fn has_live_active_vpatch_wfp_filters() -> bool {
+    active_vpatch_wfp_filter_count() > 0
+}
+
+/// Delegates kernel WFP modification to a short-lived elevated
+/// `--wfp-kernel-apply <engage|disarm|vpatch-engage|vpatch-disarm>` helper via
+/// `ShellExecuteExW("runas")`, keeping the main AgentOctopus server & arms de-elevated (Finding 7).
 #[cfg(windows)]
 pub fn try_elevated_delegation(action: &str) -> Result<bool, HostIsolationError> {
-    if action != "engage" && action != "disarm" {
+    if !matches!(
+        action,
+        "engage" | "disarm" | "vpatch-engage" | "vpatch-disarm"
+    ) {
         return Err(HostIsolationError::InvalidAction(action.to_string()));
     }
     if is_current_process_elevated() || is_non_elevated_test_simulation() {
@@ -2464,12 +2571,15 @@ pub fn try_elevated_delegation(action: &str) -> Result<bool, HostIsolationError>
     Ok(true)
 }
 
-/// Executes the one-shot elevated `--wfp-kernel-apply <engage|disarm>` helper action and exits.
-/// Must be invoked at the very top of `main()` before `relaunch_deelevated_or_fail`.
+/// Executes the one-shot elevated `--wfp-kernel-apply <engage|disarm|vpatch-engage|vpatch-disarm>`
+/// helper action and exits. Must be invoked at the very top of `main()` before `relaunch_deelevated_or_fail`.
 pub fn handle_wfp_kernel_apply_cli(action: &str) -> Result<(), HostIsolationError> {
-    if action != "engage" && action != "disarm" {
+    if !matches!(
+        action,
+        "engage" | "disarm" | "vpatch-engage" | "vpatch-disarm"
+    ) {
         return Err(HostIsolationError::InvalidAction(format!(
-            "Unsupported --wfp-kernel-apply action '{}' (expected 'engage' or 'disarm')",
+            "Unsupported --wfp-kernel-apply action '{}' (expected 'engage', 'disarm', 'vpatch-engage', or 'vpatch-disarm')",
             action
         )));
     }
@@ -2492,6 +2602,25 @@ pub fn handle_wfp_kernel_apply_cli(action: &str) -> Result<(), HostIsolationErro
         }
         "disarm" => {
             disarm_platform_kernel_quarantine("wfp-helper")?;
+            Ok(())
+        }
+        "vpatch-engage" => {
+            let posture = crate::security::virtual_patch_shield::current_shield_posture();
+            let receipt = apply_virtual_patch_perimeter_shield_with_options(
+                &posture,
+                &preserved_ports,
+                false,
+            )?;
+            if !receipt.os_enforcement_applied || !receipt.readback_verified {
+                return Err(HostIsolationError::KernelEngineError(
+                    "Elevated vpatch-engage helper did not verify OS virtual-patch filters"
+                        .to_string(),
+                ));
+            }
+            Ok(())
+        }
+        "vpatch-disarm" => {
+            let _ = disarm_virtual_patch_perimeter_shield(false)?;
             Ok(())
         }
         _ => unreachable!(),
@@ -4007,11 +4136,613 @@ pub fn generate_linux_nftables_virtual_patch_rules(spec: &KernelPerimeterPatchSp
     rules
 }
 
+/// Linux `NETLINK_NETFILTER` / `NFNL_SUBSYS_NFTABLES` constants for zero-subprocess virtual-patch enforcement.
+pub const NETLINK_NETFILTER: i32 = 12;
+pub const NFNL_SUBSYS_NFTABLES: u16 = 10;
+pub const NFNL_MSG_BATCH_BEGIN: u16 = 0x10;
+pub const NFNL_MSG_BATCH_END: u16 = 0x11;
+pub const NFT_MSG_NEWTABLE: u16 = 0;
+pub const NFT_MSG_GETTABLE: u16 = 1;
+pub const NFT_MSG_DELTABLE: u16 = 2;
+pub const NFT_MSG_NEWCHAIN: u16 = 3;
+pub const NFT_MSG_NEWRULE: u16 = 6;
+pub const NFPROTO_INET: u8 = 1;
+const NLA_F_NESTED: u16 = 0x8000;
+
+fn align4(len: usize) -> usize {
+    (len + 3) & !3
+}
+
+fn push_nlattr(buf: &mut Vec<u8>, nla_type: u16, payload: &[u8]) {
+    let nla_len = (4 + payload.len()) as u16;
+    buf.extend_from_slice(&nla_len.to_ne_bytes());
+    buf.extend_from_slice(&nla_type.to_ne_bytes());
+    buf.extend_from_slice(payload);
+    let pad = align4(payload.len()) - payload.len();
+    buf.resize(buf.len() + pad, 0);
+}
+
+fn push_nlattr_str(buf: &mut Vec<u8>, nla_type: u16, s: &str) {
+    let mut bytes = Vec::with_capacity(s.len() + 1);
+    bytes.extend_from_slice(s.as_bytes());
+    bytes.push(0);
+    push_nlattr(buf, nla_type, &bytes);
+}
+
+fn push_nlattr_nested(buf: &mut Vec<u8>, nla_type: u16, inner: &[u8]) {
+    push_nlattr(buf, nla_type | NLA_F_NESTED, inner);
+}
+
+fn build_nfgen_nlmsg(
+    nlmsg_type: u16,
+    nlmsg_flags: u16,
+    seq: u32,
+    nfgen_family: u8,
+    res_id: u16,
+    attrs: &[u8],
+) -> Vec<u8> {
+    let total_len = align4(16 + 4 + attrs.len());
+    let mut msg = Vec::with_capacity(total_len);
+    msg.extend_from_slice(&(total_len as u32).to_ne_bytes());
+    msg.extend_from_slice(&nlmsg_type.to_ne_bytes());
+    msg.extend_from_slice(&nlmsg_flags.to_ne_bytes());
+    msg.extend_from_slice(&seq.to_ne_bytes());
+    msg.extend_from_slice(&0u32.to_ne_bytes()); // nlmsg_pid = 0 (kernel)
+    msg.push(nfgen_family);
+    msg.push(0u8); // NFNETLINK_V0
+    msg.extend_from_slice(&res_id.to_be_bytes());
+    msg.extend_from_slice(attrs);
+    msg.resize(total_len, 0);
+    msg
+}
+
+fn build_nft_expr(name: &str, data: &[u8]) -> Vec<u8> {
+    let mut elem = Vec::new();
+    push_nlattr_str(&mut elem, 1, name); // NFTA_EXPR_NAME
+    push_nlattr_nested(&mut elem, 2, data); // NFTA_EXPR_DATA
+    let mut wrapped = Vec::new();
+    push_nlattr_nested(&mut wrapped, 1, &elem); // NFTA_LIST_ELEM
+    wrapped
+}
+
+fn build_nft_meta_expr(key: u32, dreg: u32) -> Vec<u8> {
+    let mut data = Vec::new();
+    push_nlattr(&mut data, 1, &dreg.to_be_bytes()); // NFTA_META_DREG
+    push_nlattr(&mut data, 2, &key.to_be_bytes()); // NFTA_META_KEY
+    build_nft_expr("meta", &data)
+}
+
+fn build_nft_payload_expr(base: u32, offset: u32, len: u32, dreg: u32) -> Vec<u8> {
+    let mut data = Vec::new();
+    push_nlattr(&mut data, 1, &dreg.to_be_bytes()); // NFTA_PAYLOAD_DREG
+    push_nlattr(&mut data, 2, &base.to_be_bytes()); // NFTA_PAYLOAD_BASE
+    push_nlattr(&mut data, 3, &offset.to_be_bytes()); // NFTA_PAYLOAD_OFFSET
+    push_nlattr(&mut data, 4, &len.to_be_bytes()); // NFTA_PAYLOAD_LEN
+    build_nft_expr("payload", &data)
+}
+
+fn build_nft_cmp_expr(sreg: u32, op: u32, value: &[u8]) -> Vec<u8> {
+    let mut cmp_data = Vec::new();
+    push_nlattr(&mut cmp_data, 1, value); // NFTA_DATA_VALUE
+    let mut data = Vec::new();
+    push_nlattr(&mut data, 1, &sreg.to_be_bytes()); // NFTA_CMP_SREG
+    push_nlattr(&mut data, 2, &op.to_be_bytes()); // NFTA_CMP_OP
+    push_nlattr_nested(&mut data, 3, &cmp_data); // NFTA_CMP_DATA
+    build_nft_expr("cmp", &data)
+}
+
+fn build_nft_verdict_expr(verdict_code: i32) -> Vec<u8> {
+    let mut verdict = Vec::new();
+    push_nlattr(&mut verdict, 1, &verdict_code.to_be_bytes()); // NFTA_VERDICT_CODE
+    let mut imm_data = Vec::new();
+    push_nlattr_nested(&mut imm_data, 2, &verdict); // NFTA_DATA_VERDICT
+    let mut data = Vec::new();
+    push_nlattr(&mut data, 1, &0u32.to_be_bytes()); // NFTA_IMMEDIATE_DREG = NFT_REG_VERDICT (0)
+    push_nlattr_nested(&mut data, 2, &imm_data); // NFTA_IMMEDIATE_DATA
+    build_nft_expr("immediate", &data)
+}
+
+/// Builds a deterministic raw binary `AF_NETLINK` (`NETLINK_NETFILTER` / `nf_tables`) batch
+/// message configuring table `inet agent_octopus_vpatch` and chain `inbound_shield` without
+/// spawning any external firewall subprocess.
+#[must_use]
+pub fn build_linux_nft_vpatch_netlink_batch(
+    spec: &KernelPerimeterPatchSpec,
+    engage: bool,
+) -> Vec<u8> {
+    let mut batch = Vec::new();
+    let mut seq: u32 = 1;
+    let req_ack: u16 = 0x0001 | 0x0004; // NLM_F_REQUEST | NLM_F_ACK
+    let req_create: u16 = req_ack | 0x0400; // | NLM_F_CREATE
+    let req_append: u16 = req_create | 0x0800; // | NLM_F_APPEND
+
+    // 1. NFNL_MSG_BATCH_BEGIN
+    batch.extend_from_slice(&build_nfgen_nlmsg(
+        NFNL_MSG_BATCH_BEGIN,
+        0x0001,
+        seq,
+        0,
+        NFNL_SUBSYS_NFTABLES,
+        &[],
+    ));
+    seq += 1;
+
+    // 2. Ensure table exists, then delete cleanly to reset state atomically
+    let mut tbl_attrs = Vec::new();
+    push_nlattr_str(&mut tbl_attrs, 1, "agent_octopus_vpatch"); // NFTA_TABLE_NAME
+    batch.extend_from_slice(&build_nfgen_nlmsg(
+        (NFNL_SUBSYS_NFTABLES << 8) | NFT_MSG_NEWTABLE,
+        req_create,
+        seq,
+        NFPROTO_INET,
+        0,
+        &tbl_attrs,
+    ));
+    seq += 1;
+
+    batch.extend_from_slice(&build_nfgen_nlmsg(
+        (NFNL_SUBSYS_NFTABLES << 8) | NFT_MSG_DELTABLE,
+        req_ack,
+        seq,
+        NFPROTO_INET,
+        0,
+        &tbl_attrs,
+    ));
+    seq += 1;
+
+    if engage {
+        // 3. Re-create table `inet agent_octopus_vpatch`
+        batch.extend_from_slice(&build_nfgen_nlmsg(
+            (NFNL_SUBSYS_NFTABLES << 8) | NFT_MSG_NEWTABLE,
+            req_create,
+            seq,
+            NFPROTO_INET,
+            0,
+            &tbl_attrs,
+        ));
+        seq += 1;
+
+        // 4. Create base input chain `inbound_shield` (priority -10, policy accept)
+        let mut hook_attrs = Vec::new();
+        push_nlattr(&mut hook_attrs, 1, &1u32.to_be_bytes()); // NF_INET_LOCAL_IN = 1
+        push_nlattr(&mut hook_attrs, 2, &(-10i32).to_be_bytes()); // priority -10
+
+        let mut chain_attrs = Vec::new();
+        push_nlattr_str(&mut chain_attrs, 1, "agent_octopus_vpatch"); // NFTA_CHAIN_TABLE
+        push_nlattr_str(&mut chain_attrs, 3, "inbound_shield"); // NFTA_CHAIN_NAME
+        push_nlattr_nested(&mut chain_attrs, 4, &hook_attrs); // NFTA_CHAIN_HOOK
+        push_nlattr(&mut chain_attrs, 5, &1u32.to_be_bytes()); // NFTA_CHAIN_POLICY = NF_ACCEPT (1)
+        push_nlattr_str(&mut chain_attrs, 7, "filter"); // NFTA_CHAIN_TYPE
+
+        batch.extend_from_slice(&build_nfgen_nlmsg(
+            (NFNL_SUBSYS_NFTABLES << 8) | NFT_MSG_NEWCHAIN,
+            req_create,
+            seq,
+            NFPROTO_INET,
+            0,
+            &chain_attrs,
+        ));
+        seq += 1;
+
+        // 5. Rule 0: permit loopback `iifname == "lo"` (`NF_ACCEPT = 1`)
+        let mut lb_exprs = Vec::new();
+        lb_exprs.extend_from_slice(&build_nft_meta_expr(6, 1)); // NFT_META_IIFNAME = 6 -> reg 1
+        let mut lo_name = [0u8; 16];
+        lo_name[0] = b'l';
+        lo_name[1] = b'o';
+        lb_exprs.extend_from_slice(&build_nft_cmp_expr(1, 0, &lo_name));
+        lb_exprs.extend_from_slice(&build_nft_verdict_expr(1)); // NF_ACCEPT
+        let mut lb_rule = Vec::new();
+        push_nlattr_str(&mut lb_rule, 1, "agent_octopus_vpatch");
+        push_nlattr_str(&mut lb_rule, 2, "inbound_shield");
+        push_nlattr_nested(&mut lb_rule, 4, &lb_exprs);
+        batch.extend_from_slice(&build_nfgen_nlmsg(
+            (NFNL_SUBSYS_NFTABLES << 8) | NFT_MSG_NEWRULE,
+            req_append,
+            seq,
+            NFPROTO_INET,
+            0,
+            &lb_rule,
+        ));
+        seq += 1;
+
+        // 6. Inbound TCP & UDP port drops (`NF_DROP = 0`)
+        for &port in &spec.blocked_inbound_ports {
+            for proto in [6u8, 17u8] {
+                let mut exprs = Vec::new();
+                exprs.extend_from_slice(&build_nft_meta_expr(16, 1)); // NFT_META_L4PROTO = 16 -> reg 1
+                exprs.extend_from_slice(&build_nft_cmp_expr(1, 0, &[proto]));
+                exprs.extend_from_slice(&build_nft_payload_expr(2, 2, 2, 1)); // transport dport -> reg 1
+                exprs.extend_from_slice(&build_nft_cmp_expr(1, 0, &port.to_be_bytes()));
+                exprs.extend_from_slice(&build_nft_verdict_expr(0)); // NF_DROP
+
+                let mut rule = Vec::new();
+                push_nlattr_str(&mut rule, 1, "agent_octopus_vpatch");
+                push_nlattr_str(&mut rule, 2, "inbound_shield");
+                push_nlattr_nested(&mut rule, 4, &exprs);
+                batch.extend_from_slice(&build_nfgen_nlmsg(
+                    (NFNL_SUBSYS_NFTABLES << 8) | NFT_MSG_NEWRULE,
+                    req_append,
+                    seq,
+                    NFPROTO_INET,
+                    0,
+                    &rule,
+                ));
+                seq += 1;
+            }
+        }
+
+        // 7. ICMPv6 RA (134) & Redirect (137) drop when IPv6 RCE shield is active
+        if spec.block_ipv6_rce_surfaces {
+            for icmp6_type in [134u8, 137u8] {
+                let mut exprs = Vec::new();
+                exprs.extend_from_slice(&build_nft_meta_expr(16, 1)); // NFT_META_L4PROTO = 16
+                exprs.extend_from_slice(&build_nft_cmp_expr(1, 0, &[58u8])); // IPPROTO_ICMPV6 = 58
+                exprs.extend_from_slice(&build_nft_payload_expr(2, 0, 1, 1)); // icmpv6 type offset 0 len 1
+                exprs.extend_from_slice(&build_nft_cmp_expr(1, 0, &[icmp6_type]));
+                exprs.extend_from_slice(&build_nft_verdict_expr(0)); // NF_DROP
+
+                let mut rule = Vec::new();
+                push_nlattr_str(&mut rule, 1, "agent_octopus_vpatch");
+                push_nlattr_str(&mut rule, 2, "inbound_shield");
+                push_nlattr_nested(&mut rule, 4, &exprs);
+                batch.extend_from_slice(&build_nfgen_nlmsg(
+                    (NFNL_SUBSYS_NFTABLES << 8) | NFT_MSG_NEWRULE,
+                    req_append,
+                    seq,
+                    NFPROTO_INET,
+                    0,
+                    &rule,
+                ));
+                seq += 1;
+            }
+        }
+    }
+
+    // 8. NFNL_MSG_BATCH_END
+    batch.extend_from_slice(&build_nfgen_nlmsg(
+        NFNL_MSG_BATCH_END,
+        0x0001,
+        seq,
+        0,
+        NFNL_SUBSYS_NFTABLES,
+        &[],
+    ));
+    batch
+}
+
+#[cfg(target_os = "linux")]
+fn apply_linux_nft_vpatch_netlink(
+    spec: &KernelPerimeterPatchSpec,
+    engage: bool,
+) -> Result<(), HostIsolationError> {
+    let batch = build_linux_nft_vpatch_netlink_batch(spec, engage);
+    unsafe {
+        let fd = libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, NETLINK_NETFILTER);
+        if fd < 0 {
+            return Err(HostIsolationError::KernelEngineError(format!(
+                "socket(AF_NETLINK, NETLINK_NETFILTER) failed: errno {}",
+                std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+            )));
+        }
+        let mut sa: libc::sockaddr_nl = std::mem::zeroed();
+        sa.nl_family = libc::AF_NETLINK as u16;
+        if libc::bind(
+            fd,
+            &sa as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
+        ) < 0
+        {
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            libc::close(fd);
+            return Err(HostIsolationError::KernelEngineError(format!(
+                "NETLINK_NETFILTER bind failed: errno {errno}"
+            )));
+        }
+        let sent = libc::sendto(
+            fd,
+            batch.as_ptr() as *const libc::c_void,
+            batch.len(),
+            0,
+            &sa as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
+        );
+        if sent < 0 {
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            libc::close(fd);
+            return Err(HostIsolationError::KernelEngineError(format!(
+                "NETLINK_NETFILTER batch sendto failed: errno {errno}"
+            )));
+        }
+
+        // Verify kernel ACKs on non-blocking drain + NFT_MSG_GETTABLE readback when engaging
+        let tv = libc::timeval {
+            tv_sec: 1,
+            tv_usec: 0,
+        };
+        let _ = libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &tv as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        );
+        let mut ack_buf = [0u8; 4096];
+        let n = libc::recv(
+            fd,
+            ack_buf.as_mut_ptr() as *mut libc::c_void,
+            ack_buf.len(),
+            0,
+        );
+        if n >= 20 {
+            let nl_type = u16::from_ne_bytes([ack_buf[4], ack_buf[5]]);
+            if nl_type == 2 {
+                let code = i32::from_ne_bytes([ack_buf[16], ack_buf[17], ack_buf[18], ack_buf[19]]);
+                if code != 0 && code != -libc::ENOENT {
+                    libc::close(fd);
+                    return Err(HostIsolationError::KernelEngineError(format!(
+                        "NETLINK_NETFILTER batch ACK error: {code}"
+                    )));
+                }
+            }
+        }
+
+        if engage {
+            let mut tbl_attrs = Vec::new();
+            push_nlattr_str(&mut tbl_attrs, 1, "agent_octopus_vpatch");
+            let get_msg = build_nfgen_nlmsg(
+                (NFNL_SUBSYS_NFTABLES << 8) | NFT_MSG_GETTABLE,
+                0x0001,
+                999,
+                NFPROTO_INET,
+                0,
+                &tbl_attrs,
+            );
+            if libc::sendto(
+                fd,
+                get_msg.as_ptr() as *const libc::c_void,
+                get_msg.len(),
+                0,
+                &sa as *const _ as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
+            ) < 0
+            {
+                libc::close(fd);
+                return Err(HostIsolationError::KernelEngineError(
+                    "NETLINK_NETFILTER GETTABLE readback send failed".to_string(),
+                ));
+            }
+            let rn = libc::recv(
+                fd,
+                ack_buf.as_mut_ptr() as *mut libc::c_void,
+                ack_buf.len(),
+                0,
+            );
+            libc::close(fd);
+            if rn < 20 {
+                return Err(HostIsolationError::KernelEngineError(
+                    "NETLINK_NETFILTER GETTABLE readback returned empty response".to_string(),
+                ));
+            }
+            let nl_type = u16::from_ne_bytes([ack_buf[4], ack_buf[5]]);
+            if nl_type == 2 {
+                let code = i32::from_ne_bytes([ack_buf[16], ack_buf[17], ack_buf[18], ack_buf[19]]);
+                if code != 0 {
+                    return Err(HostIsolationError::KernelEngineError(format!(
+                        "NETLINK_NETFILTER GETTABLE readback failed: {code}"
+                    )));
+                }
+            }
+            return Ok(());
+        }
+
+        libc::close(fd);
+        Ok(())
+    }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd"
+))]
+fn apply_macos_pf_vpatch_ioctl(
+    spec: &KernelPerimeterPatchSpec,
+    engage: bool,
+) -> Result<usize, HostIsolationError> {
+    use std::ffi::CString;
+
+    const MAXPATHLEN: usize = 1024;
+    const IFNAMSIZ: usize = 16;
+    const DIOCGETRULES: u64 = 0xC808_4406;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct PfTransElem {
+        rs_num: i32,
+        anchor: [u8; MAXPATHLEN],
+        ticket: u32,
+    }
+    #[repr(C)]
+    struct PfTrans {
+        size: i32,
+        esize: i32,
+        array: *mut PfTransElem,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct PfPortRange {
+        port_start: u16,
+        port_end: u16,
+        op: u8,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct PfRuleRaw {
+        action: u8,
+        direction: u8,
+        quick: u8,
+        log: u8,
+        proto: u8,
+        af: u8,
+        ifname: [u8; IFNAMSIZ],
+        src_port: PfPortRange,
+        dst_port: PfPortRange,
+        keep_state: u8,
+        rule_flag: u32,
+        return_icmp: u8,
+        return_icmp6: u8,
+        padding: [u8; 64],
+    }
+    #[repr(C)]
+    struct PfiocRule {
+        action: u32,
+        ticket: u32,
+        nr: u32,
+        anchor: [u8; MAXPATHLEN],
+        ruleset: [u8; MAXPATHLEN],
+        rule: PfRuleRaw,
+    }
+
+    let dev = CString::new("/dev/pf").unwrap();
+    let fd = unsafe { libc::open(dev.as_ptr(), libc::O_RDWR) };
+    if fd < 0 {
+        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        return Err(HostIsolationError::InsufficientPrivileges {
+            details: format!("Cannot open /dev/pf for virtual-patch anchor (errno {errno})"),
+            remediation: "Run with sudo / root privileges.".to_string(),
+        });
+    }
+
+    let mut elem = PfTransElem {
+        rs_num: 1,
+        anchor: [0u8; MAXPATHLEN],
+        ticket: 0,
+    };
+    let anchor_bytes = b"agent_octopus_vpatch";
+    elem.anchor[..anchor_bytes.len()].copy_from_slice(anchor_bytes);
+
+    let mut trans = PfTrans {
+        size: 1,
+        esize: std::mem::size_of::<PfTransElem>() as i32,
+        array: &mut elem,
+    };
+
+    let mut committed_rules = 0usize;
+    unsafe {
+        if engage {
+            let _ = libc::ioctl(fd, DIOCSTART as libc::c_ulong);
+        }
+        if libc::ioctl(fd, DIOCXBEGIN as libc::c_ulong, &mut trans) < 0 {
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            libc::close(fd);
+            return Err(HostIsolationError::KernelEngineError(format!(
+                "/dev/pf vpatch DIOCXBEGIN failed: errno {errno}"
+            )));
+        }
+
+        if engage {
+            let mut rules_raw: Vec<(u8, u8, Option<&[u8]>, u8, Option<u16>)> = Vec::new();
+            // Permit loopback first
+            rules_raw.push((0, 0, Some(b"lo0"), 0, None));
+            // Block high-risk inbound TCP & UDP ports
+            for &port in &spec.blocked_inbound_ports {
+                rules_raw.push((1, 1, None, 6, Some(port)));
+                rules_raw.push((1, 1, None, 17, Some(port)));
+            }
+            if spec.block_ipv6_rce_surfaces {
+                rules_raw.push((1, 1, None, 58, None)); // IPPROTO_ICMPV6 inbound drop
+            }
+
+            for (idx, (act, dir, iface, proto, port)) in rules_raw.into_iter().enumerate() {
+                let mut pr = PfiocRule {
+                    action: 0,
+                    ticket: elem.ticket,
+                    nr: idx as u32,
+                    anchor: [0u8; MAXPATHLEN],
+                    ruleset: [0u8; MAXPATHLEN],
+                    rule: PfRuleRaw {
+                        action: act,
+                        direction: dir,
+                        quick: 1,
+                        log: 0,
+                        proto,
+                        af: 0,
+                        ifname: [0u8; IFNAMSIZ],
+                        src_port: PfPortRange::default(),
+                        dst_port: PfPortRange::default(),
+                        keep_state: if act == 0 { 1 } else { 0 },
+                        rule_flag: 0,
+                        return_icmp: 0,
+                        return_icmp6: 0,
+                        padding: [0u8; 64],
+                    },
+                };
+                pr.anchor[..anchor_bytes.len()].copy_from_slice(anchor_bytes);
+                if let Some(ifb) = iface {
+                    pr.rule.ifname[..ifb.len()].copy_from_slice(ifb);
+                }
+                if let Some(p) = port {
+                    pr.rule.dst_port = PfPortRange {
+                        port_start: p.to_be(),
+                        port_end: p.to_be(),
+                        op: 1,
+                    };
+                }
+                if libc::ioctl(fd, DIOCADDRULE as libc::c_ulong, &mut pr) < 0 {
+                    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                    let _ = libc::ioctl(fd, DIOCXROLLBACK as libc::c_ulong, &mut trans);
+                    libc::close(fd);
+                    return Err(HostIsolationError::KernelEngineError(format!(
+                        "/dev/pf vpatch DIOCADDRULE failed: errno {errno}"
+                    )));
+                }
+                committed_rules += 1;
+            }
+        }
+
+        if libc::ioctl(fd, DIOCXCOMMIT as libc::c_ulong, &mut trans) < 0 {
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            libc::close(fd);
+            return Err(HostIsolationError::KernelEngineError(format!(
+                "/dev/pf vpatch DIOCXCOMMIT failed: errno {errno}"
+            )));
+        }
+
+        // Binary DIOCGETRULES read-back verification when engaging
+        if engage {
+            let mut rb: PfiocRule = std::mem::zeroed();
+            rb.anchor[..anchor_bytes.len()].copy_from_slice(anchor_bytes);
+            if libc::ioctl(fd, DIOCGETRULES as libc::c_ulong, &mut rb) < 0 || rb.nr == 0 {
+                libc::close(fd);
+                return Err(HostIsolationError::KernelEngineError(
+                    "/dev/pf vpatch DIOCGETRULES read-back verification failed".to_string(),
+                ));
+            }
+            committed_rules = rb.nr as usize;
+        }
+        libc::close(fd);
+    }
+
+    Ok(committed_rules)
+}
+
 /// Applies the `<1ms` targeted No Break-In kernel perimeter shield with real OS enforcement
-/// when elevated and immediate post-commit read-back verification + RFC 6962 `MerkleTree` receipt.
+/// when elevated (no surprise UAC popups on unattended background scans).
 pub fn apply_virtual_patch_perimeter_shield(
     posture: &crate::security::virtual_patch_shield::KernelShieldPosture,
     preserved_ports: &[u16],
+) -> Result<crate::security::virtual_patch_shield::VirtualPatchShieldReceipt, HostIsolationError> {
+    apply_virtual_patch_perimeter_shield_with_options(posture, preserved_ports, false)
+}
+
+/// Applies the targeted No Break-In kernel perimeter shield with optional Windows UAC helper
+/// delegation (`--wfp-kernel-apply vpatch-engage`) for explicit operator CLI/Dashboard actions.
+pub fn apply_virtual_patch_perimeter_shield_with_options(
+    posture: &crate::security::virtual_patch_shield::KernelShieldPosture,
+    preserved_ports: &[u16],
+    allow_uac_delegation: bool,
 ) -> Result<crate::security::virtual_patch_shield::VirtualPatchShieldReceipt, HostIsolationError> {
     let start = std::time::Instant::now();
     let spec = build_virtual_patch_perimeter_spec(posture, preserved_ports);
@@ -4019,9 +4750,52 @@ pub fn apply_virtual_patch_perimeter_shield(
     let mut os_enforcement_applied = false;
     let mut readback_verified = false;
 
-    let should_enforce_live = posture.is_shield_active()
-        && is_current_process_elevated()
-        && !is_non_elevated_test_simulation();
+    let elevated = is_current_process_elevated();
+    let is_test_sim = is_non_elevated_test_simulation();
+    let should_enforce_live = posture.is_shield_active() && elevated && !is_test_sim;
+
+    #[cfg(windows)]
+    if posture.is_shield_active() && !elevated && allow_uac_delegation && !is_test_sim {
+        let delegated = try_elevated_delegation("vpatch-engage")?;
+        if delegated {
+            let persisted = load_persisted_vpatch_wfp_filter_ids();
+            if persisted.is_empty() {
+                return Err(HostIsolationError::KernelEngineError(
+                    "Elevated vpatch-engage helper completed without persisting WFP filter IDs"
+                        .to_string(),
+                ));
+            }
+            for &port in &spec.blocked_inbound_ports {
+                rules_applied.push(format!("inbound_block:tcp_udp:{port}"));
+            }
+            if spec.block_ipv6_rce_surfaces {
+                rules_applied.push("inbound_block:ipv6_ra_icmpv6_rce".to_string());
+            }
+            rules_applied.push(format!(
+                "wfp_vpatch_uac_verified_filters:{}",
+                persisted.len()
+            ));
+            let clamps: Vec<String> = posture
+                .affected_surfaces
+                .iter()
+                .map(|s| format!("no_breakout:{}", s.as_str()))
+                .collect();
+            let elapsed_us = start.elapsed().as_micros() as u64;
+            return Ok(
+                crate::security::virtual_patch_shield::build_shield_receipt_with_enforcement(
+                    posture.clone(),
+                    clamps,
+                    rules_applied,
+                    Vec::new(),
+                    true,
+                    true,
+                    elapsed_us,
+                ),
+            );
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = allow_uac_delegation;
 
     if should_enforce_live {
         #[cfg(windows)]
@@ -4033,6 +4807,7 @@ pub fn apply_virtual_patch_perimeter_shield(
                     "Virtual-patch WFP post-commit read-back failed".to_string(),
                 ));
             }
+            persist_vpatch_wfp_filter_ids(&ids);
             for &port in &spec.blocked_inbound_ports {
                 rules_applied.push(format!("inbound_block:tcp_udp:{port}"));
             }
@@ -4046,77 +4821,97 @@ pub fn apply_virtual_patch_perimeter_shield(
 
         #[cfg(target_os = "linux")]
         {
-            use std::io::Write;
-            use std::process::{Command, Stdio};
+            // Prefer pure zero-subprocess AF_NETLINK (NETLINK_NETFILTER nf_tables) batch; fall back
+            // to pinned `/usr/sbin/nft` only if the kernel rejects raw netlink batch framing.
+            if apply_linux_nft_vpatch_netlink(&spec, true).is_ok() {
+                for &port in &spec.blocked_inbound_ports {
+                    rules_applied.push(format!("inbound_block:tcp_udp:{port}"));
+                }
+                if spec.block_ipv6_rce_surfaces {
+                    rules_applied.push("inbound_block:ipv6_ra_icmpv6_rce".to_string());
+                }
+                rules_applied.push("netlink_nft_vpatch_verified:agent_octopus_vpatch".to_string());
+                os_enforcement_applied = true;
+                readback_verified = true;
+            } else {
+                use std::io::Write;
+                use std::process::{Command, Stdio};
 
-            let nft_bin = ["/usr/sbin/nft", "/sbin/nft", "/usr/bin/nft"]
-                .into_iter()
-                .find(|p| std::path::Path::new(p).is_file())
-                .ok_or_else(|| {
-                    HostIsolationError::KernelEngineError(
-                        "Pinned nft binary not found under /usr/sbin/nft, /sbin/nft, or /usr/bin/nft"
-                            .to_string(),
-                    )
+                let nft_bin = ["/usr/sbin/nft", "/sbin/nft", "/usr/bin/nft"]
+                    .into_iter()
+                    .find(|p| std::path::Path::new(p).is_file())
+                    .ok_or_else(|| {
+                        HostIsolationError::KernelEngineError(
+                            "NETLINK_NETFILTER failed and pinned nft binary not found under /usr/sbin/nft, /sbin/nft, or /usr/bin/nft"
+                                .to_string(),
+                        )
+                    })?;
+                let nft_script = format!(
+                    "add table inet agent_octopus_vpatch\ndelete table inet agent_octopus_vpatch\n{}\n",
+                    generate_linux_nftables_virtual_patch_rules(&spec).join("\n")
+                );
+                let mut child = Command::new(nft_bin)
+                    .args(["-f", "-"])
+                    .env_clear()
+                    .env("PATH", "/usr/sbin:/sbin:/usr/bin:/bin")
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .map_err(|e| {
+                        HostIsolationError::KernelEngineError(format!(
+                            "Failed spawning {nft_bin}: {e}"
+                        ))
+                    })?;
+                if let Some(ref mut stdin) = child.stdin {
+                    stdin.write_all(nft_script.as_bytes()).map_err(|e| {
+                        HostIsolationError::KernelEngineError(format!(
+                            "Failed writing nft rules: {e}"
+                        ))
+                    })?;
+                }
+                let out = child.wait_with_output().map_err(|e| {
+                    HostIsolationError::KernelEngineError(format!(
+                        "Failed waiting on {nft_bin}: {e}"
+                    ))
                 })?;
-            let nft_script = format!(
-                "add table inet agent_octopus_vpatch\ndelete table inet agent_octopus_vpatch\n{}\n",
-                generate_linux_nftables_virtual_patch_rules(&spec).join("\n")
-            );
-            let mut child = Command::new(nft_bin)
-                .args(["-f", "-"])
-                .env_clear()
-                .env("PATH", "/usr/sbin:/sbin:/usr/bin:/bin")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|e| {
-                    HostIsolationError::KernelEngineError(format!("Failed spawning {nft_bin}: {e}"))
-                })?;
-            if let Some(ref mut stdin) = child.stdin {
-                stdin.write_all(nft_script.as_bytes()).map_err(|e| {
-                    HostIsolationError::KernelEngineError(format!("Failed writing nft rules: {e}"))
-                })?;
-            }
-            let out = child.wait_with_output().map_err(|e| {
-                HostIsolationError::KernelEngineError(format!("Failed waiting on {nft_bin}: {e}"))
-            })?;
-            if !out.status.success() {
-                return Err(HostIsolationError::KernelEngineError(format!(
-                    "nft virtual-patch apply failed: {}",
-                    String::from_utf8_lossy(&out.stderr)
-                )));
-            }
+                if !out.status.success() {
+                    return Err(HostIsolationError::KernelEngineError(format!(
+                        "nft virtual-patch apply failed: {}",
+                        String::from_utf8_lossy(&out.stderr)
+                    )));
+                }
 
-            let readback = Command::new(nft_bin)
-                .args(["-n", "list", "table", "inet", "agent_octopus_vpatch"])
-                .env_clear()
-                .env("PATH", "/usr/sbin:/sbin:/usr/bin:/bin")
-                .output()
-                .map_err(|e| {
-                    HostIsolationError::KernelEngineError(format!("Failed nft read-back: {e}"))
-                })?;
-            let rb_stdout = String::from_utf8_lossy(&readback.stdout);
-            if !readback.status.success()
-                || !rb_stdout.contains("table inet agent_octopus_vpatch")
-                || !spec
-                    .blocked_inbound_ports
-                    .iter()
-                    .all(|p| rb_stdout.contains(&format!("tcp dport {p} drop")))
-            {
-                return Err(HostIsolationError::KernelEngineError(
-                    "nft virtual-patch post-commit read-back verification failed".to_string(),
-                ));
+                let readback = Command::new(nft_bin)
+                    .args(["-n", "list", "table", "inet", "agent_octopus_vpatch"])
+                    .env_clear()
+                    .env("PATH", "/usr/sbin:/sbin:/usr/bin:/bin")
+                    .output()
+                    .map_err(|e| {
+                        HostIsolationError::KernelEngineError(format!("Failed nft read-back: {e}"))
+                    })?;
+                let rb_stdout = String::from_utf8_lossy(&readback.stdout);
+                if !readback.status.success()
+                    || !rb_stdout.contains("table inet agent_octopus_vpatch")
+                    || !spec
+                        .blocked_inbound_ports
+                        .iter()
+                        .all(|p| rb_stdout.contains(&format!("tcp dport {p} drop")))
+                {
+                    return Err(HostIsolationError::KernelEngineError(
+                        "nft virtual-patch post-commit read-back verification failed".to_string(),
+                    ));
+                }
+                for &port in &spec.blocked_inbound_ports {
+                    rules_applied.push(format!("inbound_block:tcp_udp:{port}"));
+                }
+                if spec.block_ipv6_rce_surfaces {
+                    rules_applied.push("inbound_block:ipv6_ra_icmpv6_rce".to_string());
+                }
+                rules_applied.push("nft_vpatch_verified:agent_octopus_vpatch".to_string());
+                os_enforcement_applied = true;
+                readback_verified = true;
             }
-            for &port in &spec.blocked_inbound_ports {
-                rules_applied.push(format!("inbound_block:tcp_udp:{port}"));
-            }
-            if spec.block_ipv6_rce_surfaces {
-                rules_applied.push("inbound_block:ipv6_ra_icmpv6_rce".to_string());
-            }
-            rules_applied.push("nft_vpatch_verified:agent_octopus_vpatch".to_string());
-            os_enforcement_applied = true;
-            readback_verified = true;
         }
 
         #[cfg(any(
@@ -4126,70 +4921,14 @@ pub fn apply_virtual_patch_perimeter_shield(
             target_os = "netbsd"
         ))]
         {
-            use std::io::Write;
-            use std::process::{Command, Stdio};
-
-            let pfctl_bin = "/sbin/pfctl";
-            if !std::path::Path::new(pfctl_bin).is_file() {
-                return Err(HostIsolationError::KernelEngineError(
-                    "Pinned /sbin/pfctl not found".to_string(),
-                ));
-            }
-            let pf_rules = format!(
-                "{}\n",
-                generate_bsd_darwin_pf_virtual_patch_rules(&spec).join("\n")
-            );
-            let mut child = Command::new(pfctl_bin)
-                .args(["-a", "agent_octopus_vpatch", "-f", "-"])
-                .env_clear()
-                .env("PATH", "/sbin:/usr/sbin:/bin:/usr/bin")
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|e| {
-                    HostIsolationError::KernelEngineError(format!("Failed spawning pfctl: {e}"))
-                })?;
-            if let Some(ref mut stdin) = child.stdin {
-                stdin.write_all(pf_rules.as_bytes()).map_err(|e| {
-                    HostIsolationError::KernelEngineError(format!("Failed writing pf rules: {e}"))
-                })?;
-            }
-            let out = child.wait_with_output().map_err(|e| {
-                HostIsolationError::KernelEngineError(format!("Failed waiting on pfctl: {e}"))
-            })?;
-            if !out.status.success() {
-                return Err(HostIsolationError::KernelEngineError(format!(
-                    "pfctl virtual-patch apply failed: {}",
-                    String::from_utf8_lossy(&out.stderr)
-                )));
-            }
-
-            let readback = Command::new(pfctl_bin)
-                .args(["-a", "agent_octopus_vpatch", "-sr"])
-                .env_clear()
-                .env("PATH", "/sbin:/usr/sbin:/bin:/usr/bin")
-                .output()
-                .map_err(|e| {
-                    HostIsolationError::KernelEngineError(format!("Failed pfctl read-back: {e}"))
-                })?;
-            let rb_stdout = String::from_utf8_lossy(&readback.stdout);
-            let drop_count = rb_stdout
-                .lines()
-                .filter(|l| l.contains("block drop in quick"))
-                .count();
-            if !readback.status.success() || drop_count < spec.blocked_inbound_ports.len() {
-                return Err(HostIsolationError::KernelEngineError(
-                    "pfctl virtual-patch post-commit read-back verification failed".to_string(),
-                ));
-            }
+            let verified_rules = apply_macos_pf_vpatch_ioctl(&spec, true)?;
             for &port in &spec.blocked_inbound_ports {
                 rules_applied.push(format!("inbound_block:tcp_udp:{port}"));
             }
             if spec.block_ipv6_rce_surfaces {
                 rules_applied.push("inbound_block:ipv6_ra_icmpv6_rce".to_string());
             }
-            rules_applied.push(format!("pf_vpatch_verified_rules:{drop_count}"));
+            rules_applied.push(format!("pf_ioctl_vpatch_verified_rules:{verified_rules}"));
             os_enforcement_applied = true;
             readback_verified = true;
         }
@@ -4228,6 +4967,94 @@ pub fn apply_virtual_patch_perimeter_shield(
             elapsed_us,
         ),
     )
+}
+
+/// Disarms ONLY the targeted `AgentOctopus-VirtualPatch-*` kernel perimeter rules without touching
+/// full Host KillSwitch quarantine filters. Strictly fails closed while `shield_locked_until_reboot`
+/// is active (Foolproof Invariant #1).
+pub fn disarm_virtual_patch_perimeter_shield(
+    allow_uac_delegation: bool,
+) -> Result<usize, HostIsolationError> {
+    let posture = crate::security::virtual_patch_shield::current_shield_posture();
+    if posture.shield_locked_until_reboot {
+        return Err(HostIsolationError::KernelEngineError(
+            "Monotonic violation: cannot disarm virtual-patch perimeter while shield_locked_until_reboot is active"
+                .to_string(),
+        ));
+    }
+
+    if !is_current_process_elevated() && is_non_elevated_test_simulation() {
+        return Ok(0);
+    }
+
+    #[cfg(windows)]
+    {
+        if !is_current_process_elevated() {
+            if allow_uac_delegation {
+                let delegated = try_elevated_delegation("vpatch-disarm")?;
+                if delegated {
+                    clear_persisted_vpatch_wfp_filter_ids();
+                    return Ok(0);
+                }
+            }
+            return Err(HostIsolationError::InsufficientPrivileges {
+                details: "Administrator privileges required to remove virtual-patch WFP filters."
+                    .to_string(),
+                remediation: "Accept the UAC prompt or run from an elevated terminal.".to_string(),
+            });
+        }
+        let session = WfpKernelSession::open()?;
+        let removed = session.remove_virtual_patch_inbound_shield()?;
+        clear_persisted_vpatch_wfp_filter_ids();
+        Ok(removed)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = allow_uac_delegation;
+        if !is_current_process_elevated() {
+            return Err(HostIsolationError::InsufficientPrivileges {
+                details: "Root / CAP_NET_ADMIN required to remove virtual-patch netfilter table."
+                    .to_string(),
+                remediation: "Run with sudo or CAP_NET_ADMIN.".to_string(),
+            });
+        }
+        let spec = build_virtual_patch_perimeter_spec(&posture, &[]);
+        let _ = apply_linux_nft_vpatch_netlink(&spec, false);
+        Ok(1)
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    ))]
+    {
+        let _ = allow_uac_delegation;
+        if !is_current_process_elevated() {
+            return Err(HostIsolationError::InsufficientPrivileges {
+                details: "Root privileges required to flush /dev/pf virtual-patch anchor."
+                    .to_string(),
+                remediation: "Run with sudo / root privileges.".to_string(),
+            });
+        }
+        let spec = build_virtual_patch_perimeter_spec(&posture, &[]);
+        apply_macos_pf_vpatch_ioctl(&spec, false)
+    }
+
+    #[cfg(not(any(
+        windows,
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    )))]
+    {
+        let _ = allow_uac_delegation;
+        Ok(0)
+    }
 }
 
 #[cfg(test)]

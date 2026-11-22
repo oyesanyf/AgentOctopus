@@ -160,7 +160,7 @@ fn test_r6_all_17_linux_distros_3_bsds_windows_macos_cpe_and_pinned_patch_plans(
             LinuxDistro::Sles,
             "cpe:2.3:o:suse:linux_enterprise_server:15.5:*:*:*:*:*:*:*",
             &["/usr/sbin/klp", "/usr/bin/zypper"],
-            "/usr/sbin/klp",
+            "/usr/bin/zypper",
         ),
         (
             "ID=opensuse-leap\nVERSION_ID=\"15.6\"",
@@ -239,18 +239,71 @@ fn test_r6_all_17_linux_distros_3_bsds_windows_macos_cpe_and_pinned_patch_plans(
         }
     }
 
-    // Windows 10/11/Server plan
+    // Windows 10/11/Server native WUA COM plan + Hotpatch awareness
     let win_probe = MockBinaryProbe::with_paths(&[r"C:\Windows\System32\UsoClient.exe"], "x86_64");
     let win_plan =
         plan_native_kernel_patch_with_probe(&OsFamily::Windows, None, &win_probe).unwrap();
-    assert_eq!(
-        win_plan.primary_command,
-        r"C:\Windows\System32\UsoClient.exe"
-    );
+    assert_eq!(win_plan.primary_command, "WindowsUpdateAgentCOM");
+    assert_eq!(win_plan.os_subsystem, "WindowsUpdateAgentCOM");
+    assert!(!win_plan.rebootless_livepatch_preferred);
     assert_eq!(win_plan.steps.len(), 3);
-    assert_eq!(win_plan.steps[0].args, vec!["StartScan"]);
-    assert_eq!(win_plan.steps[1].args, vec!["StartDownload"]);
-    assert_eq!(win_plan.steps[2].args, vec!["StartInstall"]);
+    assert_eq!(win_plan.steps[0].phase, "search");
+    assert_eq!(win_plan.steps[1].phase, "download");
+    assert_eq!(win_plan.steps[2].phase, "install");
+
+    let win_hotpatch_plan =
+        agent_octopus::security::kernel_patcher::plan_native_kernel_patch_with_posture(
+            &OsFamily::Windows,
+            None,
+            &win_probe,
+            false,
+            true,
+        )
+        .unwrap();
+    assert!(win_hotpatch_plan.rebootless_livepatch_preferred);
+
+    // Ubuntu Pro active refresh step (when canonical-livepatch absent)
+    let pro_probe = MockBinaryProbe::with_paths(&["/usr/bin/pro", "/usr/bin/apt-get"], "x86_64");
+    let pro_plan = plan_native_kernel_patch_with_probe(
+        &OsFamily::Linux,
+        Some(&LinuxDistro::Ubuntu),
+        &pro_probe,
+    )
+    .unwrap();
+    assert_eq!(pro_plan.steps[0].command, "/usr/bin/pro");
+    assert_eq!(pro_plan.steps[0].args, vec!["refresh"]);
+    assert!(pro_plan.rebootless_livepatch_preferred);
+
+    // SLES zypper patch followed by klp -v patches verification
+    let sles_probe = MockBinaryProbe::with_paths(&["/usr/sbin/klp", "/usr/bin/zypper"], "x86_64");
+    let sles_plan = plan_native_kernel_patch_with_probe(
+        &OsFamily::Linux,
+        Some(&LinuxDistro::Sles),
+        &sles_probe,
+    )
+    .unwrap();
+    assert_eq!(sles_plan.steps[0].command, "/usr/bin/zypper");
+    assert_eq!(sles_plan.steps[1].command, "/usr/sbin/klp");
+    assert_eq!(sles_plan.steps[1].args, vec!["-v", "patches"]);
+    assert_eq!(sles_plan.steps[1].phase, "verify_livepatch");
+    assert!(sles_plan.rebootless_livepatch_preferred);
+
+    // Linux NETLINK_NETFILTER nf_tables binary batch framing check
+    let mut nl_posture = KernelShieldPosture::default_fail_closed();
+    nl_posture.unpatched_cve_ids = vec!["CVE-2024-38063".to_string()];
+    nl_posture.finalize();
+    let nl_spec = build_virtual_patch_perimeter_spec(&nl_posture, &[5005]);
+    let nl_batch = agent_octopus::security::build_linux_nft_vpatch_netlink_batch(&nl_spec, true);
+    assert!(
+        nl_batch.len() > 128,
+        "NETLINK_NETFILTER batch must encode table+chain+rules"
+    );
+    assert!(
+        nl_batch
+            .windows(b"agent_octopus_vpatch".len())
+            .any(|w| w == b"agent_octopus_vpatch"),
+        "NETLINK_NETFILTER batch must reference agent_octopus_vpatch table"
+    );
 
     // macOS plan
     let mac_probe = MockBinaryProbe::with_paths(&["/usr/sbin/softwareupdate"], "aarch64");

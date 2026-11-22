@@ -2,7 +2,7 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
     <Package Name="Agent Octopus"
              Manufacturer="Agent Octopus Security"
-             Version="0.1.0.0"
+             Version="$(var.Version)"
              UpgradeCode="7a8b9c0d-1e2f-4a3b-8c9d-0e1f2a3b4c5d"
              Scope="perUser"
              Compressed="yes">
@@ -10,19 +10,24 @@
         <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
         <MediaTemplate EmbedCab="yes" />
 
+        <!-- Zero-Touch PATH Invariant: installer never mutates user or system PATH -->
         <StandardDirectory Id="LocalAppDataFolder">
             <Directory Id="INSTALLFOLDER" Name="AgentOctopus">
                 <Component Id="CoreExecutables" Guid="3a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d" Bitness="always64">
-                    <File Id="StartLauncherExe" Source="target\release\start.exe" KeyPath="yes" />
-                    <File Id="AgentOctopusCliExe" Source="target\release\agent_octopus.exe" />
-                    <File Id="OctopusCliExe" Source="target\release\octopus.exe" />
+                    <File Id="StartLauncherExe" Source="$(var.BinDir)\start.exe" />
+                    <File Id="AgentOctopusCliExe" Source="$(var.BinDir)\agent_octopus.exe" />
+                    <File Id="OctopusCliExe" Source="$(var.BinDir)\octopus.exe" />
+                    <File Id="OctopusSentinelExe" Source="$(var.BinDir)\octopus-sentinel.exe" />
+                    <File Id="OctopusSupervisorExe" Source="$(var.BinDir)\octopus-supervisor.exe" />
+                    <File Id="OctopusWorkerExe" Source="$(var.BinDir)\octopus-worker.exe" />
                     <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+                    <RegistryValue Root="HKCU" Key="Software\AgentOctopus" Name="CoreInstalled" Type="integer" Value="1" KeyPath="yes" />
                 </Component>
                 <Directory Id="ConfigDir" Name="config">
                     <Component Id="DefaultConfigFiles" Guid="8b4f912c-3b18-4e89-9a2c-f67e2a96f122" Bitness="always64">
-                        <File Id="EgressDomainsConfig" Source="config\egress_domains.json" KeyPath="yes" />
+                        <File Id="EgressDomainsConfig" Source="config\egress_domains.json" />
                         <RemoveFolder Id="RemoveConfigFolder" Directory="ConfigDir" On="uninstall" />
-                        <RegistryValue Root="HKCU" Key="Software\AgentOctopus" Name="ConfigInstalled" Type="integer" Value="1" />
+                        <RegistryValue Root="HKCU" Key="Software\AgentOctopus" Name="ConfigInstalled" Type="integer" Value="1" KeyPath="yes" />
                     </Component>
                 </Directory>
             </Directory>
@@ -33,9 +38,14 @@
                 <Component Id="StartMenuShortcutComponent" Guid="5f2e8694-5ef8-4903-b1da-5847fa2c03d1">
                     <Shortcut Id="ApplicationStartMenuShortcut"
                               Name="Agent Octopus Dashboard"
-                              Description="Launch Agent Octopus Zero-Trust Wasm &amp; AgentMesh Gateway"
+                              Description="Launch Agent Octopus Zero-Trust Wasm, Kernel Patcher &amp; AgentMesh Gateway"
                               Target="[INSTALLFOLDER]start.exe"
                               WorkingDirectory="INSTALLFOLDER" />
+                    <Shortcut Id="UninstallProductShortcut"
+                              Name="Uninstall Agent Octopus"
+                              Description="Uninstalls Agent Octopus"
+                              Target="[System64Folder]msiexec.exe"
+                              Arguments="/x [ProductCode]" />
                     <RemoveFolder Id="RemoveShortcutFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
                     <RegistryValue Root="HKCU" Key="Software\AgentOctopus" Name="Installed" Type="integer" Value="1" KeyPath="yes" />
                 </Component>

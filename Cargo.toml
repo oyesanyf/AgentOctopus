@@ -6,12 +6,12 @@ authors = ["Femo <oyesanyf@gmail.com>"]
 description = "Single-binary Rust deterministic agent containment runtime (AWS Cedar, Wasmtime, OS sandboxes, and RT-ASP sanitizers)"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-homepage = "https://github.com/oyesanyf/AgentOctopus"
 repository = "https://github.com/oyesanyf/AgentOctopus"
 documentation = "https://docs.rs/agent_octopus"
 keywords = ["security", "ai-agents", "rasp", "cedar-policy", "sandbox"]
 categories = ["cryptography", "development-tools", "command-line-utilities"]
 exclude = [
+    "benchmarks/artifacts/**",
     "start.exe",
     "octopus.exe",
     "agent_octopus.exe",
@@ -74,7 +74,7 @@ ml-dsa = "0.1.1"
 p256 = { version = "0.13", features = ["ecdsa"] }
 base64 = "0.22"
 zeroize = { version = "1.8", features = ["derive"] }
-rusqlite = { version = "0.31", features = ["bundled", "serde_json", "hooks"] }
+rusqlite = { version = "0.43", features = ["bundled", "serde_json", "hooks"] }
 subtle = "2.6"
 chrono = { version = "0.4", features = ["serde"] }
 sysinfo = "0.30"

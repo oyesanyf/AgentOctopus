@@ -369,7 +369,8 @@ impl SiqueryEngine {
             | AuthAction::Pragma { .. }
             | AuthAction::Recursive => Authorization::Allow,
             _ => Authorization::Deny,
-        }));
+        }))
+        .map_err(|e| format!("Failed to register SQLite read-only authorizer: {}", e))?;
 
         // Guard 3: SQLite PRAGMA query_only = ON;
         conn.execute_batch("PRAGMA query_only = ON;")
@@ -383,7 +384,8 @@ impl SiqueryEngine {
                 // In SQLite/rusqlite, returning true triggers SQLITE_INTERRUPT to abort execution
                 query_start.elapsed().as_secs() >= 15
             }),
-        );
+        )
+        .map_err(|e| format!("Failed to register SQLite progress timeout handler: {}", e))?;
 
         // Prepare statement
         let mut stmt = conn
@@ -398,11 +400,7 @@ impl SiqueryEngine {
         }
 
         let col_count = stmt.column_count();
-        let col_names: Vec<String> = stmt
-            .column_names()
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect();
+        let col_names: Vec<String> = stmt.column_names().map(|s| s.to_string()).collect();
 
         let mut rows = stmt
             .query([])

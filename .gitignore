@@ -52,6 +52,11 @@ quarantine_journal.json
 
 # Packaging, installers & CIFuzz build output
 *.msi
+*.deb
+*.rpm
+*.pkg
+deploy/
+raptor_out/
 build/
 dist_manifest.json
 agent_octopus_source_code.zip

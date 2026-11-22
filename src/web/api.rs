@@ -118,6 +118,13 @@ pub struct WebState {
     pub cage_substrate: Arc<crate::security::cage_substrate::CageSubstrateState>,
     pub agentmesh_engine: Arc<crate::security::agentmesh::AgentMeshEngine>,
     pub latest_kernel_scan: Arc<tokio::sync::RwLock<Option<KernelScanSummary>>>,
+    pub last_kernel_patch_result:
+        Arc<tokio::sync::RwLock<Option<crate::security::kernel_patcher::PatchExecutionResult>>>,
+    pub last_perimeter_receipt: Arc<
+        tokio::sync::RwLock<
+            Option<crate::security::virtual_patch_shield::VirtualPatchShieldReceipt>,
+        >,
+    >,
     pub host_killswitch_override: Option<Arc<crate::security::HostKillSwitchManager>>,
     pub kernel_shield_override:
         Option<Arc<crate::security::kernel_patcher::KernelShieldCoordinator>>,
@@ -325,6 +332,8 @@ impl Default for WebState {
         );
 
         let latest_kernel_scan = Arc::new(tokio::sync::RwLock::new(None));
+        let last_kernel_patch_result = Arc::new(tokio::sync::RwLock::new(None));
+        let last_perimeter_receipt = Arc::new(tokio::sync::RwLock::new(None));
 
         Self {
             gateway,
@@ -357,6 +366,8 @@ impl Default for WebState {
             cage_substrate,
             agentmesh_engine,
             latest_kernel_scan,
+            last_kernel_patch_result,
+            last_perimeter_receipt,
             host_killswitch_override: None,
             kernel_shield_override: None,
         }
@@ -5111,6 +5122,14 @@ pub async fn handle_kernel_patcher_status(state: &WebState) -> String {
         let guard = state.latest_kernel_scan.read().await;
         guard.clone()
     };
+    let last_patch_result = {
+        let guard = state.last_kernel_patch_result.read().await;
+        guard.clone()
+    };
+    let last_perimeter_receipt = {
+        let guard = state.last_perimeter_receipt.read().await;
+        guard.clone()
+    };
 
     let disabled = is_kernel_scan_disabled();
     let initial_delay_secs = resolve_kernel_scan_initial_delay_secs();
@@ -5120,6 +5139,32 @@ pub async fn handle_kernel_patcher_status(state: &WebState) -> String {
 
     let shield_state = state.kernel_shield().state();
     let global_posture = crate::security::virtual_patch_shield::current_shield_posture();
+    let sentinel = Arc::clone(&state.kernel_sentinel);
+    let (available_patch_plan, active_vpatch_filters, byovd_driver_audit) =
+        tokio::task::spawn_blocking(move || {
+            let plan = crate::security::kernel_patcher::resolve_host_patch_plan_preview(true);
+            let vpatch_cnt =
+                crate::security::host_network_isolation::active_vpatch_wfp_filter_count();
+            let byovd = sentinel.audit_live_loaded_kernel_drivers();
+            (plan, vpatch_cnt, byovd)
+        })
+        .await
+        .unwrap_or_else(|_| {
+            (
+                None,
+                0,
+                state.kernel_sentinel.audit_live_loaded_kernel_drivers(),
+            )
+        });
+
+    let perimeter_os_enforcement_applied = last_perimeter_receipt
+        .as_ref()
+        .map(|r| r.os_enforcement_applied)
+        .unwrap_or(active_vpatch_filters > 0);
+    let perimeter_readback_verified = last_perimeter_receipt
+        .as_ref()
+        .map(|r| r.readback_verified)
+        .unwrap_or(active_vpatch_filters > 0);
 
     match latest_scan {
         Some(summary) => {
@@ -5161,6 +5206,13 @@ pub async fn handle_kernel_patcher_status(state: &WebState) -> String {
                 "shield_active": shield_active,
                 "merkle_root": merkle_root,
                 "merkle_root_hex": merkle_root,
+                "available_patch_plan": available_patch_plan,
+                "last_patch_result": last_patch_result,
+                "last_perimeter_receipt": last_perimeter_receipt,
+                "active_vpatch_wfp_filter_count": active_vpatch_filters,
+                "perimeter_os_enforcement_applied": perimeter_os_enforcement_applied,
+                "perimeter_readback_verified": perimeter_readback_verified,
+                "byovd_driver_audit": byovd_driver_audit,
                 "latest_scan": summary,
             })
             .to_string()
@@ -5201,10 +5253,339 @@ pub async fn handle_kernel_patcher_status(state: &WebState) -> String {
                 "shield_active": shield_state.active || global_posture.is_shield_active(),
                 "merkle_root": shield_state.merkle_root,
                 "merkle_root_hex": shield_state.merkle_root,
+                "available_patch_plan": available_patch_plan,
+                "last_patch_result": last_patch_result,
+                "last_perimeter_receipt": last_perimeter_receipt,
+                "active_vpatch_wfp_filter_count": active_vpatch_filters,
+                "perimeter_os_enforcement_applied": perimeter_os_enforcement_applied,
+                "perimeter_readback_verified": perimeter_readback_verified,
+                "byovd_driver_audit": byovd_driver_audit,
                 "latest_scan": serde_json::Value::Null,
             })
             .to_string()
         }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct KernelPatchApplyBody {
+    #[serde(default = "default_true_flag")]
+    dry_run: bool,
+    #[serde(default)]
+    confirm_apply: bool,
+    #[serde(default = "default_true_flag")]
+    allow_uac_delegation: bool,
+    #[serde(default = "default_true_flag")]
+    auto_accept_eula: bool,
+    #[serde(default)]
+    operator: Option<String>,
+}
+
+fn default_true_flag() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct KernelPerimeterActionBody {
+    #[serde(default = "default_perimeter_engage")]
+    action: String,
+    #[serde(default = "default_true_flag")]
+    allow_uac_delegation: bool,
+    #[serde(default)]
+    operator: Option<String>,
+}
+
+fn default_perimeter_engage() -> String {
+    "engage".to_string()
+}
+
+/// Authenticated `POST /api/kernel-patcher/scan` handler triggering an on-demand NVD/KEV scan
+/// plus virtual-patch shield & Cedar forbid hot-reload.
+pub async fn handle_kernel_patcher_scan(state: &Arc<WebState>) -> (&'static str, String) {
+    let scan_outcome = crate::web::server::run_periodic_kernel_scan_cycle(state).await;
+    let detail = match &scan_outcome {
+        Ok(count) => format!("On-demand NVD/KEV kernel scan completed ({count} findings)"),
+        Err(e) => format!("On-demand NVD/KEV kernel scan degraded fail-closed ({e})"),
+    };
+    state.audit_log.record_event(
+        "KERNEL_PATCHER_SCAN",
+        "webui_operator",
+        &detail,
+        if scan_outcome.is_ok() {
+            "COMPLETED"
+        } else {
+            "DEGRADED_FAIL_CLOSED"
+        },
+    );
+    ("200 OK", handle_kernel_patcher_status(state).await)
+}
+
+/// Authenticated `POST /api/kernel-patcher/apply` handler supporting safe dry-run previews and
+/// explicitly confirmed live OS kernel patching (WUA COM + UAC helper on Windows, native livepatch
+/// + package manager on Linux/macOS/BSD).
+pub async fn handle_kernel_patcher_apply(state: &WebState, body: &str) -> (&'static str, String) {
+    let parsed: KernelPatchApplyBody = if body.trim().is_empty() {
+        KernelPatchApplyBody {
+            dry_run: true,
+            confirm_apply: false,
+            allow_uac_delegation: true,
+            auto_accept_eula: true,
+            operator: None,
+        }
+    } else {
+        match serde_json::from_str(body) {
+            Ok(p) => p,
+            Err(e) => {
+                return (
+                    "400 Bad Request",
+                    json_error_payload(
+                        "INVALID_JSON",
+                        &format!("Invalid JSON payload for /api/kernel-patcher/apply: {e}"),
+                    ),
+                );
+            }
+        }
+    };
+
+    if !parsed.dry_run && !parsed.confirm_apply {
+        return (
+            "400 Bad Request",
+            json_error_payload(
+                "CONFIRMATION_REQUIRED",
+                "Live OS kernel patching requires explicit confirm_apply=true",
+            ),
+        );
+    }
+
+    let operator = parsed
+        .operator
+        .unwrap_or_else(|| "webui_operator".to_string());
+    let patcher = crate::security::kernel_patcher::KernelPatcher::new();
+    match patcher
+        .apply_os_kernel_patch_with_options(
+            parsed.dry_run,
+            parsed.allow_uac_delegation,
+            parsed.auto_accept_eula,
+        )
+        .await
+    {
+        Ok(res) => {
+            {
+                let mut guard = state.last_kernel_patch_result.write().await;
+                *guard = Some(res.clone());
+            }
+            if !parsed.dry_run {
+                let _ = state.kernel_sentinel.enforce_byovd_virtual_patch_blocklist();
+                let live_posture = crate::security::virtual_patch_shield::current_shield_posture();
+                if live_posture.is_shield_active() {
+                    let allow_uac = parsed.allow_uac_delegation;
+                    let receipt_res = tokio::task::spawn_blocking(move || {
+                        let ports =
+                            crate::security::host_network_isolation::discover_active_octopus_ports();
+                        crate::security::host_network_isolation::apply_virtual_patch_perimeter_shield_with_options(
+                            &live_posture,
+                            &ports,
+                            allow_uac,
+                        )
+                    })
+                    .await;
+                    if let Ok(Ok(receipt)) = receipt_res {
+                        let mut pguard = state.last_perimeter_receipt.write().await;
+                        *pguard = Some(receipt);
+                    }
+                }
+            }
+            state.audit_log.record_event(
+                if parsed.dry_run {
+                    "KERNEL_PATCH_DRY_RUN"
+                } else {
+                    "KERNEL_PATCH_APPLIED"
+                },
+                &operator,
+                &format!(
+                    "subsystem={} success={} uac_delegated={} shield_locked={}",
+                    res.os_subsystem,
+                    res.success,
+                    res.uac_delegated,
+                    res.shield_locked_until_reboot
+                ),
+                if res.success { "SUCCESS" } else { "FAILED" },
+            );
+            (
+                "200 OK",
+                serde_json::to_string(&res).unwrap_or_else(|_| "{}".to_string()),
+            )
+        }
+        Err(crate::security::kernel_patcher::PatcherError::InsufficientPrivileges) => (
+            "403 Forbidden",
+            json_error_payload(
+                "INSUFFICIENT_PRIVILEGES",
+                "Administrator / root elevation is required (accept the Windows UAC prompt or run elevated).",
+            ),
+        ),
+        Err(e) => (
+            "500 Internal Server Error",
+            json_error_payload("KERNEL_PATCH_FAILED", &e.to_string()),
+        ),
+    }
+}
+
+/// Authenticated `POST /api/kernel-patcher/perimeter` handler engaging or (when unlocked) disarming
+/// the targeted virtual-patch OS kernel firewall (WFP + UAC on Windows, Netlink/nft on Linux, `/dev/pf` on macOS/BSD).
+pub async fn handle_kernel_patcher_perimeter(
+    state: &WebState,
+    body: &str,
+) -> (&'static str, String) {
+    let parsed: KernelPerimeterActionBody = if body.trim().is_empty() {
+        KernelPerimeterActionBody {
+            action: "engage".to_string(),
+            allow_uac_delegation: true,
+            operator: None,
+        }
+    } else {
+        match serde_json::from_str(body) {
+            Ok(p) => p,
+            Err(e) => {
+                return (
+                    "400 Bad Request",
+                    json_error_payload(
+                        "INVALID_JSON",
+                        &format!("Invalid JSON payload for /api/kernel-patcher/perimeter: {e}"),
+                    ),
+                );
+            }
+        }
+    };
+
+    let operator = parsed
+        .operator
+        .unwrap_or_else(|| "webui_operator".to_string());
+    let action = parsed.action.trim().to_ascii_lowercase();
+
+    match action.as_str() {
+        "engage" => {
+            let posture = crate::security::virtual_patch_shield::current_shield_posture();
+            let ports = crate::security::host_network_isolation::discover_active_octopus_ports();
+            let allow_uac = parsed.allow_uac_delegation;
+            let res = tokio::task::spawn_blocking(move || {
+                crate::security::host_network_isolation::apply_virtual_patch_perimeter_shield_with_options(
+                    &posture, &ports, allow_uac,
+                )
+            })
+            .await;
+
+            match res {
+                Ok(Ok(receipt)) => {
+                    {
+                        let mut guard = state.last_perimeter_receipt.write().await;
+                        *guard = Some(receipt.clone());
+                    }
+                    state.audit_log.record_event(
+                        "VIRTUAL_PATCH_PERIMETER_ENGAGED",
+                        &operator,
+                        &format!(
+                            "os_enforcement_applied={} readback_verified={} rules={}",
+                            receipt.os_enforcement_applied,
+                            receipt.readback_verified,
+                            receipt.no_breakin_rules.len()
+                        ),
+                        if receipt.os_enforcement_applied {
+                            "ENFORCED"
+                        } else {
+                            "PLAN_ONLY"
+                        },
+                    );
+                    (
+                        "200 OK",
+                        serde_json::to_string(&receipt).unwrap_or_else(|_| "{}".to_string()),
+                    )
+                }
+                Ok(Err(crate::security::HostIsolationError::InsufficientPrivileges {
+                    details,
+                    remediation,
+                })) => (
+                    "403 Forbidden",
+                    json_error_payload(
+                        "INSUFFICIENT_PRIVILEGES",
+                        &format!("{details} {remediation}"),
+                    ),
+                ),
+                Ok(Err(e)) => (
+                    "500 Internal Server Error",
+                    json_error_payload("PERIMETER_ENGAGE_FAILED", &e.to_string()),
+                ),
+                Err(e) => (
+                    "500 Internal Server Error",
+                    json_error_payload("PERIMETER_WORKER_ERROR", &e.to_string()),
+                ),
+            }
+        }
+        "disarm" => {
+            let allow_uac = parsed.allow_uac_delegation;
+            let res = tokio::task::spawn_blocking(move || {
+                crate::security::host_network_isolation::disarm_virtual_patch_perimeter_shield(
+                    allow_uac,
+                )
+            })
+            .await;
+
+            match res {
+                Ok(Ok(removed)) => {
+                    {
+                        let mut guard = state.last_perimeter_receipt.write().await;
+                        *guard = None;
+                    }
+                    state.audit_log.record_event(
+                        "VIRTUAL_PATCH_PERIMETER_DISARMED",
+                        &operator,
+                        &format!("Removed {removed} virtual-patch perimeter firewall rule(s)"),
+                        "DISARMED",
+                    );
+                    (
+                        "200 OK",
+                        json!({
+                            "status": "disarmed",
+                            "removed_rules": removed,
+                            "active_vpatch_wfp_filter_count": 0
+                        })
+                        .to_string(),
+                    )
+                }
+                Ok(Err(crate::security::HostIsolationError::KernelEngineError(msg)))
+                    if msg.contains("shield_locked_until_reboot") =>
+                {
+                    (
+                        "409 Conflict",
+                        json_error_payload("SHIELD_LOCKED_UNTIL_REBOOT", &msg),
+                    )
+                }
+                Ok(Err(crate::security::HostIsolationError::InsufficientPrivileges {
+                    details,
+                    remediation,
+                })) => (
+                    "403 Forbidden",
+                    json_error_payload(
+                        "INSUFFICIENT_PRIVILEGES",
+                        &format!("{details} {remediation}"),
+                    ),
+                ),
+                Ok(Err(e)) => (
+                    "500 Internal Server Error",
+                    json_error_payload("PERIMETER_DISARM_FAILED", &e.to_string()),
+                ),
+                Err(e) => (
+                    "500 Internal Server Error",
+                    json_error_payload("PERIMETER_WORKER_ERROR", &e.to_string()),
+                ),
+            }
+        }
+        other => (
+            "400 Bad Request",
+            json_error_payload(
+                "INVALID_ACTION",
+                &format!("Unsupported perimeter action '{other}' (expected 'engage' or 'disarm')"),
+            ),
+        ),
     }
 }
 
@@ -5459,6 +5840,75 @@ mod tests {
         assert_eq!(
             completed_json["latest_scan"]["host_kernel"]["cpe23"],
             "cpe:2.3:o:linux:linux_kernel:6.8.0:*:*:*:*:*:*:*"
+        );
+        assert!(completed_json["available_patch_plan"].is_object());
+        assert!(completed_json["active_vpatch_wfp_filter_count"].is_number());
+        assert!(completed_json["perimeter_os_enforcement_applied"].is_boolean());
+        assert!(completed_json["perimeter_readback_verified"].is_boolean());
+        assert!(completed_json["byovd_driver_audit"].is_object());
+    }
+
+    #[tokio::test]
+    async fn test_handle_kernel_patcher_apply_fail_closed_and_dry_run() {
+        let state = WebState::default();
+
+        // Fail-closed: live apply without confirm_apply=true MUST return 400 CONFIRMATION_REQUIRED
+        let (status_unconfirmed, body_unconfirmed) =
+            handle_kernel_patcher_apply(&state, r#"{"dry_run": false, "confirm_apply": false}"#)
+                .await;
+        assert_eq!(status_unconfirmed, "400 Bad Request");
+        let parsed_err: serde_json::Value =
+            serde_json::from_str(&body_unconfirmed).expect("valid error JSON");
+        assert_eq!(parsed_err["code"], "CONFIRMATION_REQUIRED");
+
+        // Malformed JSON -> 400 INVALID_JSON
+        let (status_bad, body_bad) = handle_kernel_patcher_apply(&state, "{not_json").await;
+        assert_eq!(status_bad, "400 Bad Request");
+        assert!(body_bad.contains("INVALID_JSON"));
+
+        // Safe dry-run preview -> 200 OK and stored in state.last_kernel_patch_result
+        let (status_dry, body_dry) = handle_kernel_patcher_apply(
+            &state,
+            r#"{"dry_run": true, "confirm_apply": false, "allow_uac_delegation": false}"#,
+        )
+        .await;
+        assert_eq!(status_dry, "200 OK");
+        let parsed_dry: serde_json::Value =
+            serde_json::from_str(&body_dry).expect("valid dry-run JSON");
+        assert_eq!(parsed_dry["dry_run"], true);
+        assert!(state.last_kernel_patch_result.read().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_handle_kernel_patcher_perimeter_validation_and_lock() {
+        let state = WebState::default();
+
+        // Unsupported action -> 400 INVALID_ACTION
+        let (status_bad, body_bad) =
+            handle_kernel_patcher_perimeter(&state, r#"{"action": "destroy"}"#).await;
+        assert_eq!(status_bad, "400 Bad Request");
+        assert!(body_bad.contains("INVALID_ACTION"));
+
+        // Invalid JSON -> 400 INVALID_JSON
+        let (status_json, body_json) = handle_kernel_patcher_perimeter(&state, "{broken").await;
+        assert_eq!(status_json, "400 Bad Request");
+        assert!(body_json.contains("INVALID_JSON"));
+    }
+
+    #[test]
+    fn test_dashboard_html_contains_accessible_kernel_patcher_controls() {
+        let html = crate::web::static_files::INDEX_HTML;
+        assert!(html.contains("id=\"kernel-patcher-view\""));
+        assert!(html.contains("id=\"kp-apply-dialog\""));
+        assert!(html.contains("dialog.kp-modal:modal"));
+        assert!(html.contains("dialog.kp-modal::backdrop"));
+        assert!(html.contains("@container (width < 600px)"));
+        assert!(html.contains("/api/kernel-patcher/scan"));
+        assert!(html.contains("/api/kernel-patcher/apply"));
+        assert!(html.contains("/api/kernel-patcher/perimeter"));
+        assert!(
+            !html.contains("id=\"kp-apply-dialog\" role=\"dialog\""),
+            "Native <dialog> must not add redundant role=dialog"
         );
     }
 }

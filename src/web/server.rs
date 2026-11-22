@@ -17,7 +17,8 @@ use super::api::{
     handle_evolution_stop, handle_get_egress_domains, handle_glm_fusion_calibration,
     handle_governor_inject_sample, handle_governor_reset, handle_governor_status,
     handle_harness2_library, handle_harness2_run, handle_harness2_status,
-    handle_harness2_validate_tree, handle_kernel_patcher_status, handle_kernel_stats,
+    handle_harness2_validate_tree, handle_kernel_patcher_apply, handle_kernel_patcher_perimeter,
+    handle_kernel_patcher_scan, handle_kernel_patcher_status, handle_kernel_stats,
     handle_killswitch_disarm_with_peer, handle_killswitch_engage, handle_killswitch_protocols,
     handle_killswitch_status, handle_live_tests, handle_merged_well_known_jwks,
     handle_oshoosiclaw_containment_evaluate, handle_oshoosiclaw_containment_status,
@@ -1259,6 +1260,39 @@ async fn handle_connection(
             let json_body = handle_kernel_patcher_status(&state).await;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/kernel-patcher/scan") => {
+            let (status_code, json_body) = handle_kernel_patcher_scan(&state).await;
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/kernel-patcher/apply") => {
+            let (status_code, json_body) = handle_kernel_patcher_apply(&state, body).await;
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/kernel-patcher/perimeter") => {
+            let (status_code, json_body) = handle_kernel_patcher_perimeter(&state, body).await;
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
                 json_body.len(),
                 json_body
             );
@@ -3858,11 +3892,15 @@ async fn run_periodic_kernel_scan_cycle_with_base_url(
                     .enforce_byovd_virtual_patch_blocklist();
                 let ports =
                     crate::security::host_network_isolation::discover_active_octopus_ports();
-                let _ =
+                if let Ok(receipt) =
                     crate::security::host_network_isolation::apply_virtual_patch_perimeter_shield(
                         &global_posture,
                         &ports,
-                    );
+                    )
+                {
+                    let mut pguard = state.last_perimeter_receipt.write().await;
+                    *pguard = Some(receipt);
+                }
             }
             let degraded_summary = KernelScanSummary {
                 scanned_at: chrono::Utc::now(),
@@ -3906,10 +3944,15 @@ async fn run_periodic_kernel_scan_cycle_with_base_url(
             .kernel_sentinel
             .enforce_byovd_virtual_patch_blocklist();
         let ports = crate::security::host_network_isolation::discover_active_octopus_ports();
-        let _ = crate::security::host_network_isolation::apply_virtual_patch_perimeter_shield(
-            &global_posture,
-            &ports,
-        );
+        if let Ok(receipt) =
+            crate::security::host_network_isolation::apply_virtual_patch_perimeter_shield(
+                &global_posture,
+                &ports,
+            )
+        {
+            let mut pguard = state.last_perimeter_receipt.write().await;
+            *pguard = Some(receipt);
+        }
     }
 
     let cisa_kev_count = findings.iter().filter(|v| v.is_cisa_kev).count();

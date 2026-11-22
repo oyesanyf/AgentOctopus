@@ -24,7 +24,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -54,7 +54,7 @@ jobs:
             target: aarch64-apple-darwin
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -94,6 +94,12 @@ jobs:
       - name: Run Native SRT Hardening Integration Tests
         run: cargo test --test srt_hardening_integration_tests --all-features
 
+      - name: Run Kernel Patcher, Virtual-Patch Shield & Kernel Firewall Suites
+        run: |
+          cargo test --test virtual_patch_shield_tests --all-features
+          cargo test --test universal_killswitch_tests --all-features
+          cargo test --test kernel_sentinel_tests --all-features
+
       - name: Run SafeAgents 562-Case Misuse Simulation Suite
         run: cargo test --test safeagents_562_misuse_suite --all-features
 
@@ -105,7 +111,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -138,7 +144,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
