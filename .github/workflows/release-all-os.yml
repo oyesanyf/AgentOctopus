@@ -65,6 +65,7 @@ jobs:
           $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
           $ver = if ($env:REF_NAME -like "v*") { $env:REF_NAME.Substring(1) } elseif ($env:INPUT_VERSION) { $env:INPUT_VERSION } else { "0.2.0" }
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package_windows_msi.ps1 -Version $ver
+          if ($LASTEXITCODE -ne 0) { throw "package_windows_msi.ps1 failed with exit code $LASTEXITCODE" }
           & "target\release\start.exe" --verify
           if ($LASTEXITCODE -ne 0) { throw "start.exe --verify smoke check failed" }
           & "target\release\octopus.exe" --version

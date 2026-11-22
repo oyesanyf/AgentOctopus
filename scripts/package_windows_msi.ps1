@@ -161,37 +161,35 @@ try {
 
     Write-Host "[4/5] Verifying MSI Database Tables (Zero-Touch PATH, 6 Binaries, Metadata)..." -ForegroundColor Cyan
     $installer = New-Object -ComObject WindowsInstaller.Installer
-    $db = $installer.GetType().InvokeMember("OpenDatabase", "InvokeMethod", $null, $installer, @($MsiOut, 0))
+    $db = $installer.OpenDatabase($MsiOut, 0)
     try {
-        $view = $db.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $db, @("SELECT Value FROM Property WHERE Property='ProductName'"))
-        $view.GetType().InvokeMember("Execute", "InvokeMethod", $null, $view, $null) | Out-Null
-        $rec = $view.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $view, $null)
-        $prodName = $rec.GetType().InvokeMember("StringData", "GetProperty", $null, $rec, @(1))
-        $view.GetType().InvokeMember("Close", "InvokeMethod", $null, $view, $null) | Out-Null
+        $view = $db.OpenView("SELECT Value FROM Property WHERE Property='ProductName'")
+        $view.Execute()
+        $rec = $view.Fetch()
+        $prodName = $rec.StringData(1)
+        $view.Close()
         if ($prodName -ne "Agent Octopus") {
             throw "Unexpected MSI ProductName: $prodName"
         }
 
-        $fileView = $db.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $db, @("SELECT FileName FROM File"))
-        $fileView.GetType().InvokeMember("Execute", "InvokeMethod", $null, $fileView, $null) | Out-Null
+        $fileView = $db.OpenView("SELECT FileName FROM File")
+        $fileView.Execute()
         $msiFiles = @()
-        while ($true) {
-            $frec = $fileView.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $fileView, $null)
-            if ($null -eq $frec) { break }
-            $msiFiles += $frec.GetType().InvokeMember("StringData", "GetProperty", $null, $frec, @(1))
+        while ($null -ne ($frec = $fileView.Fetch())) {
+            $msiFiles += $frec.StringData(1)
         }
-        $fileView.GetType().InvokeMember("Close", "InvokeMethod", $null, $fileView, $null) | Out-Null
+        $fileView.Close()
         foreach ($bin in $BinNames) {
             if (-not ($msiFiles | Where-Object { $_ -like "*$bin" })) {
                 throw "MSI File table missing expected binary: $bin"
             }
         }
 
-        # Verify Environment table does not exist or contains zero PATH entries
-        $tblView = $db.GetType().InvokeMember("OpenView", "InvokeMethod", $null, $db, @("SELECT Name FROM _Tables WHERE Name='Environment'"))
-        $tblView.GetType().InvokeMember("Execute", "InvokeMethod", $null, $tblView, $null) | Out-Null
-        $trec = $tblView.GetType().InvokeMember("Fetch", "InvokeMethod", $null, $tblView, $null)
-        $tblView.GetType().InvokeMember("Close", "InvokeMethod", $null, $tblView, $null) | Out-Null
+        # Verify Environment table does not exist (Zero-Touch PATH invariant)
+        $tblView = $db.OpenView("SELECT Name FROM _Tables WHERE Name='Environment'")
+        $tblView.Execute()
+        $trec = $tblView.Fetch()
+        $tblView.Close()
         if ($null -ne $trec) {
             throw "MSI violates Zero-Touch PATH invariant: Environment table must not exist"
         }
