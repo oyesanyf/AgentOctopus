@@ -108,9 +108,23 @@ fn test_data_breakout_guard_blocks_cross_agent_scratchpad_pollution() {
     assert!(clean.is_clean);
 }
 
+fn unique_temp_path(label: &str) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "octopus_continuous_test_{}_{}_{}.json",
+        label,
+        std::process::id(),
+        nanos
+    ))
+}
+
 #[test]
 fn test_rl_adaptive_defense_engine_q_learning_and_reward() {
-    let rl = AdaptiveRlDefenseEngine::new("config/test_rl_policy.json");
+    let temp_rl_path = unique_temp_path("rl_policy");
+    let rl = AdaptiveRlDefenseEngine::new_enabled_advisory(temp_rl_path.to_str().unwrap());
 
     // Construct high threat state (Docker socket probe)
     let mut threat_state = AdaptiveStateVector::default();
@@ -146,11 +160,13 @@ fn test_rl_adaptive_defense_engine_q_learning_and_reward() {
     let stats = rl.stats();
     assert_eq!(stats.total_episodes, 1);
     assert_eq!(stats.total_steps, 1);
+    let _ = std::fs::remove_file(temp_rl_path);
 }
 
 #[test]
 fn test_prioritized_experience_replay_weighted_sampling_and_training() {
-    let rl = AdaptiveRlDefenseEngine::new("config/test_per_rl.json");
+    let temp_per_path = unique_temp_path("per_rl");
+    let rl = AdaptiveRlDefenseEngine::new_enabled_advisory(temp_per_path.to_str().unwrap());
 
     // Seed the replay buffer with distinct transitions having different TD priorities
     for i in 0..20 {
@@ -183,11 +199,13 @@ fn test_prioritized_experience_replay_weighted_sampling_and_training() {
     assert_eq!(m.sampled_batch_size, 8);
     assert!(m.max_importance_weight > 0.0);
     assert_eq!(m.priorities_updated, 8);
+    let _ = std::fs::remove_file(temp_per_path);
 }
 
 #[test]
 fn test_rl_policy_empirical_baseline_comparison() {
-    let rl = AdaptiveRlDefenseEngine::new("config/test_eval_rl.json");
+    let temp_eval_path = unique_temp_path("eval_rl");
+    let rl = AdaptiveRlDefenseEngine::new_enabled_advisory(temp_eval_path.to_str().unwrap());
 
     // Train on 30 initial exploration steps
     for i in 0..30 {
@@ -228,11 +246,13 @@ fn test_rl_policy_empirical_baseline_comparison() {
         benchmark.learned_cumulative_reward > benchmark.disabled_cumulative_reward,
         "Learned RL must outperform disabled baseline"
     );
+    let _ = std::fs::remove_file(temp_eval_path);
 }
 
 #[test]
 fn test_opentelemetry_session_telemetry_and_resilience_metrics() {
-    let otel = OtelSessionTelemetry::new("logs/test_otel_sessions.jsonl", 100);
+    let temp_otel_path = unique_temp_path("otel_sessions");
+    let otel = OtelSessionTelemetry::new(temp_otel_path.to_str().unwrap(), 100);
 
     let (session_id, trace_id) = otel.get_or_start_session("sess_agent_123", "network_arm");
     assert_eq!(session_id, "sess_agent_123");
@@ -261,21 +281,38 @@ fn test_opentelemetry_session_telemetry_and_resilience_metrics() {
     assert!(metrics.mttd_ms > 0.0);
     assert!(metrics.mttr_ms > 0.0);
     assert!(metrics.cumulative_survival_prob <= 1.0);
+    let _ = std::fs::remove_file(temp_otel_path);
 }
 
 #[tokio::test]
 async fn test_continuous_evaluation_cycle_executes_all_perimeters() {
     let breakout_coord = Arc::new(BreakoutDefenseCoordinator::default());
-    let rl_engine = Arc::new(AdaptiveRlDefenseEngine::new(
-        "config/test_continuous_rl.json",
+    let temp_cont_rl = unique_temp_path("continuous_rl");
+    let temp_cont_otel = unique_temp_path("continuous_otel");
+    let rl_engine = Arc::new(AdaptiveRlDefenseEngine::new_enabled_advisory(
+        temp_cont_rl.to_str().unwrap(),
     ));
     let otel_telemetry = Arc::new(OtelSessionTelemetry::new(
-        "logs/test_continuous_otel.jsonl",
+        temp_cont_otel.to_str().unwrap(),
         200,
     ));
 
-    let engine = ContinuousEvaluationEngine::new(breakout_coord, rl_engine, otel_telemetry);
+    // 1. Verify 100% deterministic containment WITHOUT RL
+    let det_engine = ContinuousEvaluationEngine::new_deterministic(
+        Arc::clone(&breakout_coord),
+        Arc::clone(&otel_telemetry),
+    );
+    let det_report = det_engine.run_continuous_training_cycle().await;
+    assert!(det_report.total_probes >= 25);
+    assert_eq!(
+        det_report.defensive_breaches, 0,
+        "Deterministic evaluation must contain all adversarial probes without RL: {:?}",
+        det_report.results_summary
+    );
+    assert_eq!(det_report.passed_invariants, det_report.total_probes);
 
+    // 2. Verify with optional advisory RL enabled
+    let engine = ContinuousEvaluationEngine::new(breakout_coord, rl_engine, otel_telemetry);
     let report = engine.run_continuous_training_cycle().await;
     assert!(
         report.total_probes >= 25,
@@ -288,4 +325,7 @@ async fn test_continuous_evaluation_cycle_executes_all_perimeters() {
     );
     assert_eq!(report.passed_invariants, report.total_probes);
     assert!(report.average_reward > 0.0);
+
+    let _ = std::fs::remove_file(temp_cont_rl);
+    let _ = std::fs::remove_file(temp_cont_otel);
 }

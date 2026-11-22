@@ -121,6 +121,13 @@ pub fn generate_macos_seatbelt_profile(config: &SandboxedMacosConfig) -> String 
     profile.push_str("    (literal \"/dev/null\")\n");
     profile.push_str("    (literal \"/dev/tty\")\n");
     profile.push_str("    (literal \"/dev/dtracehelper\"))\n");
+    profile.push_str("(deny system-kext-load)\n");
+    profile.push_str("(deny iokit-open)\n");
+    profile.push_str("(deny system-fsctl)\n");
+    profile.push_str("(deny system-nfssvc)\n");
+    profile.push_str("(deny system-privilege)\n");
+    profile.push_str("(deny system-acct)\n");
+    profile.push_str("(deny system-swap)\n");
     profile.push_str("(allow file-read* file-map-executable\n");
     for base_path in [
         "/usr",
@@ -136,7 +143,6 @@ pub fn generate_macos_seatbelt_profile(config: &SandboxedMacosConfig) -> String 
         "/private/var/select",
         "/private/etc",
         "/etc",
-        "/dev",
     ] {
         profile.push_str(&format!("    (subpath \"{}\")\n", base_path));
     }
@@ -357,6 +363,67 @@ pub fn kill_macos_process_subtree(root_pid: u32) -> Result<usize, OctopusSecurit
         }
     }
     Ok(killed)
+}
+
+/// Spawns a process strictly confined under `/usr/bin/sandbox-exec` with a fail-closed SBPL
+/// profile, passing sanitized `env_pairs` and inherited or piped stdio.
+#[cfg(target_os = "macos")]
+pub fn spawn_macos_seatbelt_process_with_stdio(
+    config: &SandboxedMacosConfig,
+    env_pairs: &[(String, String)],
+    pipe_stdio: bool,
+) -> Result<SandboxedMacosProcess, OctopusSecurityError> {
+    const SANDBOX_EXEC_BIN: &str = "/usr/bin/sandbox-exec";
+    if !Path::new(SANDBOX_EXEC_BIN).is_file() {
+        return Err(OctopusSecurityError::IsolationViolation(
+            "/usr/bin/sandbox-exec is missing; refusing uncontained macOS spawn".to_string(),
+        ));
+    }
+
+    let sbpl_profile = generate_macos_seatbelt_profile(config);
+    let resolved_program = resolve_macos_program_path(&config.program);
+    let sanitized_ports = if config.allow_loopback {
+        sanitize_firewall_preserved_ports(&config.control_ports)
+    } else {
+        Vec::new()
+    };
+
+    let mut cmd = Command::new(SANDBOX_EXEC_BIN);
+    cmd.arg("-p")
+        .arg(&sbpl_profile)
+        .arg(&resolved_program)
+        .args(&config.args)
+        .env_clear()
+        .envs(env_pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+
+    if pipe_stdio {
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+    } else {
+        cmd.stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+    }
+    if let Some(ref wd) = config.working_dir {
+        cmd.current_dir(wd);
+    }
+
+    let child = cmd.spawn().map_err(|e| {
+        OctopusSecurityError::IsolationViolation(format!(
+            "Failed to spawn macOS sandbox-exec child: {}",
+            e
+        ))
+    })?;
+    let root_pid = child.id();
+
+    Ok(SandboxedMacosProcess {
+        root_pid,
+        backend: "macos-seatbelt-sbpl".to_string(),
+        sbpl_profile,
+        control_ports: sanitized_ports,
+        child: Some(child),
+    })
 }
 
 /// Spawns a process strictly confined under `/usr/bin/sandbox-exec` with a fail-closed SBPL

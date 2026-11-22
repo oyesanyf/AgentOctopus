@@ -1,5 +1,7 @@
 {
-  "title": "Agent Octopus Vassilev Sisyphean Bound & RL Mathematical Validation Report",
+  "title": "Agent Octopus Vassilev Sisyphean Bound & Optional Offline/Advisory D3QN Validation Report",
+  "advisory_only": true,
+  "gates_deterministic_containment": false,
   "timestamp_unix": 1791632761.008604,
   "horizon_steps": 500,
   "static_epsilon_min": 0.01,

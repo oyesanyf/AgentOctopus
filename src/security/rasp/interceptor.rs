@@ -3,8 +3,121 @@ use super::context::{
 };
 use super::policy::RaspPolicyEngine;
 use crate::security::cedar_arm::CedarAuthorizationGateway;
-use regex::Regex;
+use regex::{Regex, RegexSet};
 use std::sync::Arc;
+
+const JAILBREAK_PATTERN_STRS: [&str; 11] = [
+    r"(?i)ignore\s+(all\s+)?(previous|prior)\s+(instructions|directives|rules)",
+    r"(?i)disregard\s+(all\s+)?(previous|prior|safety)\s+(rules|constraints|instructions)",
+    r"(?i)system\s*override\s*:\s*disable\s*security",
+    r"(?i)you\s+are\s+now\s+(in\s+)?(DAN|developer|jailbreak|unfiltered)\s+mode",
+    r"(?i)forget\s+(all\s+)?(security|safety|ethical)\s+(guidelines|rules|constraints)",
+    r"(?i)bypass\s+(cedar|rasp|policy|security|containment)\s+(gate|engine|checks)",
+    r"(?i)pretend\s+you\s+have\s+root\s+privileges",
+    r"(?i)exfiltrate\s+confidential\s+keys",
+    r"(?i)terminate\s+sandbox",
+    r"(?i)eject\s+process",
+    r"(?i)(gradually[_\s]+)?relax(ing)?[_\s]+security[_\s]+constraints",
+];
+
+/// Unified standard Base64 (+, /) and base64url (-, _) 6-bit LUT.
+/// 0..=63 => valid 6-bit value
+/// 0xFE   => skippable line-break inside Base64 run (\r, \n)
+/// 0xFF   => delimiter (including '=', whitespace, punctuation, '%', >= 0x80)
+const B64_LUT: [u8; 256] = {
+    let mut lut = [0xFFu8; 256];
+    let mut i = b'A' as usize;
+    while i <= b'Z' as usize {
+        lut[i] = (i - b'A' as usize) as u8;
+        i += 1;
+    }
+    i = b'a' as usize;
+    while i <= b'z' as usize {
+        lut[i] = (i - b'a' as usize + 26) as u8;
+        i += 1;
+    }
+    i = b'0' as usize;
+    while i <= b'9' as usize {
+        lut[i] = (i - b'0' as usize + 52) as u8;
+        i += 1;
+    }
+    lut[b'+' as usize] = 62;
+    lut[b'-' as usize] = 62;
+    lut[b'/' as usize] = 63;
+    lut[b'_' as usize] = 63;
+    lut[b'\r' as usize] = 0xFE;
+    lut[b'\n' as usize] = 0xFE;
+    lut
+};
+
+const ARENA_FLUSH_THRESHOLD: usize = 256 * 1024;
+
+#[inline]
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Strictly single-pass RFC 3986 %XX unescape.
+/// Returns None if no valid %XX sequence exists (zero allocation fast path).
+/// Never converts '+' to ' ' and never double-decodes (%252F -> %2F once).
+fn percent_decode_once(input: &[u8]) -> Option<Vec<u8>> {
+    if !input.contains(&b'%') {
+        return None;
+    }
+    let mut out: Option<Vec<u8>> = None;
+    let mut i = 0;
+    while i < input.len() {
+        if input[i] == b'%' && i + 2 < input.len() {
+            if let (Some(hi), Some(lo)) = (hex_val(input[i + 1]), hex_val(input[i + 2])) {
+                let buf = out.get_or_insert_with(|| {
+                    let mut v = Vec::with_capacity(input.len());
+                    v.extend_from_slice(&input[..i]);
+                    v
+                });
+                buf.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        if let Some(buf) = out.as_mut() {
+            buf.push(input[i]);
+        }
+        i += 1;
+    }
+    out
+}
+
+#[inline]
+fn push_sanitized_byte(out: &mut String, b: u8) -> bool {
+    if b.is_ascii_graphic() {
+        out.push(b as char);
+        true
+    } else if b.is_ascii_whitespace() {
+        out.push(' ');
+        true
+    } else {
+        // Sentinel prevents false-positive concatenation across binary/non-ASCII gaps
+        out.push('\0');
+        false
+    }
+}
+
+fn rot13_ascii(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        out.push(match c {
+            'a'..='m' | 'A'..='M' => ((c as u8) + 13) as char,
+            'n'..='z' | 'N'..='Z' => ((c as u8) - 13) as char,
+            _ => c,
+        });
+    }
+    out
+}
 
 /// Core trait implemented by all modular RT-ASP interceptors.
 pub trait RaspInterceptor: Send + Sync {
@@ -18,7 +131,7 @@ pub trait RaspInterceptor: Send + Sync {
 
 pub struct PromptInvocationInterceptor {
     policy_engine: Arc<RaspPolicyEngine>,
-    jailbreak_patterns: Vec<Regex>,
+    jailbreak_set: RegexSet,
     zero_width_regex: Regex,
 }
 
@@ -30,23 +143,14 @@ impl Default for PromptInvocationInterceptor {
 
 impl PromptInvocationInterceptor {
     pub fn new(policy_engine: Arc<RaspPolicyEngine>) -> Self {
-        let patterns = vec![
-            Regex::new(r"(?i)ignore\s+(all\s+)?(previous|prior)\s+(instructions|directives|rules)").unwrap(),
-            Regex::new(r"(?i)disregard\s+(all\s+)?(previous|prior|safety)\s+(rules|constraints|instructions)").unwrap(),
-            Regex::new(r"(?i)system\s*override\s*:\s*disable\s*security").unwrap(),
-            Regex::new(r"(?i)you\s+are\s+now\s+(in\s+)?(DAN|developer|jailbreak|unfiltered)\s+mode").unwrap(),
-            Regex::new(r"(?i)forget\s+(all\s+)?(security|safety|ethical)\s+(guidelines|rules|constraints)").unwrap(),
-            Regex::new(r"(?i)bypass\s+(cedar|rasp|policy|security|containment)\s+(gate|engine|checks)").unwrap(),
-            Regex::new(r"(?i)pretend\s+you\s+have\s+root\s+privileges").unwrap(),
-            Regex::new(r"(?i)exfiltrate\s+confidential\s+keys").unwrap(),
-        ];
+        let jailbreak_set = RegexSet::new(JAILBREAK_PATTERN_STRS).unwrap();
 
         let zero_width_regex =
             Regex::new(r"[\u{200B}\u{200C}\u{200D}\u{FEFF}\u{202A}-\u{202E}]").unwrap();
 
         Self {
             policy_engine,
-            jailbreak_patterns: patterns,
+            jailbreak_set,
             zero_width_regex,
         }
     }
@@ -82,20 +186,66 @@ impl PromptInvocationInterceptor {
             return (dec, Some(cat), TaintLevel::Malicious);
         }
 
-        // 3. Scan for adversarial injection patterns
-        for pattern in &self.jailbreak_patterns {
-            if pattern.is_match(prompt) {
-                let cat = RaspThreatCategory::PromptInjection;
+        // 3. Scan for adversarial injection patterns (raw, ROT13, Base64/base64url, and single-pass %XX unescaped)
+        if let Some(blocked) = self.match_jailbreak_set(
+            prompt,
+            "Direct prompt injection pattern matched",
+            "RASP-PROMPT-002",
+            subject,
+        ) {
+            return blocked;
+        }
+
+        {
+            let rot13_decoded = rot13_ascii(prompt);
+            if let Some(blocked) = self.match_jailbreak_set(
+                &rot13_decoded,
+                "ROT13-obfuscated prompt injection pattern matched",
+                "RASP-PROMPT-003",
+                subject,
+            ) {
+                return blocked;
+            }
+        }
+
+        if let Some(blocked) = self.scan_base64_in_bytes(prompt.as_bytes(), subject) {
+            return blocked;
+        }
+
+        if let Some(unescaped) = percent_decode_once(prompt.as_bytes()) {
+            let unescaped_str = String::from_utf8_lossy(&unescaped);
+            if self.zero_width_regex.is_match(&unescaped_str) {
+                let cat = RaspThreatCategory::SteganographySmuggling;
                 let dec = self.policy_engine.evaluate_mitigation_action(
                     cat,
-                    &format!(
-                        "Direct prompt injection pattern matched: {}",
-                        pattern.as_str()
-                    ),
+                    "Zero-width unicode steganographic characters detected in prompt",
                     subject,
-                    "RASP-PROMPT-002",
+                    "RASP-PROMPT-001",
                 );
                 return (dec, Some(cat), TaintLevel::Malicious);
+            }
+            if let Some(blocked) = self.match_jailbreak_set(
+                &unescaped_str,
+                "URL-encoded prompt injection pattern matched",
+                "RASP-PROMPT-002",
+                subject,
+            ) {
+                return blocked;
+            }
+            {
+                let rot13_unescaped = rot13_ascii(&unescaped_str);
+                if let Some(blocked) = self.match_jailbreak_set(
+                    &rot13_unescaped,
+                    "ROT13-obfuscated prompt injection pattern matched",
+                    "RASP-PROMPT-003",
+                    subject,
+                ) {
+                    return blocked;
+                }
+            }
+            drop(unescaped_str);
+            if let Some(blocked) = self.scan_base64_in_bytes(&unescaped, subject) {
+                return blocked;
             }
         }
 
@@ -130,6 +280,145 @@ impl PromptInvocationInterceptor {
             TaintLevel::Clean,
         )
     }
+
+    fn match_jailbreak_set(
+        &self,
+        haystack: &str,
+        prefix: &str,
+        rule_id: &str,
+        subject: &AgentSecuritySubject,
+    ) -> Option<(RaspDecision, Option<RaspThreatCategory>, TaintLevel)> {
+        let matches = self.jailbreak_set.matches(haystack);
+        if let Some(idx) = matches.iter().next() {
+            let cat = RaspThreatCategory::PromptInjection;
+            let dec = self.policy_engine.evaluate_mitigation_action(
+                cat,
+                &format!("{}: {}", prefix, JAILBREAK_PATTERN_STRS[idx]),
+                subject,
+                rule_id,
+            );
+            return Some((dec, Some(cat), TaintLevel::Malicious));
+        }
+        None
+    }
+
+    fn scan_base64_in_bytes(
+        &self,
+        bytes: &[u8],
+        subject: &AgentSecuritySubject,
+    ) -> Option<(RaspDecision, Option<RaspThreatCategory>, TaintLevel)> {
+        let mut run_buf: Vec<u8> = Vec::new();
+        let mut decoded_arena = String::new();
+
+        for &b in bytes {
+            let code = B64_LUT[b as usize];
+            if code < 64 {
+                run_buf.push(code);
+            } else if code == 0xFE {
+                // Skip \r and \n inside Base64 runs (handles MIME/PEM wrapping & %0A splits)
+                continue;
+            } else {
+                if run_buf.len() >= 8 {
+                    if let Some(blocked) =
+                        self.decode_run_all_offsets(&run_buf, &mut decoded_arena, subject)
+                    {
+                        return Some(blocked);
+                    }
+                }
+                run_buf.clear();
+            }
+        }
+
+        if run_buf.len() >= 8 {
+            if let Some(blocked) =
+                self.decode_run_all_offsets(&run_buf, &mut decoded_arena, subject)
+            {
+                return Some(blocked);
+            }
+        }
+
+        if !decoded_arena.is_empty() {
+            return self.match_jailbreak_set(
+                &decoded_arena,
+                "Base64-obfuscated prompt injection pattern matched",
+                "RASP-PROMPT-004",
+                subject,
+            );
+        }
+
+        None
+    }
+
+    fn decode_run_all_offsets(
+        &self,
+        run_codes: &[u8],
+        decoded_arena: &mut String,
+        subject: &AgentSecuritySubject,
+    ) -> Option<(RaspDecision, Option<RaspThreatCategory>, TaintLevel)> {
+        for offset in 0..4 {
+            let slice = &run_codes[offset..];
+            if slice.len() < 8 {
+                break;
+            }
+            let start_len = decoded_arena.len();
+            let mut printable_count = 0usize;
+
+            let chunks = slice.chunks_exact(4);
+            let rem = chunks.remainder();
+            for c in chunks {
+                let v = ((c[0] as u32) << 18)
+                    | ((c[1] as u32) << 12)
+                    | ((c[2] as u32) << 6)
+                    | (c[3] as u32);
+                if push_sanitized_byte(decoded_arena, ((v >> 16) & 0xFF) as u8) {
+                    printable_count += 1;
+                }
+                if push_sanitized_byte(decoded_arena, ((v >> 8) & 0xFF) as u8) {
+                    printable_count += 1;
+                }
+                if push_sanitized_byte(decoded_arena, (v & 0xFF) as u8) {
+                    printable_count += 1;
+                }
+            }
+            match rem.len() {
+                2 => {
+                    let b0 = (rem[0] << 2) | (rem[1] >> 4);
+                    if push_sanitized_byte(decoded_arena, b0) {
+                        printable_count += 1;
+                    }
+                }
+                3 => {
+                    let b0 = (rem[0] << 2) | (rem[1] >> 4);
+                    let b1 = (rem[1] << 4) | (rem[2] >> 2);
+                    if push_sanitized_byte(decoded_arena, b0) {
+                        printable_count += 1;
+                    }
+                    if push_sanitized_byte(decoded_arena, b1) {
+                        printable_count += 1;
+                    }
+                }
+                _ => {}
+            }
+
+            if printable_count < 4 {
+                decoded_arena.truncate(start_len);
+            } else {
+                decoded_arena.push('\0');
+                if decoded_arena.len() >= ARENA_FLUSH_THRESHOLD {
+                    if let Some(blocked) = self.match_jailbreak_set(
+                        decoded_arena,
+                        "Base64-obfuscated prompt injection pattern matched",
+                        "RASP-PROMPT-004",
+                        subject,
+                    ) {
+                        return Some(blocked);
+                    }
+                    decoded_arena.clear();
+                }
+            }
+        }
+        None
+    }
 }
 
 impl RaspInterceptor for PromptInvocationInterceptor {
@@ -162,7 +451,7 @@ impl ToolActuatorInterceptor {
     pub fn new(policy_engine: Arc<RaspPolicyEngine>) -> Self {
         let cmd_regex = Regex::new(r#"(?i)(;|&&|\|\||`|\$\(|\bpowershell(\.exe)?\b|\bcmd(\.exe)?\b|\bbash\b|\bwscript(\.exe)?\b)"#).unwrap();
         let path_regex =
-            Regex::new(r#"(?i)(\.\./|\.\.\\|/etc/passwd|c:\\windows\\system32|%2e%2e)"#).unwrap();
+            Regex::new(r#"(?i)(\.\./|\.\.\\|/etc/passwd|c:\\+windows\\+system32|%2e%2e)"#).unwrap();
 
         Self {
             policy_engine,
@@ -359,7 +648,10 @@ impl MemoryScratchpadInterceptor {
             if parts.len() >= 2 {
                 let owner = parts[1];
                 if owner != subject.agent_id
-                    && subject.trust_tier == AgentTrustTier::WorkerSandboxed
+                    && matches!(
+                        subject.trust_tier,
+                        AgentTrustTier::WorkerSandboxed | AgentTrustTier::UntrustedExternal
+                    )
                 {
                     let cat = RaspThreatCategory::ScratchpadBleed;
                     let dec = self.policy_engine.evaluate_mitigation_action(

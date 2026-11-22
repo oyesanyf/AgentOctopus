@@ -3,9 +3,11 @@
 #[cfg(windows)]
 use super::super::cpe::{canonicalize_windows_cpe, Cpe23};
 use super::super::error::PatcherError;
-use super::super::types::HostKernelInfo;
 #[cfg(windows)]
 use super::super::types::OsFamily;
+use super::super::types::{
+    HostKernelInfo, LivepatchEngine, LivepatchStatus, OsSecurityPosture, RebootPendingStatus,
+};
 
 #[cfg(windows)]
 #[repr(C)]
@@ -281,6 +283,173 @@ pub fn detect_windows_kernel() -> Result<HostKernelInfo, PatcherError> {
         cpe23,
         architecture: std::env::consts::ARCH.to_string(),
     })
+}
+
+/// Raw Windows security posture & reboot-pending registry flags (cross-OS unit testable).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WindowsRawPostureInput {
+    pub hvci_enabled: Option<u32>,
+    pub vbs_enabled: Option<u32>,
+    pub vulnerable_driver_blocklist: Option<u32>,
+    pub hotpatch_enrolled: Option<u32>,
+    pub cbs_reboot_pending: bool,
+    pub wu_reboot_required: bool,
+    pub pending_file_rename_ops: bool,
+}
+
+/// Pure analyzer converting raw Windows registry values into `OsSecurityPosture`,
+/// `RebootPendingStatus`, and `LivepatchStatus`.
+#[must_use]
+pub fn parse_windows_posture(
+    running_kernel: &str,
+    raw: &WindowsRawPostureInput,
+) -> (OsSecurityPosture, RebootPendingStatus, LivepatchStatus) {
+    let hvci = raw.hvci_enabled.map(|v| v != 0);
+    let vbs = raw.vbs_enabled.map(|v| v != 0);
+    let blocklist = raw.vulnerable_driver_blocklist.map(|v| v != 0);
+    let hotpatch_active = raw.hotpatch_enrolled.map(|v| v == 1);
+
+    let livepatch = if hotpatch_active == Some(true) {
+        LivepatchStatus {
+            engine: LivepatchEngine::WindowsHotpatch,
+            active_in_ram: true,
+            sysfs_patches: Vec::new(),
+            details: "Windows Hotpatch enrolled (rebootless security updates)".to_string(),
+        }
+    } else {
+        LivepatchStatus::default()
+    };
+
+    let mut reasons = Vec::new();
+    if raw.cbs_reboot_pending {
+        reasons.push(r"CBS\RebootPending key present".to_string());
+    }
+    if raw.wu_reboot_required {
+        reasons.push(r"WindowsUpdate\Auto Update\RebootRequired key present".to_string());
+    }
+    if raw.pending_file_rename_ops {
+        reasons.push(r"Session Manager\PendingFileRenameOperations non-empty".to_string());
+    }
+
+    let reboot_required = !reasons.is_empty();
+    let shield_locked_until_reboot = reboot_required && !livepatch.active_in_ram;
+
+    let posture = OsSecurityPosture {
+        hvci_enabled: hvci,
+        vbs_enabled: vbs,
+        vulnerable_driver_blocklist_enabled: blocklist,
+        hotpatch_enrolled: hotpatch_active,
+        ..Default::default()
+    };
+    let reboot = RebootPendingStatus {
+        reboot_required,
+        running_kernel: running_kernel.to_string(),
+        newest_installed_kernel: None,
+        reasons,
+        livepatch_mitigated: livepatch.active_in_ram,
+        shield_locked_until_reboot,
+    };
+    (posture, reboot, livepatch)
+}
+
+#[cfg(windows)]
+fn read_hklm_dword(subkey_path: &str, value_name: &str) -> Option<u32> {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ};
+
+    let subkey = to_wide_null(subkey_path);
+    let mut hkey: HKEY = std::ptr::null_mut();
+    let status =
+        unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.as_ptr(), 0, KEY_READ, &mut hkey) };
+    if status != ERROR_SUCCESS || hkey.is_null() {
+        return None;
+    }
+    let guard = RegKeyGuard(hkey);
+    read_reg_dword(guard.0, value_name)
+}
+
+#[cfg(windows)]
+fn hklm_key_exists(subkey_path: &str) -> bool {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ};
+
+    let subkey = to_wide_null(subkey_path);
+    let mut hkey: HKEY = std::ptr::null_mut();
+    let status =
+        unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.as_ptr(), 0, KEY_READ, &mut hkey) };
+    if status == ERROR_SUCCESS && !hkey.is_null() {
+        let _guard = RegKeyGuard(hkey);
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(windows)]
+fn hklm_value_non_empty(subkey_path: &str, value_name: &str) -> bool {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{
+        RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_VALUE_TYPE,
+    };
+
+    let subkey = to_wide_null(subkey_path);
+    let mut hkey: HKEY = std::ptr::null_mut();
+    let status =
+        unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.as_ptr(), 0, KEY_READ, &mut hkey) };
+    if status != ERROR_SUCCESS || hkey.is_null() {
+        return false;
+    }
+    let guard = RegKeyGuard(hkey);
+    let wide_name = to_wide_null(value_name);
+    let mut val_type: REG_VALUE_TYPE = 0;
+    let mut cb_data: u32 = 0;
+    let st = unsafe {
+        RegQueryValueExW(
+            guard.0,
+            wide_name.as_ptr(),
+            std::ptr::null(),
+            &mut val_type,
+            std::ptr::null_mut(),
+            &mut cb_data,
+        )
+    };
+    st == ERROR_SUCCESS && cb_data > 4
+}
+
+/// Queries live Windows HVCI, VBS, Vulnerable Driver Blocklist, Hotpatch, and RebootPending state.
+#[cfg(windows)]
+pub fn query_windows_posture(
+    running_kernel: &str,
+) -> (OsSecurityPosture, RebootPendingStatus, LivepatchStatus) {
+    let raw = WindowsRawPostureInput {
+        hvci_enabled: read_hklm_dword(
+            r"SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity",
+            "Enabled",
+        ),
+        vbs_enabled: read_hklm_dword(
+            r"SYSTEM\CurrentControlSet\Control\DeviceGuard",
+            "EnableVirtualizationBasedSecurity",
+        ),
+        vulnerable_driver_blocklist: read_hklm_dword(
+            r"SYSTEM\CurrentControlSet\Control\CI\Config",
+            "VulnerableDriverBlocklistEnable",
+        ),
+        hotpatch_enrolled: read_hklm_dword(
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Hotpatch",
+            "Enabled",
+        ),
+        cbs_reboot_pending: hklm_key_exists(
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending",
+        ),
+        wu_reboot_required: hklm_key_exists(
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired",
+        ),
+        pending_file_rename_ops: hklm_value_non_empty(
+            r"SYSTEM\CurrentControlSet\Control\Session Manager",
+            "PendingFileRenameOperations",
+        ),
+    };
+    parse_windows_posture(running_kernel, &raw)
 }
 
 #[cfg(not(windows))]

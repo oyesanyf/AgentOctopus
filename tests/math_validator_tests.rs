@@ -143,7 +143,15 @@ fn test_monte_carlo_simulation_and_hypothesis_test() {
 
 #[test]
 fn test_enhanced_dueling_q_and_epistemic_uncertainty() {
-    let rl = AdaptiveRlDefenseEngine::new("config/test_enhanced_rl.json");
+    let temp_rl_path = std::env::temp_dir().join(format!(
+        "octopus_test_enhanced_rl_{}_{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let rl = AdaptiveRlDefenseEngine::new_enabled_advisory(temp_rl_path.to_str().unwrap());
 
     // 1. Initial epistemic uncertainty should be high for unseen state
     let mut s = AdaptiveStateVector::default();
@@ -193,4 +201,6 @@ fn test_enhanced_dueling_q_and_epistemic_uncertainty() {
     let stats = rl.stats();
     assert!(stats.dueling_state_values_count > 0);
     assert!(stats.prioritized_replay_p95_weight > 0.0);
+
+    let _ = std::fs::remove_file(temp_rl_path);
 }

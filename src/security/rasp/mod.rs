@@ -31,7 +31,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 /// 3. Memory & Scratchpads (Canary tripwires, credential leakage redaction, cross-agent isolation)
 /// 4. Agent-to-Agent Lateral Traffic (Collusion, un-attested disbursements, cyclic delegation)
 /// 5. OS Substrate & Syscalls (Windows Job Object 64MB memory clamp, process creation veto)
-/// 6. Autonomous Self-Healing & Closed-Loop Reinforcement Learning Integration
+/// 6. Deterministic Breach-Counter Self-Healing with Optional Offline RL Advisory Telemetry
 pub struct AgentRaspEngine {
     policy_engine: Arc<RaspPolicyEngine>,
     prompt_interceptor: PromptInvocationInterceptor,
@@ -43,9 +43,19 @@ pub struct AgentRaspEngine {
     self_healing: Arc<RaspSelfHealingController>,
 }
 
+impl Default for AgentRaspEngine {
+    fn default() -> Self {
+        Self::new_deterministic(Arc::new(OtelSessionTelemetry::default()))
+    }
+}
+
 impl AgentRaspEngine {
+    pub fn new_deterministic(otel_telemetry: Arc<OtelSessionTelemetry>) -> Self {
+        Self::new(None, otel_telemetry)
+    }
+
     pub fn new(
-        rl_defense: Arc<AdaptiveRlDefenseEngine>,
+        rl_defense: Option<Arc<AdaptiveRlDefenseEngine>>,
         otel_telemetry: Arc<OtelSessionTelemetry>,
     ) -> Self {
         let policy_engine = Arc::new(RaspPolicyEngine::default());
@@ -108,7 +118,7 @@ impl AgentRaspEngine {
             sanitized_output_summary: None,
             latency_micros,
             trace_id: generate_trace_id(),
-            remediated_by_rl: decision.is_blocked(),
+            remediated_by_rl: false,
             attributes: HashMap::new(),
         };
 
@@ -153,7 +163,7 @@ impl AgentRaspEngine {
             sanitized_output_summary: Some(modified_params.to_string().chars().take(96).collect()),
             latency_micros,
             trace_id: generate_trace_id(),
-            remediated_by_rl: decision.is_blocked(),
+            remediated_by_rl: false,
             attributes: HashMap::new(),
         };
 
@@ -187,7 +197,7 @@ impl AgentRaspEngine {
             sanitized_output_summary: None,
             latency_micros,
             trace_id: generate_trace_id(),
-            remediated_by_rl: decision.is_blocked(),
+            remediated_by_rl: false,
             attributes: HashMap::new(),
         };
 
@@ -224,7 +234,7 @@ impl AgentRaspEngine {
             sanitized_output_summary: Some(sanitized.chars().take(64).collect()),
             latency_micros,
             trace_id: generate_trace_id(),
-            remediated_by_rl: decision.is_blocked(),
+            remediated_by_rl: false,
             attributes: HashMap::new(),
         };
 
@@ -261,7 +271,7 @@ impl AgentRaspEngine {
             sanitized_output_summary: None,
             latency_micros,
             trace_id: generate_trace_id(),
-            remediated_by_rl: decision.is_blocked(),
+            remediated_by_rl: false,
             attributes: HashMap::new(),
         };
 
@@ -298,7 +308,7 @@ impl AgentRaspEngine {
             sanitized_output_summary: None,
             latency_micros,
             trace_id: generate_trace_id(),
-            remediated_by_rl: decision.is_blocked(),
+            remediated_by_rl: false,
             attributes: HashMap::new(),
         };
 
@@ -337,7 +347,7 @@ impl AgentRaspEngine {
             sanitized_output_summary: None,
             latency_micros,
             trace_id: generate_trace_id(),
-            remediated_by_rl: decision.is_blocked(),
+            remediated_by_rl: false,
             attributes: HashMap::new(),
         };
 

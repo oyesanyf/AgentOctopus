@@ -148,8 +148,10 @@ impl ProtocolWorldModel {
         let mut initial_entropy = 0.0;
         let mut final_entropy = 0.0;
 
-        let rfc_keys: Vec<u32> = policy.rfc_weights.keys().cloned().collect();
-        let mut_keys: Vec<String> = policy.mutation_weights.keys().cloned().collect();
+        let mut rfc_keys: Vec<u32> = policy.rfc_weights.keys().cloned().collect();
+        rfc_keys.sort_unstable();
+        let mut mut_keys: Vec<String> = policy.mutation_weights.keys().cloned().collect();
+        mut_keys.sort();
 
         if rfc_keys.is_empty() || mut_keys.is_empty() {
             return DreamRolloutReport {

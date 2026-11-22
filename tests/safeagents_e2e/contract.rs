@@ -2,7 +2,7 @@
 //! [AGENT OCTOPUS] SAFEAGENTS E2E OPAQUE-BOX VERIFICATION CONTRACT & REFERENCE ORACLE
 //! ==============================================================================
 //! Authoritative reference models, specification contracts, and verification oracles
-//! derived strictly from upstream SafeAgents, atif-scan, and PROJECT.md.
+//! derived strictly from upstream SafeAgents and atif-scan.
 //! ==============================================================================
 
 use regex::Regex;

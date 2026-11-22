@@ -699,6 +699,126 @@ impl ReteEngine {
         self.eviction_queue_osquery.write().unwrap().clear();
         self.eviction_queue_rea.write().unwrap().clear();
     }
+
+    /// Evaluates a pre-spawn binary integrity fact through the RETE Alpha/Beta memories and
+    /// `OpenJevDecisionVoter`, returning a deterministic fail-closed pre-exec verdict.
+    pub fn evaluate_pre_spawn_rea_gate(
+        &self,
+        fact: ReaBinaryFact,
+        has_wx_violation: bool,
+        has_raw_size_anomaly: bool,
+        header_anomalies: &[String],
+        binary_format: crate::security::rea_binary_gate::BinaryFormat,
+        policy: &PreSpawnReaPolicy,
+    ) -> PreSpawnReaVerdict {
+        self.insert_rea_fact(fact.clone());
+        let bundle =
+            self.evaluate_beta_join(fact.pid)
+                .unwrap_or_else(|| CorrelatedEvidenceBundle {
+                    pid: fact.pid,
+                    flow: None,
+                    process: None,
+                    binary: Some(fact.clone()),
+                    protocol: NetworkProtocol::HttpHttps,
+                    dst_host: "local_exec".to_string(),
+                });
+        let voter = OpenJevDecisionVoter::vote(&bundle);
+
+        let mut reasons = Vec::new();
+        if policy.enabled {
+            if !header_anomalies.is_empty() {
+                reasons.push(format!(
+                    "binary_header_anomalies({})",
+                    header_anomalies.join(",")
+                ));
+            }
+            if binary_format == crate::security::rea_binary_gate::BinaryFormat::Unknown {
+                reasons.push("unknown_binary_format_rejected".to_string());
+            }
+            if policy.block_packed && fact.is_packed {
+                reasons.push("packed_binary_blocked".to_string());
+            }
+            if policy.block_packed && has_raw_size_anomaly {
+                reasons.push("raw_size_or_section_anomaly".to_string());
+            }
+            if policy.block_wx_sections && has_wx_violation {
+                reasons.push("wx_memory_section_violation".to_string());
+            }
+            if policy.block_direct_syscalls
+                && fact.direct_syscall_count > policy.max_allowed_direct_syscalls
+            {
+                reasons.push(format!(
+                    "direct_syscall_stubs_detected(count={})",
+                    fact.direct_syscall_count
+                ));
+            }
+            if policy.block_packed
+                && fact.obfuscation_entropy >= policy.entropy_threshold
+                && (fact.is_packed || has_wx_violation || has_raw_size_anomaly)
+            {
+                reasons.push(format!(
+                    "high_obfuscation_entropy_with_anomaly({:.2}>={:.2})",
+                    fact.obfuscation_entropy, policy.entropy_threshold
+                ));
+            }
+            if policy.require_signed_binaries && !fact.is_authenticode_signed {
+                reasons.push("unsigned_binary_rejected".to_string());
+            }
+            if !fact.yara_detections.is_empty() {
+                reasons.push(format!(
+                    "yara_detections({})",
+                    fact.yara_detections.join(",")
+                ));
+            }
+        }
+
+        PreSpawnReaVerdict {
+            allowed: reasons.is_empty(),
+            reasons,
+            fact,
+            openjev_malicious_prob: voter.malicious_prob,
+        }
+    }
+}
+
+fn default_rea_policy_enabled() -> bool {
+    true
+}
+
+/// Deterministic policy knobs governing the RETE pre-spawn REA gate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreSpawnReaPolicy {
+    #[serde(default = "default_rea_policy_enabled")]
+    pub enabled: bool,
+    pub require_signed_binaries: bool,
+    pub block_packed: bool,
+    pub block_wx_sections: bool,
+    pub block_direct_syscalls: bool,
+    pub max_allowed_direct_syscalls: u32,
+    pub entropy_threshold: f64,
+}
+
+impl Default for PreSpawnReaPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            require_signed_binaries: false,
+            block_packed: true,
+            block_wx_sections: true,
+            block_direct_syscalls: true,
+            max_allowed_direct_syscalls: 0,
+            entropy_threshold: 6.4,
+        }
+    }
+}
+
+/// Deterministic verdict returned by `ReteEngine::evaluate_pre_spawn_rea_gate`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreSpawnReaVerdict {
+    pub allowed: bool,
+    pub reasons: Vec<String>,
+    pub fact: ReaBinaryFact,
+    pub openjev_malicious_prob: f64,
 }
 
 // ============================================================================
@@ -959,10 +1079,21 @@ impl GenerativeLlmVoter {
 pub struct RateLimitVoterEnsemble;
 
 impl RateLimitVoterEnsemble {
-    /// Evaluates all 3 voters, calculates weighted consensus, and enforces the 4 Hard Invariants.
+    /// Evaluates all 3 voters, calculates weighted consensus, and enforces the 4 Hard Invariants
+    /// using the default global [`RateLimitAllowlist`].
     pub fn evaluate_and_vote(&self, bundle: &CorrelatedEvidenceBundle) -> VoterConsensus {
+        self.evaluate_and_vote_with_allowlist(bundle, &DEFAULT_ALLOWLIST_STORE)
+    }
+
+    /// Evaluates all 3 voters, calculates weighted consensus, and enforces the 4 Hard Invariants
+    /// against an explicit [`RateLimitAllowlistStore`].
+    pub fn evaluate_and_vote_with_allowlist(
+        &self,
+        bundle: &CorrelatedEvidenceBundle,
+        allowlist: &RateLimitAllowlistStore,
+    ) -> VoterConsensus {
         // --- Hard Invariant 0: User Override Gate ---
-        if RateLimitAllowlist::is_released(&bundle.dst_host, bundle.protocol, Some(bundle.pid)) {
+        if allowlist.is_released(&bundle.dst_host, bundle.protocol, Some(bundle.pid)) {
             let action = EdrAction::AllowAndWhitelistWindow {
                 duration_secs: 86400,
                 reason: "User manual rate-limit release override active".to_string(),
@@ -1040,7 +1171,12 @@ impl RateLimitVoterEnsemble {
         let is_interactive_unpacked = is_interactive && !is_packed && direct_syscalls == 0;
 
         // --- Hard Invariant 1: Compliant Exponential Backoff ---
-        if backoff_compliant && honors_retry_after && entropy < 6.4 {
+        if backoff_compliant
+            && honors_retry_after
+            && entropy < 6.4
+            && !is_packed
+            && direct_syscalls == 0
+        {
             let action = EdrAction::AllowAndWhitelistWindow {
                 duration_secs: 3600,
                 reason: "Compliant exponential backoff with jitter and verified binary".to_string(),
@@ -1162,9 +1298,119 @@ pub struct RateLimitReleaseEntry {
     pub timestamp_epoch_secs: u64,
 }
 
-static ALLOWLIST_CACHE: LazyLock<RwLock<Vec<RateLimitReleaseEntry>>> =
-    LazyLock::new(|| RwLock::new(Vec::new()));
-static ALLOWLIST_LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Instance-scoped analyst/user manual rate-limit release overrides persisted in JSON.
+pub struct RateLimitAllowlistStore {
+    path: PathBuf,
+    cache: RwLock<Vec<RateLimitReleaseEntry>>,
+    loaded: std::sync::atomic::AtomicBool,
+}
+
+impl RateLimitAllowlistStore {
+    /// Creates an isolated allowlist store backed by `path`.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            cache: RwLock::new(Vec::new()),
+            loaded: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Returns the backing JSON file path for this store.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// Loads allowlist from disk into this store's in-memory cache.
+    pub fn reload(&self) {
+        let entries: Vec<RateLimitReleaseEntry> = if self.path.exists() {
+            fs::read_to_string(&self.path)
+                .ok()
+                .and_then(|c| serde_json::from_str(&c).ok())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let mut lock = self.cache.write().unwrap();
+        *lock = entries;
+        self.loaded.store(true, Ordering::SeqCst);
+    }
+
+    /// Checks if a release override exists matching destination host, protocol, or PID.
+    pub fn is_released(&self, host: &str, proto: NetworkProtocol, pid: Option<u32>) -> bool {
+        if !self.loaded.load(Ordering::Relaxed) {
+            self.reload();
+        }
+
+        let lock = self.cache.read().unwrap();
+        let h_lower = host.trim().to_ascii_lowercase();
+        let proto_str = proto.as_str().to_ascii_lowercase();
+
+        lock.iter().any(|entry| {
+            let entry_host = entry.destination_host.trim().to_ascii_lowercase();
+            let host_match = entry_host == "*" || entry_host == h_lower;
+
+            let entry_proto = entry.protocol.trim().to_ascii_lowercase();
+            let proto_match = entry_proto == "*" || entry_proto == proto_str;
+
+            let pid_match = match (entry.pid, pid) {
+                (Some(ep), Some(target_p)) => ep == target_p,
+                (None, _) => true,
+                _ => false,
+            };
+
+            host_match && proto_match && pid_match
+        })
+    }
+
+    /// Appends a new release override entry and persists to disk.
+    pub fn add_entry(&self, entry: RateLimitReleaseEntry) -> Result<(), String> {
+        if let Some(parent) = self.path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        {
+            let mut lock = self.cache.write().unwrap();
+            lock.retain(|e| {
+                !(e.destination_host
+                    .eq_ignore_ascii_case(&entry.destination_host)
+                    && e.protocol.eq_ignore_ascii_case(&entry.protocol)
+                    && e.pid == entry.pid)
+            });
+            lock.push(entry);
+
+            let json_str = serde_json::to_string_pretty(&*lock).map_err(|e| e.to_string())?;
+            fs::write(&self.path, json_str).map_err(|e| e.to_string())?;
+        }
+        self.loaded.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Returns a snapshot of all active release entries.
+    pub fn list_entries(&self) -> Vec<RateLimitReleaseEntry> {
+        if !self.loaded.load(Ordering::Relaxed) {
+            self.reload();
+        }
+        self.cache.read().unwrap().clone()
+    }
+
+    /// Clears all entries from allowlist.
+    pub fn clear(&self) -> Result<(), String> {
+        {
+            let mut lock = self.cache.write().unwrap();
+            lock.clear();
+            let json_str = serde_json::to_string_pretty(&*lock).map_err(|e| e.to_string())?;
+            if self.path.exists() || self.path.parent().map(|d| d.exists()).unwrap_or(false) {
+                let _ = fs::write(&self.path, json_str);
+            }
+        }
+        self.loaded.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+static DEFAULT_ALLOWLIST_STORE: LazyLock<RateLimitAllowlistStore> =
+    LazyLock::new(|| RateLimitAllowlistStore::new(RateLimitAllowlist::file_path()));
 
 /// Manages analyst/user manual rate-limit release overrides persisted in JSON.
 pub struct RateLimitAllowlist;
@@ -1187,93 +1433,27 @@ impl RateLimitAllowlist {
 
     /// Loads allowlist from disk into in-memory cache.
     pub fn reload() {
-        let p = Self::file_path();
-        let entries: Vec<RateLimitReleaseEntry> = if p.exists() {
-            fs::read_to_string(&p)
-                .ok()
-                .and_then(|c| serde_json::from_str(&c).ok())
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        let mut lock = ALLOWLIST_CACHE.write().unwrap();
-        *lock = entries;
-        ALLOWLIST_LOADED.store(true, Ordering::SeqCst);
+        DEFAULT_ALLOWLIST_STORE.reload();
     }
 
     /// Checks if a release override exists matching destination host, protocol, or PID.
     pub fn is_released(host: &str, proto: NetworkProtocol, pid: Option<u32>) -> bool {
-        if !ALLOWLIST_LOADED.load(Ordering::Relaxed) {
-            Self::reload();
-        }
-
-        let lock = ALLOWLIST_CACHE.read().unwrap();
-        let h_lower = host.trim().to_ascii_lowercase();
-        let proto_str = proto.as_str().to_ascii_lowercase();
-
-        lock.iter().any(|entry| {
-            let entry_host = entry.destination_host.trim().to_ascii_lowercase();
-            let host_match = entry_host == "*" || entry_host == h_lower;
-
-            let entry_proto = entry.protocol.trim().to_ascii_lowercase();
-            let proto_match = entry_proto == "*" || entry_proto == proto_str;
-
-            let pid_match = match (entry.pid, pid) {
-                (Some(ep), Some(target_p)) => ep == target_p,
-                (None, _) => true,
-                _ => false,
-            };
-
-            host_match && proto_match && pid_match
-        })
+        DEFAULT_ALLOWLIST_STORE.is_released(host, proto, pid)
     }
 
     /// Appends a new release override entry and persists to disk.
     pub fn add_entry(entry: RateLimitReleaseEntry) -> Result<(), String> {
-        let p = Self::file_path();
-        if let Some(parent) = p.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-
-        {
-            let mut lock = ALLOWLIST_CACHE.write().unwrap();
-            lock.retain(|e| {
-                !(e.destination_host
-                    .eq_ignore_ascii_case(&entry.destination_host)
-                    && e.protocol.eq_ignore_ascii_case(&entry.protocol)
-                    && e.pid == entry.pid)
-            });
-            lock.push(entry.clone());
-
-            let json_str = serde_json::to_string_pretty(&*lock).map_err(|e| e.to_string())?;
-            fs::write(&p, json_str).map_err(|e| e.to_string())?;
-        }
-        ALLOWLIST_LOADED.store(true, Ordering::SeqCst);
-        Ok(())
+        DEFAULT_ALLOWLIST_STORE.add_entry(entry)
     }
 
     /// Returns a snapshot of all active release entries.
     pub fn list_entries() -> Vec<RateLimitReleaseEntry> {
-        if !ALLOWLIST_LOADED.load(Ordering::Relaxed) {
-            Self::reload();
-        }
-        ALLOWLIST_CACHE.read().unwrap().clone()
+        DEFAULT_ALLOWLIST_STORE.list_entries()
     }
 
     /// Clears all entries from allowlist.
     pub fn clear() -> Result<(), String> {
-        let p = Self::file_path();
-        {
-            let mut lock = ALLOWLIST_CACHE.write().unwrap();
-            lock.clear();
-            let json_str = serde_json::to_string_pretty(&*lock).map_err(|e| e.to_string())?;
-            if p.exists() || p.parent().map(|d| d.exists()).unwrap_or(false) {
-                let _ = fs::write(&p, json_str);
-            }
-        }
-        ALLOWLIST_LOADED.store(true, Ordering::SeqCst);
-        Ok(())
+        DEFAULT_ALLOWLIST_STORE.clear()
     }
 }
 
@@ -1767,7 +1947,25 @@ mod tests {
 
     #[test]
     fn test_scenario_6_one_click_ui_rate_limit_rejection() {
+        struct TempAllowlistDir(PathBuf);
+        impl Drop for TempAllowlistDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
         let _lock = TEST_MUTEX.lock().unwrap();
+        let temp_dir = TempAllowlistDir(std::env::temp_dir().join(format!(
+            "octopus_allowlist_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        )));
+        fs::create_dir_all(&temp_dir.0).unwrap();
+        let allowlist = RateLimitAllowlistStore::new(temp_dir.0.join("allowlist.json"));
+
         let rete = ReteEngine::new();
 
         let target_host = "test-override.cloud.corp";
@@ -1781,13 +1979,12 @@ mod tests {
             reason: "One-click UI rate limit rejection".to_string(),
             timestamp_epoch_secs: 1729864800,
         };
-        RateLimitAllowlist::add_entry(entry).unwrap();
+        allowlist.add_entry(entry).unwrap();
+        assert!(allowlist.path().exists());
 
-        assert!(RateLimitAllowlist::is_released(
-            target_host,
-            NetworkProtocol::HttpHttps,
-            Some(target_pid)
-        ));
+        // Reload a fresh store instance pointing at the same temp file to verify real disk persistence
+        let reloaded = RateLimitAllowlistStore::new(allowlist.path());
+        assert!(reloaded.is_released(target_host, NetworkProtocol::HttpHttps, Some(target_pid)));
 
         let flow = HarFlowFact {
             flow_id: "flow_s6".into(),
@@ -1807,7 +2004,7 @@ mod tests {
             .evaluate_beta_join(target_pid)
             .expect("Beta join on target_pid");
 
-        let consensus = RateLimitVoterEnsemble.evaluate_and_vote(&bundle);
+        let consensus = RateLimitVoterEnsemble.evaluate_and_vote_with_allowlist(&bundle, &reloaded);
         assert!(consensus.override_applied, "Override flag must be true");
         assert!(
             matches!(consensus.action, EdrAction::AllowAndWhitelistWindow { .. }),
@@ -1815,7 +2012,7 @@ mod tests {
             consensus.action
         );
 
-        let _ = RateLimitAllowlist::clear();
+        let _ = allowlist.clear();
     }
 
     #[test]
@@ -1999,5 +2196,164 @@ mod tests {
         rete.clear();
         assert_eq!(rete.alpha_memory_sizes(), (0, 0, 0));
         assert!(rete.evaluate_beta_join(999).is_none());
+    }
+
+    #[test]
+    fn test_hard_invariant_1_rejects_packed_or_direct_syscall_binaries() {
+        let rete = ReteEngine::new();
+        let flow = HarFlowFact {
+            flow_id: "flow_hi1".into(),
+            pid: 888,
+            protocol: NetworkProtocol::HttpHttps,
+            dst_host: "api.example.com".into(),
+            dst_port: 443,
+            samples: vec![],
+            backoff_compliant: true,
+            observed_jitter_present: true,
+            honors_retry_after: true,
+            flood_detected: false,
+        };
+        let binary_packed = ReaBinaryFact {
+            pid: 888,
+            binary_path: "packed.exe".into(),
+            is_packed: true,
+            direct_syscall_count: 0,
+            obfuscation_entropy: 5.5,
+            is_authenticode_signed: false,
+            yara_detections: vec![],
+        };
+        rete.insert_har_fact(flow.clone());
+        rete.insert_rea_fact(binary_packed);
+        let bundle = rete.evaluate_beta_join(888).unwrap();
+        let consensus = RateLimitVoterEnsemble.evaluate_and_vote(&bundle);
+        assert!(
+            !matches!(
+                consensus.action,
+                EdrAction::AllowAndWhitelistWindow {
+                    duration_secs: 3600,
+                    ..
+                }
+            ),
+            "Packed binary must NOT trigger Hard Invariant 1 whitelist: {:?}",
+            consensus.action
+        );
+
+        let binary_syscall = ReaBinaryFact {
+            pid: 889,
+            binary_path: "hells_gate.exe".into(),
+            is_packed: false,
+            direct_syscall_count: 2,
+            obfuscation_entropy: 5.1,
+            is_authenticode_signed: false,
+            yara_detections: vec![],
+        };
+        let mut flow2 = flow;
+        flow2.pid = 889;
+        rete.insert_har_fact(flow2);
+        rete.insert_rea_fact(binary_syscall);
+        let bundle2 = rete.evaluate_beta_join(889).unwrap();
+        let consensus2 = RateLimitVoterEnsemble.evaluate_and_vote(&bundle2);
+        assert!(
+            !matches!(
+                consensus2.action,
+                EdrAction::AllowAndWhitelistWindow {
+                    duration_secs: 3600,
+                    ..
+                }
+            ),
+            "Direct-syscall binary must NOT trigger Hard Invariant 1 whitelist: {:?}",
+            consensus2.action
+        );
+    }
+
+    #[test]
+    fn test_evaluate_pre_spawn_rea_gate_enforces_policy_and_inserts_fact() {
+        use crate::security::rea_binary_gate::BinaryFormat;
+        let rete = ReteEngine::new();
+        let policy = PreSpawnReaPolicy::default();
+
+        // Benign unsigned binary allowed when require_signed_binaries == false
+        let clean = ReaBinaryFact {
+            pid: 1001,
+            binary_path: "python.exe".into(),
+            is_packed: false,
+            direct_syscall_count: 0,
+            obfuscation_entropy: 5.8,
+            is_authenticode_signed: false,
+            yara_detections: vec![],
+        };
+        let v_ok = rete.evaluate_pre_spawn_rea_gate(
+            clean.clone(),
+            false,
+            false,
+            &[],
+            BinaryFormat::Pe64,
+            &policy,
+        );
+        assert!(v_ok.allowed, "expected clean allow: {:?}", v_ok.reasons);
+        assert!(rete.evaluate_beta_join(1001).is_some());
+
+        // Unsigned binary denied when require_signed_binaries == true
+        let strict_sig = PreSpawnReaPolicy {
+            require_signed_binaries: true,
+            ..PreSpawnReaPolicy::default()
+        };
+        let v_sig = rete.evaluate_pre_spawn_rea_gate(
+            clean.clone(),
+            false,
+            false,
+            &[],
+            BinaryFormat::Pe64,
+            &strict_sig,
+        );
+        assert!(!v_sig.allowed);
+        assert!(v_sig
+            .reasons
+            .iter()
+            .any(|r| r.contains("unsigned_binary_rejected")));
+
+        // Header anomalies & BinaryFormat::Unknown fail closed when policy.enabled == true
+        let v_anom = rete.evaluate_pre_spawn_rea_gate(
+            clean.clone(),
+            false,
+            false,
+            &["pe_truncated_section_table".to_string()],
+            BinaryFormat::Pe64,
+            &policy,
+        );
+        assert!(!v_anom.allowed);
+        assert!(v_anom
+            .reasons
+            .iter()
+            .any(|r| r.contains("binary_header_anomalies")));
+
+        let v_unknown = rete.evaluate_pre_spawn_rea_gate(
+            clean,
+            false,
+            false,
+            &[],
+            BinaryFormat::Unknown,
+            &policy,
+        );
+        assert!(!v_unknown.allowed);
+        assert!(v_unknown
+            .reasons
+            .iter()
+            .any(|r| r.contains("unknown_binary_format_rejected")));
+
+        // W^X and direct syscalls denied
+        let hostile = ReaBinaryFact {
+            pid: 1002,
+            binary_path: "evil.exe".into(),
+            is_packed: true,
+            direct_syscall_count: 3,
+            obfuscation_entropy: 7.1,
+            is_authenticode_signed: false,
+            yara_detections: vec![],
+        };
+        let v_bad =
+            rete.evaluate_pre_spawn_rea_gate(hostile, true, true, &[], BinaryFormat::Pe64, &policy);
+        assert!(!v_bad.allowed);
+        assert!(v_bad.reasons.len() >= 3);
     }
 }

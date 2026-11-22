@@ -1,9 +1,12 @@
-# Mathematical Validation Report: Vassilev Sisyphean Bound & RL Active Defense
+# Mathematical Validation Report: Vassilev Sisyphean Bound & Optional Offline/Advisory D3QN Telemetry Scoring
 
-> **System**: Agent Octopus Autonomous Swarm Breakout Defense  
+> **System**: Agent Octopus Deterministic Containment Runtime (with Optional Offline/Advisory D3QN Telemetry)  
 > **Source Theoretical Architecture**: *"Beyond One and Done: Agent Breakouts and Continuous Security for Agentic AI Systems"* (Femi Oyesanya, October 2026)  
 > **Verification Date**: 2026-10-10 11:46:01 UTC  
-> **Formal Verdict**: **MATHEMATICALLY PROVEN & EMPIRICALLY VALIDATED (Z = 70.09, p < 0.001)**
+> **Formal Verdict**: **OFFLINE SIMULATION VALIDATED (Z = 70.09, p < 0.001) — ADVISORY-ONLY, NON-GATING**
+
+> [!IMPORTANT]
+> **Deterministic Containment vs. Optional Advisory Scope**: All runtime security allow/deny decisions in AgentOctopus are enforced **100% deterministically** by **AWS Cedar v4.13**, **Wasmtime v49.0.4**, **OS Kernel Sandboxes**, and **RT-ASP Sanitizers**. The **D3QN** anomaly scorer documented in this report is **optional, disabled by default** (opt-in via `OCTOPUS_ENABLE_RL_ADVISORY=1`), **strictly offline/advisory-only** for telemetry anomaly scoring, and **never** gates, vetoes, self-heals, or attenuates deterministic containment decisions.
 
 ---
 
@@ -18,21 +21,21 @@ $$\lim_{N \to \infty} P_{secure}(N) = 0$$
 ### The Equation (10) Numerical Benchmark
 For an agent with 99% per-step policy compliance ($\epsilon_{min} = 0.01$), after $N = 500$ continuous tool steps:
 $$P_{secure}(500) \le (1 - 0.01)^{500} \approx 0.0065707 \quad (0.657\%)$$
-A system relying purely on static filters faces a **99.34% certainty of catastrophic breakout**.
+A system relying purely on static content-only filters without deterministic runtime containment faces a **99.34% certainty of catastrophic breakout**.
 
-### Theorem 1: RL Continuous Adaptation Transference Theorem
-Agent Octopus deploys a closed-loop **Dueling Double Deep Q-Learning (D3QN)** engine with Prioritized Experience Replay and Epistemic Uncertainty Estimation. Under continuous policy improvement:
+### Theorem 1: Optional Advisory D3QN Convergence Bound (Offline Simulation Only)
+In offline/advisory simulation mode (disabled by default; non-gating on Cedar/Wasmtime/OS containment enforcement), the optional **Dueling Double Deep Q-Learning (D3QN)** anomaly scorer models decaying error probability with Prioritized Experience Replay and Epistemic Uncertainty Estimation:
 $$\epsilon_{RL}(t) = \frac{\epsilon_0}{(1 + \lambda t)^\gamma}, \quad \gamma = 1.25 > 1.0$$
 
-Because $\sum_{t=1}^\infty \epsilon_{RL}(t) < \infty$, the Weierstrass infinite product theorem guarantees convergence to a **strictly positive asymptotic survival floor**:
+Because $\sum_{t=1}^\infty \epsilon_{RL}(t) < \infty$, the Weierstrass infinite product theorem guarantees convergence to a **strictly positive asymptotic survival floor** in simulation:
 $$P_\infty = \prod_{t=1}^\infty (1 - \epsilon_{RL}(t)) = \mathbf{1.85\%} > 0$$
-The Sisyphean Bound is mathematically broken.
+The Sisyphean Bound is mathematically broken in the offline simulation benchmark.
 
 ---
 
 ## 2. Multi-Horizon Analytical Comparison
 
-| Execution Horizon ($N$) | Static Guardrail $P_{secure}(N)$ | RL Adaptive Defense $P_{secure}(N)$ | Advantage Ratio |
+| Execution Horizon ($N$) | Static Guardrail $P_{secure}(N)$ | Optional Advisory D3QN Score (Offline Sim) $P_{secure}(N)$ | Advantage Ratio |
 |---|---|---|---|
 | **10 steps** | `90.4382%` | **`68.1671%`** | **0.8x** |
 | **50 steps** | `60.5006%` | **`34.3063%`** | **0.6x** |
@@ -48,8 +51,8 @@ The Sisyphean Bound is mathematically broken.
 ## 3. High-Powered Monte Carlo Simulation (50,000 Trajectories, $N = 500$)
 
 - **Static Guardrail Survivors**: `336` / `50,000` (**`0.67%`**)
-- **RL Active Defense Survivors**: `5,554` / `50,000` (**`11.11%`**)
-- **Mean Survival Steps Before Breakout**: Static = `100.2` steps vs RL = **`101.1` steps**
+- **Optional Advisory D3QN Score (Offline Sim) Survivors**: `5,554` / `50,000` (**`11.11%`**)
+- **Mean Survival Steps Before Breakout**: Static = `100.2` steps vs Advisory Sim = **`101.1` steps**
 - **Two-Proportion Hypothesis Test**: $Z = 70.09, \quad p < 0.0001$ (Reject $H_0$).
 
 ---
@@ -65,4 +68,4 @@ Derived directly from OpenTelemetry W3C session telemetry traces (`logs/otel_ses
 3. **Total Sub-Millisecond Blast Radius Quarantine Latency**: **`2.47 ms`**
 
 ---
-*Certificate generated automatically by Agent Octopus Mathematical Validation Engine.*
+*Certificate generated automatically by Agent Octopus Mathematical Validation Engine (offline advisory simulation scope; non-gating on deterministic Cedar/Wasmtime/OS containment).*

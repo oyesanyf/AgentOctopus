@@ -3,7 +3,7 @@
 //! Directly implements continuous execution telemetry evaluation, dynamic hazard
 //! risk computation (logistic mapping), cumulative survival probability tracking
 //! against the Sisyphean Bound, incident tracking (MTTD / MTTR), 4-stage progressive
-//! containment ladder, closed-loop RL mitigation coupling, and asynchronous
+//! containment ladder, optional non-attenuating RL advisory metadata, and asynchronous
 //! out-of-band circuit breaker containment.
 
 use std::collections::VecDeque;
@@ -334,7 +334,8 @@ impl SecurityGovernorState {
         Ok((eps, surv))
     }
 
-    /// Evaluates sample with closed-loop Dueling Double Q-learning (D3QN) mitigation coupling
+    /// Evaluates sample deterministically and optionally emits read-only D3QN advisory metadata.
+    /// RL never attenuates `raw_epsilon` or suppresses `current_survival_prob` / `GovernorStage`.
     pub fn evaluate_sample_with_rl(
         &mut self,
         sample: TelemetrySample,
@@ -349,9 +350,9 @@ impl SecurityGovernorState {
     > {
         self.current_step = sample.step;
         let raw_epsilon = self.compute_step_risk(&sample.event);
+        let effective_epsilon = raw_epsilon;
 
-        // Dynamic RL mitigation attenuation
-        let (effective_epsilon, action_opt) = if let Some(rl) = rl_engine {
+        let action_opt = if let Some(rl) = rl_engine.filter(|r| r.is_enabled()) {
             let mut s_vec = crate::security::rl_defense::AdaptiveStateVector::default();
             match &sample.event {
                 KernelEventKind::ProcessExec {
@@ -386,19 +387,9 @@ impl SecurityGovernorState {
                 _ => {}
             }
 
-            let action = rl.select_action(&s_vec);
-            let mitigation_factor = match action {
-                crate::security::rl_defense::AdaptiveDefenseAction::HardMitigation => 0.85,
-                crate::security::rl_defense::AdaptiveDefenseAction::MicroContainment => 0.65,
-                crate::security::rl_defense::AdaptiveDefenseAction::MemoryIntrospection => 0.40,
-                crate::security::rl_defense::AdaptiveDefenseAction::TraceElevation => 0.25,
-                crate::security::rl_defense::AdaptiveDefenseAction::PassiveObserve => 0.05,
-            };
-
-            // Attenuate raw hazard
-            (raw_epsilon * (1.0 - mitigation_factor), Some(action))
+            rl.advise_action(&s_vec)
         } else {
-            (raw_epsilon, None)
+            None
         };
 
         self.current_survival_prob *= 1.0 - effective_epsilon;

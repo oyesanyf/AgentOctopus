@@ -494,8 +494,8 @@ impl AttenuatedMandate {
     /// Strictly asserts:
     /// 1. Root link delegator verifying key equals expected_root_key
     /// 2. Root link delegator SPIFFE ID equals root_issuer_spiffe_id
-    /// 3. Inter-hop key continuity: link[i].delegator_vk == link[i-1].delegatee_vk
-    /// 4. Inter-hop SPIFFE continuity: link[i].delegator_spiffe == link[i-1].delegatee_spiffe
+    /// 3. Inter-hop key continuity: `link[i].delegator_vk == link[i-1].delegatee_vk`
+    /// 4. Inter-hop SPIFFE continuity: `link[i].delegator_spiffe == link[i-1].delegatee_spiffe`
     /// 5. Leaf delegatee SPIFFE ID equals current_holder_spiffe_id
     /// 6. Monotonic capability shrinkage and valid Ed25519 signatures on all links
     pub fn verify_chain(&self, expected_root_key: &[u8; 32], now: u64) -> Result<(), MandateError> {

@@ -4,6 +4,7 @@ pub mod anomaly_arms;
 pub mod atlas_arm;
 pub mod audit;
 pub mod breakouts;
+pub mod bsd_sandbox;
 pub mod cage_governance;
 pub mod capabilities;
 
@@ -72,12 +73,15 @@ pub use safeagents_client::{
 
 pub use linux_sandbox::{
     build_hardened_sandbox_bpf, build_socket_filter_bpf, build_syscall_policy_bpf,
-    describe_tier2_host_confinement_posture, evaluate_bpf_filter, spawn_tier2_linux_command,
+    build_virtual_patch_socket_family_bpf, describe_tier2_host_confinement_posture,
+    evaluate_bpf_filter, evaluate_bpf_filter_with_args, spawn_tier2_linux_command,
     LinuxConfinementConfig, LinuxConfinementVerification, LinuxResourceLimits,
-    AARCH64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS, AARCH64_BLOCKED_SOCKET_SYSCALLS, AUDIT_ARCH_AARCH64,
-    AUDIT_ARCH_X86_64, LINUX_EACCES, LINUX_ENOSYS, LINUX_EPERM, LINUX_SYS_CLONE3,
-    SECCOMP_RET_ALLOW, SECCOMP_RET_ERRNO, SECCOMP_RET_KILL_PROCESS,
+    AARCH64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS, AARCH64_BLOCKED_SOCKET_SYSCALLS,
+    AARCH64_VIRTUAL_PATCH_CVE_SYSCALLS, AUDIT_ARCH_AARCH64, AUDIT_ARCH_X86_64,
+    EXOTIC_BLOCKED_SOCKET_FAMILIES, LINUX_EACCES, LINUX_EAFNOSUPPORT, LINUX_ENOSYS, LINUX_EPERM,
+    LINUX_SYS_CLONE3, SECCOMP_RET_ALLOW, SECCOMP_RET_ERRNO, SECCOMP_RET_KILL_PROCESS,
     X86_64_BLOCKED_SANDBOX_ESCAPE_SYSCALLS, X86_64_BLOCKED_SOCKET_SYSCALLS,
+    X86_64_VIRTUAL_PATCH_CVE_SYSCALLS,
 };
 
 pub use agentjacking_guard::{
@@ -200,15 +204,26 @@ pub use spider_physics::{OrbWebContainmentEngine, OrbWebEvaluationResult, SilkRe
 #[cfg(windows)]
 pub use windows_sandbox::verify_process_appcontainer_token;
 pub use windows_sandbox::{
-    evaluate_pre_resume_confinement_gate, spawn_tier2_appcontainer_command,
-    verify_windows_confinement_invariants, AppContainerTokenVerification, Tier2ConfinedChildResult,
-    WindowsConfinementPolicy,
+    compute_windows_mitigation_policy_mask, evaluate_pre_resume_confinement_gate,
+    spawn_tier2_appcontainer_command, verify_windows_confinement_invariants,
+    AppContainerTokenVerification, Tier2ConfinedChildResult, WindowsConfinementPolicy,
+    PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON,
+    PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_LOW_LABEL_ALWAYS_ON,
+    PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_NO_REMOTE_ALWAYS_ON,
+    PROCESS_CREATION_MITIGATION_POLICY_IMAGE_LOAD_PREFER_SYSTEM32_ALWAYS_ON,
+    PROCESS_CREATION_MITIGATION_POLICY_WIN32K_SYSTEM_CALL_DISABLE_ALWAYS_ON,
+    PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
 };
 
 pub mod executable_identity;
 pub use executable_identity::{
-    detect_renamed_interpreter_marker, ExecutableIdentityVerifier, VerifiedExecutableHandle,
-    VerifiedExecutableMetadata, ALLOWED_TIER2_EXECUTABLE_STEMS, FORBIDDEN_TIER2_EXECUTABLE_STEMS,
+    detect_renamed_interpreter_marker, open_and_lock_executable_for_cli,
+    ExecutableIdentityVerifier, VerifiedExecutableHandle, VerifiedExecutableMetadata,
+    ALLOWED_TIER2_EXECUTABLE_STEMS, FORBIDDEN_TIER2_EXECUTABLE_STEMS,
+};
+pub mod rea_binary_gate;
+pub use rea_binary_gate::{
+    inspect_binary_bytes, inspect_locked_file, BinaryFormat, BinaryIntegrityVerdict, ByteCursor,
 };
 
 pub mod token_posture;
@@ -236,7 +251,7 @@ pub use command_line::{
 
 pub mod wasm_tier1;
 pub use wasm_tier1::{
-    WasmExecutionReceipt, WasmHostState, WasmSandboxLimits, WasmTier1Executor,
+    WasmExecutionReceipt, WasmFsPolicy, WasmHostState, WasmSandboxLimits, WasmTier1Executor,
     WASI_ERR_ACCESS_DENIED, WASI_ERR_FAULT, WASI_ERR_IO, WASM_DOC_EXTRACTOR_WAT,
     WASM_LEDGER_VALIDATOR_WAT,
 };
@@ -246,12 +261,14 @@ pub use rate_limit_backoff::{
     global_rate_limit_ensemble, global_rete_engine, BackoffEvaluationReport,
     CorrelatedEvidenceBundle, DeterministicPhysicsVoter, EdrAction, GenerativeLlmVoter,
     GoogleApiBackoffAnalyzer, HarEntrySample, HarFlowFact, NetworkProtocol, OpenJevDecisionVoter,
-    OsqueryProcessFact, RateLimitAllowlist, RateLimitReleaseEntry, RateLimitVoterEnsemble,
-    ReaBinaryFact, ReteEngine, VoterConsensus, VoterVerdict,
+    OsqueryProcessFact, PreSpawnReaPolicy, PreSpawnReaVerdict, RateLimitAllowlist,
+    RateLimitAllowlistStore, RateLimitReleaseEntry, RateLimitVoterEnsemble, ReaBinaryFact,
+    ReteEngine, VoterConsensus, VoterVerdict,
 };
 
 pub mod cage_substrate;
 pub mod host_network_isolation;
+pub mod latent_shield;
 pub mod universal_protocols;
 
 pub use cage_substrate::{
@@ -265,12 +282,15 @@ pub use cage_substrate::{
     SealedJournalEnvelope,
 };
 pub use host_network_isolation::{
-    build_linux_blackhole_route_msg, discover_active_octopus_ports,
+    apply_virtual_patch_perimeter_shield, build_linux_blackhole_route_msg,
+    build_virtual_patch_perimeter_spec, discover_active_octopus_ports,
+    generate_bsd_darwin_pf_virtual_patch_rules, generate_linux_nftables_virtual_patch_rules,
     generate_macos_pf_quarantine_rules, global_host_killswitch, handle_wfp_kernel_apply_cli,
     has_live_active_wfp_filters, is_current_process_elevated, load_persisted_wfp_filter_ids,
     terminate_non_loopback_tcp_sockets, FwpmFilter0, HostIsolationError, HostIsolationReceipt,
-    HostKillSwitchManager, HostKillSwitchStatus, KernelIsolationBackend, BLOCKED_L2_ETHERTYPES,
-    DEFAULT_OCTOPUS_PORT, FORBIDDEN_PORT_5000, WFP_RULE_PREFIX,
+    HostKillSwitchManager, HostKillSwitchStatus, KernelIsolationBackend, KernelPerimeterPatchSpec,
+    BLOCKED_L2_ETHERTYPES, DEFAULT_OCTOPUS_PORT, FORBIDDEN_PORT_5000, VIRTUAL_PATCH_INBOUND_PORTS,
+    WFP_RULE_PREFIX,
 };
 pub use universal_protocols::{
     OsiLayer, ProtocolDefinition, ProtocolDomain, ProtocolVectorType, UniversalProtocolCatalog,
@@ -286,6 +306,15 @@ pub mod semantic_command;
 pub mod semantic_dlp;
 pub mod sensitive_paths;
 pub mod siquery;
+pub mod virtual_patch_shield;
+
+pub use bsd_sandbox::{build_bsd_confinement_posture, BsdConfinementPosture};
+pub use virtual_patch_shield::{
+    apply_shield_posture, build_shield_receipt, build_shield_receipt_with_enforcement,
+    current_shield_posture, global_shield_store, mark_shield_telemetry_degraded,
+    KernelAttackSurface, KernelShieldPosture, VirtualPatchShieldReceipt, VirtualPatchShieldStore,
+    ENV_SHIELD_POSTURE_PATH,
+};
 
 pub use active_sockets::{query_live_os_process_sockets, OsQueryProcessSocketRow};
 pub use agent_hooks::{
@@ -303,6 +332,17 @@ pub use circumvention::{
 pub use exec_sensor::{
     ExecEvent, ExecEventSubscriber, ExecSensorBuffer, EXEC_SENSOR_BUFFER,
     EXEC_SENSOR_DEFAULT_CAPACITY,
+};
+pub use latent_shield::{
+    extract_sbom_features, load_cyclonedx_sbom_file, parse_cyclonedx_sbom_bounded,
+    validate_sbom_bounds, AgentRuntimeGuard, ComponentProperty, CycloneDxSbom, GuardVerdict,
+    LatentShieldError, LatentWorldModel, LicenseChoice, LicenseDetail, LiveRuntimeMonitor,
+    RuntimeEventKind, RuntimeGuardVerdictSummary, RuntimeTelemetry, SbomComponent, SbomDependency,
+    SbomIntent, SbomSupplyChainGuard, UnifiedSecurityShield, DEFAULT_EMBEDDED_WEIGHTS_JSON,
+    DEFAULT_LATENT_DIM, MAX_MODEL_DIM, MAX_SBOM_COMPONENTS, MAX_SBOM_DEPENDENCIES, MAX_SBOM_EDGES,
+    MAX_SBOM_JSON_BYTES, MAX_SBOM_LICENSES_PER_COMPONENT, MAX_SBOM_PROPERTIES_PER_COMPONENT,
+    MAX_SBOM_STRING_LEN, MAX_WEIGHTS_JSON_BYTES, RUNTIME_ACTION_DIM, RUNTIME_OBS_DIM,
+    SBOM_ACTION_DIM, SBOM_OBS_DIM,
 };
 pub use process_immunity::{
     inspect_process_lineage, is_immutable_os_kernel_anchor, is_process_immune,

@@ -70,6 +70,42 @@ fn extract_domain(resource: &str) -> String {
     }
 }
 
+fn extract_port(resource: &str) -> Option<u16> {
+    let trimmed = resource.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(port) = trimmed.parse::<u16>() {
+        return Some(port);
+    }
+    let parse_target = if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("https://{}", trimmed)
+    };
+    if let Ok(parsed) = url::Url::parse(&parse_target) {
+        if let Some(p) = parsed.port() {
+            return Some(p);
+        }
+    }
+    let no_path = trimmed
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split('?')
+        .next()
+        .unwrap_or("");
+    if let Some(after_bracket) = no_path.strip_prefix('[') {
+        if let Some((_, rest)) = after_bracket.split_once("]:") {
+            return rest.parse::<u16>().ok();
+        }
+        return None;
+    }
+    no_path
+        .rsplit_once(':')
+        .and_then(|(_, p)| p.parse::<u16>().ok())
+}
+
 /// Evaluates operations against formal AWS Cedar policies.
 #[derive(Clone)]
 pub struct CedarGate {
@@ -171,6 +207,22 @@ impl CedarGate {
         Ok(())
     }
 
+    /// Hot-loads a monotonic tighten-only `forbid` policy into the live `CedarGate` engine.
+    pub fn add_tighten_only_forbid_policy(
+        &self,
+        policy_id: Option<&str>,
+        policy_text: &str,
+    ) -> Result<String, crate::security::cedar_arm::CedarEngineError> {
+        let guard = self.gateway.try_read().map_err(|_| {
+            crate::security::cedar_arm::CedarEngineError::EvaluationPanic(
+                "CedarGate gateway read lock busy".to_string(),
+            )
+        })?;
+        guard
+            .engine()
+            .add_tighten_only_forbid_policy(policy_id, policy_text)
+    }
+
     pub fn gateway(&self) -> Arc<RwLock<CedarAuthorizationGateway>> {
         self.gateway.clone()
     }
@@ -262,6 +314,7 @@ impl CedarGate {
                     || action == "shell_exec"
                     || action == "write"
                     || action == "egress"
+                    || action == "inbound_perimeter"
                 {
                     return Err(OctopusSecurityError::CapabilityDenied(format!(
                         "Cedar Zero-Trust Policy Veto: UntrustedDocIngest arm '{}' is forbidden from invoking sink tool '{}'",
@@ -273,6 +326,7 @@ impl CedarGate {
                 if action == "http_egress"
                     || action == "shell_exec"
                     || action == "egress"
+                    || action == "inbound_perimeter"
                     || action == "extract"
                 {
                     return Err(OctopusSecurityError::CapabilityDenied(format!(
@@ -301,6 +355,7 @@ impl CedarGate {
             "extract" | "doc_extractor" | "DocumentRead" => ("extract", "Document"),
             "write" | "ledger_writer" | "LedgerWrite" => ("write", "Ledger"),
             "egress" | "http_egress" | "HttpEgress" => ("egress", "NetworkTarget"),
+            "inbound_perimeter" => ("inbound_perimeter", "Host"),
             "quarantine" | "tarpit" => ("quarantine", "DecoyTrap"),
             "kernel_enforce" | "kernel_sentinel" => ("kernel_enforce", "KernelSubstrate"),
             "change_security_policy" => ("change_security_policy", "SystemPolicy"),
@@ -308,6 +363,7 @@ impl CedarGate {
         };
 
         let destination_domain = extract_domain(resource);
+        let port = extract_port(resource);
         let amount = amount_cents.unwrap_or(0);
         let approved = amount <= 10_000_000;
 
@@ -316,8 +372,20 @@ impl CedarGate {
                 "amount_cents": amount,
                 "approved": approved,
             }),
-            "egress" => serde_json::json!({
-                "destination_domain": destination_domain,
+            "egress" => {
+                if let Some(p) = port {
+                    serde_json::json!({
+                        "destination_domain": destination_domain,
+                        "destination_port": p as i64,
+                    })
+                } else {
+                    serde_json::json!({
+                        "destination_domain": destination_domain,
+                    })
+                }
+            }
+            "inbound_perimeter" => serde_json::json!({
+                "inbound_port": port.unwrap_or(0) as i64,
             }),
             "extract" => serde_json::json!({
                 "delegation_depth": 0,

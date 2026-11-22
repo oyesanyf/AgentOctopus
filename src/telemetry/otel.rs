@@ -175,7 +175,7 @@ impl OtelSessionTelemetry {
             total_turns: 1,
             total_tool_calls: 0,
             security_violations_detected: 0,
-            rl_action_tier: "PassiveObserve".to_string(),
+            rl_action_tier: "Disabled".to_string(),
             mttd_ms: 0.0,
             mttr_ms: 0.0,
             survival_probability: 1.0,
@@ -338,7 +338,7 @@ impl OtelSessionTelemetry {
             cumulative_survival_prob: survival_prob,
             current_step_count: steps,
             epsilon_min,
-            active_rl_action_tier: "PassiveObserve".to_string(),
+            active_rl_action_tier: "Disabled".to_string(),
         }
     }
 

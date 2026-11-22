@@ -1,0 +1,23 @@
+{
+  "allowed_domains": ["api.github.com"],
+  "denied_domains": ["evil.example.com"],
+  "denied_resolved_addresses": ["169.254.169.254/32", "100.100.100.200/32"],
+  "commands": {
+    "allow": ["python", "python3"],
+    "deny": ["bash", "sh", "powershell", "pwsh", "cmd"],
+    "max_child_processes": 4
+  },
+  "filesystem": {
+    "allow_read": ["."],
+    "allow_write": [],
+    "deny": ["~/.ssh", "~/.aws", ".git/hooks", ".mcp.json"]
+  },
+  "credentials": {
+    "mask_env": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+    "inject_hosts": ["api.github.com"]
+  },
+  "limits": {
+    "memory_mb": 256,
+    "timeout_secs": 30
+  }
+}

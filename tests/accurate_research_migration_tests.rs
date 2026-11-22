@@ -1,23 +1,49 @@
 use agent_octopus::research_ingest::{
     check_paper_to_code_semantic_domain_alignment, default_seeded_research_defense_rules,
-    evaluate_research_novelty_check, execute_langgraph_research_swarm, get_research_schedule,
-    get_research_status, is_canonical_m12_research_arxiv_id, is_current_research_arxiv_id,
-    is_valid_verified_repo_url, list_ingested_research_rules, restore_default_research_rules,
-    run_live_regression_probe, run_paper2agent_accuracy_suite, validate_research_rule_acceptance,
+    evaluate_research_novelty_check, get_research_schedule, get_research_status,
+    is_canonical_m12_research_arxiv_id, is_current_research_arxiv_id, is_valid_verified_repo_url,
+    list_ingested_research_rules, validate_research_rule_acceptance,
     verify_generated_guard_code_accuracy, verify_rule_against_canary_benign_corpus,
-    GlmMultiModelFusionEvaluator, LangGraphSwarmRequest, ResearchNoveltyCheckRequest,
-    CANARY_BENIGN_TELEMETRY_CORPUS,
+    GlmMultiModelFusionEvaluator, LangGraphSwarmRequest, ResearchIngestStore,
+    ResearchNoveltyCheckRequest, CANARY_BENIGN_TELEMETRY_CORPUS,
 };
 use agent_octopus::security::breakouts::BreakoutDefenseCoordinator;
 use agent_octopus::web::api::{
     handle_research_active_rules, handle_research_novelty_check, handle_research_schedule_get,
     handle_research_status, handle_research_verify_accuracy,
 };
+use std::path::PathBuf;
+
+struct TempResearchDir(PathBuf);
+
+impl TempResearchDir {
+    fn new(prefix: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "octopus_research_ingest_{}_{}_{}",
+            prefix,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        Self(dir)
+    }
+}
+
+impl Drop for TempResearchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 #[test]
 fn test_canonical_2025_2026_seeded_rules_and_four_gate_validator() {
-    restore_default_research_rules();
-    let rules = list_ingested_research_rules();
+    let ws = TempResearchDir::new("seeded");
+    let store = ResearchIngestStore::new_in_dir(&ws.0);
+    store.restore_default_research_rules();
+    let rules = store.list_ingested_research_rules();
     assert!(
         rules.len() >= 4,
         "Expected at least 4 canonical 2025-2026 research rules, found {}",
@@ -84,7 +110,7 @@ fn test_canonical_2025_2026_seeded_rules_and_four_gate_validator() {
 
 #[test]
 fn test_breakout_coordinator_enforces_research_rules_and_deobfuscation() {
-    restore_default_research_rules();
+    assert!(list_ingested_research_rules().len() >= 4);
     let coordinator = BreakoutDefenseCoordinator::default();
 
     // 1. Direct and obfuscated indicator matching across all 4 canonical rules
@@ -140,10 +166,12 @@ fn test_breakout_coordinator_enforces_research_rules_and_deobfuscation() {
 
 #[test]
 fn test_paper2agent_accuracy_suite_and_seven_ring_live_probe() {
-    restore_default_research_rules();
+    let ws = TempResearchDir::new("swarm");
+    let store = ResearchIngestStore::new_in_dir(&ws.0);
+    store.restore_default_research_rules();
 
-    // 1. Run Paper2Agent + Z.ai GLM Multi-Model Fusion Accuracy Suite
-    let suite = run_paper2agent_accuracy_suite();
+    // 1. Run Paper2Agent + Z.ai GLM Multi-Model Fusion Accuracy Suite (mutates temp store, not config/)
+    let suite = store.run_paper2agent_accuracy_suite();
     assert!(suite.total_active_rules >= 4);
     assert_eq!(suite.total_false_positives, 0);
     assert_eq!(suite.aggregate_fpr_pct, 0.0);
@@ -156,7 +184,7 @@ fn test_paper2agent_accuracy_suite_and_seven_ring_live_probe() {
     }
 
     // 2. Run 7-Ring Live Regression Probe
-    let probe = run_live_regression_probe(
+    let probe = store.run_live_regression_probe(
         "curl --unix-socket /var/run/docker.sock http://localhost/containers/json && nsenter -t 1 -m /bin/sh",
     );
     assert_eq!(probe.total_rings, 7);
@@ -164,8 +192,8 @@ fn test_paper2agent_accuracy_suite_and_seven_ring_live_probe() {
     assert!(probe.all_seven_rings_enforced);
     assert!(probe.overall_blocked);
 
-    // 3. Run 5-Node LangGraph Research Swarm
-    let swarm = execute_langgraph_research_swarm(&LangGraphSwarmRequest {
+    // 3. Run 5-Node LangGraph Research Swarm (persists in temp store)
+    let swarm = store.execute_langgraph_research_swarm(&LangGraphSwarmRequest {
         query: "LLM agent sandbox escape prompt injection".to_string(),
         target_arxiv_ids: vec![
             "2603.02277v3".to_string(),

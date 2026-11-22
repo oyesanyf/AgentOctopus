@@ -87,6 +87,7 @@ pub struct ProtocolResearchSupervisor {
     synchronizer: RfcIndexSynchronizer,
     evaluation_counter: AtomicUsize,
     recent_evaluations: RwLock<Vec<u64>>,
+    workspace_root: std::path::PathBuf,
 }
 
 impl ProtocolResearchSupervisor {
@@ -108,7 +109,49 @@ impl ProtocolResearchSupervisor {
             synchronizer,
             evaluation_counter: AtomicUsize::new(0),
             recent_evaluations: RwLock::new(Vec::new()),
+            workspace_root: std::path::PathBuf::from("."),
         }
+    }
+
+    /// Creates a new ProtocolResearchSupervisor bound directly to `root` without touching `cwd/data/`.
+    pub fn new_in_workspace(
+        ring_registry: Arc<ArmRingRegistry>,
+        cedar_engine: Arc<CedarPolicyEngine>,
+        dogwood_engine: Arc<DogwoodTemporalEngine>,
+        differential_engine: Arc<DifferentialProtocolEngine>,
+        root: impl Into<std::path::PathBuf>,
+    ) -> Self {
+        let workspace_root = root.into();
+        let knowledge_base = Arc::new(RfcKnowledgeBase::from_path(
+            workspace_root.join("data").join("protocol_research.db"),
+        ));
+        let synchronizer =
+            RfcIndexSynchronizer::new_in_workspace(Arc::clone(&knowledge_base), &workspace_root);
+        Self {
+            ring_registry,
+            cedar_engine,
+            dogwood_engine,
+            differential_engine,
+            knowledge_base,
+            synchronizer,
+            evaluation_counter: AtomicUsize::new(0),
+            recent_evaluations: RwLock::new(Vec::new()),
+            workspace_root,
+        }
+    }
+
+    /// Overrides the workspace root used for trajectory history, DB, and RFC cache persistence (e.g. isolated test dirs).
+    pub fn with_workspace(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        let workspace_root = root.into();
+        let knowledge_base = Arc::new(RfcKnowledgeBase::from_path(
+            workspace_root.join("data").join("protocol_research.db"),
+        ));
+        let synchronizer =
+            RfcIndexSynchronizer::new_in_workspace(Arc::clone(&knowledge_base), &workspace_root);
+        self.knowledge_base = knowledge_base;
+        self.synchronizer = synchronizer;
+        self.workspace_root = workspace_root;
+        self
     }
 
     /// Access the underlying dedicated Octopus knowledge base.
@@ -285,7 +328,8 @@ impl ProtocolResearchSupervisor {
         self.enforce_temporal_velocity().await?;
 
         // Step 4: Execute Real Network Transmission over TCP Socket (Zero Mocks)
-        let timeout_duration = std::time::Duration::from_millis(2500);
+        // Use 5000ms timeout so Windows ~2s loopback RST retry never races under parallel test load.
+        let timeout_duration = std::time::Duration::from_millis(5000);
 
         let (baseline_outcome, baseline_response) =
             if let Some(ref base_req) = request.baseline_request {
@@ -492,7 +536,9 @@ impl ProtocolResearchSupervisor {
                 .unwrap_or_default()
                 .as_secs(),
         };
-        let history_file = std::path::Path::new("data")
+        let history_file = self
+            .workspace_root
+            .join("data")
             .join("protocol_research")
             .join("evaluation_history.jsonl");
         if let Some(p) = history_file.parent() {

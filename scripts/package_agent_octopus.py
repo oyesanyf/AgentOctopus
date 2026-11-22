@@ -18,7 +18,11 @@ OUTPUT_ZIP = REPO_ROOT / "agent_octopus_source_code.zip"
 
 EXCLUDE_DIRS = {
     ".git",
+    ".agents",
     "target",
+    "build",
+    "logs",
+    "strix_runs",
     "__pycache__",
     ".pytest_cache",
     ".venv",
@@ -78,8 +82,10 @@ def package_agent_octopus(output_zip: Path = OUTPUT_ZIP) -> bool:
     print(f"[+] Compressed size  : {zip_size_mb:.2f} MB")
     print(f"[+] SHA-256 Digest   : {sha256_hash}")
 
-    # Generate Manifest file
-    manifest_path = REPO_ROOT / "dist_manifest.json"
+    # Generate Manifest file inside logs/
+    logs_dir = REPO_ROOT / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = logs_dir / "dist_manifest.json"
     import json
     manifest = {
         "package": "AgentOctopus",

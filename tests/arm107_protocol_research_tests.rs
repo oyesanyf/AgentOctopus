@@ -8,7 +8,32 @@ use agent_octopus::security::protocol_research::{
     RfcIndexSynchronizer, RfcKnowledgeBase, TransportOutcome,
 };
 use agent_octopus::security::SecurityAuditLog;
+use std::path::PathBuf;
 use std::sync::Arc;
+
+struct TempArm107Dir(PathBuf);
+
+impl TempArm107Dir {
+    fn new(prefix: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "{}_{}_{}",
+            prefix,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        Self(dir)
+    }
+}
+
+impl Drop for TempArm107Dir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 #[tokio::test]
 async fn test_arm107_dedicated_database_isolation() {
@@ -64,7 +89,9 @@ async fn test_arm107_cedar_target_allowlist_enforcement() {
         Arc::clone(&audit_log),
     ));
 
-    let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
+    let ws = TempArm107Dir::new("octopus_arm107_allow");
+    let supervisor =
+        ProtocolResearchSupervisor::new_in_workspace(rings, cedar, dogwood, diff_engine, &ws.0);
 
     // Positive Control: Local loopback 127.0.0.1 must be permitted through Cedar Policy 8
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -151,7 +178,9 @@ async fn test_arm107_handoff_to_arm106_differential_engine() {
         Arc::clone(&audit_log),
     ));
 
-    let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
+    let ws = TempArm107Dir::new("octopus_arm107_allow");
+    let supervisor =
+        ProtocolResearchSupervisor::new_in_workspace(rings, cedar, dogwood, diff_engine, &ws.0);
 
     let handoff = Arm106ValidationHandoff {
         handoff_id: "handoff-unit-001".to_string(),
@@ -201,7 +230,7 @@ async fn test_arm107_rfc_index_synchronization() {
     let db_path = temp_dir.join("sync_research.db");
 
     let kb = Arc::new(RfcKnowledgeBase::from_path(&db_path));
-    let sync = RfcIndexSynchronizer::new(Arc::clone(&kb));
+    let sync = RfcIndexSynchronizer::new_in_workspace(Arc::clone(&kb), &temp_dir);
 
     let report = sync.sync_index().await.expect("Sync pass must succeed");
     assert!(
@@ -228,7 +257,9 @@ async fn test_arm107_destination_egress_and_dns_rebinding_defense() {
         Arc::clone(&rings),
         Arc::clone(&audit_log),
     ));
-    let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
+    let ws = TempArm107Dir::new("octopus_arm107_allow");
+    let supervisor =
+        ProtocolResearchSupervisor::new_in_workspace(rings, cedar, dogwood, diff_engine, &ws.0);
 
     // 1. Authorized loopback target must resolve and pass
     let valid_dest = supervisor.validate_and_resolve_destination("127.0.0.1", 5005);
@@ -267,14 +298,22 @@ async fn test_arm107_structured_transport_outcomes_no_synthetic_http() {
         Arc::clone(&rings),
         Arc::clone(&audit_log),
     ));
-    let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
+    let ws = TempArm107Dir::new("octopus_arm107_allow");
+    let supervisor =
+        ProtocolResearchSupervisor::new_in_workspace(rings, cedar, dogwood, diff_engine, &ws.0);
 
-    // Negative connection: closed port (e.g. port 19876)
+    // Negative connection: unbound closed ephemeral loopback port
     // Must return ConnectionRefused and raw_response must be EMPTY (NO synthetic 502/504 HTTP string)
+    let closed_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("Bind ephemeral port");
+    let closed_port = closed_listener
+        .local_addr()
+        .expect("Get closed port")
+        .port();
+    drop(closed_listener);
     let closed_port_req = EvaluationRequest {
         raw_request: "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_string(),
         target_host: "127.0.0.1".to_string(),
-        target_port: 19876,
+        target_port: closed_port,
         baseline_request: None,
         repetition_count: None,
         ..Default::default()
@@ -349,7 +388,9 @@ async fn test_arm107_differential_baseline_response_comparison() {
         Arc::clone(&rings),
         Arc::clone(&audit_log),
     ));
-    let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
+    let ws = TempArm107Dir::new("octopus_arm107_allow");
+    let supervisor =
+        ProtocolResearchSupervisor::new_in_workspace(rings, cedar, dogwood, diff_engine, &ws.0);
 
     let eval_req = EvaluationRequest {
         raw_request: "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n0\r\n\r\n".to_string(),
@@ -442,7 +483,9 @@ async fn test_arm107_transient_non_reproducible_anomaly_downgrade() {
         Arc::clone(&rings),
         Arc::clone(&audit_log),
     ));
-    let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
+    let ws = TempArm107Dir::new("octopus_arm107_allow");
+    let supervisor =
+        ProtocolResearchSupervisor::new_in_workspace(rings, cedar, dogwood, diff_engine, &ws.0);
 
     let eval_req = EvaluationRequest {
         raw_request: "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Transient-Test: 1\r\n\r\n".to_string(),
@@ -479,7 +522,7 @@ async fn test_arm107_rfc_sync_transactional_deduplication() {
     let db_path = temp_dir.join("dedup_research.db");
 
     let kb = Arc::new(RfcKnowledgeBase::from_path(&db_path));
-    let sync = RfcIndexSynchronizer::new(Arc::clone(&kb));
+    let sync = RfcIndexSynchronizer::new_in_workspace(Arc::clone(&kb), &temp_dir);
 
     // First synchronization pass
     let report1 = sync.sync_index().await.expect("1st sync pass");
@@ -583,7 +626,9 @@ async fn test_arm107_multi_trial_repetition_stable_baseline_and_arm106_confirmat
         Arc::clone(&rings),
         Arc::clone(&audit_log),
     ));
-    let supervisor = ProtocolResearchSupervisor::new(rings, cedar, dogwood, diff_engine);
+    let ws = TempArm107Dir::new("octopus_arm107_allow");
+    let supervisor =
+        ProtocolResearchSupervisor::new_in_workspace(rings, cedar, dogwood, diff_engine, &ws.0);
 
     // Configure 5 repeated trials with baseline request
     let eval_req = EvaluationRequest {
