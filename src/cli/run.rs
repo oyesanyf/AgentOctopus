@@ -12182,7 +12182,6 @@ permit (
         for pinned in [
             "C:/ws/allowed/.git",
             "C:/ws/allowed/.claude",
-            "C:/ws/allowed/.git.",
             "C:/ws/allowed/.git:stream",
             "C:/ws/allowed/sub/../.git",
             "C:/ws/allowed/.githooks",
@@ -12202,6 +12201,24 @@ permit (
                 !resp.allowed && resp.explicit_forbid,
                 "pinned parent '{}' must be unconditionally forbidden: allowed={}, explicit_forbid={}, reason={}",
                 pinned, resp.allowed, resp.explicit_forbid, resp.reason
+            );
+        }
+
+        #[cfg(windows)]
+        {
+            let win_dot_req = CedarFsIpcRequest {
+                token: "tok123".to_string(),
+                action: "fs_write".to_string(),
+                path: "C:/ws/allowed/.git.".to_string(),
+                raw_path: None,
+                args_joined: None,
+                check_pinned_parent: true,
+            };
+            let win_dot_resp = evaluate_cedar_fs_request(&state, &win_dot_req);
+            assert!(
+                !win_dot_resp.allowed && win_dot_resp.explicit_forbid,
+                "Windows trailing-dot pinned parent 'C:/ws/allowed/.git.' must be forbidden: allowed={}, explicit_forbid={}, reason={}",
+                win_dot_resp.allowed, win_dot_resp.explicit_forbid, win_dot_resp.reason
             );
         }
 
