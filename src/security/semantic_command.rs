@@ -231,6 +231,127 @@ impl DynamicBinaryMetadataProbe {
         Ok(probe)
     }
 
+    /// Probe an already-locked file handle using bounded O(1) I/O (`<= 256 KiB`) and handle-identity caching.
+    pub fn probe_locked_file(file: &mut std::fs::File) -> std::io::Result<Self> {
+        use std::collections::HashMap;
+        use std::io::{Read, Seek, SeekFrom};
+        use std::sync::{OnceLock, RwLock};
+
+        const LOCKED_PROBE_WINDOW_BYTES: usize = 65_536;
+
+        #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+        enum ProbeCacheKey {
+            #[cfg(windows)]
+            Windows(crate::security::executable_identity::KernelFileIdentityKey),
+            #[cfg(unix)]
+            Unix {
+                dev: u64,
+                ino: u64,
+                mtime_sec: i64,
+                mtime_nsec: i64,
+                size: u64,
+            },
+        }
+
+        static PROBE_CACHE: OnceLock<RwLock<HashMap<ProbeCacheKey, DynamicBinaryMetadataProbe>>> =
+            OnceLock::new();
+        let cache = PROBE_CACHE.get_or_init(|| RwLock::new(HashMap::with_capacity(64)));
+
+        let cache_key: Option<ProbeCacheKey> = {
+            #[cfg(windows)]
+            {
+                crate::security::executable_identity::query_file_identity_key_from_file(file)
+                    .map(ProbeCacheKey::Windows)
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                file.metadata().ok().map(|meta| ProbeCacheKey::Unix {
+                    dev: meta.dev(),
+                    ino: meta.ino(),
+                    mtime_sec: meta.mtime(),
+                    mtime_nsec: meta.mtime_nsec(),
+                    size: meta.len(),
+                })
+            }
+            #[cfg(not(any(windows, unix)))]
+            {
+                None
+            }
+        };
+
+        if let Some(ref key) = cache_key {
+            if let Ok(guard) = cache.read() {
+                if let Some(hit) = guard.get(key) {
+                    return Ok(hit.clone());
+                }
+            }
+        }
+
+        let mut probe = Self::default();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if let Ok(fs_meta) = file.metadata() {
+                let mode = fs_meta.mode();
+                probe.is_suid = (mode & 0o4000) != 0;
+                probe.is_sgid = (mode & 0o2000) != 0;
+                probe.file_uid = fs_meta.uid();
+            }
+            #[cfg(target_os = "linux")]
+            {
+                use std::os::unix::io::AsRawFd;
+                let mut buf = [0u8; 64];
+                let attr_name = b"security.capability\0";
+                let res = unsafe {
+                    libc::fgetxattr(
+                        file.as_raw_fd(),
+                        attr_name.as_ptr() as *const libc::c_char,
+                        buf.as_mut_ptr() as *mut libc::c_void,
+                        buf.len(),
+                    )
+                };
+                if res > 0 {
+                    probe.has_linux_capabilities = true;
+                    if res >= 8 {
+                        let eff = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]);
+                        probe.linux_capabilities_mask = eff as u64;
+                    }
+                }
+            }
+        }
+
+        file.seek(SeekFrom::Start(0))?;
+        let mut buffer = Vec::new();
+        file.by_ref()
+            .take(LOCKED_PROBE_WINDOW_BYTES as u64)
+            .read_to_end(&mut buffer)?;
+        let _ = file.seek(SeekFrom::Start(0));
+
+        let bytes_probe = Self::probe_bytes(&buffer);
+        if bytes_probe.elevation_requirement != ElevationRequirement::None {
+            probe.elevation_requirement = bytes_probe.elevation_requirement;
+        }
+        if bytes_probe.invokes_wsl_subsystem {
+            probe.invokes_wsl_subsystem = true;
+        }
+        if bytes_probe.invokes_hyperv_compute {
+            probe.invokes_hyperv_compute = true;
+        }
+
+        if let Some(key) = cache_key {
+            if let Ok(mut guard) = cache.write() {
+                if guard.len() >= 256 {
+                    guard.clear();
+                }
+                guard.insert(key, probe.clone());
+            }
+        }
+
+        Ok(probe)
+    }
+
     /// Probe in-memory executable bytes for PE manifest or subsystem references.
     pub fn probe_bytes(bytes: &[u8]) -> Self {
         let mut probe = Self::default();

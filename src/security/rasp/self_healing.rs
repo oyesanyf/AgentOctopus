@@ -9,9 +9,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Real-time self-healing feedback controller integrating RT-ASP with RL defense and OTel.
+/// Real-time deterministic self-healing feedback controller integrating RT-ASP with OTel
+/// and optional offline RL advisory telemetry.
 pub struct RaspSelfHealingController {
-    rl_defense: Arc<AdaptiveRlDefenseEngine>,
+    rl_defense: Option<Arc<AdaptiveRlDefenseEngine>>,
     otel_telemetry: Arc<OtelSessionTelemetry>,
     consecutive_breaches: AtomicUsize,
     last_escalation_secs: AtomicUsize,
@@ -19,7 +20,7 @@ pub struct RaspSelfHealingController {
 
 impl RaspSelfHealingController {
     pub fn new(
-        rl_defense: Arc<AdaptiveRlDefenseEngine>,
+        rl_defense: Option<Arc<AdaptiveRlDefenseEngine>>,
         otel_telemetry: Arc<OtelSessionTelemetry>,
     ) -> Self {
         Self {
@@ -30,7 +31,19 @@ impl RaspSelfHealingController {
         }
     }
 
-    /// Handles an interception event by updating the RL policy and dispatching OpenTelemetry spans.
+    pub fn new_deterministic(otel_telemetry: Arc<OtelSessionTelemetry>) -> Self {
+        Self::new(None, otel_telemetry)
+    }
+
+    pub fn has_rl_advisory(&self) -> bool {
+        self.rl_defense
+            .as_ref()
+            .map(|rl| rl.is_enabled())
+            .unwrap_or(false)
+    }
+
+    /// Handles an interception event by updating deterministic escalation tiers, OpenTelemetry spans,
+    /// and (only when explicitly enabled) optional RL advisory telemetry.
     pub fn handle_event(&self, event: &RaspInterceptionEvent, policy_engine: &RaspPolicyEngine) {
         let now_nano = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -80,26 +93,29 @@ impl RaspSelfHealingController {
             Vec::new(),
         );
 
-        // 2. Closed-loop RL self-tuning and adaptive remediation
+        // 2. Deterministic breach counter, OTel resilience metrics, and optional RL advisory feedback
         if event.decision.is_blocked() {
             let breaches = self.consecutive_breaches.fetch_add(1, Ordering::Relaxed) + 1;
 
-            // Formulate state vector
-            let mut state = AdaptiveStateVector::default();
-            state.schema_tamper_score = (breaches as f32 * 0.2).min(1.0);
-            state.prompt_injection_semantic_anomaly = (breaches as f32 * 0.25).min(1.0);
-            state.credential_access_pressure = (breaches as f32 * 0.3).min(1.0);
-            state.error_frequency = (breaches as f32 * 0.2).min(1.0);
+            if let Some(ref rl) = self.rl_defense {
+                if rl.is_enabled() {
+                    let mut state = AdaptiveStateVector::default();
+                    state.schema_tamper_score = (breaches as f32 * 0.2).min(1.0);
+                    state.prompt_injection_semantic_anomaly = (breaches as f32 * 0.25).min(1.0);
+                    state.credential_access_pressure = (breaches as f32 * 0.3).min(1.0);
+                    state.error_frequency = (breaches as f32 * 0.2).min(1.0);
 
-            let bucket = state.discretize_bucket();
+                    let bucket = state.discretize_bucket();
 
-            // Penalize passive action (0) and boost HardMitigation (4)
-            self.rl_defense.tune_on_failure(
-                bucket,
-                AdaptiveDefenseAction::PassiveObserve.to_index(),
-                AdaptiveDefenseAction::HardMitigation.to_index(),
-                -100.0,
-            );
+                    // Advisory-only Q-table update (never gates RT-ASP enforcement)
+                    rl.tune_on_failure(
+                        bucket,
+                        AdaptiveDefenseAction::PassiveObserve.to_index(),
+                        AdaptiveDefenseAction::HardMitigation.to_index(),
+                        -100.0,
+                    );
+                }
+            }
 
             // Record breach and remediation in OTel session metrics
             let mttd_ms = (event.latency_micros as f64) / 1000.0;

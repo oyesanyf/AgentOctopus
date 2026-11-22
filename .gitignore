@@ -49,3 +49,15 @@ data/*.db-wal
 .pytest_cache/
 
 quarantine_journal.json
+
+# Packaging, installers & CIFuzz build output
+*.msi
+build/
+dist_manifest.json
+agent_octopus_source_code.zip
+
+# Generated root test reports
+octopus_exhaustive_test_report.*
+pyrit_test_report.*
+strix_llm_test_report.*
+

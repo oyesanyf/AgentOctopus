@@ -356,13 +356,25 @@ async fn test_non_cooperative_infinite_loop_wasm_trapped_by_killswitch_epoch() {
     );
 
     let wasm = Arc::clone(engine.wasm_executor());
+    // Pre-warm module cache so Cranelift compilation in debug builds does not race with epoch trip.
+    let mut warmup_limits = WasmSandboxLimits::default();
+    warmup_limits.fuel_budget = 50;
+    let _ =
+        wasm.execute_wat_with_context("spin_warmup", INFINITE_SPIN_WAT, b"", warmup_limits, None);
+
+    let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let entered_thread = Arc::clone(&entered);
     let handle = std::thread::spawn(move || {
         let mut limits = WasmSandboxLimits::default();
         limits.fuel_budget = u64::MAX / 2;
+        entered_thread.store(true, std::sync::atomic::Ordering::Release);
         wasm.execute_wat_with_context("spin_forever", INFINITE_SPIN_WAT, b"", limits, None)
     });
 
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    while !entered.load(std::sync::atomic::Ordering::Acquire) {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
     let latency = engine.trip_killswitch_autotomy("arm_calc").await;
     let trap_res = handle.join().unwrap();
 

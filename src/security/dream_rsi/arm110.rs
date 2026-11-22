@@ -25,6 +25,10 @@ pub struct DreamRsiOptimizerArm {
 impl DreamRsiOptimizerArm {
     pub fn new() -> Self {
         let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::new_in_workspace(root)
+    }
+
+    pub fn new_in_workspace(root: PathBuf) -> Self {
         let arm = Self {
             ring: None,
             optimizer: Arc::new(RwLock::new(DreamRsiPolicyOptimizer::new())),

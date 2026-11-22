@@ -552,7 +552,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_harness2_arm111_propose_probe_compose_and_budget_identity() {
-        let arm = RecursiveHarnessOptimizerArm::new();
+        struct TempDirGuard(PathBuf);
+        impl Drop for TempDirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let temp_dir = std::env::temp_dir().join(format!(
+            "octopus_arm111_unit_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create temp dir for arm111 test");
+        let _guard = TempDirGuard(temp_dir.clone());
+
+        let arm = RecursiveHarnessOptimizerArm::new().with_workspace(temp_dir);
         let report = arm
             .run_recursive_harnessing(
                 "security_policy",

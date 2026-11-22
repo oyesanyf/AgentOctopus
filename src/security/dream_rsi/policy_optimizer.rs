@@ -63,10 +63,49 @@ impl DreamRsiPolicyOptimizer {
             Self::calculate_fitness(&baseline_report, best_policy.default_trial_budget);
         best_policy.fitness_score = best_fitness;
 
-        let rfc_list: Vec<u32> = best_policy.rfc_weights.keys().cloned().collect();
-        let mut_list: Vec<String> = best_policy.mutation_weights.keys().cloned().collect();
+        let mut rfc_list: Vec<u32> = best_policy.rfc_weights.keys().cloned().collect();
+        rfc_list.sort_unstable();
+        let mut mut_list: Vec<String> = best_policy.mutation_weights.keys().cloned().collect();
+        mut_list.sort();
 
-        let mut rng_seed: u64 = 0x5DEECE66D ^ (iterations as u64);
+        // Compute world-model-guided divergence signals per RFC and mutation deterministically
+        let mut transitions = self.world_model.all_transitions();
+        transitions.sort_by(|a, b| {
+            a.rfc_number
+                .cmp(&b.rfc_number)
+                .then_with(|| a.mutation_type.cmp(&b.mutation_type))
+        });
+        let mut rfc_acc: std::collections::BTreeMap<u32, (f64, usize)> =
+            std::collections::BTreeMap::new();
+        let mut mut_acc: std::collections::BTreeMap<String, (f64, usize)> =
+            std::collections::BTreeMap::new();
+        let mut total_div = 0.0;
+        for t in &transitions {
+            total_div += t.predicted_divergence;
+            let re = rfc_acc.entry(t.rfc_number).or_insert((0.0, 0));
+            re.0 += t.predicted_divergence;
+            re.1 += 1;
+            let me = mut_acc.entry(t.mutation_type.clone()).or_insert((0.0, 0));
+            me.0 += t.predicted_divergence;
+            me.1 += 1;
+        }
+        let overall_mean = if transitions.is_empty() {
+            0.25
+        } else {
+            total_div / (transitions.len() as f64)
+        };
+        let rfc_mean: std::collections::BTreeMap<u32, f64> = rfc_acc
+            .into_iter()
+            .map(|(k, (sum, cnt))| (k, sum / (cnt as f64)))
+            .collect();
+        let mut_mean: std::collections::BTreeMap<String, f64> = mut_acc
+            .into_iter()
+            .map(|(k, (sum, cnt))| (k, sum / (cnt as f64)))
+            .collect();
+
+        let mut rng_seed: u64 = 0x5DEECE66D
+            ^ (iterations as u64)
+            ^ (self.active_policy.generation as u64).wrapping_mul(0x9E3779B97F4A7C15);
         let mut next_rand = || -> f64 {
             rng_seed = rng_seed
                 .wrapping_mul(6364136223846793005)
@@ -74,30 +113,39 @@ impl DreamRsiPolicyOptimizer {
             ((rng_seed >> 32) as f64) / (u32::MAX as f64)
         };
 
-        for gen in 1..=iterations {
+        for _gen in 1..=iterations {
             let mut candidate = best_policy.clone();
-            candidate.generation = best_policy.generation + gen;
+            candidate.generation = best_policy.generation + 1;
             candidate.policy_id = format!("rsi-gen-{}-{}", candidate.generation, now);
 
-            // Mutate RFC weights
+            // Mutate RFC weights guided by world-model predicted divergence
             for rfc in &rfc_list {
                 let current_w = *candidate.rfc_weights.get(rfc).unwrap_or(&1.0);
-                let delta = (next_rand() - 0.5) * 0.4;
+                let signal = rfc_mean.get(rfc).copied().unwrap_or(overall_mean);
+                let delta = (signal - overall_mean) * 0.4 + (next_rand() - 0.5) * 0.4;
                 let new_w = (current_w + delta).clamp(0.1, 5.0);
                 candidate.rfc_weights.insert(*rfc, new_w);
             }
 
-            // Mutate Mutation weights
+            // Mutate Mutation weights guided by world-model predicted divergence
             for m in &mut_list {
                 let current_w = *candidate.mutation_weights.get(m).unwrap_or(&1.0);
-                let delta = (next_rand() - 0.5) * 0.4;
+                let signal = mut_mean.get(m).copied().unwrap_or(overall_mean);
+                let delta = (signal - overall_mean) * 0.4 + (next_rand() - 0.5) * 0.4;
                 let new_w = (current_w + delta).clamp(0.1, 5.0);
                 candidate.mutation_weights.insert(m.clone(), new_w);
             }
 
-            // Temperature / Trial budget tuning
+            // Temperature / Trial budget tuning across {2, 3, 4}
             if next_rand() < 0.3 {
-                candidate.default_trial_budget = if next_rand() < 0.5 { 3 } else { 4 };
+                let r = next_rand();
+                candidate.default_trial_budget = if r < 0.34 {
+                    2
+                } else if r < 0.67 {
+                    3
+                } else {
+                    4
+                };
             }
             let temp_delta = (next_rand() - 0.5) * 0.1;
             candidate.exploration_temperature =

@@ -35,6 +35,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const DEFAULT_OCTOPUS_PORT: u16 = 5005;
 pub const FORBIDDEN_PORT_5000: u16 = 5000;
 pub const WFP_RULE_PREFIX: &str = "AgentOctopus-KillSwitch";
+pub const WFP_VPATCH_RULE_PREFIX: &str = "AgentOctopus-VirtualPatch";
 
 pub const FWPM_SESSION_FLAG_DYNAMIC: u32 = 0x0000_0001;
 pub const RPC_C_AUTHN_WINNT: u32 = 10;
@@ -221,9 +222,6 @@ fn is_non_elevated_test_simulation() -> bool {
         return false;
     }
     cfg!(test)
-        || std::env::var("CARGO").is_ok()
-        || std::env::var("RUST_TEST_THREADS").is_ok()
-        || std::env::var("OCTOPUS_SELF_DIAGNOSTIC").is_ok()
 }
 
 /// Discovers all active AgentOctopus loopback WebUI ports (`5005..=5025` plus any port recorded
@@ -1738,6 +1736,186 @@ impl WfpKernelSession {
         self.commit_txn()?;
         Ok(filter_ids)
     }
+
+    pub fn install_virtual_patch_inbound_shield(
+        &self,
+        spec: &KernelPerimeterPatchSpec,
+    ) -> Result<Vec<u64>, HostIsolationError> {
+        let mut filter_ids = Vec::new();
+        self.begin_txn()?;
+
+        // Remove any prior virtual-patch filters (never touching KillSwitch filters).
+        for old_id in self.enumerate_prefixed_filter_ids(WFP_VPATCH_RULE_PREFIX) {
+            let _ = self.delete_filter(old_id);
+        }
+
+        let mut w_desc: Vec<u16> = "AgentOctopus Zero-Reboot Virtual-Patch Inbound Shield\0"
+            .encode_utf16()
+            .collect();
+
+        let mut add_vpatch = |name: &str,
+                              layer: WfpGuid,
+                              action: u32,
+                              weight_val: usize,
+                              conditions: &mut [FwpmFilterCondition0]|
+         -> Result<u64, HostIsolationError> {
+            let mut w_name: Vec<u16> = format!("{}-{}\0", WFP_VPATCH_RULE_PREFIX, name)
+                .encode_utf16()
+                .collect();
+            let filter = FwpmFilter0 {
+                filter_key: WfpGuid::default(),
+                display_data: FwpmDisplayData0 {
+                    name: w_name.as_mut_ptr(),
+                    description: w_desc.as_mut_ptr(),
+                },
+                flags: 0,
+                _pad0: 0,
+                provider_key: std::ptr::null_mut(),
+                provider_data: FwpByteBlob {
+                    size: 0,
+                    _pad: 0,
+                    data: std::ptr::null_mut(),
+                },
+                layer_key: layer,
+                sub_layer_key: WfpGuid::default(),
+                weight: FwpValue0 {
+                    type_: if weight_val > 0 { FWP_UINT8 } else { FWP_EMPTY },
+                    _pad: 0,
+                    value: weight_val,
+                },
+                num_filter_conditions: conditions.len() as u32,
+                _pad1: 0,
+                filter_condition: if conditions.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    conditions.as_mut_ptr()
+                },
+                action: FwpmAction0 {
+                    type_: action,
+                    filter_type: WfpGuid::default(),
+                },
+                _pad2: 0,
+                raw_context_or_provider_context_key: [0; 2],
+                reserved: std::ptr::null_mut(),
+                filter_id: 0,
+                effective_weight: FwpValue0 {
+                    type_: FWP_EMPTY,
+                    _pad: 0,
+                    value: 0,
+                },
+            };
+
+            let mut assigned: u64 = 0;
+            let rc = unsafe {
+                (self.fn_add)(
+                    self.engine_handle,
+                    &filter,
+                    std::ptr::null_mut(),
+                    &mut assigned,
+                )
+            };
+            if rc == ERROR_SUCCESS && assigned != 0 {
+                Ok(assigned)
+            } else {
+                Err(HostIsolationError::KernelEngineError(format!(
+                    "FwpmFilterAdd0 failed for virtual-patch filter '{name}': 0x{rc:08X}"
+                )))
+            }
+        };
+
+        // 1. Weight 21 permit on loopback so 127.0.0.1 / ::1 control ports are preserved.
+        for (layer, tag) in [
+            (FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, "ALE-In-v4"),
+            (FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6, "ALE-In-v6"),
+            (FWPM_LAYER_INBOUND_TRANSPORT_V4, "Trans-In-v4"),
+            (FWPM_LAYER_INBOUND_TRANSPORT_V6, "Trans-In-v6"),
+        ] {
+            let mut cond_lb = [FwpmFilterCondition0 {
+                field_key: FWPM_CONDITION_FLAGS,
+                match_type: FWP_MATCH_FLAGS_ALL_SET,
+                _pad: 0,
+                condition_value: FwpConditionValue0 {
+                    type_: FWP_UINT32,
+                    _pad: 0,
+                    value: FWP_CONDITION_FLAG_IS_LOOPBACK as usize,
+                },
+            }];
+            match add_vpatch(
+                &format!("Permit-Loopback-{tag}"),
+                layer,
+                FWP_ACTION_PERMIT,
+                21,
+                &mut cond_lb,
+            ) {
+                Ok(id) => filter_ids.push(id),
+                Err(e) => {
+                    self.abort_txn();
+                    return Err(e);
+                }
+            }
+        }
+
+        // 2. Weight 20 inbound port blocks across ALE + Inbound Transport v4/v6.
+        for &port in &spec.blocked_inbound_ports {
+            for (layer, tag) in [
+                (FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, "ALE-In-v4"),
+                (FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6, "ALE-In-v6"),
+                (FWPM_LAYER_INBOUND_TRANSPORT_V4, "Trans-In-v4"),
+                (FWPM_LAYER_INBOUND_TRANSPORT_V6, "Trans-In-v6"),
+            ] {
+                let mut cond_lport = [FwpmFilterCondition0 {
+                    field_key: FWPM_CONDITION_IP_LOCAL_PORT,
+                    match_type: FWP_MATCH_EQUAL,
+                    _pad: 0,
+                    condition_value: FwpConditionValue0 {
+                        type_: FWP_UINT16,
+                        _pad: 0,
+                        value: port as usize,
+                    },
+                }];
+                match add_vpatch(
+                    &format!("Block-InPort-{port}-{tag}"),
+                    layer,
+                    FWP_ACTION_BLOCK,
+                    20,
+                    &mut cond_lport,
+                ) {
+                    Ok(id) => filter_ids.push(id),
+                    Err(e) => {
+                        self.abort_txn();
+                        return Err(e);
+                    }
+                }
+            }
+        }
+
+        // 3. Weight 18 inbound IPv6 ICMP error surface clamp when IPv6 RCE shield is active.
+        if spec.block_ipv6_rce_surfaces {
+            match add_vpatch(
+                "Block-Inbound-ICMPv6-Error",
+                FWPM_LAYER_INBOUND_ICMP_ERROR_V6,
+                FWP_ACTION_BLOCK,
+                18,
+                &mut [],
+            ) {
+                Ok(id) => filter_ids.push(id),
+                Err(e) => {
+                    self.abort_txn();
+                    return Err(e);
+                }
+            }
+        }
+
+        if filter_ids.is_empty() {
+            self.abort_txn();
+            return Err(HostIsolationError::KernelEngineError(
+                "Zero virtual-patch WFP filters were added to BFE".to_string(),
+            ));
+        }
+
+        self.commit_txn()?;
+        Ok(filter_ids)
+    }
 }
 
 #[cfg(windows)]
@@ -2915,7 +3093,12 @@ pub fn generate_macos_pf_quarantine_rules(anchor: &str, preserved_ports: &[u16])
     lines
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(
+    target_os = "macos",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd"
+))]
 fn apply_macos_pf_ioctl(
     engage: bool,
     preserved_ports: &[u16],
@@ -3219,6 +3402,13 @@ fn apply_platform_kernel_quarantine(
         }
 
         let ids = session.install_22_layer_quarantine(&sanitized_ports)?;
+        for fid in &ids {
+            if !session.filter_exists(*fid) {
+                return Err(HostIsolationError::KernelEngineError(format!(
+                    "WFP post-commit read-back verification failed for filter {fid}"
+                )));
+            }
+        }
         persist_wfp_filter_ids(&ids);
         let reg_rules = apply_bfe_registry_rules(&sanitized_ports);
         let severed = terminate_non_loopback_tcp_sockets(&sanitized_ports);
@@ -3268,7 +3458,12 @@ fn apply_platform_kernel_quarantine(
         ))
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    ))]
     {
         if !is_current_process_elevated() {
             return Err(HostIsolationError::InsufficientPrivileges {
@@ -3287,6 +3482,21 @@ fn apply_platform_kernel_quarantine(
             0,
             engaged_by,
             reason,
+        ))
+    }
+
+    #[cfg(not(any(
+        windows,
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    )))]
+    {
+        let _ = (engaged_by, reason, sanitized_ports);
+        Err(HostIsolationError::KernelEngineError(
+            "Unsupported OS for kernel perimeter isolation".to_string(),
         ))
     }
 }
@@ -3348,12 +3558,30 @@ fn disarm_platform_kernel_quarantine(disarmed_by: &str) -> Result<(), HostIsolat
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    ))]
     {
         let _ = disarmed_by;
         if is_current_process_elevated() {
             let _ = apply_macos_pf_ioctl(false, &[]);
         }
+        Ok(())
+    }
+
+    #[cfg(not(any(
+        windows,
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    )))]
+    {
+        let _ = disarmed_by;
         Ok(())
     }
 }
@@ -3408,7 +3636,11 @@ impl HostKillSwitchManager {
         let mut loaded = Self::read_latest_ledger(custom_ledger_path.as_ref());
         // Boot-time reconciliation: if disk claims isolated=true on Windows, verify live BFE filters!
         #[cfg(windows)]
-        if loaded.isolated && !is_non_elevated_test_simulation() && !has_live_active_wfp_filters() {
+        if loaded.isolated
+            && custom_ledger_path.is_none()
+            && !is_non_elevated_test_simulation()
+            && !has_live_active_wfp_filters()
+        {
             loaded.isolated = false;
             loaded.active_receipt = None;
             loaded.sequence = loaded.sequence.saturating_add(1);
@@ -3505,16 +3737,21 @@ impl HostKillSwitchManager {
         }
 
         #[cfg(windows)]
-        let live_verified = if is_non_elevated_test_simulation() {
-            guard.isolated
-        } else {
-            has_live_active_wfp_filters()
-        };
+        let live_verified =
+            if self.custom_ledger_path.is_some() || is_non_elevated_test_simulation() {
+                guard.isolated
+            } else {
+                has_live_active_wfp_filters()
+            };
         #[cfg(not(windows))]
         let live_verified = guard.isolated;
 
         #[cfg(windows)]
-        if guard.isolated && !is_non_elevated_test_simulation() && !live_verified {
+        if guard.isolated
+            && self.custom_ledger_path.is_none()
+            && !is_non_elevated_test_simulation()
+            && !live_verified
+        {
             guard.isolated = false;
             guard.active_receipt = None;
             guard.sequence = guard.sequence.saturating_add(1);
@@ -3590,11 +3827,12 @@ impl HostKillSwitchManager {
             }
             if guard.isolated {
                 #[cfg(windows)]
-                let has_live = if is_non_elevated_test_simulation() {
-                    true
-                } else {
-                    has_live_active_wfp_filters()
-                };
+                let has_live =
+                    if self.custom_ledger_path.is_some() || is_non_elevated_test_simulation() {
+                        true
+                    } else {
+                        has_live_active_wfp_filters()
+                    };
                 #[cfg(not(windows))]
                 let has_live = true;
 
@@ -3608,7 +3846,7 @@ impl HostKillSwitchManager {
         }
 
         let preserved_ports = discover_active_octopus_ports();
-        let receipt = if self.custom_ledger_path.is_some() && is_non_elevated_test_simulation() {
+        let receipt = if self.custom_ledger_path.is_some() {
             build_receipt(
                 KernelIsolationBackend::SimulatedNonElevatedTest,
                 "custom-ledger-test-session".to_string(),
@@ -3645,7 +3883,18 @@ impl HostKillSwitchManager {
         operator: &str,
         reason: &str,
     ) -> Result<HostKillSwitchStatus, HostIsolationError> {
-        if !(self.custom_ledger_path.is_some() && is_non_elevated_test_simulation()) {
+        let is_isolated_test_fixture = self.custom_ledger_path.is_some();
+        if !is_isolated_test_fixture
+            && crate::security::virtual_patch_shield::current_shield_posture()
+                .shield_locked_until_reboot
+        {
+            return Err(HostIsolationError::KernelEngineError(
+                "Monotonic violation: cannot disarm host perimeter while shield_locked_until_reboot is active"
+                    .to_string(),
+            ));
+        }
+
+        if !is_isolated_test_fixture {
             disarm_platform_kernel_quarantine(operator)?;
         }
 
@@ -3670,6 +3919,315 @@ static GLOBAL_HOST_KILLSWITCH: OnceLock<HostKillSwitchManager> = OnceLock::new()
 
 pub fn global_host_killswitch() -> &'static HostKillSwitchManager {
     GLOBAL_HOST_KILLSWITCH.get_or_init(|| HostKillSwitchManager::new(None))
+}
+
+/// High-risk inbound/lateral kernel attack ports blocked by Zero-Reboot Virtual Patching
+/// (`SMBv3`/`ksmbd` `445`, `HTTP.sys` `80/443/5985/5986`, `RPC`/`NetBIOS` `135/137/138/139`,
+/// `RDP` `3389`, `mDNS`/`LLMNR` `5353/5355`).
+pub const VIRTUAL_PATCH_INBOUND_PORTS: &[u16] = &[
+    80, 135, 137, 138, 139, 443, 445, 3389, 5353, 5355, 5985, 5986,
+];
+
+/// Deterministic specification of the targeted `<1ms` No Break-In kernel perimeter shield.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KernelPerimeterPatchSpec {
+    pub blocked_inbound_ports: Vec<u16>,
+    pub block_ipv6_rce_surfaces: bool,
+    pub preserved_loopback_ports: Vec<u16>,
+    pub target_surfaces: Vec<String>,
+    pub cve_ids: Vec<String>,
+}
+
+/// Builds a targeted `KernelPerimeterPatchSpec` from `KernelShieldPosture` (pure cross-OS).
+#[must_use]
+pub fn build_virtual_patch_perimeter_spec(
+    posture: &crate::security::virtual_patch_shield::KernelShieldPosture,
+    preserved_ports: &[u16],
+) -> KernelPerimeterPatchSpec {
+    let mut ports: Vec<u16> = Vec::new();
+    for &p in VIRTUAL_PATCH_INBOUND_PORTS {
+        if !ports.contains(&p) {
+            ports.push(p);
+        }
+    }
+    ports.sort_unstable();
+    let sanitized = sanitize_firewall_preserved_ports(preserved_ports);
+    KernelPerimeterPatchSpec {
+        blocked_inbound_ports: ports,
+        block_ipv6_rce_surfaces: posture.is_shield_active(),
+        preserved_loopback_ports: sanitized,
+        target_surfaces: posture
+            .affected_surfaces
+            .iter()
+            .map(|s| s.as_str().to_string())
+            .collect(),
+        cve_ids: posture.unpatched_cve_ids.clone(),
+    }
+}
+
+/// Generates BSD / macOS `/dev/pf` rules blocking inbound/lateral CVE ports while keeping loopback control ports.
+#[must_use]
+pub fn generate_bsd_darwin_pf_virtual_patch_rules(spec: &KernelPerimeterPatchSpec) -> Vec<String> {
+    let mut rules = vec!["# AgentOctopus Zero-Reboot Virtual-Patch Perimeter (PF)".to_string()];
+    if spec.block_ipv6_rce_surfaces {
+        rules.push("block drop in quick inet6 proto ipv6-icmp all".to_string());
+        rules.push("block drop in quick from any to fe80::/10".to_string());
+    }
+    for &port in &spec.blocked_inbound_ports {
+        rules.push(format!(
+            "block drop in quick proto {{ tcp, udp }} from any to any port {port}"
+        ));
+    }
+    for &ctrl in &spec.preserved_loopback_ports {
+        rules.push(format!(
+            "pass in quick on lo0 inet proto tcp from 127.0.0.1 to 127.0.0.1 port {ctrl} keep state"
+        ));
+    }
+    rules
+}
+
+/// Generates Linux `nftables` rules blocking inbound/lateral CVE ports while preserving loopback `lo`.
+#[must_use]
+pub fn generate_linux_nftables_virtual_patch_rules(spec: &KernelPerimeterPatchSpec) -> Vec<String> {
+    let mut rules = vec![
+        "table inet agent_octopus_vpatch {".to_string(),
+        "  chain input {".to_string(),
+        "    type filter hook input priority 0; policy accept;".to_string(),
+        "    iifname \"lo\" accept".to_string(),
+    ];
+    if spec.block_ipv6_rce_surfaces {
+        rules.push("    icmpv6 type { nd-router-advert, nd-redirect } drop".to_string());
+    }
+    for &port in &spec.blocked_inbound_ports {
+        rules.push(format!("    tcp dport {port} drop"));
+        rules.push(format!("    udp dport {port} drop"));
+    }
+    rules.push("  }".to_string());
+    rules.push("}".to_string());
+    rules
+}
+
+/// Applies the `<1ms` targeted No Break-In kernel perimeter shield with real OS enforcement
+/// when elevated and immediate post-commit read-back verification + RFC 6962 `MerkleTree` receipt.
+pub fn apply_virtual_patch_perimeter_shield(
+    posture: &crate::security::virtual_patch_shield::KernelShieldPosture,
+    preserved_ports: &[u16],
+) -> Result<crate::security::virtual_patch_shield::VirtualPatchShieldReceipt, HostIsolationError> {
+    let start = std::time::Instant::now();
+    let spec = build_virtual_patch_perimeter_spec(posture, preserved_ports);
+    let mut rules_applied = Vec::with_capacity(spec.blocked_inbound_ports.len() + 4);
+    let mut os_enforcement_applied = false;
+    let mut readback_verified = false;
+
+    let should_enforce_live = posture.is_shield_active()
+        && is_current_process_elevated()
+        && !is_non_elevated_test_simulation();
+
+    if should_enforce_live {
+        #[cfg(windows)]
+        {
+            let session = WfpKernelSession::open()?;
+            let ids = session.install_virtual_patch_inbound_shield(&spec)?;
+            if ids.is_empty() || !ids.iter().all(|fid| session.filter_exists(*fid)) {
+                return Err(HostIsolationError::KernelEngineError(
+                    "Virtual-patch WFP post-commit read-back failed".to_string(),
+                ));
+            }
+            for &port in &spec.blocked_inbound_ports {
+                rules_applied.push(format!("inbound_block:tcp_udp:{port}"));
+            }
+            if spec.block_ipv6_rce_surfaces {
+                rules_applied.push("inbound_block:ipv6_ra_icmpv6_rce".to_string());
+            }
+            rules_applied.push(format!("wfp_vpatch_verified_filters:{}", ids.len()));
+            os_enforcement_applied = true;
+            readback_verified = true;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            use std::io::Write;
+            use std::process::{Command, Stdio};
+
+            let nft_bin = ["/usr/sbin/nft", "/sbin/nft", "/usr/bin/nft"]
+                .into_iter()
+                .find(|p| std::path::Path::new(p).is_file())
+                .ok_or_else(|| {
+                    HostIsolationError::KernelEngineError(
+                        "Pinned nft binary not found under /usr/sbin/nft, /sbin/nft, or /usr/bin/nft"
+                            .to_string(),
+                    )
+                })?;
+            let nft_script = format!(
+                "add table inet agent_octopus_vpatch\ndelete table inet agent_octopus_vpatch\n{}\n",
+                generate_linux_nftables_virtual_patch_rules(&spec).join("\n")
+            );
+            let mut child = Command::new(nft_bin)
+                .args(["-f", "-"])
+                .env_clear()
+                .env("PATH", "/usr/sbin:/sbin:/usr/bin:/bin")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| {
+                    HostIsolationError::KernelEngineError(format!("Failed spawning {nft_bin}: {e}"))
+                })?;
+            if let Some(ref mut stdin) = child.stdin {
+                stdin.write_all(nft_script.as_bytes()).map_err(|e| {
+                    HostIsolationError::KernelEngineError(format!("Failed writing nft rules: {e}"))
+                })?;
+            }
+            let out = child.wait_with_output().map_err(|e| {
+                HostIsolationError::KernelEngineError(format!("Failed waiting on {nft_bin}: {e}"))
+            })?;
+            if !out.status.success() {
+                return Err(HostIsolationError::KernelEngineError(format!(
+                    "nft virtual-patch apply failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                )));
+            }
+
+            let readback = Command::new(nft_bin)
+                .args(["-n", "list", "table", "inet", "agent_octopus_vpatch"])
+                .env_clear()
+                .env("PATH", "/usr/sbin:/sbin:/usr/bin:/bin")
+                .output()
+                .map_err(|e| {
+                    HostIsolationError::KernelEngineError(format!("Failed nft read-back: {e}"))
+                })?;
+            let rb_stdout = String::from_utf8_lossy(&readback.stdout);
+            if !readback.status.success()
+                || !rb_stdout.contains("table inet agent_octopus_vpatch")
+                || !spec
+                    .blocked_inbound_ports
+                    .iter()
+                    .all(|p| rb_stdout.contains(&format!("tcp dport {p} drop")))
+            {
+                return Err(HostIsolationError::KernelEngineError(
+                    "nft virtual-patch post-commit read-back verification failed".to_string(),
+                ));
+            }
+            for &port in &spec.blocked_inbound_ports {
+                rules_applied.push(format!("inbound_block:tcp_udp:{port}"));
+            }
+            if spec.block_ipv6_rce_surfaces {
+                rules_applied.push("inbound_block:ipv6_ra_icmpv6_rce".to_string());
+            }
+            rules_applied.push("nft_vpatch_verified:agent_octopus_vpatch".to_string());
+            os_enforcement_applied = true;
+            readback_verified = true;
+        }
+
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        ))]
+        {
+            use std::io::Write;
+            use std::process::{Command, Stdio};
+
+            let pfctl_bin = "/sbin/pfctl";
+            if !std::path::Path::new(pfctl_bin).is_file() {
+                return Err(HostIsolationError::KernelEngineError(
+                    "Pinned /sbin/pfctl not found".to_string(),
+                ));
+            }
+            let pf_rules = format!(
+                "{}\n",
+                generate_bsd_darwin_pf_virtual_patch_rules(&spec).join("\n")
+            );
+            let mut child = Command::new(pfctl_bin)
+                .args(["-a", "agent_octopus_vpatch", "-f", "-"])
+                .env_clear()
+                .env("PATH", "/sbin:/usr/sbin:/bin:/usr/bin")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| {
+                    HostIsolationError::KernelEngineError(format!("Failed spawning pfctl: {e}"))
+                })?;
+            if let Some(ref mut stdin) = child.stdin {
+                stdin.write_all(pf_rules.as_bytes()).map_err(|e| {
+                    HostIsolationError::KernelEngineError(format!("Failed writing pf rules: {e}"))
+                })?;
+            }
+            let out = child.wait_with_output().map_err(|e| {
+                HostIsolationError::KernelEngineError(format!("Failed waiting on pfctl: {e}"))
+            })?;
+            if !out.status.success() {
+                return Err(HostIsolationError::KernelEngineError(format!(
+                    "pfctl virtual-patch apply failed: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                )));
+            }
+
+            let readback = Command::new(pfctl_bin)
+                .args(["-a", "agent_octopus_vpatch", "-sr"])
+                .env_clear()
+                .env("PATH", "/sbin:/usr/sbin:/bin:/usr/bin")
+                .output()
+                .map_err(|e| {
+                    HostIsolationError::KernelEngineError(format!("Failed pfctl read-back: {e}"))
+                })?;
+            let rb_stdout = String::from_utf8_lossy(&readback.stdout);
+            let drop_count = rb_stdout
+                .lines()
+                .filter(|l| l.contains("block drop in quick"))
+                .count();
+            if !readback.status.success() || drop_count < spec.blocked_inbound_ports.len() {
+                return Err(HostIsolationError::KernelEngineError(
+                    "pfctl virtual-patch post-commit read-back verification failed".to_string(),
+                ));
+            }
+            for &port in &spec.blocked_inbound_ports {
+                rules_applied.push(format!("inbound_block:tcp_udp:{port}"));
+            }
+            if spec.block_ipv6_rce_surfaces {
+                rules_applied.push("inbound_block:ipv6_ra_icmpv6_rce".to_string());
+            }
+            rules_applied.push(format!("pf_vpatch_verified_rules:{drop_count}"));
+            os_enforcement_applied = true;
+            readback_verified = true;
+        }
+    } else {
+        for &port in &spec.blocked_inbound_ports {
+            rules_applied.push(format!(
+                "unprivileged_plan_only:inbound_block:tcp_udp:{port}"
+            ));
+        }
+        if spec.block_ipv6_rce_surfaces {
+            rules_applied
+                .push("unprivileged_plan_only:inbound_block:ipv6_ra_icmpv6_rce".to_string());
+        }
+        if !posture.is_shield_active() {
+            rules_applied.push("shield_inactive_no_os_firewall_rules".to_string());
+        } else {
+            rules_applied
+                .push("unprivileged_os_firewall_skipped:requires_root_or_admin".to_string());
+        }
+    }
+
+    let clamps: Vec<String> = posture
+        .affected_surfaces
+        .iter()
+        .map(|s| format!("no_breakout:{}", s.as_str()))
+        .collect();
+    let elapsed_us = start.elapsed().as_micros() as u64;
+    Ok(
+        crate::security::virtual_patch_shield::build_shield_receipt_with_enforcement(
+            posture.clone(),
+            clamps,
+            rules_applied,
+            Vec::new(),
+            os_enforcement_applied,
+            readback_verified,
+            elapsed_us,
+        ),
+    )
 }
 
 #[cfg(test)]

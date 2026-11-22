@@ -192,8 +192,8 @@ impl QuantumCircuit {
         self.state.iter().map(|c| c.norm_sq()).collect()
     }
 
-    /// Computes the Pauli-Z expectation value <Z_i> for a given qubit:
-    /// <Z_i> = P(qubit=0) - P(qubit=1), ranging in [-1.0, +1.0].
+    /// Computes the Pauli-Z expectation value `<Z_i>` for a given qubit:
+    /// `<Z_i> = P(qubit=0) - P(qubit=1)`, ranging in `[-1.0, +1.0]`.
     pub fn expectation_z(&self, qubit: usize) -> f64 {
         let bit = 1 << qubit;
         let mut sum_zero = 0.0;

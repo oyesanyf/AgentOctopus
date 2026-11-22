@@ -517,7 +517,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_openevolve_synthesizes_and_promotes_fix_for_failure() {
-        let arm = EvolutionaryOptimizerArm::new();
+        struct TempDirGuard(PathBuf);
+        impl Drop for TempDirGuard {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let temp_dir = std::env::temp_dir().join(format!(
+            "octopus_arm109_unit_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).expect("create temp dir for arm109 test");
+        let _guard = TempDirGuard(temp_dir.clone());
+
+        let arm = EvolutionaryOptimizerArm::new().with_workspace(temp_dir);
         let cand = arm
             .synthesize_and_apply_fix_for_failure(
                 "KERNEL-CEDAR-AUTH-01",

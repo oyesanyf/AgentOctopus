@@ -131,7 +131,7 @@ impl AtlasParser {
         }
     }
 
-    /// Parses a standard STIX 2.1 JSON bundle (from https://github.com/mitre-atlas/atlas-data)
+    /// Parses a standard STIX 2.1 JSON bundle (from <https://github.com/mitre-atlas/atlas-data>)
     /// into a complete, queryable MITRE ATLAS Knowledge Base.
     pub fn parse_stix_bundle(
         json_str: &str,

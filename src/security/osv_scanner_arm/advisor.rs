@@ -24,7 +24,7 @@ pub struct OsvAdvisory {
 pub struct OsvDatabaseMatcher;
 
 impl OsvDatabaseMatcher {
-    /// Formats a batch query payload for Google OSV API (https://api.osv.dev/v1/querybatch).
+    /// Formats a batch query payload for Google OSV API (<https://api.osv.dev/v1/querybatch>).
     pub fn build_batch_query_payload(
         deps: &[super::parser::DiscoveredDependency],
     ) -> serde_json::Value {

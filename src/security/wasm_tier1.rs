@@ -9,7 +9,7 @@
 //!    functions outside the explicit `"octopus_wasi"` host capability bridge fails instantiation.
 //! 2. **Handle-Confined Scratchpad Bridge (`octopus_wasi::scratch_read` / `scratch_write`)**:
 //!    The only filesystem operations available to the guest route exclusively through
-//!    [`open_confined`](crate::security::breakouts::open_confined), which opens every path
+//!    [`open_confined`], which opens every path
 //!    component with `FILE_FLAG_OPEN_REPARSE_POINT`, rejects symlinks/junctions, rejects
 //!    hardlinks (`nNumberOfLinks > 1`), and verifies `GetFinalPathNameByHandleW` prefix
 //!    confinement before reading or writing a single byte.
@@ -28,6 +28,16 @@ use crate::security::agentmesh::pep_bridge::AgentMeshPepBridge;
 use crate::security::breakouts::{
     open_confined, ZeroMiProjectionResult, ZeroMutualInformationProjector,
 };
+use crate::security::cedar_arm::CedarPolicyEngine;
+use crate::security::latent_shield::{
+    AgentRuntimeGuard, GuardVerdict, RuntimeGuardVerdictSummary, RuntimeTelemetry,
+    UnifiedSecurityShield,
+};
+use crate::security::sensitive_paths::{
+    classify_mandatory_write_deny_path, classify_pinned_parent_for_write_deny,
+    classify_sensitive_system_path, scan_for_sensitive_system_path,
+};
+use ndarray::Array1;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -134,6 +144,30 @@ impl WasmMeshBridgeContext {
     }
 }
 
+/// Filesystem and Cedar policy enforcement configuration for Wasmtime `scratch_read` / `scratch_write`.
+#[derive(Clone)]
+pub struct WasmFsPolicy {
+    pub enforce_filesystem_lists: bool,
+    pub allow_read: Vec<String>,
+    pub allow_write: Vec<String>,
+    pub deny: Vec<String>,
+    pub is_standalone_cedar: bool,
+    pub cedar_engine: Option<Arc<CedarPolicyEngine>>,
+}
+
+impl std::fmt::Debug for WasmFsPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WasmFsPolicy")
+            .field("enforce_filesystem_lists", &self.enforce_filesystem_lists)
+            .field("allow_read_count", &self.allow_read.len())
+            .field("allow_write_count", &self.allow_write.len())
+            .field("deny_count", &self.deny.len())
+            .field("is_standalone_cedar", &self.is_standalone_cedar)
+            .field("has_cedar_engine", &self.cedar_engine.is_some())
+            .finish()
+    }
+}
+
 /// Resource and capability limits applied to a single Tier 1 Wasm tool execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmSandboxLimits {
@@ -152,6 +186,18 @@ pub struct WasmSandboxLimits {
     /// Optional host-bound AgentMesh bridge context.
     #[serde(skip)]
     pub mesh_context: Option<WasmMeshBridgeContext>,
+    /// Optional filesystem allow/deny & Cedar policy configuration for `scratch_read`/`scratch_write`.
+    #[serde(skip)]
+    pub fs_policy: Option<Arc<WasmFsPolicy>>,
+    /// Optional Gate 2 `AgentRuntimeGuard` for microsecond per-step latent trajectory checking.
+    #[serde(skip)]
+    pub runtime_guard: Option<Arc<AgentRuntimeGuard>>,
+    /// Optional declared tool action `[read, write, network]` for Gate 2 evaluation.
+    #[serde(skip)]
+    pub runtime_guard_action: Option<[f64; 3]>,
+    /// Disables Gate 2 runtime step checks only when explicitly set; default `false` (enabled).
+    #[serde(skip)]
+    pub disable_runtime_guard: bool,
 }
 
 impl Default for WasmSandboxLimits {
@@ -164,6 +210,10 @@ impl Default for WasmSandboxLimits {
             scratchpad_root: std::env::temp_dir().join("octopus_wasm_scratchpad"),
             allow_scratch_write: false,
             mesh_context: None,
+            fs_policy: None,
+            runtime_guard: None,
+            runtime_guard_action: None,
+            disable_runtime_guard: false,
         }
     }
 }
@@ -192,6 +242,12 @@ pub struct WasmExecutionReceipt {
     pub mesh_bytes_exchanged: u64,
     /// True when post-execution linear memory inspection confirms zero JWT/access-token/private-key bytes exist in guest memory.
     pub linear_memory_zero_secret_verified: bool,
+    /// True when the Zero-Reboot Virtual-Patching Shield is active on the host during execution.
+    #[serde(default)]
+    pub virtual_patch_shield_active: bool,
+    /// Gate 2 `AgentRuntimeGuard` final transition verdict for this Tier-1 execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_guard_verdict: Option<RuntimeGuardVerdictSummary>,
 }
 
 fn verify_linear_memory_contains_no_secrets(mem_bytes: &[u8]) -> bool {
@@ -228,6 +284,19 @@ pub struct WasmHostState {
     pub active_streams: HashMap<u32, VirtualMeshStream>,
     pub next_stream_fd: u32,
     pub stream_fallback_needed: bool,
+    // Milestone 5b (R8) Gate 2 Runtime Telemetry Guard:
+    pub runtime_guard: Option<Arc<AgentRuntimeGuard>>,
+    pub runtime_guard_action: [f64; 3],
+    pub initial_runtime_telemetry: RuntimeTelemetry,
+    pub prev_runtime_telemetry: RuntimeTelemetry,
+    pub last_checked_escape_attempts: usize,
+    pub scratch_read_ops: u64,
+    pub scratch_write_ops: u64,
+    pub output_emit_ops: u64,
+    pub epoch_ticks: u64,
+    pub last_runtime_verdict: Option<GuardVerdict>,
+    pub runtime_guard_blocked: bool,
+    pub runtime_guard_reason: Option<String>,
 }
 
 impl WasmHostState {
@@ -242,6 +311,16 @@ impl WasmHostState {
         mesh_context: Option<WasmMeshBridgeContext>,
     ) -> Self {
         let ctx = mesh_context.or_else(|| limits.mesh_context.clone());
+        let runtime_guard = if limits.disable_runtime_guard {
+            None
+        } else {
+            limits.runtime_guard.clone().or_else(|| {
+                UnifiedSecurityShield::cached_default()
+                    .ok()
+                    .map(|s| Arc::new(s.runtime_guard.clone()))
+            })
+        };
+        let runtime_guard_action = limits.runtime_guard_action.unwrap_or([1.0, 0.0, 0.0]);
         Self {
             limits,
             input_bytes,
@@ -259,7 +338,137 @@ impl WasmHostState {
             active_streams: HashMap::new(),
             next_stream_fd: 3, // Start virtual descriptors after 0, 1, 2
             stream_fallback_needed: false,
+            runtime_guard,
+            runtime_guard_action,
+            initial_runtime_telemetry: RuntimeTelemetry::idle_initial(),
+            prev_runtime_telemetry: RuntimeTelemetry::idle_initial(),
+            last_checked_escape_attempts: 0,
+            scratch_read_ops: 0,
+            scratch_write_ops: 0,
+            output_emit_ops: 0,
+            epoch_ticks: 0,
+            last_runtime_verdict: None,
+            runtime_guard_blocked: false,
+            runtime_guard_reason: None,
         }
+    }
+
+    pub fn current_runtime_telemetry(&self) -> RuntimeTelemetry {
+        let file_reads_norm = ((self.scratch_read_ops as f64 * 0.03)
+            + (self.scratch_bytes_read as f64 / (2.0 * 1024.0 * 1024.0)))
+            .min(1.5);
+        let file_writes_norm = ((self.scratch_write_ops as f64 * 0.04)
+            + (self.scratch_bytes_written as f64 / (1024.0 * 1024.0)))
+            .min(1.5);
+        let child_procs_norm = if self.blocked_escape_attempts.len() > 8 {
+            (1.0 + (self.blocked_escape_attempts.len() - 9) as f64 * 0.15).min(1.5)
+        } else {
+            0.0
+        };
+        let net_sockets_norm = ((self.mesh_calls_attempted as f64 * 0.04)
+            + (self.mesh_bytes_exchanged as f64 / (2.0 * 1024.0 * 1024.0)))
+            .min(1.5);
+        let mem_delta_norm = ((self.peak_memory_bytes.saturating_sub(65_536)) as f64
+            / (8.0 * 1024.0 * 1024.0))
+            .min(1.5);
+        let prompt_entropy_norm =
+            (0.20 + (self.output_buffer.len() as f64 / (1024.0 * 1024.0))).min(1.2);
+        RuntimeTelemetry {
+            file_reads_norm,
+            file_writes_norm,
+            child_procs_norm,
+            net_sockets_norm,
+            mem_delta_norm,
+            prompt_entropy_norm,
+        }
+    }
+
+    pub fn evaluate_runtime_guard_step(
+        &mut self,
+        action_override: Option<[f64; 3]>,
+    ) -> Option<GuardVerdict> {
+        if self.runtime_guard_blocked {
+            return Some(self.last_runtime_verdict.clone().unwrap_or_else(|| {
+                GuardVerdict {
+                    domain: "AGENT_OCTOPUS_RUNTIME",
+                    surprise_score: f64::MAX,
+                    threshold: self
+                        .runtime_guard
+                        .as_ref()
+                        .map(|g| g.threshold())
+                        .filter(|t| t.is_finite() && *t >= 0.0)
+                        .unwrap_or(0.0),
+                    block_execution: true,
+                    reason:
+                        "Latent trajectory divergence: Wasm runtime guard latched after prior breakout trip.",
+                }
+            }));
+        }
+        let guard = self.runtime_guard.as_ref()?.clone();
+        let observed = self.current_runtime_telemetry();
+        let act_arr = action_override.unwrap_or_else(|| {
+            if self.limits.runtime_guard_action.is_some() {
+                self.runtime_guard_action
+            } else if observed.net_sockets_norm
+                > self.prev_runtime_telemetry.net_sockets_norm + 1e-9
+            {
+                [0.0, 0.0, 1.0]
+            } else if observed.file_writes_norm
+                > self.prev_runtime_telemetry.file_writes_norm + 1e-9
+            {
+                [0.0, 1.0, 0.0]
+            } else {
+                self.runtime_guard_action
+            }
+        });
+        let action = Array1::from_vec(act_arr.to_vec());
+        let escape_increased =
+            self.blocked_escape_attempts.len() > self.last_checked_escape_attempts;
+        let mut verdict = guard.evaluate_step(&self.prev_runtime_telemetry, &action, &observed);
+        if observed.child_procs_norm > 0.0 || escape_increased {
+            let anchor_verdict =
+                guard.evaluate_step(&self.initial_runtime_telemetry, &action, &observed);
+            if anchor_verdict.block_execution
+                && (!verdict.block_execution
+                    || anchor_verdict.surprise_score > verdict.surprise_score)
+            {
+                verdict = anchor_verdict;
+            }
+        }
+        self.last_checked_escape_attempts = self.blocked_escape_attempts.len();
+        self.last_runtime_verdict = Some(verdict.clone());
+        if verdict.block_execution {
+            let reason = format!(
+                "{} (surprise={:.4}, threshold={:.4})",
+                verdict.reason, verdict.surprise_score, verdict.threshold
+            );
+            self.runtime_guard_blocked = true;
+            self.runtime_guard_reason = Some(reason.clone());
+            self.blocked_escape_attempts
+                .push(format!("gate2_runtime_guard: {}", reason));
+        } else if observed.child_procs_norm == 0.0 && !escape_increased {
+            self.prev_runtime_telemetry = observed;
+        }
+        Some(verdict)
+    }
+
+    pub fn record_blocked_escape(
+        &mut self,
+        msg: String,
+        action: [f64; 3],
+    ) -> Result<(), wasmtime::Error> {
+        self.blocked_escape_attempts.push(msg);
+        if self.blocked_escape_attempts.len() > 8 {
+            if let Some(verdict) = self.evaluate_runtime_guard_step(Some(action)) {
+                if verdict.block_execution {
+                    return Err(wasmtime::Error::msg(format!(
+                        "GATE2_RUNTIME_GUARD_BLOCKED: {}",
+                        verdict.reason
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -282,6 +491,14 @@ impl ResourceLimiter for WasmHostState {
         }
         if desired > self.peak_memory_bytes {
             self.peak_memory_bytes = desired;
+        }
+        if desired.saturating_sub(65_536) >= 1024 * 1024 {
+            if let Some(verdict) = self.evaluate_runtime_guard_step(None) {
+                if verdict.block_execution {
+                    self.memory_limit_exceeded = true;
+                    return Ok(false);
+                }
+            }
         }
         Ok(true)
     }
@@ -482,6 +699,275 @@ pub struct WasmTier1Executor {
     module_cache: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<[u8; 32], Module>>>,
 }
 
+fn normalize_wasm_cmp_path(raw: &str) -> String {
+    let mut s = raw.trim().replace('\\', "/");
+    #[cfg(windows)]
+    {
+        if let Some(after_unc) = s
+            .strip_prefix("//?/UNC/")
+            .or_else(|| s.strip_prefix("//?/unc/"))
+        {
+            s = format!("//{}", after_unc);
+        } else if let Some(after_verb) = s.strip_prefix("//?/") {
+            s = after_verb.to_string();
+        }
+    }
+    while s.contains("//") && !s.starts_with("//") {
+        s = s.replace("//", "/");
+    }
+    if s.len() > 1 && !(s.len() == 3 && s.as_bytes()[1] == b':' && s.ends_with('/')) {
+        s = s.trim_end_matches('/').to_string();
+    }
+    if cfg!(windows) {
+        s.to_ascii_lowercase()
+    } else {
+        s
+    }
+}
+
+fn under_dir_wasm(target: &str, base: &str) -> bool {
+    let t = normalize_wasm_cmp_path(target);
+    let b = normalize_wasm_cmp_path(base);
+    if b.is_empty() {
+        return false;
+    }
+    if t == b {
+        return true;
+    }
+    if b.ends_with('/') {
+        t.starts_with(&b)
+    } else {
+        t.starts_with(&format!("{}/", b))
+    }
+}
+
+fn is_env_secret_file(rel_or_abs: &str) -> bool {
+    let norm = rel_or_abs.trim().replace('\\', "/");
+    for seg in norm.split('/') {
+        let clean = seg.trim_end_matches(['.', ' ']);
+        if clean.eq_ignore_ascii_case(".env") || clean.to_ascii_lowercase().starts_with(".env.") {
+            return true;
+        }
+    }
+    false
+}
+
+fn check_wasm_scratch_fs_policy(
+    limits: &WasmSandboxLimits,
+    rel_path: &str,
+    is_write: bool,
+) -> Result<(), String> {
+    let trimmed = rel_path.trim();
+    if trimmed.is_empty() || trimmed.contains('\0') {
+        return Err("empty or NUL path rejected".to_string());
+    }
+    let rel_norm_slash = trimmed.replace('\\', "/");
+    let p_rel = std::path::Path::new(trimmed);
+    if p_rel.is_absolute()
+        || rel_norm_slash.starts_with('/')
+        || (rel_norm_slash.len() >= 2
+            && rel_norm_slash.as_bytes()[0].is_ascii_alphabetic()
+            && rel_norm_slash.as_bytes()[1] == b':')
+    {
+        return Err("absolute path rejected in scratch bridge".to_string());
+    }
+
+    let mut clean_segs: Vec<&str> = Vec::new();
+    for seg in rel_norm_slash.split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            return Err("parent traversal '..' rejected in scratch bridge".to_string());
+        }
+        clean_segs.push(seg);
+    }
+    if clean_segs.is_empty() {
+        return Err("empty relative path rejected".to_string());
+    }
+    let rel_clean = clean_segs.join("/");
+
+    let abs_pb = limits.scratchpad_root.join(p_rel);
+    let root_str = limits.scratchpad_root.to_string_lossy().replace('\\', "/");
+    #[cfg(windows)]
+    let root_str = root_str
+        .strip_prefix("//?/")
+        .unwrap_or(&root_str)
+        .to_string();
+    let root_trim = root_str.trim_end_matches('/');
+    let abs_lex = format!("{}/{}", root_trim, rel_clean);
+
+    let mut candidates = vec![abs_lex.clone()];
+    if let Ok(canon_pb) = std::fs::canonicalize(&abs_pb) {
+        let cs = canon_pb.to_string_lossy().replace('\\', "/");
+        #[cfg(windows)]
+        let cs = cs.strip_prefix("//?/").unwrap_or(&cs).to_string();
+        if !cs.is_empty() && !candidates.contains(&cs) {
+            candidates.push(cs);
+        }
+    } else if let Some(parent) = abs_pb.parent() {
+        if let Ok(canon_parent) = std::fs::canonicalize(parent) {
+            if let Some(fname) = abs_pb.file_name().and_then(|s| s.to_str()) {
+                let ps = canon_parent.to_string_lossy().replace('\\', "/");
+                #[cfg(windows)]
+                let ps = ps.strip_prefix("//?/").unwrap_or(&ps).to_string();
+                let joined = format!("{}/{}", ps.trim_end_matches('/'), fname);
+                if !candidates.contains(&joined) {
+                    candidates.push(joined);
+                }
+            }
+        }
+    }
+
+    // 1. Sensitive system paths (always enforced)
+    if classify_sensitive_system_path(&rel_clean).is_some()
+        || scan_for_sensitive_system_path(&rel_clean).is_some()
+        || candidates
+            .iter()
+            .any(|c| classify_sensitive_system_path(c).is_some())
+    {
+        return Err(format!("SensitiveSystemPathGuard denied '{}'", rel_clean));
+    }
+
+    // 2. Mandatory write-deny targets (.git/hooks, .git/config, .env, .mcp.json, etc.)
+    if is_write
+        && (classify_mandatory_write_deny_path(&rel_clean).is_some()
+            || classify_pinned_parent_for_write_deny(&rel_clean).is_some()
+            || is_env_secret_file(&rel_clean)
+            || candidates.iter().any(|c| {
+                classify_mandatory_write_deny_path(c).is_some()
+                    || classify_pinned_parent_for_write_deny(c).is_some()
+            }))
+    {
+        return Err(format!(
+            "MandatoryWriteDenyGuard denied write to '{}'",
+            rel_clean
+        ));
+    }
+
+    let Some(ref fp) = limits.fs_policy else {
+        return Ok(());
+    };
+
+    // 3. JSON filesystem allow_read / allow_write / deny lists
+    if !fp.is_standalone_cedar {
+        for cand in &candidates {
+            if fp.deny.iter().any(|dp| under_dir_wasm(cand, dp))
+                || fp.deny.iter().any(|dp| under_dir_wasm(&rel_clean, dp))
+            {
+                return Err(format!(
+                    "path '{}' blocked by policy filesystem.deny",
+                    rel_clean
+                ));
+            }
+        }
+        if is_write {
+            if fp.enforce_filesystem_lists || !fp.allow_write.is_empty() {
+                if fp.allow_write.is_empty()
+                    || !candidates
+                        .iter()
+                        .all(|c| fp.allow_write.iter().any(|aw| under_dir_wasm(c, aw)))
+                {
+                    return Err(format!(
+                        "write to '{}' outside policy filesystem.allow_write",
+                        rel_clean
+                    ));
+                }
+            }
+        } else if !fp.allow_read.is_empty()
+            && !candidates
+                .iter()
+                .all(|c| fp.allow_read.iter().any(|ar| under_dir_wasm(c, ar)))
+        {
+            return Err(format!(
+                "read of '{}' outside policy filesystem.allow_read",
+                rel_clean
+            ));
+        }
+    }
+
+    // 4. Cedar fs_read / fs_write policy evaluation
+    if let Some(ref cedar) = fp.cedar_engine {
+        let action = if is_write { "fs_write" } else { "fs_read" };
+        let enforce_default_deny = fp.is_standalone_cedar || cedar.has_permit_action_policy(action);
+        let mut all_allowed = true;
+
+        for cand in &candidates {
+            let is_sensitive = classify_sensitive_system_path(cand).is_some();
+            let is_mandatory_deny = is_write
+                && (classify_mandatory_write_deny_path(cand).is_some()
+                    || classify_pinned_parent_for_write_deny(cand).is_some()
+                    || is_env_secret_file(cand));
+
+            #[cfg(windows)]
+            let norm_path = cand.to_ascii_lowercase();
+            #[cfg(not(windows))]
+            let norm_path = cand.clone();
+
+            let make_ctx = |path_val: &str| {
+                if !is_write {
+                    serde_json::json!({
+                        "path": path_val,
+                        "normalized_path": norm_path,
+                        "is_sensitive": is_sensitive,
+                    })
+                } else {
+                    serde_json::json!({
+                        "path": path_val,
+                        "normalized_path": norm_path,
+                        "is_mandatory_deny": is_mandatory_deny,
+                    })
+                }
+            };
+
+            let verdict = cedar
+                .evaluate("cli_runner", action, cand, "FilePath", make_ctx(cand))
+                .map_err(|e| format!("Cedar {} evaluation error: {}", action, e))?;
+
+            if !verdict.is_allowed && !verdict.determining_policies.is_empty() {
+                return Err(format!(
+                    "Cedar policy explicitly forbids {} on '{}'",
+                    action, rel_clean
+                ));
+            }
+
+            #[allow(unused_mut)]
+            let mut cand_allowed = verdict.is_allowed;
+            #[cfg(windows)]
+            {
+                let lower_cand = cand.to_ascii_lowercase();
+                if lower_cand != *cand {
+                    let verdict_lower = cedar
+                        .evaluate(
+                            "cli_runner",
+                            action,
+                            &lower_cand,
+                            "FilePath",
+                            make_ctx(&lower_cand),
+                        )
+                        .map_err(|e| format!("Cedar {} evaluation error: {}", action, e))?;
+                    if !verdict_lower.is_allowed && !verdict_lower.determining_policies.is_empty() {
+                        return Err(format!(
+                            "Cedar policy explicitly forbids {} on '{}'",
+                            action, rel_clean
+                        ));
+                    }
+                    cand_allowed = cand_allowed || verdict_lower.is_allowed;
+                }
+            }
+            if !cand_allowed {
+                all_allowed = false;
+            }
+        }
+
+        if !all_allowed && enforce_default_deny {
+            return Err(format!("Cedar policy denied {} on '{}'", action, rel_clean));
+        }
+    }
+
+    Ok(())
+}
+
 impl WasmTier1Executor {
     pub fn try_new() -> Result<Self, OctopusSecurityError> {
         let mut config = Config::new();
@@ -651,6 +1137,18 @@ impl WasmTier1Executor {
             ))
         })?;
         store.set_epoch_deadline(1);
+        store.epoch_deadline_callback(|mut ctx| {
+            ctx.data_mut().epoch_ticks = ctx.data().epoch_ticks.saturating_add(1);
+            if let Some(verdict) = ctx.data_mut().evaluate_runtime_guard_step(None) {
+                if verdict.block_execution {
+                    return Err(wasmtime::Error::msg(format!(
+                        "GATE2_RUNTIME_GUARD_BLOCKED: {} (surprise={:.4}, threshold={:.4})",
+                        verdict.reason, verdict.surprise_score, verdict.threshold
+                    )));
+                }
+            }
+            Err(wasmtime::Error::msg("interrupt: epoch deadline tripped"))
+        });
         let mut uncached_linker: Linker<WasmHostState> = Linker::new(&self.engine);
         Self::bind_octopus_wasi_imports(&mut uncached_linker)?;
         let instance = uncached_linker
@@ -680,11 +1178,28 @@ impl WasmTier1Executor {
                 ))
             })?;
         let exit_code = run_fn.call(&mut store, ()).map_err(|trap| {
+            if trap.to_string().contains("interrupt") {
+                return OctopusSecurityError::LimbKilled;
+            }
+            if let Some(ref reason) = store.data().runtime_guard_reason {
+                return OctopusSecurityError::BreakoutDetected(format!(
+                    "TIER1_GATE2_RUNTIME_GUARD_BLOCKED [{}]: {}",
+                    tool_name, reason
+                ));
+            }
             OctopusSecurityError::IsolationViolation(format!(
                 "TIER1_WASM_RUNTIME_TRAP [{}]: {}",
                 tool_name, trap
             ))
         })?;
+        if let Some(verdict) = store.data_mut().evaluate_runtime_guard_step(None) {
+            if verdict.block_execution {
+                return Err(OctopusSecurityError::BreakoutDetected(format!(
+                    "TIER1_GATE2_RUNTIME_GUARD_BLOCKED [{}]: {} (surprise={:.4}, threshold={:.4})",
+                    tool_name, verdict.reason, verdict.surprise_score, verdict.threshold
+                )));
+            }
+        }
         let execution_us = exec_begin.elapsed().as_micros() as u64;
         let fuel_remaining = store.get_fuel().unwrap_or(0);
         let fuel_consumed = fuel_budget.saturating_sub(fuel_remaining);
@@ -692,7 +1207,12 @@ impl WasmTier1Executor {
             .get_memory(&mut store, "memory")
             .map(|mem| verify_linear_memory_contains_no_secrets(mem.data(&store)))
             .unwrap_or(true);
-        let state = store.into_data();
+        let mut state = store.into_data();
+        let runtime_guard_verdict = state
+            .last_runtime_verdict
+            .take()
+            .as_ref()
+            .map(RuntimeGuardVerdictSummary::from);
         let raw_output = String::from_utf8_lossy(&state.output_buffer).to_string();
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -720,6 +1240,9 @@ impl WasmTier1Executor {
             mesh_calls_succeeded: state.mesh_calls_succeeded,
             mesh_bytes_exchanged: state.mesh_bytes_exchanged,
             linear_memory_zero_secret_verified,
+            virtual_patch_shield_active:
+                crate::security::virtual_patch_shield::current_shield_posture().is_shield_active(),
+            runtime_guard_verdict,
         })
     }
 
@@ -823,6 +1346,18 @@ impl WasmTier1Executor {
             ))
         })?;
         store.set_epoch_deadline(1);
+        store.epoch_deadline_callback(|mut ctx| {
+            ctx.data_mut().epoch_ticks = ctx.data().epoch_ticks.saturating_add(1);
+            if let Some(verdict) = ctx.data_mut().evaluate_runtime_guard_step(None) {
+                if verdict.block_execution {
+                    return Err(wasmtime::Error::msg(format!(
+                        "GATE2_RUNTIME_GUARD_BLOCKED: {} (surprise={:.4}, threshold={:.4})",
+                        verdict.reason, verdict.surprise_score, verdict.threshold
+                    )));
+                }
+            }
+            Err(wasmtime::Error::msg("interrupt: epoch deadline tripped"))
+        });
 
         let instance = self.linker.instantiate(&mut store, module).map_err(|e| {
             let mem_exceeded = store.data().memory_limit_exceeded;
@@ -850,17 +1385,21 @@ impl WasmTier1Executor {
             }
         }
 
-        let run_fn = instance
+        let call_res = if let Ok(run_fn) = instance
             .get_typed_func::<(), i32>(&mut store, "octopus_run")
             .or_else(|_| instance.get_typed_func::<(), i32>(&mut store, "execute_step"))
-            .map_err(|e| {
-                OctopusSecurityError::IsolationViolation(format!(
-                    "TIER1_WASM_MISSING_ENTRYPOINT [{}]: expected `(func (export \"octopus_run\") (result i32))`: {}",
-                    tool_name, e
-                ))
-            })?;
+        {
+            run_fn.call(&mut store, ())
+        } else if let Ok(start_fn) = instance.get_typed_func::<(), ()>(&mut store, "_start") {
+            start_fn.call(&mut store, ()).map(|()| 0)
+        } else {
+            return Err(OctopusSecurityError::IsolationViolation(format!(
+                "TIER1_WASM_MISSING_ENTRYPOINT [{}]: expected `octopus_run`, `execute_step`, or `_start`",
+                tool_name
+            )));
+        };
 
-        let exit_code = match run_fn.call(&mut store, ()) {
+        let exit_code = match call_res {
             Ok(code) => code,
             Err(trap) => {
                 let fuel_left = store.get_fuel().unwrap_or(0);
@@ -873,6 +1412,12 @@ impl WasmTier1Executor {
 
                 if is_tripped || trap.to_string().contains("interrupt") {
                     return Err(OctopusSecurityError::LimbKilled);
+                }
+                if let Some(ref reason) = store.data().runtime_guard_reason {
+                    return Err(OctopusSecurityError::BreakoutDetected(format!(
+                        "TIER1_GATE2_RUNTIME_GUARD_BLOCKED [{}]: {}",
+                        tool_name, reason
+                    )));
                 }
                 if fuel_left == 0 {
                     return Err(OctopusSecurityError::ResourceQuotaExceeded(format!(
@@ -893,6 +1438,15 @@ impl WasmTier1Executor {
             }
         };
 
+        if let Some(verdict) = store.data_mut().evaluate_runtime_guard_step(None) {
+            if verdict.block_execution {
+                return Err(OctopusSecurityError::BreakoutDetected(format!(
+                    "TIER1_GATE2_RUNTIME_GUARD_BLOCKED [{}]: {} (surprise={:.4}, threshold={:.4})",
+                    tool_name, verdict.reason, verdict.surprise_score, verdict.threshold
+                )));
+            }
+        }
+
         let mut linear_memory_zero_secret_verified = true;
         if let Some(mem) = instance.get_memory(&mut store, "memory") {
             let cur_size = mem.data_size(&store);
@@ -907,7 +1461,12 @@ impl WasmTier1Executor {
         let fuel_remaining = store.get_fuel().unwrap_or(0);
         let fuel_consumed = fuel_budget.saturating_sub(fuel_remaining);
 
-        let state = store.into_data();
+        let mut state = store.into_data();
+        let runtime_guard_verdict = state
+            .last_runtime_verdict
+            .take()
+            .as_ref()
+            .map(RuntimeGuardVerdictSummary::from);
         let raw_output = String::from_utf8_lossy(&state.output_buffer).to_string();
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -936,6 +1495,9 @@ impl WasmTier1Executor {
             mesh_calls_succeeded: state.mesh_calls_succeeded,
             mesh_bytes_exchanged: state.mesh_bytes_exchanged,
             linear_memory_zero_secret_verified,
+            virtual_patch_shield_active:
+                crate::security::virtual_patch_shield::current_shield_posture().is_shield_active(),
+            runtime_guard_verdict,
         })
     }
 
@@ -984,12 +1546,15 @@ impl WasmTier1Executor {
             .func_wrap(
                 "octopus_wasi",
                 "emit_output",
-                |mut caller: Caller<'_, WasmHostState>, src_ptr: i32, src_len: i32| -> i32 {
+                |mut caller: Caller<'_, WasmHostState>,
+                 src_ptr: i32,
+                 src_len: i32|
+                 -> Result<i32, wasmtime::Error> {
                     if src_ptr < 0 || src_len < 0 {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     }
                     let Some(wasmtime::Extern::Memory(mem)) = caller.get_export("memory") else {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     };
                     let start = src_ptr as usize;
                     let len = src_len as usize;
@@ -997,17 +1562,30 @@ impl WasmTier1Executor {
                     let slice = {
                         let data = mem.data(&caller);
                         if end > data.len() {
-                            return WASI_ERR_FAULT;
+                            return Ok(WASI_ERR_FAULT);
                         }
                         data[start..end].to_vec()
                     };
                     let max_out = caller.data().limits.max_output_bytes;
                     let state = caller.data_mut();
                     if state.output_buffer.len().saturating_add(slice.len()) > max_out {
-                        return WASI_ERR_ACCESS_DENIED;
+                        return Ok(WASI_ERR_ACCESS_DENIED);
                     }
                     state.output_buffer.extend_from_slice(&slice);
-                    slice.len() as i32
+                    state.output_emit_ops = state.output_emit_ops.saturating_add(1);
+                    if state.output_emit_ops % 16 == 0 || slice.len() >= 16_384 {
+                        if let Some(verdict) =
+                            state.evaluate_runtime_guard_step(Some([0.0, 1.0, 0.0]))
+                        {
+                            if verdict.block_execution {
+                                return Err(wasmtime::Error::msg(format!(
+                                    "GATE2_RUNTIME_GUARD_BLOCKED: {}",
+                                    verdict.reason
+                                )));
+                            }
+                        }
+                    }
+                    Ok(slice.len() as i32)
                 },
             )
             .map_err(|e| OctopusSecurityError::IsolationViolation(e.to_string()))?;
@@ -1023,35 +1601,45 @@ impl WasmTier1Executor {
                  path_len: i32,
                  dst_ptr: i32,
                  dst_cap: i32|
-                 -> i32 {
+                 -> Result<i32, wasmtime::Error> {
                     if path_ptr < 0 || path_len <= 0 || dst_ptr < 0 || dst_cap < 0 {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     }
                     let Some(wasmtime::Extern::Memory(mem)) = caller.get_export("memory") else {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     };
                     let rel_path = {
                         let data = mem.data(&caller);
                         let p_start = path_ptr as usize;
                         let p_end = p_start.saturating_add(path_len as usize);
                         if p_end > data.len() {
-                            return WASI_ERR_FAULT;
+                            return Ok(WASI_ERR_FAULT);
                         }
                         match std::str::from_utf8(&data[p_start..p_end]) {
                             Ok(s) => s.to_string(),
-                            Err(_) => return WASI_ERR_IO,
+                            Err(_) => return Ok(WASI_ERR_IO),
                         }
                     };
+
+                    if let Err(reason) =
+                        check_wasm_scratch_fs_policy(&caller.data().limits, &rel_path, false)
+                    {
+                        caller.data_mut().record_blocked_escape(
+                            format!("scratch_read('{}') denied by policy: {}", rel_path, reason),
+                            [1.0, 0.0, 0.0],
+                        )?;
+                        return Ok(WASI_ERR_ACCESS_DENIED);
+                    }
 
                     let root = caller.data().limits.scratchpad_root.clone();
                     let mut file = match open_confined(&root, &rel_path, false) {
                         Ok(f) => f,
                         Err(e) => {
-                            caller
-                                .data_mut()
-                                .blocked_escape_attempts
-                                .push(format!("scratch_read('{}') blocked: {}", rel_path, e));
-                            return WASI_ERR_ACCESS_DENIED;
+                            caller.data_mut().record_blocked_escape(
+                                format!("scratch_read('{}') blocked: {}", rel_path, e),
+                                [1.0, 0.0, 0.0],
+                            )?;
+                            return Ok(WASI_ERR_ACCESS_DENIED);
                         }
                     };
 
@@ -1064,7 +1652,7 @@ impl WasmTier1Executor {
                         .read_to_end(&mut buf)
                         .is_err()
                     {
-                        return WASI_ERR_IO;
+                        return Ok(WASI_ERR_IO);
                     }
                     let copy_len = buf.len().min(dst_cap as usize);
                     let d_start = dst_ptr as usize;
@@ -1072,12 +1660,23 @@ impl WasmTier1Executor {
                     {
                         let data = mem.data_mut(&mut caller);
                         if d_end > data.len() {
-                            return WASI_ERR_FAULT;
+                            return Ok(WASI_ERR_FAULT);
                         }
                         data[d_start..d_end].copy_from_slice(&buf[..copy_len]);
                     }
-                    caller.data_mut().scratch_bytes_read += copy_len as u64;
-                    copy_len as i32
+                    let state = caller.data_mut();
+                    state.scratch_bytes_read += copy_len as u64;
+                    state.scratch_read_ops = state.scratch_read_ops.saturating_add(1);
+                    if let Some(verdict) = state.evaluate_runtime_guard_step(Some([1.0, 0.0, 0.0]))
+                    {
+                        if verdict.block_execution {
+                            return Err(wasmtime::Error::msg(format!(
+                                "GATE2_RUNTIME_GUARD_BLOCKED: {}",
+                                verdict.reason
+                            )));
+                        }
+                    }
+                    Ok(copy_len as i32)
                 },
             )
             .map_err(|e| OctopusSecurityError::IsolationViolation(e.to_string()))?;
@@ -1093,28 +1692,31 @@ impl WasmTier1Executor {
                  path_len: i32,
                  src_ptr: i32,
                  src_len: i32|
-                 -> i32 {
+                 -> Result<i32, wasmtime::Error> {
                     if !caller.data().limits.allow_scratch_write {
-                        caller
-                            .data_mut()
-                            .blocked_escape_attempts
-                            .push("scratch_write denied: allow_scratch_write=false".to_string());
-                        return WASI_ERR_ACCESS_DENIED;
+                        caller.data_mut().record_blocked_escape(
+                            "scratch_write denied: allow_scratch_write=false".to_string(),
+                            [0.0, 1.0, 0.0],
+                        )?;
+                        return Ok(WASI_ERR_ACCESS_DENIED);
                     }
                     if path_ptr < 0 || path_len <= 0 || src_ptr < 0 || src_len < 0 {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     }
                     let max_write_quota = caller.data().limits.max_output_bytes as u64;
                     let cur_written = caller.data().scratch_bytes_written;
                     if cur_written.saturating_add(src_len as u64) > max_write_quota {
-                        caller.data_mut().blocked_escape_attempts.push(format!(
-                            "scratch_write denied: write quota exceeded ({} + {} > {})",
-                            cur_written, src_len, max_write_quota
-                        ));
-                        return WASI_ERR_ACCESS_DENIED;
+                        caller.data_mut().record_blocked_escape(
+                            format!(
+                                "scratch_write denied: write quota exceeded ({} + {} > {})",
+                                cur_written, src_len, max_write_quota
+                            ),
+                            [0.0, 1.0, 0.0],
+                        )?;
+                        return Ok(WASI_ERR_ACCESS_DENIED);
                     }
                     let Some(wasmtime::Extern::Memory(mem)) = caller.get_export("memory") else {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     };
                     let (rel_path, payload) = {
                         let data = mem.data(&caller);
@@ -1123,30 +1725,51 @@ impl WasmTier1Executor {
                         let s_start = src_ptr as usize;
                         let s_end = s_start.saturating_add(src_len as usize);
                         if p_end > data.len() || s_end > data.len() {
-                            return WASI_ERR_FAULT;
+                            return Ok(WASI_ERR_FAULT);
                         }
                         let Ok(p_str) = std::str::from_utf8(&data[p_start..p_end]) else {
-                            return WASI_ERR_IO;
+                            return Ok(WASI_ERR_IO);
                         };
                         (p_str.to_string(), data[s_start..s_end].to_vec())
                     };
+
+                    if let Err(reason) =
+                        check_wasm_scratch_fs_policy(&caller.data().limits, &rel_path, true)
+                    {
+                        caller.data_mut().record_blocked_escape(
+                            format!("scratch_write('{}') denied by policy: {}", rel_path, reason),
+                            [0.0, 1.0, 0.0],
+                        )?;
+                        return Ok(WASI_ERR_ACCESS_DENIED);
+                    }
 
                     let root = caller.data().limits.scratchpad_root.clone();
                     let mut file = match open_confined(&root, &rel_path, true) {
                         Ok(f) => f,
                         Err(e) => {
-                            caller
-                                .data_mut()
-                                .blocked_escape_attempts
-                                .push(format!("scratch_write('{}') blocked: {}", rel_path, e));
-                            return WASI_ERR_ACCESS_DENIED;
+                            caller.data_mut().record_blocked_escape(
+                                format!("scratch_write('{}') blocked: {}", rel_path, e),
+                                [0.0, 1.0, 0.0],
+                            )?;
+                            return Ok(WASI_ERR_ACCESS_DENIED);
                         }
                     };
                     if file.write_all(&payload).is_err() {
-                        return WASI_ERR_IO;
+                        return Ok(WASI_ERR_IO);
                     }
-                    caller.data_mut().scratch_bytes_written += payload.len() as u64;
-                    payload.len() as i32
+                    let state = caller.data_mut();
+                    state.scratch_bytes_written += payload.len() as u64;
+                    state.scratch_write_ops = state.scratch_write_ops.saturating_add(1);
+                    if let Some(verdict) = state.evaluate_runtime_guard_step(Some([0.0, 1.0, 0.0]))
+                    {
+                        if verdict.block_execution {
+                            return Err(wasmtime::Error::msg(format!(
+                                "GATE2_RUNTIME_GUARD_BLOCKED: {}",
+                                verdict.reason
+                            )));
+                        }
+                    }
+                    Ok(payload.len() as i32)
                 },
             )
             .map_err(|e| OctopusSecurityError::IsolationViolation(e.to_string()))?;
@@ -1163,15 +1786,15 @@ impl WasmTier1Executor {
                  req_len: i32,
                  resp_ptr: i32,
                  resp_cap: i32|
-                 -> i32 {
+                 -> Result<i32, wasmtime::Error> {
                     caller.data_mut().mesh_calls_attempted += 1;
 
                     if uri_ptr < 0 || uri_len <= 0 || req_ptr < 0 || req_len < 0 || resp_ptr < 0 || resp_cap < 0 {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     }
 
                     let Some(wasmtime::Extern::Memory(mem)) = caller.get_export("memory") else {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     };
 
                     // Bounds-checked extraction of URI and request payload from guest linear memory
@@ -1182,21 +1805,21 @@ impl WasmTier1Executor {
                         let r_start = req_ptr as usize;
                         let r_end = r_start.saturating_add(req_len as usize);
                         if u_end > data.len() || r_end > data.len() {
-                            return WASI_ERR_FAULT;
+                            return Ok(WASI_ERR_FAULT);
                         }
                         let Ok(uri_s) = std::str::from_utf8(&data[u_start..u_end]) else {
-                            return WASI_ERR_IO;
+                            return Ok(WASI_ERR_IO);
                         };
                         (uri_s.trim().to_string(), data[r_start..r_end].to_vec())
                     };
 
                     // Strict URI scheme check (mcp://, a2a://, inference://, egress://)
                     if let Err(e) = validate_mesh_uri(&uri_str) {
-                        caller.data_mut().blocked_escape_attempts.push(format!(
-                            "mesh_call denied: invalid URI '{}': {}",
-                            uri_str, e
-                        ));
-                        return WASI_ERR_ACCESS_DENIED;
+                        caller.data_mut().record_blocked_escape(
+                            format!("mesh_call denied: invalid URI '{}': {}", uri_str, e),
+                            [0.0, 0.0, 1.0],
+                        )?;
+                        return Ok(WASI_ERR_ACCESS_DENIED);
                     }
 
                     // Extract host-only context from Store
@@ -1223,8 +1846,19 @@ impl WasmTier1Executor {
                     let (arm_id, epoch, role, pep_bridge) = match extracted {
                         Ok(tuple) => tuple,
                         Err(msg) => {
-                            caller.data_mut().blocked_escape_attempts.push(msg);
-                            return WASI_ERR_ACCESS_DENIED;
+                            let state = caller.data_mut();
+                            state.blocked_escape_attempts.push(msg);
+                            if let Some(verdict) =
+                                state.evaluate_runtime_guard_step(Some([0.0, 0.0, 1.0]))
+                            {
+                                if verdict.block_execution {
+                                    return Err(wasmtime::Error::msg(format!(
+                                        "GATE2_RUNTIME_GUARD_BLOCKED: {}",
+                                        verdict.reason
+                                    )));
+                                }
+                            }
+                            return Ok(WASI_ERR_ACCESS_DENIED);
                         }
                     };
 
@@ -1237,7 +1871,7 @@ impl WasmTier1Executor {
                             {
                                 let data = mem.data_mut(&mut caller);
                                 if d_end > data.len() {
-                                    return WASI_ERR_FAULT;
+                                    return Ok(WASI_ERR_FAULT);
                                 }
                                 data[d_start..d_end].copy_from_slice(&sanitized_resp[..copy_len]);
                             }
@@ -1246,29 +1880,39 @@ impl WasmTier1Executor {
                             state.mesh_bytes_exchanged = state
                                 .mesh_bytes_exchanged
                                 .saturating_add((req_bytes.len() + copy_len) as u64);
+                            if let Some(verdict) =
+                                state.evaluate_runtime_guard_step(Some([0.0, 0.0, 1.0]))
+                            {
+                                if verdict.block_execution {
+                                    return Err(wasmtime::Error::msg(format!(
+                                        "GATE2_RUNTIME_GUARD_BLOCKED: {}",
+                                        verdict.reason
+                                    )));
+                                }
+                            }
 
-                            copy_len as i32
+                            Ok(copy_len as i32)
                         }
                         Err(crate::security::agentmesh::pep_bridge::MeshCallError::AccessDenied(msg)) => {
-                            caller.data_mut().blocked_escape_attempts.push(format!(
-                                "mesh_call policy 403 denied for '{}': {}",
-                                uri_str, msg
-                            ));
-                            WASI_ERR_ACCESS_DENIED
+                            caller.data_mut().record_blocked_escape(
+                                format!("mesh_call policy 403 denied for '{}': {}", uri_str, msg),
+                                [0.0, 0.0, 1.0],
+                            )?;
+                            Ok(WASI_ERR_ACCESS_DENIED)
                         }
                         Err(crate::security::agentmesh::pep_bridge::MeshCallError::KillSwitchTripped(arm)) => {
-                            caller.data_mut().blocked_escape_attempts.push(format!(
-                                "mesh_call aborted: KillSwitch tripped for arm '{}'",
-                                arm
-                            ));
-                            WASI_ERR_ACCESS_DENIED
+                            caller.data_mut().record_blocked_escape(
+                                format!("mesh_call aborted: KillSwitch tripped for arm '{}'", arm),
+                                [0.0, 0.0, 1.0],
+                            )?;
+                            Ok(WASI_ERR_ACCESS_DENIED)
                         }
                         Err(e) => {
-                            caller.data_mut().blocked_escape_attempts.push(format!(
-                                "mesh_call failed for '{}': {}",
-                                uri_str, e
-                            ));
-                            WASI_ERR_ACCESS_DENIED
+                            caller.data_mut().record_blocked_escape(
+                                format!("mesh_call failed for '{}': {}", uri_str, e),
+                                [0.0, 0.0, 1.0],
+                            )?;
+                            Ok(WASI_ERR_ACCESS_DENIED)
                         }
                     }
                 },
@@ -1284,49 +1928,52 @@ impl WasmTier1Executor {
                  uri_ptr: i32,
                  uri_len: i32,
                  flags: i32|
-                 -> i32 {
+                 -> Result<i32, wasmtime::Error> {
                     if uri_ptr < 0 || uri_len <= 0 {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     }
                     let Some(wasmtime::Extern::Memory(mem)) = caller.get_export("memory") else {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     };
                     let uri_str = {
                         let data = mem.data(&caller);
                         let u_start = uri_ptr as usize;
                         let u_end = u_start.saturating_add(uri_len as usize);
                         if u_end > data.len() {
-                            return WASI_ERR_FAULT;
+                            return Ok(WASI_ERR_FAULT);
                         }
                         match std::str::from_utf8(&data[u_start..u_end]) {
                             Ok(s) => s.trim().to_string(),
-                            Err(_) => return WASI_ERR_IO,
+                            Err(_) => return Ok(WASI_ERR_IO),
                         }
                     };
 
                     if let Err(e) = validate_mesh_uri(&uri_str) {
-                        caller.data_mut().blocked_escape_attempts.push(format!(
-                            "mesh_stream_open denied: invalid URI '{}': {}",
-                            uri_str, e
-                        ));
-                        return WASI_ERR_ACCESS_DENIED;
+                        caller.data_mut().record_blocked_escape(
+                            format!("mesh_stream_open denied: invalid URI '{}': {}", uri_str, e),
+                            [0.0, 0.0, 1.0],
+                        )?;
+                        return Ok(WASI_ERR_ACCESS_DENIED);
                     }
 
                     let state = caller.data();
                     let Some(ref ctx) = state.mesh_context else {
-                        return WASI_ERR_ACCESS_DENIED;
+                        return Ok(WASI_ERR_ACCESS_DENIED);
                     };
 
                     if ctx.is_tripped() {
-                        return WASI_ERR_ACCESS_DENIED;
+                        return Ok(WASI_ERR_ACCESS_DENIED);
                     }
 
                     if state.active_streams.len() >= MAX_VIRTUAL_MESH_STREAMS {
-                        caller.data_mut().blocked_escape_attempts.push(format!(
-                            "mesh_stream_open denied: active stream descriptor limit ({}) exceeded",
-                            MAX_VIRTUAL_MESH_STREAMS
-                        ));
-                        return WASI_ERR_ACCESS_DENIED;
+                        caller.data_mut().record_blocked_escape(
+                            format!(
+                                "mesh_stream_open denied: active stream descriptor limit ({}) exceeded",
+                                MAX_VIRTUAL_MESH_STREAMS
+                            ),
+                            [0.0, 0.0, 1.0],
+                        )?;
+                        return Ok(WASI_ERR_ACCESS_DENIED);
                     }
 
                     let state_mut = caller.data_mut();
@@ -1334,8 +1981,18 @@ impl WasmTier1Executor {
                     state_mut.next_stream_fd = state_mut.next_stream_fd.wrapping_add(1).max(3);
                     let stream = VirtualMeshStream::new(fd, uri_str, flags);
                     state_mut.active_streams.insert(fd, stream);
+                    if let Some(verdict) =
+                        state_mut.evaluate_runtime_guard_step(Some([0.0, 0.0, 1.0]))
+                    {
+                        if verdict.block_execution {
+                            return Err(wasmtime::Error::msg(format!(
+                                "GATE2_RUNTIME_GUARD_BLOCKED: {}",
+                                verdict.reason
+                            )));
+                        }
+                    }
 
-                    fd as i32
+                    Ok(fd as i32)
                 },
             )
             .map_err(|e| OctopusSecurityError::IsolationViolation(e.to_string()))?;
@@ -1349,43 +2006,60 @@ impl WasmTier1Executor {
                  fd: i32,
                  src_ptr: i32,
                  src_len: i32|
-                 -> i32 {
+                 -> Result<i32, wasmtime::Error> {
                     if fd < 0 || src_ptr < 0 || src_len < 0 {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     }
                     let Some(wasmtime::Extern::Memory(mem)) = caller.get_export("memory") else {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     };
                     let chunk = {
                         let data = mem.data(&caller);
                         let s_start = src_ptr as usize;
                         let s_end = s_start.saturating_add(src_len as usize);
                         if s_end > data.len() {
-                            return WASI_ERR_FAULT;
+                            return Ok(WASI_ERR_FAULT);
                         }
                         data[s_start..s_end].to_vec()
                     };
 
                     let state = caller.data_mut();
-                    let Some(stream) = state.active_streams.get_mut(&(fd as u32)) else {
-                        return WASI_ERR_FAULT;
-                    };
-
                     let max_bytes = state.mesh_context.as_ref().map_or(16 * 1024 * 1024, |c| c.max_mesh_bytes);
-                    if stream.write_buffer.len().saturating_add(chunk.len()) > max_bytes {
+                    let mut quota_exceeded = false;
+                    {
+                        let Some(stream) = state.active_streams.get_mut(&(fd as u32)) else {
+                            return Ok(WASI_ERR_FAULT);
+                        };
+                        if stream.write_buffer.len().saturating_add(chunk.len()) > max_bytes {
+                            quota_exceeded = true;
+                        } else {
+                            stream.write_buffer.extend_from_slice(&chunk);
+                            stream.total_bytes_written += chunk.len() as u64;
+                        }
+                    }
+                    if quota_exceeded {
                         state.stream_fallback_needed = true;
-                        state.blocked_escape_attempts.push(format!(
-                            "mesh_stream_write: stream buffer capacity exceeded ({} bytes), flagging Tier 2 fallback",
-                            max_bytes
-                        ));
-                        return WASI_ERR_ACCESS_DENIED;
+                        state.record_blocked_escape(
+                            format!(
+                                "mesh_stream_write: stream buffer capacity exceeded ({} bytes), flagging Tier 2 fallback",
+                                max_bytes
+                            ),
+                            [0.0, 0.0, 1.0],
+                        )?;
+                        return Ok(WASI_ERR_ACCESS_DENIED);
+                    }
+                    state.mesh_bytes_exchanged = state.mesh_bytes_exchanged.saturating_add(chunk.len() as u64);
+                    if let Some(verdict) = state.evaluate_runtime_guard_step(Some([0.0, 0.0, 1.0]))
+                    {
+                        if verdict.block_execution {
+                            return Err(wasmtime::Error::msg(format!(
+                                "GATE2_RUNTIME_GUARD_BLOCKED: {}",
+                                verdict.reason
+                            )));
+                        }
                     }
 
-                    stream.write_buffer.extend_from_slice(&chunk);
-                    stream.total_bytes_written += chunk.len() as u64;
-                    state.mesh_bytes_exchanged = state.mesh_bytes_exchanged.saturating_add(chunk.len() as u64);
-
-                    chunk.len() as i32
+                    Ok(chunk.len() as i32)
                 },
             )
             .map_err(|e| OctopusSecurityError::IsolationViolation(e.to_string()))?;
@@ -1399,19 +2073,19 @@ impl WasmTier1Executor {
                  fd: i32,
                  dst_ptr: i32,
                  dst_cap: i32|
-                 -> i32 {
+                 -> Result<i32, wasmtime::Error> {
                     if fd < 0 || dst_ptr < 0 || dst_cap < 0 {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     }
                     let Some(wasmtime::Extern::Memory(mem)) = caller.get_export("memory") else {
-                        return WASI_ERR_FAULT;
+                        return Ok(WASI_ERR_FAULT);
                     };
 
                     let needs_dispatch = {
                         let state = caller.data();
                         match state.active_streams.get(&(fd as u32)) {
                             Some(s) => !s.dispatched,
-                            None => return WASI_ERR_FAULT,
+                            None => return Ok(WASI_ERR_FAULT),
                         }
                     };
 
@@ -1420,14 +2094,14 @@ impl WasmTier1Executor {
                             let state = caller.data();
                             let ctx = match state.mesh_context {
                                 Some(ref c) => c,
-                                None => return WASI_ERR_ACCESS_DENIED,
+                                None => return Ok(WASI_ERR_ACCESS_DENIED),
                             };
                             if ctx.is_tripped() {
-                                return WASI_ERR_ACCESS_DENIED;
+                                return Ok(WASI_ERR_ACCESS_DENIED);
                             }
                             let stream = match state.active_streams.get(&(fd as u32)) {
                                 Some(s) => s,
-                                None => return WASI_ERR_FAULT,
+                                None => return Ok(WASI_ERR_FAULT),
                             };
                             (
                                 ctx.arm_id.clone(),
@@ -1450,13 +2124,13 @@ impl WasmTier1Executor {
                                 state.mesh_calls_succeeded += 1;
                             }
                             Err(crate::security::agentmesh::pep_bridge::MeshCallError::AccessDenied(_)) => {
-                                return WASI_ERR_ACCESS_DENIED;
+                                return Ok(WASI_ERR_ACCESS_DENIED);
                             }
                             Err(crate::security::agentmesh::pep_bridge::MeshCallError::KillSwitchTripped(_)) => {
-                                return WASI_ERR_ACCESS_DENIED;
+                                return Ok(WASI_ERR_ACCESS_DENIED);
                             }
                             Err(_) => {
-                                return WASI_ERR_IO;
+                                return Ok(WASI_ERR_IO);
                             }
                         }
                     }
@@ -1465,7 +2139,7 @@ impl WasmTier1Executor {
                         let state = caller.data();
                         let stream = match state.active_streams.get(&(fd as u32)) {
                             Some(s) => s,
-                            None => return WASI_ERR_FAULT,
+                            None => return Ok(WASI_ERR_FAULT),
                         };
                         let remaining = stream.read_buffer.len().saturating_sub(stream.read_cursor);
                         let len = remaining.min(dst_cap as usize);
@@ -1479,7 +2153,7 @@ impl WasmTier1Executor {
                         {
                             let data = mem.data_mut(&mut caller);
                             if d_end > data.len() {
-                                return WASI_ERR_FAULT;
+                                return Ok(WASI_ERR_FAULT);
                             }
                             data[d_start..d_end].copy_from_slice(&chunk);
                         }
@@ -1491,7 +2165,18 @@ impl WasmTier1Executor {
                         state.mesh_bytes_exchanged = state.mesh_bytes_exchanged.saturating_add(copy_len as u64);
                     }
 
-                    copy_len as i32
+                    if let Some(verdict) =
+                        caller.data_mut().evaluate_runtime_guard_step(Some([0.0, 0.0, 1.0]))
+                    {
+                        if verdict.block_execution {
+                            return Err(wasmtime::Error::msg(format!(
+                                "GATE2_RUNTIME_GUARD_BLOCKED: {}",
+                                verdict.reason
+                            )));
+                        }
+                    }
+
+                    Ok(copy_len as i32)
                 },
             )
             .map_err(|e| OctopusSecurityError::IsolationViolation(e.to_string()))?;

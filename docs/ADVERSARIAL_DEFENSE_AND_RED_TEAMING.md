@@ -1,10 +1,14 @@
-# Agent Octopus: Autonomous Swarm Breakout Defense & Multi-Framework Red Teaming Guide
+# Agent Octopus: Autonomous Swarm Breakout Defense and Multi-Framework Red Teaming Guide
+
+**Docs:** [Hub](README.md) | [Architecture & Security](ARCHITECTURE_AND_SECURITY_MODEL.md) | [Kernel Shield](KERNEL_PATCHING_AND_ZERO_BREAKOUT_SHIELD.md) | [CLI & Policy](CLI_AND_POLICY_REFERENCE.md) | [Operations & API](OPERATIONS_AND_API_GUIDE.md) | [AgentMesh + Wasm](AGENTMESH_WASM_INTEGRATION.md) | [Red Teaming](ADVERSARIAL_DEFENSE_AND_RED_TEAMING.md) | [Root README](../README.md)
 
 ## Overview
 
-Agent Octopus is an enterprise-grade defense platform and deterministic zero-trust policy engine designed to neutralize autonomous swarm breakouts, lateral privilege escalation, and prompt injection attacks against LLMs and agentic microservices.
+Agent Octopus is a single-binary Rust deterministic agent containment runtime designed to neutralize autonomous swarm breakouts, lateral privilege escalation, and prompt injection attacks against LLMs and agentic microservices. It pairs with **`google/agentmesh`** ([`#887`](https://github.com/google/agentmesh/pull/887), [`#897`](https://github.com/google/agentmesh/pull/897)) as the host/process containment runtime while replacing multi-service Python governance gateways (such as **CAGE**).
 
-The architecture comprises **9 Specialized Arms** orchestrated by an isolated central Brain, governed by formal **AWS Cedar v4.13** authorization policies, hardware-isolated Windows Job Objects, AppContainer sandboxes, and cryptographic append-only SHA-256 audit trails.
+All allow/deny verdicts are enforced deterministically across four core layers: **RT-ASP Sanitizers**, **AWS Cedar v4.13** authorization policies, **Wasmtime v49.0.4** Tier-1 sandboxes, and cross-platform **OS Kernel Sandboxes** (Linux `seccomp-BPF` + Landlock LSM + `PR_SET_NO_NEW_PRIVS` + `RLIMIT_AS`, macOS Seatbelt, Windows AppContainer + de-elevated restricted tokens + Job Objects, BSD `unveil`/`pledge`/Capsicum), reinforced by the **R6 Zero-Reboot Kernel Shield**, **R7 `<2ms` Pre-Spawn REA Binary Gate**, **R8 Pure-Rust `UnifiedSecurityShield`**, and cryptographic append-only SHA-256 audit trails. Optional D3QN anomaly telemetry is **disabled by default** (`OCTOPUS_ENABLE_RL_ADVISORY=1`), strictly offline/advisory, and never gates allow/deny decisions.
+
+See also: [Documentation Hub](README.md) &bull; [Architecture and Security Model](ARCHITECTURE_AND_SECURITY_MODEL.md) &bull; [Kernel Patching and Zero-Breakout Shield](KERNEL_PATCHING_AND_ZERO_BREAKOUT_SHIELD.md) &bull; [CLI and Policy Reference](CLI_AND_POLICY_REFERENCE.md) &bull; [Operations and API Guide](OPERATIONS_AND_API_GUIDE.md).
 
 ### Dual-Layer Operating Model: Inline Gateway & Multi-Arm Enclave
 
@@ -21,13 +25,13 @@ Agent Octopus operates as both an **inline authorization gateway** and an **isol
 
 3. **Multi-Limb Agent Enclave (`ArmRuntime`)**:
    - Behind the gateway, Agent Octopus is a distributed cephalopod architecture with 9 specialized, sandboxed arms (`DocumentArm`, `LedgerArm`, `NetworkArm`, `TarpitDecoyArm`, etc.).
-   - The arms run inside Windows Job Objects (64MB memory clamps), AppContainer sandboxes, and Wasmtime fuel meters. If an arm experiences a security breach, the system trips an internal circuit breaker (autotomy) to sever that limb while keeping the central Brain and remaining arms intact.
+   - The arms run inside Wasmtime v49.0.4 fuel/epoch sandboxes and cross-platform OS confinement (Linux `seccomp-BPF`/Landlock, macOS Seatbelt, Windows Job Objects/AppContainer). If an arm experiences a security breach, the system trips an internal circuit breaker (autotomy) to sever that limb while keeping the central Brain and remaining arms intact.
 
 So while it contains an entire isolated multi-agent execution environment, the front line intercepting all requests and red-teaming probes is indeed a deterministic zero-trust policy gateway.
 
 ---
 
-## 🐙 The 9 Specialized Arms Architecture
+## The Specialized Arms Architecture (9 Core Arms + Protocol Arms 106-107)
 
 | Arm | Operating Isolation | Permitted Boundary & Capabilities |
 | :--- | :--- | :--- |
@@ -39,13 +43,13 @@ So while it contains an entire isolated multi-agent execution environment, the f
 | `VulnerabilityArm`| Read-Only Sandbox | Deep static & dynamic vulnerability inspection of candidate payloads |
 | `AttackChainArm` | Graph Synthesis Enclave | Multi-step lateral movement path analysis and containment |
 | `MitreAtlasArm` | ATLAS v4.1 Threat Matrix | Real-time mapping against 16 tactics and 208 AI attack techniques |
-| `BehavioralSentinelArm` | Sliding Window Watchdog | Fast-path entropy anomaly detection and statistical spike alerts |
+| `BehavioralSentinelArm` | Sliding Window Watchdog | Deterministic sliding-window entropy anomaly detection and statistical spike alerts (advisory-only; never overrides Cedar/Wasm/OS deny verdicts) |
 | `DifferentialProtocolAnalyzer` (Arm 106) | Differential Parser Matrix | Independent cross-validation of HTTP desync vectors across RFC 7230, Envoy, Go, Node, and ATS profiles |
 | `AutonomousProtocolResearch` (Arm 107) | Dedicated Ring #107 & Job Object (64MB) | Autonomous RFC intelligence & hypothesis generation bounded by Cedar Policy #8 allowlist, Dogwood temporal limits, and an isolated private SQLite database (`data/protocol_research.db`) |
 
 ---
 
-## 🛡️ Integrated Multi-Framework Red-Teaming Suites
+## Integrated Multi-Framework Red-Teaming Suites
 
 Agent Octopus integrates continuous verification harnesses across 19 industry red-teaming frameworks and auditing tools:
 
@@ -81,46 +85,58 @@ Agent Octopus integrates continuous verification harnesses across 19 industry re
 
 ---
 
-## 🚀 How to Use & Run Tests
+## How to Use and Run Tests
 
-### 1. Web Dashboard (Interactive GUI)
-1. Start the Agent Octopus defense daemon:
-   ```powershell
-   .\start.exe
+### 1. 1-Command Workload Containment CLI & Web Dashboard (`127.0.0.1:3030`)
+Run any workload directly under deterministic policy confinement:
+```bash
+octopus run --policy examples/quickstart/policy.json -- python examples/quickstart/my_agent.py
+# Or via Cargo:
+cargo run --bin octopus -- run --policy examples/quickstart/policy.json -- python examples/quickstart/my_agent.py
+```
+
+To launch the interactive Web Dashboard:
+1. Start the Agent Octopus defense daemon on port `3030`:
+   ```bash
+   cargo run --bin agent_octopus -- start --port 3030
+   # Or headless/console launcher:
+   cargo run --bin start -- --console --port 3030
    ```
-2. Open your browser to `http://127.0.0.1:5000` (or `5001`).
+2. Open your browser to `http://127.0.0.1:3030`.
 3. Use the **Test Runner & Progression** tab to select any suite (e.g. `Agent Collusion & Breakout`, `Multilingual Determinism`, `Garak`, `DeepEval`, `Inspect AI`, `Promptfoo`, `Astra`, `RESTler`, `Multimodal Vision`, or `Multi-Framework Comprehensive Suite`) and click **Run Selected Suite**.
 4. Observe live terminal execution, running counters, and real-time Tarpit Arm telemetry.
 
-### 2. Command Line Interface (CLI)
-You can invoke the Python verification harness directly:
+### 2. Command Line Interface (CLI) Red-Teaming Harness
+You can invoke the Python verification harness directly against the running daemon (`127.0.0.1:3030`):
 
-```powershell
+```bash
 # Run the complete exhaustive test suite across all 12 perimeters and 19 frameworks:
-python d:\tools\strix_llm_adversarial_tester.py --skip-strix
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --skip-strix
 
 # Run specific specialized frameworks:
-python d:\tools\strix_llm_adversarial_tester.py --suite collusion       # Agent Collusion & Breakout (30 tests)
-python d:\tools\strix_llm_adversarial_tester.py --suite multilingual    # Multilingual Determinism (74 Languages / 148 tests)
-python d:\tools\strix_llm_adversarial_tester.py --suite garak           # Garak LLM Vulnerability Scanner
-python d:\tools\strix_llm_adversarial_tester.py --suite deepeval        # DeepEval Multi-Turn Compliance
-python d:\tools\strix_llm_adversarial_tester.py --suite inspect_ai      # Inspect AI (UK AISI)
-python d:\tools\strix_llm_adversarial_tester.py --suite promptfoo       # Promptfoo Guardrails
-python d:\tools\strix_llm_adversarial_tester.py --suite pentestgpt      # PentestGPT Attack Tree
-python d:\tools\strix_llm_adversarial_tester.py --suite redamon         # RedAmon Attack Surface Graph
-python d:\tools\strix_llm_adversarial_tester.py --suite caido           # Caido Rust Proxy Replay
-python d:\tools\strix_llm_adversarial_tester.py --suite astra           # Astra REST API Security
-python d:\tools\strix_llm_adversarial_tester.py --suite restler         # RESTler Stateful REST Fuzzer
-python d:\tools\strix_llm_adversarial_tester.py --suite multimodal      # Multimodal Vision & OCR Ingest
-python d:\tools\strix_llm_adversarial_tester.py --suite pyrit           # PyRIT AI Risk Suite (Microsoft)
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite collusion       # Agent Collusion & Breakout (30 tests)
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite multilingual    # Multilingual Determinism (74 Languages / 148 tests)
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite garak           # Garak LLM Vulnerability Scanner
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite deepeval        # DeepEval Multi-Turn Compliance
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite inspect_ai      # Inspect AI (UK AISI)
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite promptfoo       # Promptfoo Guardrails
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite pentestgpt      # PentestGPT Attack Tree
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite redamon         # RedAmon Attack Surface Graph
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite caido           # Caido Rust Proxy Replay
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite astra           # Astra REST API Security
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite restler         # RESTler Stateful REST Fuzzer
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite multimodal      # Multimodal Vision & OCR Ingest
+python tests/strix_llm_adversarial_tester.py --target http://127.0.0.1:3030 --suite pyrit           # PyRIT AI Risk Suite (Microsoft)
 
 # Run native Rust unit and integration policy tests:
 cargo test --test cedar_policy_tests
+cargo test --test deterministic_containment_boundary_tests
+cargo test --test octopus_cli_e2e_tests
 ```
 
 ---
 
-## 🍯 The Tarpit Decoy Defense Arm (`TarpitArm`)
+## The Tarpit Decoy Defense Arm (`TarpitArm`)
 
 The `TarpitArm` is Agent Octopus's active defense honeypot and compute exhaustion mechanism:
 
@@ -131,13 +147,16 @@ The `TarpitArm` is Agent Octopus's active defense honeypot and compute exhaustio
 
 ---
 
-## 📡 REST API Reference
+## REST API Reference
+
+All `/api/*` requests require the operator authentication header `X-Octopus-Token: <operator_token>` written to `logs/.octopus_operator_token` when the daemon starts.
 
 ### Evaluate Cedar Policy
 ```http
 POST /api/evaluate-cedar HTTP/1.1
-Host: 127.0.0.1:5000
+Host: 127.0.0.1:3030
 Content-Type: application/json
+X-Octopus-Token: <operator_token>
 
 {
   "principal": "ledger_arm",
@@ -172,33 +191,38 @@ Content-Type: application/json
   "decoy_honey_token": "{\"status\":\"TARPIT_ENGAGED\",\"trap_canary_id\":\"CANARY-TP-...\"}"
 }
 ```
+*(Note: `rl_action_tier` is omitted/`null` unless optional offline/advisory telemetry is explicitly opted in via `OCTOPUS_ENABLE_RL_ADVISORY=1`.)*
 
 ### Health & Defense Status
 ```http
 GET /api/status HTTP/1.1
-Host: 127.0.0.1:5000
+Host: 127.0.0.1:3030
+X-Octopus-Token: <operator_token>
 ```
-Returns defense engine online status, active policy count, OS isolation clamp state, and Tarpit Arm metrics (`trapped_callers`, `tokens_burned`, `total_delay_ms`).
+Returns defense engine online status, active policy count, OS isolation clamp state, `rl_active_defense` status (disabled/optional offline advisory by default), and Tarpit Arm metrics (`trapped_callers`, `tokens_burned`, `total_delay_ms`).
 
 ### Tarpit Defense Telemetry
 ```http
 GET /api/tarpit-stats HTTP/1.1
-Host: 127.0.0.1:5000
+Host: 127.0.0.1:3030
+X-Octopus-Token: <operator_token>
 ```
 Returns live counters on trapped callers, tokens burned, and active quarantines.
 
 ### Cryptographic Audit Log
 ```http
 GET /api/audit-log HTTP/1.1
-Host: 127.0.0.1:5000
+Host: 127.0.0.1:3030
+X-Octopus-Token: <operator_token>
 ```
 Returns the complete list of security events along with SHA-256 verification status.
 
 ---
 
-## 🔒 Security Invariants Upheld
+## Security Invariants Upheld
 
 1. **Zero-Touch PATH & Environment**: Strictly process-scoped memory. No registry mutation.
-2. **Google Egress Invariant**: Only `google.com` and `www.google.com` are permitted outbound destinations.
-3. **No Mocks Protocol**: Real cryptographic HMAC signatures, real Cedar evaluations, real Wasmtime fuel exhaustion, real Windows Job Objects.
+2. **Default-Deny Egress Invariant**: `NetworkArm`'s default Cedar baseline restricts outbound destinations to `google.com` and `www.google.com`, while `octopus run --policy <PATH>` enforces per-workload JSON/Cedar `allowed_domains` (default-deny, unconditionally blocking Cloud IMDS `169.254.169.254` and private/special-purpose CIDRs).
+3. **No Mocks Protocol**: Real cryptographic HMAC signatures, real Cedar evaluations, real Wasmtime fuel exhaustion, and real cross-platform OS confinement (Linux `seccomp-BPF`/Landlock, macOS Seatbelt, Windows Job Objects/AppContainer).
 4. **Cephalopod Autotomy**: Hardware kill switch trips automatically upon cryptographic tamper detection.
+5. **Deterministic Allow/Deny Boundary**: Security allow/deny decisions are 100% deterministic; optional D3QN telemetry cannot permit, deny, or override containment verdicts.

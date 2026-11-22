@@ -69,7 +69,25 @@ fn test_all_six_cage_substrate_endpoints_and_journal_chain() {
     let state_dir = std::env::temp_dir().join(format!("octopus_cage_it_{}", ts));
     let _ = std::fs::remove_dir_all(&state_dir);
 
-    let substrate = CageSubstrateState::with_state_dir(state_dir.clone());
+    let ks_ledger = state_dir.join("cage_test_killswitch_ledger.json");
+    let frozen_pids = Arc::new(std::sync::Mutex::new(Vec::<u32>::new()));
+    let resumed_pids = Arc::new(std::sync::Mutex::new(Vec::<u32>::new()));
+    let frozen_rec = Arc::clone(&frozen_pids);
+    let resumed_rec = Arc::clone(&resumed_pids);
+    let substrate = CageSubstrateState::with_state_dir(state_dir.clone())
+        .with_host_killswitch(Arc::new(
+            agent_octopus::security::HostKillSwitchManager::new(Some(ks_ledger)),
+        ))
+        .with_process_control_hooks(
+            Arc::new(move |pid| {
+                frozen_rec.lock().unwrap().push(pid);
+                Ok(())
+            }),
+            Arc::new(move |pid| {
+                resumed_rec.lock().unwrap().push(pid);
+                Ok(())
+            }),
+        );
     let coordinator = BreakoutDefenseCoordinator::default();
 
     // 1. GET /.well-known/jwks.json
@@ -210,6 +228,7 @@ fn test_all_six_cage_substrate_endpoints_and_journal_chain() {
     assert_eq!(q_resp.status, "QUARANTINED");
     assert_eq!(q_resp.enforcement_plane, "HOST_OS_KERNEL");
     assert_eq!(q_resp.target_pid, Some(42424));
+    assert_eq!(*frozen_pids.lock().unwrap(), vec![42424]);
     assert_eq!(substrate.journal.unexpired_leases().len(), 1);
 
     verify_domain_separated_envelope(
@@ -264,6 +283,7 @@ fn test_all_six_cage_substrate_endpoints_and_journal_chain() {
     assert_eq!(rel_resp.epoch_before, 1);
     assert_eq!(rel_resp.epoch_after, 2);
     assert_eq!(rel_resp.outcome, "RELEASED");
+    assert_eq!(*resumed_pids.lock().unwrap(), vec![42424]);
     assert!(substrate.journal.unexpired_leases().is_empty());
 
     verify_domain_separated_envelope(
@@ -345,7 +365,12 @@ fn test_jcs_2_pow_63_trackers_request_guard_and_peer_pid_anti_spoofing() {
     let resolved_pid = resolve_loopback_peer_pid(peer_addr, bound_port).unwrap();
     assert_eq!(resolved_pid, std::process::id());
 
-    let state = WebState::default();
+    let tmp_ks_ledger =
+        std::env::temp_dir().join(format!("octopus_cage_ks_test_{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&tmp_ks_ledger);
+    let state = WebState::default().with_host_killswitch(Arc::new(
+        agent_octopus::security::HostKillSwitchManager::new(Some(tmp_ks_ledger.clone())),
+    ));
     let spoofed_body = json!({
         "operator": "spoofing_actor",
         "reason": "attempting unauthorized disarm",
@@ -366,4 +391,44 @@ fn test_jcs_2_pow_63_trackers_request_guard_and_peer_pid_anti_spoofing() {
     let (st_auth, _) =
         handle_killswitch_disarm_with_peer(&state, &authentic_body, Some(peer_addr), bound_port);
     assert_eq!(st_auth, "200 OK");
+    let _ = std::fs::remove_file(&tmp_ks_ledger);
+}
+
+#[test]
+fn test_freeze_resume_not_bypassed_by_test_env_vars() {
+    // Spawn a trivial short-lived child and wait for it to exit so its PID is guaranteed dead.
+    #[cfg(windows)]
+    let mut child = std::process::Command::new("cmd")
+        .args(["/C", "exit", "0"])
+        .spawn()
+        .expect("spawn short-lived cmd child");
+    #[cfg(not(windows))]
+    let mut child = std::process::Command::new("true")
+        .spawn()
+        .expect("spawn short-lived true child");
+
+    let dead_pid = child.id();
+    let _ = child.wait().expect("wait for short-lived child");
+
+    // Even with RUST_TEST_THREADS and CARGO_PKG_NAME set, !cfg!(test) library builds MUST NOT bypass OS freeze/resume.
+    std::env::set_var("RUST_TEST_THREADS", "1");
+    std::env::set_var("CARGO_PKG_NAME", "agent_octopus");
+
+    let freeze_dead = agent_octopus::freeze_process_by_pid(dead_pid);
+    assert!(
+        freeze_dead.is_err(),
+        "freeze_process_by_pid({dead_pid}) must fail on dead PID even when test env vars are set"
+    );
+
+    let freeze_max = agent_octopus::freeze_process_by_pid(u32::MAX);
+    assert!(
+        freeze_max.is_err(),
+        "freeze_process_by_pid(u32::MAX) must reject out-of-range PID"
+    );
+
+    let resume_max = agent_octopus::resume_process_by_pid(u32::MAX);
+    assert!(
+        resume_max.is_err(),
+        "resume_process_by_pid(u32::MAX) must reject out-of-range PID"
+    );
 }

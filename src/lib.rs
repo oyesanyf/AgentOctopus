@@ -1,3 +1,137 @@
+//! # AgentOctopus (`agent_octopus`)
+//!
+//! **Single-Binary Rust Deterministic Agent Containment Runtime**
+//!
+//! > *`google/agentmesh` connects agents across machines; AgentOctopus is the single-binary Rust
+//! > runtime that ensures a hijacked agent cannot own the host or exfiltrate secrets.*
+//!
+//! Every security allow/deny decision in `AgentOctopus` is enforced **100% deterministically** at
+//! the host, binary, and process boundary. Any learned or statistical scoring module (including
+//! [`security::latent_shield::UnifiedSecurityShield`] and the optional offline/advisory
+//! [`security::rl_defense`] D3QN scorer) is strictly **monotonic / tighten-only** or **non-gating**
+//! and can **never** weaken or override a deterministic deny.
+//!
+//! ---
+//!
+//! ## Core Architecture (Requirements R1–R8)
+//!
+//! 1. **The 4 Deterministic Containment Pillars**:
+//!    - **RT-ASP Sanitizers** (`security::rasp`, `security::agent_hooks`, `security::sensitive_paths`,
+//!      `security::atif_scan`): Unicode/Agentjacking/GhostJacking normalization, EchoLeak defanging,
+//!      mandatory write-deny guards (`.ssh`, `.aws`, `.git/hooks`, `.mcp.json`, etc.), and `SemanticDlpEngine`.
+//!    - **AWS Cedar v4.13 PARC Gate** (`security::cedar_arm`, `containment_ring::cedar_gate`):
+//!      Default-deny authorization over **11 entity types** and **13 actions** (`exec`, `egress`,
+//!      `inbound_perimeter`, `fs_read`, `fs_write`, `tool_call`, `write`, `extract`, `notify`,
+//!      `change_security_policy`, `quarantine`, `kernel_enforce`, `evaluate`).
+//!    - **Wasmtime v49.0.4 Tier-1 Sandbox** (`security::wasm_tier1`, `security::openshell`):
+//!      Zero ambient WASI sockets/FS/env, `64 KiB..=64 MiB` `ResourceLimiter` cap, deterministic
+//!      Cranelift fuel metering, `<1ms` epoch `KillSwitch` interruption, and confined `octopus_wasi` imports.
+//!    - **Tier-2 OS Kernel Sandboxes & Loopback Policy Proxy** (`security::linux_sandbox`,
+//!      `security::windows_sandbox`, `security::token_posture`, `security::macos_sandbox`,
+//!      `security::bsd_sandbox`, `cli::proxy`, `security::host_network_isolation`):
+//!      Linux Landlock + `seccomp-BPF` + `PR_SET_NO_NEW_PRIVS` + `RLIMIT_AS`, Windows Restricted Token /
+//!      AppContainer + `WindowsJobObject`, macOS Seatbelt SBPL + `libproc`, BSD `unveil`/`pledge`/Capsicum,
+//!      loopback HTTP/CONNECT proxy with DNS pinning, Cloud IMDS (`169.254.169.254`) block,
+//!      `CredentialSentinelMasker` (`ao_mask_*`), and SHA-256 Merkle audit receipts (`core::merkle`).
+//!
+//! 2. **R6 — Multi-OS Kernel Patcher & Zero-Reboot Virtual-Patching Shield**
+//!    (`security::kernel_patcher`, `security::virtual_patch_shield`, `arm::kernel_sentinel_arm`):
+//!    - Discovers OS/kernel CPE 2.3 identifiers across **6 OS families** (`Windows`, `Linux`, `macOS`,
+//!      `FreeBSD`, `OpenBSD`, `NetBSD`) and **17 Linux distributions**, queries NIST NVD 2.0 + CISA KEV,
+//!      and orchestrates rebootless livepatching (`canonical-livepatch`, `kpatch`, `ksplice`/`uptrack`,
+//!      `klp`/`kgraft`, Windows Hotpatch) or native OS patching without unsafe ring-0 code splicing.
+//!    - Enforces **No Break-Out / No Break-In** zero-reboot containment: Tier-1 Wasmtime promotion
+//!      (`--sandbox wasm-strict`, `--wasm-promote`), Linux `seccomp-BPF` EoP/escape syscall clamps,
+//!      Windows `OsoosiDriver` BYOVD blocklists + process mitigations, macOS Seatbelt + BSD clamps,
+//!      WFP/`nftables`/Netlink/`pfctl` inbound shields, and tighten-only Cedar `forbid(...)` hot-reload.
+//!    - Enforces the 5 Foolproof Invariants including `shield_locked_until_reboot` and
+//!      `telemetry_degraded_fail_closed`.
+//!
+//! 3. **R7 — Fast `<2ms` Pre-Spawn REA PE/ELF/Mach-O Binary Gate**
+//!    (`security::rea_binary_gate`, `security::executable_identity`, `security::rate_limit_backoff`):
+//!    - Bounds-checked, zero-panic pure-Rust pre-exec header and stub scanner running over TOCTOU-locked
+//!      handles (`open_and_lock_executable_for_cli` / `BinarySource::LockedFile`) without heavy EDR
+//!      disassembler or memory-carving bloat.
+//!    - Detects packers (`UPX0`/`UPX1`/`UPX!`/`MPRESS`/`.vmp0`/`.themida`/`.aspack`), `W^X` sections/segments,
+//!      packed Shannon entropy (`>= 6.4` + anomaly), Authenticode/`LC_CODE_SIGNATURE` presence, and
+//!      Hell's/Halo's Gate or raw direct-syscall/`svc #0x80` stubs, bridged into `ReteEngine` (`ReaBinaryFact`).
+//!
+//! 4. **R8 — Pure-Rust `UnifiedSecurityShield`** (`security::latent_shield`, `cli::latent_shield`):
+//!    - Pure-Rust (`ndarray` + `rand_distr`) shared `LatentWorldModel` (`latent_dim = 4`, `hidden = 32`)
+//!      with embedded deterministic JSON weights (`DEFAULT_EMBEDDED_WEIGHTS_JSON`) and `--latent-weights <PATH>`.
+//!    - **Gate 1 (`SbomSupplyChainGuard`)**: Pre-Wasmtime / pre-spawn CycloneDX SBOM transition check (`octopus run --baseline-sbom ... --sbom ...` or `octopus sbom-guard`).
+//!    - **Gate 2 (`AgentRuntimeGuard` / `LiveRuntimeMonitor`)**: Microsecond Wasmtime & runtime telemetry step guard.
+//!    - Strictly **tighten-only** and fail-closed on `NaN`/`Inf`, dimension mismatches, symlinks, or oversized JSON.
+//!
+//! 5. **Optional Offline / Advisory Telemetry (D3QN)** (`security::rl_defense`):
+//!    - Disabled by default (`enabled: false`, `advisory_only: true`; opt-in via `OCTOPUS_ENABLE_RL_ADVISORY=1`).
+//!    - Completely distinct from `UnifiedSecurityShield` and holds **zero** allow/deny authority.
+//!
+//! ---
+//!
+//! ## Crate Module Index
+//!
+//! | Module | Purpose |
+//! |---|---|
+//! | `cli` | `octopus` CLI parser, `run` orchestrator, loopback egress proxy, Wasm runner, SBOM guard CLI |
+//! | `security::cedar_arm` | AWS Cedar v4.13 policy engine, 11-entity / 13-action schema, Dogwood temporal guard |
+//! | `security::wasm_tier1` | Wasmtime v49.0.4 Tier-1 sandbox, fuel/epoch `KillSwitch`, `octopus_wasi` hostcalls |
+//! | `security::rasp` | RT-ASP input/output sanitizers, EchoLeak, Agentjacking/GhostJacking, sensitive paths |
+//! | `security::linux_sandbox`, `windows_sandbox`, `macos_sandbox`, `bsd_sandbox` | Tier-2 native OS kernel confinement |
+//! | `security::kernel_patcher`, `security::virtual_patch_shield` | Multi-OS kernel CVE/KEV orchestrator and zero-reboot virtual-patch shield |
+//! | `security::rea_binary_gate`, `security::executable_identity` | `<2ms` TOCTOU-locked PE/ELF/Mach-O/Wasm pre-spawn binary gate |
+//! | `security::latent_shield` | Pure-Rust `UnifiedSecurityShield`, `LatentWorldModel`, `SbomSupplyChainGuard`, `AgentRuntimeGuard` |
+//! | `security::host_network_isolation` | Zero-subprocess WFP, Netlink/SOCK_DESTROY, `nftables`, and `/dev/pf` host isolation |
+//! | `security::agentmesh` | `google/agentmesh` OIDC/JWKS issuer, PEP bridge, Ed25519 mandate attenuation |
+//! | `containment_ring` | Dual concentric containment rings, `CedarGate`, `EgressProxy`, `TieredExecutionDispatcher` |
+//! | `arm`, `brain`, `enclave` | Multi-arm enclave runtime (`KernelSentinelArm` / `OsoosiDriver`, `TarpitArm`), central brain |
+//! | `core::merkle`, `core::circuit_breaker` | RFC 6962 SHA-256 Merkle trees and sub-millisecond `KillSwitch` |
+//! | `web` | Loopback Web Dashboard & authenticated REST API (`127.0.0.1:3030`) |
+//! | `verify`, `service` | 7-phase self-diagnostics (`octopus verify`) and native OS service manager |
+//! | `adversary` | `PromptInjectionEngine` and multi-category adversarial attack campaign evaluation |
+//! | `conformal_jailbreak` | Multi-source conformal unseen jailbreak source detection (`Persist-3` & `SR-DKW`) |
+//! | `deterministic` | `DeterministicLayer` unifying FSM transitions, `PolicyGuard`, and `SchemaGuard` |
+//! | `edr_bench` | Two-gate `EdrBenchTask` verification harness (`FAIL_TO_PASS` / `PASS_TO_PASS`) for detection rules |
+//! | `fprime_flight` | NASA JPL `F'` flight-software swarm backbone (`Fw::Comp`/`Port`, static arenas, `Svc::Health`, `CmdSequencer`) |
+//! | `ledger` | Signed execution receipts, `QuorumPolicyGuard`, PQC attestation, and RFC 6962 transparency log |
+//! | `neural_mesh` | Authenticated, anti-replay inter-arm `NeuralMessage` transport with dual capability grants |
+//! | `quantum` | Swarm `AttackGraph`, `QuantumCircuit` simulator, quantum walk, and QUBO optimizer |
+//! | `research_ingest` | Autonomous security research ingestion, 4-gate validation, and CVE `forbid(...)` hot-reload |
+//! | `sentinel_ring` | Out-of-band Ring-4 Octopus Sentinel Ring (`SentinelSupervisor`, integrity, epoch revocation, emergency lockdown) |
+//! | `swarm` | `SwarmManager` concurrent limb orchestrator with per-arm `KillSwitch` and cancellation tokens |
+//! | `telemetry` | W3C TraceContext OpenTelemetry (`OtelSpan`), `AnomalyDetector`, and `WatchdogSupervisor` |
+//! | `security::rl_defense` | Optional offline/advisory D3QN telemetry scorer (`enabled: false` by default) |
+//!
+//! ---
+//!
+//! ## Quickstart (CLI & Embedded Rust)
+//!
+//! Run any untrusted workload from the CLI:
+//!
+//! ```text
+//! octopus run --policy examples/quickstart/policy.json -- python examples/quickstart/my_agent.py
+//! ```
+//!
+//! Evaluate an AWS Cedar v4.13 policy directly from Rust:
+//!
+//! ```no_run
+//! use agent_octopus::security::cedar_arm::CedarPolicyEngine;
+//! use serde_json::json;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let engine = CedarPolicyEngine::new()?;
+//! let verdict = engine.evaluate(
+//!     "ledger_arm",
+//!     "write",
+//!     "Ledger",
+//!     "Ledger",
+//!     json!({ "amount_cents": 50000, "approved": true }),
+//! )?;
+//! assert!(verdict.is_allowed);
+//! # Ok(())
+//! # }
+//! ```
+
 #![allow(
     clippy::type_complexity,
     clippy::too_many_arguments,
@@ -49,6 +183,7 @@
 pub mod adversary;
 pub mod arm;
 pub mod brain;
+pub mod cli;
 pub mod conformal_jailbreak;
 pub mod containment_ring;
 pub mod core;
@@ -151,7 +286,7 @@ pub use research_ingest::{
     Paper2AgentAccuracySuiteResult, Paper2AgentCompiler, PaperNoveltyEvaluation,
     PendingResearchItem, ResearchAcceptanceVerdict, ResearchApprovalRequest,
     ResearchApprovalResponse, ResearchClearRequest, ResearchClearResponse, ResearchCoverageReport,
-    ResearchExtractionItem, ResearchIngestRequest, ResearchIngestResponse,
+    ResearchExtractionItem, ResearchIngestRequest, ResearchIngestResponse, ResearchIngestStore,
     ResearchNoveltyCheckRequest, ResearchNoveltyCheckResponse, ResearchScheduleConfig,
     ResearchScheduleResponse, ResearchScheduleUpdateRequest, ResearchSearchRequest,
     ResearchSearchResponse, ResearchStatusResponse, ResearchValidationResponse, RingProbeVerdict,
@@ -201,19 +336,21 @@ pub use security::{
 };
 
 pub use security::{
-    base64url_decode_no_pad, base64url_encode_no_pad, build_linux_blackhole_route_msg,
-    canonicalize_jcs, canonicalize_jcs_string, discover_active_octopus_ports,
-    freeze_process_by_pid, generate_macos_pf_quarantine_rules, global_host_killswitch,
-    handle_wfp_kernel_apply_cli, has_live_active_wfp_filters, resolve_loopback_peer_pid,
-    resume_process_by_pid, CageAttestationResponse, CageConformalBaselineResponse,
-    CageConformalValidateRequest, CageConformalValidateResponse, CageKeyManifestResolver,
-    CageQuarantineReceiptResponse, CageQuarantineReleaseReceiptResponse,
-    CageQuarantineReleaseRequest, CageQuarantineRequest, CageSubstrateState, Cumulative24hTracker,
-    HostIsolationError, HostIsolationReceipt, HostKillSwitchManager, HostKillSwitchStatus,
-    JcsError, JournalData, JournalRecord, JwkKeyDto, JwksResponse, KernelIsolationBackend,
-    KeyedCumulative24hTracker, NonceReplayCache, OsiLayer, ProtocolDefinition, ProtocolDomain,
-    ProtocolVectorType, QuarantineJournal, QuarantineLease, SealedJournalEnvelope,
-    UniversalProtocolCatalog,
+    apply_virtual_patch_perimeter_shield, base64url_decode_no_pad, base64url_encode_no_pad,
+    build_linux_blackhole_route_msg, build_virtual_patch_perimeter_spec, canonicalize_jcs,
+    canonicalize_jcs_string, discover_active_octopus_ports, freeze_process_by_pid,
+    generate_bsd_darwin_pf_virtual_patch_rules, generate_linux_nftables_virtual_patch_rules,
+    generate_macos_pf_quarantine_rules, global_host_killswitch, handle_wfp_kernel_apply_cli,
+    has_live_active_wfp_filters, resolve_loopback_peer_pid, resume_process_by_pid,
+    CageAttestationResponse, CageConformalBaselineResponse, CageConformalValidateRequest,
+    CageConformalValidateResponse, CageKeyManifestResolver, CageQuarantineReceiptResponse,
+    CageQuarantineReleaseReceiptResponse, CageQuarantineReleaseRequest, CageQuarantineRequest,
+    CageSubstrateState, Cumulative24hTracker, HostIsolationError, HostIsolationReceipt,
+    HostKillSwitchManager, HostKillSwitchStatus, JcsError, JournalData, JournalRecord, JwkKeyDto,
+    JwksResponse, KernelIsolationBackend, KernelPerimeterPatchSpec, KeyedCumulative24hTracker,
+    NonceReplayCache, OsiLayer, ProtocolDefinition, ProtocolDomain, ProtocolVectorType,
+    QuarantineJournal, QuarantineLease, SealedJournalEnvelope, UniversalProtocolCatalog,
+    VIRTUAL_PATCH_INBOUND_PORTS,
 };
 
 pub use security::{
@@ -227,6 +364,12 @@ pub use security::{
 };
 
 pub use security::{
+    apply_shield_posture, build_shield_receipt, build_shield_receipt_with_enforcement,
+    current_shield_posture, global_shield_store, mark_shield_telemetry_degraded,
+    KernelAttackSurface, KernelShieldPosture, VirtualPatchShieldReceipt, VirtualPatchShieldStore,
+    ENV_SHIELD_POSTURE_PATH,
+};
+pub use security::{
     classify_mandatory_write_deny_path, classify_pinned_parent_for_write_deny,
     classify_sensitive_system_path, extract_hosts_from_text, global_cpu_pool,
     host_port_pattern_matches, init_global_cpu_pool, is_denied_resolved_ip,
@@ -238,4 +381,20 @@ pub use security::{
     SafeAgentsClientError, SafeAgentsHarnessEvaluator, SafeAgentsJournalWatcher,
     SafeAgentsJournalWatcherHandle, SensitiveCredentialStoreKind, ToolCallEvaluator,
     ToolEvaluationVerdict, ToolInvocationContext, ToolVerdict,
+};
+pub use security::{
+    extract_sbom_features, load_cyclonedx_sbom_file, parse_cyclonedx_sbom_bounded,
+    validate_sbom_bounds, AgentRuntimeGuard, ComponentProperty, CycloneDxSbom, GuardVerdict,
+    LatentShieldError, LatentWorldModel, LicenseChoice, LicenseDetail, LiveRuntimeMonitor,
+    RuntimeEventKind, RuntimeGuardVerdictSummary, RuntimeTelemetry, SbomComponent, SbomDependency,
+    SbomIntent, SbomSupplyChainGuard, UnifiedSecurityShield, DEFAULT_EMBEDDED_WEIGHTS_JSON,
+    DEFAULT_LATENT_DIM, MAX_MODEL_DIM, MAX_SBOM_COMPONENTS, MAX_SBOM_DEPENDENCIES, MAX_SBOM_EDGES,
+    MAX_SBOM_JSON_BYTES, MAX_SBOM_LICENSES_PER_COMPONENT, MAX_SBOM_PROPERTIES_PER_COMPONENT,
+    MAX_SBOM_STRING_LEN, MAX_WEIGHTS_JSON_BYTES, RUNTIME_ACTION_DIM, RUNTIME_OBS_DIM,
+    SBOM_ACTION_DIM, SBOM_OBS_DIM,
+};
+pub use security::{
+    global_rete_engine, inspect_binary_bytes, inspect_locked_file,
+    open_and_lock_executable_for_cli, BinaryFormat, BinaryIntegrityVerdict, ByteCursor,
+    PreSpawnReaPolicy, PreSpawnReaVerdict, ReaBinaryFact, ReteEngine,
 };

@@ -176,7 +176,25 @@ async fn test_dream_rsi_arm110_sever_autotomy() {
 
 #[tokio::test]
 async fn test_dream_rsi_arm110_training_and_recommendations() {
-    let arm = DreamRsiOptimizerArm::new();
+    struct TempDirCleanup(std::path::PathBuf);
+    impl Drop for TempDirCleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "octopus_dream_rsi_test_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&temp_dir).expect("create temp workspace dir");
+    let _cleanup = TempDirCleanup(temp_dir.clone());
+
+    let arm = DreamRsiOptimizerArm::new_in_workspace(temp_dir);
 
     let res = arm.train_offline(3, 100).await;
     assert!(res.is_ok(), "Offline training must succeed");

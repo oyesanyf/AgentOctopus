@@ -33,11 +33,32 @@ pub struct RfcIndexEntry {
 /// published updates/errata tracking, and normative statement extraction.
 pub struct RfcIndexSynchronizer {
     knowledge_base: Arc<RfcKnowledgeBase>,
+    workspace_root: Option<PathBuf>,
 }
 
 impl RfcIndexSynchronizer {
     pub fn new(knowledge_base: Arc<RfcKnowledgeBase>) -> Self {
-        Self { knowledge_base }
+        Self {
+            knowledge_base,
+            workspace_root: None,
+        }
+    }
+
+    pub fn new_in_workspace(
+        knowledge_base: Arc<RfcKnowledgeBase>,
+        workspace_root: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            knowledge_base,
+            workspace_root: Some(workspace_root.into()),
+        }
+    }
+
+    fn rfc_index_cache_path(&self) -> PathBuf {
+        match &self.workspace_root {
+            Some(root) => root.join("data").join("rfcs").join("rfc-index.txt"),
+            None => PathBuf::from("data").join("rfcs").join("rfc-index.txt"),
+        }
     }
 
     /// Locates or retrieves authoritative RFC Editor index, prioritizing live TLS synchronization.
@@ -76,7 +97,7 @@ impl RfcIndexSynchronizer {
         // Priority 3: Local cache directories
         for candidate in &[
             PathBuf::from("rfcs").join("rfc-index.txt"),
-            PathBuf::from("data").join("rfcs").join("rfc-index.txt"),
+            self.rfc_index_cache_path(),
         ] {
             if candidate.exists() {
                 if let Ok(content) = std::fs::read_to_string(candidate) {
@@ -97,7 +118,7 @@ impl RfcIndexSynchronizer {
 
     /// Fetches authoritative RFC index directly from rfc-editor.org over TLS with freshness verification.
     pub fn fetch_live_rfc_editor_index(&self) -> Result<(String, String), OctopusSecurityError> {
-        let cache_path = PathBuf::from("data").join("rfcs").join("rfc-index.txt");
+        let cache_path = self.rfc_index_cache_path();
         if cache_path.exists()
             && std::env::var("OCTOPUS_FORCE_LIVE_RFC_SYNC").unwrap_or_default() != "1"
         {

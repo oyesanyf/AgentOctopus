@@ -14,18 +14,30 @@ pub mod discovery;
 pub mod error;
 pub mod patcher;
 pub mod privilege;
+pub mod shield_state;
 pub mod types;
+pub mod validation;
 
 pub use error::PatcherError;
-pub use patcher::{resolve_nvd_api_key, KernelPatcher};
+pub use patcher::{
+    plan_native_kernel_patch_with_probe, plan_native_kernel_patch_with_probe_opts,
+    resolve_nvd_api_key, BinaryProbe, HostBinaryProbe, KernelPatcher, MockBinaryProbe,
+};
 pub use privilege::is_elevated;
-pub use types::{HostKernelInfo, KernelVulnerability, OsFamily, PatchExecutionResult, ScanOptions};
+pub use shield_state::{global_kernel_shield, KernelShieldCoordinator};
+pub use types::{
+    HostKernelInfo, HostKernelPostureSnapshot, KernelVulnerability, LinuxDistro, LivepatchEngine,
+    LivepatchStatus, OsFamily, OsSecurityPosture, PatchAuditReceipt, PatchExecutionResult,
+    PatchPlan, PatchStep, RebootPendingStatus, ScanOptions, TelemetryHealthStatus,
+    VirtualPatchShieldState, VirtualPatchSurface,
+};
 
 use serde::{Deserialize, Serialize};
 
-/// Parsed CLI options for `agent_octopus patch-kernel`.
+/// Parsed CLI options for `octopus kernel-patch` / `agent_octopus patch-kernel`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PatchKernelCliArgs {
+    pub status_only: bool,
     pub dry_run: bool,
     pub kev_only: bool,
     pub min_cvss: Option<f32>,
@@ -39,6 +51,7 @@ pub struct PatchKernelCliArgs {
 impl Default for PatchKernelCliArgs {
     fn default() -> Self {
         Self {
+            status_only: false,
             dry_run: false,
             kev_only: false,
             min_cvss: None,
@@ -51,7 +64,7 @@ impl Default for PatchKernelCliArgs {
     }
 }
 
-/// Machine-readable report emitted by `agent_octopus patch-kernel --json`.
+/// Machine-readable report emitted by `octopus kernel-patch --json` / `agent_octopus patch-kernel --json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PatchKernelCliReport {
     pub scan_status: String,
@@ -63,16 +76,41 @@ pub struct PatchKernelCliReport {
     pub cisa_kev_count: usize,
     pub vulnerabilities: Vec<KernelVulnerability>,
     pub patch_result: Option<PatchExecutionResult>,
+    #[serde(default)]
+    pub distro: Option<LinuxDistro>,
+    #[serde(default)]
+    pub distro_cpe23: Option<String>,
+    #[serde(default)]
+    pub telemetry_degraded_fail_closed: bool,
+    #[serde(default)]
+    pub livepatch: LivepatchStatus,
+    #[serde(default)]
+    pub reboot_pending: RebootPendingStatus,
+    #[serde(default)]
+    pub shield_locked_until_reboot: bool,
+    #[serde(default)]
+    pub security_posture: OsSecurityPosture,
+    #[serde(default)]
+    pub virtual_patch_shield: Option<VirtualPatchShieldState>,
+    #[serde(default)]
+    pub merkle_receipt: Option<PatchAuditReceipt>,
+    #[serde(default)]
+    pub perimeter_os_enforcement_applied: Option<bool>,
+    #[serde(default)]
+    pub perimeter_readback_verified: Option<bool>,
 }
 
-/// Help banner for `agent_octopus patch-kernel`.
+/// Help banner for `octopus kernel-patch` / `agent_octopus patch-kernel`.
 #[must_use]
 pub fn format_patch_kernel_help() -> &'static str {
     "USAGE:\n  \
-     agent_octopus patch-kernel [OPTIONS]\n\n\
+     octopus kernel-patch [status] [OPTIONS]\n  \
+     agent_octopus patch-kernel [status] [OPTIONS]\n\n\
+     SUBCOMMANDS:\n  \
+     status, --status         Inspect host kernel posture, livepatch, reboot latch, and virtual-patch shield without NVD network call\n\n\
      OPTIONS:\n  \
-     --dry-run                Preview native OS patch command without mutating the kernel\n  \
-     --apply, --execute       Execute native OS patch command (requires root/Administrator)\n  \
+     --dry-run                Preview pinned native OS patch plan without mutating the kernel\n  \
+     --apply, --execute       Execute pinned native OS patch plan (requires root/Administrator)\n  \
      --kev-only               Show only CISA Known Exploited Vulnerabilities\n  \
      --min-cvss <SCORE>       Minimum CVSS v3.1 base score filter (0.0 - 10.0)\n  \
      --cpe <CPE23>            Override auto-detected host kernel CPE 2.3 string\n  \
@@ -93,6 +131,8 @@ pub fn parse_patch_kernel_args(args: &[String]) -> Result<PatchKernelCliArgs, St
         let arg = args[idx].as_str();
         if arg == "--help" || arg == "-h" {
             parsed.show_help = true;
+        } else if arg == "status" || arg == "--status" {
+            parsed.status_only = true;
         } else if arg == "--dry-run" {
             parsed.dry_run = true;
         } else if arg == "--apply" || arg == "--execute" {
@@ -119,19 +159,23 @@ pub fn parse_patch_kernel_args(args: &[String]) -> Result<PatchKernelCliArgs, St
                 .ok_or_else(|| "Missing value for --min-cvss".to_string())?;
             parsed.min_cvss = Some(parse_cvss_score(val)?);
         } else if let Some(val) = arg.strip_prefix("--cpe=") {
-            if val.trim().is_empty() {
+            let trimmed = val.trim();
+            if trimmed.is_empty() {
                 return Err("--cpe value cannot be empty".to_string());
             }
-            parsed.cpe = Some(val.trim().to_string());
+            validation::validate_cpe23(trimmed).map_err(|e| e.to_string())?;
+            parsed.cpe = Some(trimmed.to_string());
         } else if arg == "--cpe" {
             idx += 1;
             let val = args
                 .get(idx)
                 .ok_or_else(|| "Missing value for --cpe".to_string())?;
-            if val.trim().is_empty() {
+            let trimmed = val.trim();
+            if trimmed.is_empty() {
                 return Err("--cpe value cannot be empty".to_string());
             }
-            parsed.cpe = Some(val.trim().to_string());
+            validation::validate_cpe23(trimmed).map_err(|e| e.to_string())?;
+            parsed.cpe = Some(trimmed.to_string());
         } else if let Some(val) = arg.strip_prefix("--timeout-secs=") {
             parsed.timeout_secs = parse_timeout_secs(val)?;
         } else if arg == "--timeout-secs" {
@@ -173,17 +217,18 @@ fn parse_timeout_secs(raw: &str) -> Result<u64, String> {
     Ok(secs)
 }
 
-/// Runs the `agent_octopus patch-kernel` CLI workflow and prints either human-readable
-/// output or a structured JSON report.
+/// Runs the `octopus kernel-patch` / `agent_octopus patch-kernel` CLI workflow and prints
+/// either human-readable output or a structured JSON report.
 pub async fn execute_patch_kernel_cli(args: &PatchKernelCliArgs) -> Result<(), PatcherError> {
     if args.show_help {
         println!("{}", format_patch_kernel_help());
         return Ok(());
     }
 
-    let host_info = tokio::task::spawn_blocking(HostKernelInfo::detect_host_kernel)
+    let snapshot = tokio::task::spawn_blocking(discovery::detect_host_posture_snapshot)
         .await
         .map_err(|e| PatcherError::DetectionFailed(e.to_string()))??;
+    let host_info = snapshot.host_kernel.clone();
 
     let target_cpe = args
         .cpe
@@ -192,31 +237,102 @@ pub async fn execute_patch_kernel_cli(args: &PatchKernelCliArgs) -> Result<(), P
         .filter(|s| !s.is_empty())
         .unwrap_or(&host_info.cpe23)
         .to_string();
+    validation::validate_cpe23(&target_cpe)?;
 
     let api_key = resolve_nvd_api_key(None);
     let nvd_api_key_configured = api_key.is_some();
 
-    let options = ScanOptions {
-        cpe: Some(target_cpe.clone()),
-        min_cvss_score: args.min_cvss,
-        kev_only: args.kev_only,
-        api_key,
-        timeout_secs: args.timeout_secs.max(1),
+    let patcher = KernelPatcher::new();
+    let read_only_cli = args.status_only || (args.dry_run && !args.apply);
+    let local_coordinator = if read_only_cli {
+        Some(KernelShieldCoordinator::new())
+    } else {
+        None
+    };
+    let coordinator = local_coordinator
+        .as_ref()
+        .unwrap_or_else(|| global_kernel_shield());
+
+    let existing_global_posture = if args.status_only {
+        Some(crate::security::virtual_patch_shield::current_shield_posture())
+    } else {
+        None
     };
 
-    let patcher = KernelPatcher::new();
-    let (scan_status, scan_notice, vulnerabilities) =
-        match patcher.scan_kernel_vulnerabilities(&options).await {
-            Ok(vulns) => ("ok".to_string(), None, vulns),
-            Err(PatcherError::RateLimited) => (
-                "rate_limited".to_string(),
-                Some(
-                    "Rate limited by NIST NVD API 2.0; set NVD_API_KEY in runtime environment"
-                        .to_string(),
-                ),
+    let (scan_status, scan_notice, vulnerabilities, telemetry_degraded_fail_closed, merkle_receipt) =
+        if args.status_only {
+            let receipt = coordinator.apply_post_patch_status(
+                &host_info.os_family,
+                &target_cpe,
+                &snapshot.reboot_pending,
+            )?;
+            let degraded = existing_global_posture
+                .as_ref()
+                .map_or(coordinator.state().telemetry_degraded_fail_closed, |p| {
+                    p.telemetry_degraded_fail_closed
+                });
+            (
+                "status_local".to_string(),
+                None,
                 Vec::new(),
-            ),
-            Err(err) => ("unavailable".to_string(), Some(err.to_string()), Vec::new()),
+                degraded,
+                Some(receipt),
+            )
+        } else {
+            let options = ScanOptions {
+                cpe: Some(target_cpe.clone()),
+                min_cvss_score: args.min_cvss,
+                kev_only: args.kev_only,
+                api_key,
+                timeout_secs: args.timeout_secs.max(1),
+            };
+            match patcher.scan_kernel_vulnerabilities(&options).await {
+                Ok(vulns) => {
+                    let receipt = coordinator.apply_scan_findings(
+                        &host_info.os_family,
+                        &target_cpe,
+                        &vulns,
+                        &snapshot.reboot_pending,
+                    )?;
+                    ("ok".to_string(), None, vulns, false, Some(receipt))
+                }
+                Err(PatcherError::RateLimited) => {
+                    let notice =
+                    "Rate limited by NIST NVD API 2.0; fail-closed virtual-patch shield remains active (set NVD_API_KEY in runtime environment)"
+                        .to_string();
+                    let receipt = coordinator.record_degraded_telemetry_with_reboot(
+                        &host_info.os_family,
+                        &target_cpe,
+                        &notice,
+                        Some(429),
+                        Some(&snapshot.reboot_pending),
+                    )?;
+                    (
+                        "rate_limited".to_string(),
+                        Some(notice),
+                        Vec::new(),
+                        true,
+                        Some(receipt),
+                    )
+                }
+                Err(err) => {
+                    let notice = format!("{err}; fail-closed virtual-patch shield remains active");
+                    let receipt = coordinator.record_degraded_telemetry_with_reboot(
+                        &host_info.os_family,
+                        &target_cpe,
+                        &notice,
+                        None,
+                        Some(&snapshot.reboot_pending),
+                    )?;
+                    (
+                        "unavailable".to_string(),
+                        Some(notice),
+                        Vec::new(),
+                        true,
+                        Some(receipt),
+                    )
+                }
+            }
         };
 
     let patch_result = if args.apply || args.dry_run {
@@ -226,6 +342,47 @@ pub async fn execute_patch_kernel_cli(args: &PatchKernelCliArgs) -> Result<(), P
         None
     };
 
+    let (perimeter_os_enforcement_applied, perimeter_readback_verified) = if !read_only_cli {
+        let live_posture = crate::security::virtual_patch_shield::current_shield_posture();
+        if live_posture.is_shield_active() {
+            if args.apply && !args.dry_run {
+                let _ = crate::arm::KernelSentinelArm::default()
+                    .enforce_byovd_virtual_patch_blocklist();
+            }
+            let ports = crate::security::host_network_isolation::discover_active_octopus_ports();
+            match crate::security::host_network_isolation::apply_virtual_patch_perimeter_shield(
+                &live_posture,
+                &ports,
+            ) {
+                Ok(r) => (Some(r.os_enforcement_applied), Some(r.readback_verified)),
+                Err(_) => (Some(false), Some(false)),
+            }
+        } else {
+            (Some(false), Some(false))
+        }
+    } else {
+        (None, None)
+    };
+
+    let merkle_receipt = patch_result
+        .as_ref()
+        .and_then(|r| r.audit_receipt.clone())
+        .or(merkle_receipt);
+
+    let mut shield_state = coordinator.state();
+    if let Some(ref existing) = existing_global_posture {
+        if existing.shield_locked_until_reboot {
+            shield_state.shield_locked_until_reboot = true;
+            shield_state.active = true;
+        }
+        for cve in &existing.unpatched_cve_ids {
+            if !shield_state.mitigated_cves.contains(cve) {
+                shield_state.mitigated_cves.push(cve.clone());
+            }
+        }
+    }
+    let shield_locked_until_reboot = shield_state.shield_locked_until_reboot
+        || snapshot.reboot_pending.shield_locked_until_reboot;
     let cisa_kev_count = vulnerabilities.iter().filter(|v| v.is_cisa_kev).count();
 
     if args.json {
@@ -239,6 +396,17 @@ pub async fn execute_patch_kernel_cli(args: &PatchKernelCliArgs) -> Result<(), P
             cisa_kev_count,
             vulnerabilities,
             patch_result,
+            distro: snapshot.distro,
+            distro_cpe23: snapshot.distro_cpe23,
+            telemetry_degraded_fail_closed,
+            livepatch: snapshot.livepatch,
+            reboot_pending: snapshot.reboot_pending,
+            shield_locked_until_reboot,
+            security_posture: snapshot.security_posture,
+            virtual_patch_shield: Some(shield_state),
+            merkle_receipt,
+            perimeter_os_enforcement_applied,
+            perimeter_readback_verified,
         };
         let serialized = serde_json::to_string_pretty(&report)?;
         println!("{serialized}");
@@ -246,13 +414,31 @@ pub async fn execute_patch_kernel_cli(args: &PatchKernelCliArgs) -> Result<(), P
     }
 
     println!("================================================================================");
-    println!("AGENT OCTOPUS HOST KERNEL DISCOVERY & NVD VULNERABILITY SCANNER");
+    println!("AGENT OCTOPUS HOST KERNEL DISCOVERY & ZERO-REBOOT VIRTUAL-PATCHING SHIELD");
     println!("================================================================================");
     println!("  OS Family:        {}", host_info.os_family);
+    if let Some(ref d) = snapshot.distro {
+        println!("  Linux Distro:     {}", d);
+    }
+    if let Some(ref dcpe) = snapshot.distro_cpe23 {
+        println!("  Distro CPE 2.3:   {}", dcpe);
+    }
     println!("  OS Version:       {}", host_info.os_version);
     println!("  Kernel Release:   {}", host_info.kernel_release);
     println!("  Architecture:     {}", host_info.architecture);
     println!("  Target CPE 2.3:   {}", target_cpe);
+    println!(
+        "  Livepatch RAM:    {:?} (active={})",
+        snapshot.livepatch.engine, snapshot.livepatch.active_in_ram
+    );
+    println!(
+        "  Reboot Pending:   {} (shield_locked_until_reboot={})",
+        snapshot.reboot_pending.reboot_required, shield_locked_until_reboot
+    );
+    println!(
+        "  Virtual Shield:   active={} telemetry_degraded_fail_closed={} merkle_root={}",
+        shield_state.active, telemetry_degraded_fail_closed, shield_state.merkle_root
+    );
     println!(
         "  NVD API Key:      {}",
         if nvd_api_key_configured {
@@ -271,6 +457,8 @@ pub async fn execute_patch_kernel_cli(args: &PatchKernelCliArgs) -> Result<(), P
 
     if let Some(notice) = scan_notice {
         eprintln!("[KERNEL-PATCHER] NVD query notice ({scan_status}): {notice}");
+    } else if args.status_only {
+        println!("Status check complete (local posture & virtual-patch shield verified).");
     } else if vulnerabilities.is_empty() {
         println!("Zero vulnerabilities found matching the specified criteria.");
     } else {
