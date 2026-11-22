@@ -24,7 +24,7 @@ jobs:
       security-events: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -137,7 +137,7 @@ jobs:
               bash /raptor_engine/run_raptor_ci.sh || true
           else
             echo "[!] danielcuthbert/raptor:latest unavailable; running standalone Semgrep SAST fallback."
-            python3 -m pip install --quiet semgrep
+            python3 -m pip install --quiet semgrep==1.116.0
             semgrep --config "${GITHUB_WORKSPACE}/.raptor/rules" --config p/security-audit --config p/secrets \
               --sarif --output "${GITHUB_WORKSPACE}/raptor_out/semgrep_fallback.sarif" "${STAGE_DIR}" || true
           fi
@@ -285,7 +285,7 @@ jobs:
           PYEOF
 
       - name: Upload RAPTOR SARIF & Audit Artifacts
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: agentoctopus-raptor-security-sarif

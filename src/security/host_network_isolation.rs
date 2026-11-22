@@ -2424,9 +2424,6 @@ fn clear_persisted_vpatch_wfp_filter_ids() {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
-fn clear_persisted_vpatch_wfp_filter_ids() {}
-
 /// Queries live Windows BFE (when elevated) or persisted virtual-patch filter ledger to count
 /// active `AgentOctopus-VirtualPatch-*` WFP filters.
 pub fn active_vpatch_wfp_filter_count() -> usize {
