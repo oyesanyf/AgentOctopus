@@ -79,10 +79,10 @@ pub struct WindowedPerplexityAnalyzer {
 impl Default for WindowedPerplexityAnalyzer {
     fn default() -> Self {
         Self {
-            gcg_ppl_threshold: 18.0,
-            gcg_cliff_ppl_threshold: 13.5,
-            gcg_cliff_ratio_threshold: 1.65,
-            jitter_threshold: 0.34,
+            gcg_ppl_threshold: 12.5,
+            gcg_cliff_ppl_threshold: 10.5,
+            gcg_cliff_ratio_threshold: 1.45,
+            jitter_threshold: 0.36,
         }
     }
 }
