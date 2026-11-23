@@ -128,6 +128,7 @@ pub struct WebState {
     pub host_killswitch_override: Option<Arc<crate::security::HostKillSwitchManager>>,
     pub kernel_shield_override:
         Option<Arc<crate::security::kernel_patcher::KernelShieldCoordinator>>,
+    pub abibo_coordinator: Arc<crate::security::abibo_physics::AbiboMediationCoordinator>,
 }
 
 fn load_or_init_egress_domains() -> Vec<String> {
@@ -334,6 +335,8 @@ impl Default for WebState {
         let latest_kernel_scan = Arc::new(tokio::sync::RwLock::new(None));
         let last_kernel_patch_result = Arc::new(tokio::sync::RwLock::new(None));
         let last_perimeter_receipt = Arc::new(tokio::sync::RwLock::new(None));
+        let abibo_coordinator =
+            Arc::new(crate::security::abibo_physics::AbiboMediationCoordinator::default());
 
         Self {
             gateway,
@@ -370,6 +373,7 @@ impl Default for WebState {
             last_perimeter_receipt,
             host_killswitch_override: None,
             kernel_shield_override: None,
+            abibo_coordinator,
         }
     }
 }
@@ -5589,6 +5593,329 @@ pub async fn handle_kernel_patcher_perimeter(
     }
 }
 
+// ============================================================================
+// ABIBO 7-Law Physics Containment & Artemis DFIR Forensics API Handlers
+// ============================================================================
+
+/// Read-only handler for `GET /api/abibo/status`.
+pub fn handle_abibo_status(state: &WebState) -> String {
+    let snap = state.abibo_coordinator.status_snapshot();
+    serde_json::to_string(&snap).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Authenticated `POST /api/abibo/mcp/mediate` evaluating an inbound MCP call across all 7 Physics Laws.
+pub fn handle_abibo_mcp_mediate(state: &WebState, body: &str) -> (&'static str, String) {
+    let parsed: crate::security::abibo_physics::McpMediationRequest =
+        match serde_json::from_str(body) {
+            Ok(v) => v,
+            Err(e) => {
+                return (
+                    "400 Bad Request",
+                    json_error_payload(
+                        "INVALID_JSON",
+                        &format!("Invalid JSON payload for /api/abibo/mcp/mediate: {e}"),
+                    ),
+                );
+            }
+        };
+    let report = state.abibo_coordinator.mediate(&parsed);
+    state.audit_log.record_event(
+        "ABIBO_MCP_MEDIATION",
+        &parsed.nhi_id,
+        &format!(
+            "Tool '{}' -> {} ({})",
+            parsed.tool_name,
+            report.decision.as_str(),
+            report.triggered_laws.join(",")
+        ),
+        if report.allowed { "ALLOWED" } else { "DENIED" },
+    );
+    (
+        "200 OK",
+        serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string()),
+    )
+}
+
+#[derive(Debug, Deserialize)]
+struct AbiboHitlResolveRequest {
+    ticket_id: String,
+    approve: bool,
+    #[serde(default)]
+    operator: Option<String>,
+}
+
+/// Authenticated `POST /api/abibo/hitl/resolve` resolving an out-of-band 180s HITL ticket.
+pub fn handle_abibo_hitl_resolve(state: &WebState, body: &str) -> (&'static str, String) {
+    let parsed: AbiboHitlResolveRequest = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                "400 Bad Request",
+                json_error_payload(
+                    "INVALID_JSON",
+                    &format!("Invalid JSON payload for /api/abibo/hitl/resolve: {e}"),
+                ),
+            );
+        }
+    };
+    let operator = parsed
+        .operator
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("dashboard_operator");
+    let now = crate::security::artemis_dfir::unix_now_secs();
+    match state.abibo_coordinator.resolve_hitl_ticket_at(
+        &parsed.ticket_id,
+        parsed.approve,
+        operator,
+        now,
+    ) {
+        Ok(ticket) => (
+            "200 OK",
+            serde_json::to_string(&ticket).unwrap_or_else(|_| "{}".to_string()),
+        ),
+        Err(e) => (
+            "400 Bad Request",
+            json_error_payload("HITL_RESOLVE_ERROR", &e),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AbiboLivenessRequest {
+    action: String,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Authenticated `POST /api/abibo/liveness` (`lock`, `unlock`, `heartbeat`).
+pub fn handle_abibo_liveness(state: &WebState, body: &str) -> (&'static str, String) {
+    let parsed: AbiboLivenessRequest = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                "400 Bad Request",
+                json_error_payload(
+                    "INVALID_JSON",
+                    &format!("Invalid JSON payload for /api/abibo/liveness: {e}"),
+                ),
+            );
+        }
+    };
+    let snap = match parsed.action.trim().to_ascii_lowercase().as_str() {
+        "lock" | "sleep" | "event_horizon" => {
+            let reason = parsed
+                .reason
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("dashboard_manual_event_horizon_lock");
+            state
+                .abibo_coordinator
+                .liveness()
+                .trigger_event_horizon(reason)
+        }
+        "unlock" => {
+            state.abibo_coordinator.gauss_flux().disarm_faraday_cage();
+            state.abibo_coordinator.liveness().unlock_workstation()
+        }
+        "heartbeat" => state.abibo_coordinator.liveness().record_human_heartbeat(),
+        other => {
+            return (
+                "400 Bad Request",
+                json_error_payload(
+                    "INVALID_ACTION",
+                    &format!(
+                        "Unsupported liveness action '{other}' (expected 'lock', 'unlock', or 'heartbeat')"
+                    ),
+                ),
+            );
+        }
+    };
+    crate::security::artemis_dfir::record_liveness_events(
+        &state.abibo_coordinator.liveness().history_records(),
+    );
+    (
+        "200 OK",
+        serde_json::to_string(&snap).unwrap_or_else(|_| "{}".to_string()),
+    )
+}
+
+#[derive(Debug, Deserialize)]
+struct AbiboNhiRequest {
+    action: String,
+    nhi_id: String,
+    #[serde(default)]
+    sponsor_human: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    allowed_tools: Vec<String>,
+    #[serde(default)]
+    write_capable: bool,
+    #[serde(default)]
+    half_life_secs: Option<u64>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Authenticated `POST /api/abibo/nhi` (`register` or `revoke` a Non-Human Identity).
+pub fn handle_abibo_nhi(state: &WebState, body: &str) -> (&'static str, String) {
+    let parsed: AbiboNhiRequest = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                "400 Bad Request",
+                json_error_payload(
+                    "INVALID_JSON",
+                    &format!("Invalid JSON payload for /api/abibo/nhi: {e}"),
+                ),
+            );
+        }
+    };
+    if parsed.nhi_id.trim().is_empty() {
+        return (
+            "400 Bad Request",
+            json_error_payload("MISSING_NHI_ID", "nhi_id must not be empty"),
+        );
+    }
+    match parsed.action.trim().to_ascii_lowercase().as_str() {
+        "register" => {
+            let rec = crate::security::abibo_physics::NonHumanIdentityRecord {
+                nhi_id: parsed.nhi_id.trim().to_string(),
+                sponsor_human: parsed
+                    .sponsor_human
+                    .unwrap_or_else(|| "dashboard_operator".to_string()),
+                provider: parsed
+                    .provider
+                    .unwrap_or_else(|| "custom_mcp_client".to_string()),
+                allowed_tools: parsed.allowed_tools,
+                write_capable: parsed.write_capable,
+                half_life_secs: parsed.half_life_secs,
+                revoked: false,
+                revoked_reason: None,
+                created_at_unix: crate::security::artemis_dfir::unix_now_secs(),
+            };
+            state.abibo_coordinator.register_nhi(rec.clone());
+            (
+                "200 OK",
+                serde_json::to_string(&rec).unwrap_or_else(|_| "{}".to_string()),
+            )
+        }
+        "revoke" => {
+            let reason = parsed
+                .reason
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("operator_instant_revocation");
+            let found = state
+                .abibo_coordinator
+                .revoke_nhi(parsed.nhi_id.trim(), reason);
+            if found {
+                (
+                    "200 OK",
+                    json!({
+                        "status": "revoked",
+                        "nhi_id": parsed.nhi_id.trim(),
+                        "reason": reason
+                    })
+                    .to_string(),
+                )
+            } else {
+                (
+                    "404 Not Found",
+                    json_error_payload(
+                        "NHI_NOT_FOUND",
+                        &format!("Non-Human Identity '{}' not registered", parsed.nhi_id),
+                    ),
+                )
+            }
+        }
+        other => (
+            "400 Bad Request",
+            json_error_payload(
+                "INVALID_ACTION",
+                &format!("Unsupported NHI action '{other}' (expected 'register' or 'revoke')"),
+            ),
+        ),
+    }
+}
+
+/// Authenticated `POST /api/abibo/artemis/scan` running a native parallel DFIR forensic sweep
+/// and compiling live AWS Cedar `forbid` controls (offloaded to `spawn_blocking`).
+pub async fn handle_abibo_artemis_scan(state: &WebState) -> (&'static str, String) {
+    let engine = Arc::clone(state.abibo_coordinator.artemis_engine());
+    match tokio::task::spawn_blocking(move || engine.run_native_collection()).await {
+        Ok(report) => (
+            "200 OK",
+            serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string()),
+        ),
+        Err(e) => (
+            "500 Internal Server Error",
+            json_error_payload("ARTEMIS_SCAN_ERROR", &e.to_string()),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AbiboArtemisIngestRequest {
+    jsonl: String,
+    #[serde(default)]
+    sleep_windows: Vec<crate::security::artemis_dfir::SleepLockWindow>,
+}
+
+/// Authenticated `POST /api/abibo/artemis/ingest` ingesting Artemis v0.21 JSONL/Timesketch
+/// forensic exports and compiling deterministic AWS Cedar `forbid` rules.
+pub fn handle_abibo_artemis_ingest(state: &WebState, body: &str) -> (&'static str, String) {
+    let parsed: AbiboArtemisIngestRequest = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                "400 Bad Request",
+                json_error_payload(
+                    "INVALID_JSON",
+                    &format!("Invalid JSON payload for /api/abibo/artemis/ingest: {e}"),
+                ),
+            );
+        }
+    };
+    if parsed.jsonl.trim().is_empty() {
+        return (
+            "400 Bad Request",
+            json_error_payload("EMPTY_JSONL", "jsonl field must not be empty"),
+        );
+    }
+    let report = state
+        .abibo_coordinator
+        .artemis_engine()
+        .ingest_external_artemis_jsonl(&parsed.jsonl, &parsed.sleep_windows);
+    (
+        "200 OK",
+        serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string()),
+    )
+}
+
+/// Read-only `GET /api/abibo/artemis/toml` returning a valid `puffyCid/artemis` v0.21 recipe.
+pub fn handle_abibo_artemis_toml(state: &WebState) -> String {
+    let toml = state
+        .abibo_coordinator
+        .artemis_engine()
+        .export_artemis_toml("./artemis_abibo_out");
+    json!({
+        "os_family": std::env::consts::OS,
+        "artemis_version_target": "0.21",
+        "toml": toml
+    })
+    .to_string()
+}
+
+/// Authenticated `POST /api/abibo/simulate-grok` executing the deterministic 31-request
+/// NewCore Nov 2026 overnight xAI Grok attack simulation.
+pub fn handle_abibo_simulate_grok(_state: &WebState) -> String {
+    let report =
+        crate::security::abibo_physics::AbiboMediationCoordinator::simulate_newcore_grok_overnight_attack();
+    serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5910,5 +6237,69 @@ mod tests {
             !html.contains("id=\"kp-apply-dialog\" role=\"dialog\""),
             "Native <dialog> must not add redundant role=dialog"
         );
+        assert!(html.contains("id=\"abibo-physics-view\""));
+        assert!(html.contains("id=\"abibo-toml-dialog\""));
+        assert!(html.contains("/api/abibo/status"));
+        assert!(html.contains("/api/abibo/simulate-grok"));
+        assert!(html.contains("/api/abibo/artemis/ingest"));
+        assert!(
+            !html.contains("id=\"abibo-toml-dialog\" role=\"dialog\""),
+            "Native ABIBO <dialog> must not add redundant role=dialog"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_abibo_api_endpoints_end_to_end() {
+        let state = WebState::default();
+
+        // 1. GET /api/abibo/status
+        let status_body = handle_abibo_status(&state);
+        let status_json: serde_json::Value =
+            serde_json::from_str(&status_body).expect("valid ABIBO status JSON");
+        assert!(status_json["liveness"]["epoch"].as_u64().unwrap_or(0) >= 1);
+        assert!(status_json["merkle_root_hex"].is_string());
+
+        // 2. POST /api/abibo/simulate-grok
+        let sim_body = handle_abibo_simulate_grok(&state);
+        let sim_json: serde_json::Value =
+            serde_json::from_str(&sim_body).expect("valid Grok simulation JSON");
+        assert_eq!(sim_json["total_requests"], 31);
+        assert_eq!(sim_json["denied_requests"], 31);
+        assert_eq!(sim_json["approved_requests"], 0);
+
+        // 3. GET /api/abibo/artemis/toml
+        let toml_body = handle_abibo_artemis_toml(&state);
+        let toml_json: serde_json::Value =
+            serde_json::from_str(&toml_body).expect("valid Artemis TOML JSON");
+        assert!(toml_json["toml"]
+            .as_str()
+            .unwrap_or("")
+            .contains("[output]"));
+
+        // 4. POST /api/abibo/liveness lock -> unlock rotates epoch monotonically
+        let ep_before = state.abibo_coordinator.liveness().current_epoch();
+        let (st_lock, _) = handle_abibo_liveness(&state, r#"{"action":"lock"}"#);
+        assert_eq!(st_lock, "200 OK");
+        assert!(state.abibo_coordinator.liveness().is_locked());
+        let (st_unlock, _) = handle_abibo_liveness(&state, r#"{"action":"unlock"}"#);
+        assert_eq!(st_unlock, "200 OK");
+        assert!(!state.abibo_coordinator.liveness().is_locked());
+        assert!(state.abibo_coordinator.liveness().current_epoch() > ep_before);
+
+        // 5. POST /api/abibo/artemis/ingest synthesizes live Cedar forbid policies
+        let ingest_payload = serde_json::json!({
+            "jsonl": r#"{"timestamp": 1794610000, "artifact": "network", "principal": "xai_grok_bot", "domain": "api.c2-evil.example", "message": "Overnight beacon"}"#,
+            "sleep_windows": [{"start_unix": 1794600000, "end_unix": 1794628800}]
+        })
+        .to_string();
+        let (st_ing, body_ing) = handle_abibo_artemis_ingest(&state, &ingest_payload);
+        assert_eq!(st_ing, "200 OK");
+        let ing_json: serde_json::Value =
+            serde_json::from_str(&body_ing).expect("valid ingest JSON");
+        assert_eq!(ing_json["events"].as_array().map(|a| a.len()), Some(1));
+        assert!(ing_json["synthesized_controls"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false));
     }
 }

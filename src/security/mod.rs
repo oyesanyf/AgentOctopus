@@ -1,6 +1,8 @@
+pub mod abibo_physics;
 pub mod agentjacking_guard;
 pub mod agentmesh;
 pub mod anomaly_arms;
+pub mod artemis_dfir;
 pub mod atlas_arm;
 pub mod audit;
 pub mod breakouts;
@@ -319,6 +321,19 @@ pub use virtual_patch_shield::{
     ENV_SHIELD_POSTURE_PATH,
 };
 
+pub use abibo_physics::{
+    detect_ssrf_imds_or_cdp_in_args, AbiboMediationCoordinator, AbiboMerkleAuditRecord,
+    AbiboStatusSnapshot, DefangedToolResponse, GaussFluxCage, GaussFluxVerdict, HalfLifeVerdict,
+    HamiltonianBarrierEngine, HamiltonianVerdict, HitlApprovalTicket, HitlTicketStatus,
+    HumanWorkResetProof, McpMediationDecision, McpMediationReport, McpMediationRequest,
+    McpToolManifest, McpToolSchemaPinRegistry, MemoryAttestationRecord, MemoryPlane,
+    MemoryProvenanceGuard, MemoryProvenanceVerdict, NewCoreGrokSimulationReport,
+    NonHumanIdentityRecord, PhaseSpaceState, PinnedToolSchemaRecord, QuantumZenoGuard,
+    QuantumZenoVerdict, RadioactiveHalfLifeEngine, RelativityCausalityGate, RelativityConfig,
+    RelativityVerdict, SchemaPinVerdict, SignedTaintHeader, SingleUseCapabilityToken,
+    SpectralBeaconDetector, SpectralBeaconVerdict, ThermodynamicTaintEngine, ThermodynamicsVerdict,
+    DEFAULT_HITL_TTL_SECS,
+};
 pub use active_sockets::{query_live_os_process_sockets, OsQueryProcessSocketRow};
 pub use agent_hooks::{
     evaluate_hook_synchronously, format_claude_response, format_copilot_response,
@@ -326,6 +341,19 @@ pub use agent_hooks::{
     install_agent_hooks, parse_claude_request, parse_copilot_request, parse_cursor_request,
     parse_mcp_request, parse_opencode_request, snapshot_interceptions, AgentInterceptionRecord,
     HookEvaluationDecision, HookEventType, NormalizedHookRequest, SupportedAgentKind,
+};
+pub use artemis_dfir::{
+    audit_agent_instruction_and_memory_files, collect_local_mcp_connectors,
+    collect_native_persistence_artifacts, detect_local_artemis_binary, generate_abibo_artemis_toml,
+    ingest_artemis_file, ingest_artemis_jsonl_str, inspect_mark_of_the_web, parse_mcp_config_json,
+    parse_windows_prefetch_header, probe_os_workstation_liveness, run_local_artemis_collection,
+    snapshot_artemis_forensic_timeline, snapshot_artemis_liveness_events,
+    snapshot_artemis_mcp_connectors, snapshot_artemis_persistence_findings, AbiboDirection,
+    ArtemisCollectionReport, ArtemisDfirEngine, ArtemisForensicEvent, ControlSynthesisKind,
+    ForensicArtifactKind, ForensicControlCompiler, ForensicSeverity, LivenessEventRecord,
+    McpConnectorAuditEntry, OsLivenessReading, PersistenceArtifactFinding, SleepLockWindow,
+    SynthesizedControlAction, WindowsPrefetchHeader, WorkstationLivenessSnapshot,
+    WorkstationLivenessTracker,
 };
 pub use circumvention::{
     evaluate_denial_outcome, is_cross_boundary_invocation, observe_denial, CircumventionAlert,
