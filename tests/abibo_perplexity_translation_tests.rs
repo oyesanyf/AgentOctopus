@@ -5,8 +5,8 @@
 use agent_octopus::security::abibo_physics::{
     validate_loopback_translate_url, AbiboMediationCoordinator, CandidateActionProposal,
     CanonicalTranslationLayer, LanguageTier, McpMediationDecision, McpMediationRequest,
-    NonHumanIdentityRecord, PerplexityDefenseCoordinator, TranslationBackend,
-    TranslationLayerConfig,
+    NonHumanIdentityRecord, PerplexityDefenseCoordinator, PerplexityTuningConfig,
+    PerplexityWorkloadPreset, TranslationBackend, TranslationLayerConfig,
 };
 use agent_octopus::security::rasp::{
     AgentRaspEngine, AgentSecuritySubject, RaspAgentTrustTier, RaspDecision,
@@ -469,5 +469,175 @@ fn test_loopback_only_translation_url_and_strict_monotonicity_invariants() {
     assert!(
         !locked_rep.allowed,
         "Clean low perplexity must NEVER override Law 1 Event-Horizon deny"
+    );
+}
+
+#[test]
+fn test_perplexity_tuning_presets_bounds_persistence_and_live_recalibration() {
+    // 1. Verify all 4 workload presets pass strict validation
+    for preset in [
+        PerplexityWorkloadPreset::Balanced,
+        PerplexityWorkloadPreset::StrictDefense,
+        PerplexityWorkloadPreset::CodeHeavyDev,
+        PerplexityWorkloadPreset::MultilingualResearch,
+    ] {
+        let cfg = PerplexityTuningConfig::for_preset(preset);
+        assert!(cfg.validate().is_ok(), "Preset {:?} must validate", preset);
+    }
+
+    // 2. Fail-closed bounds & loopback-only URL enforcement
+    let mut bad_cloud = PerplexityTuningConfig::default();
+    bad_cloud.local_nmt_url = Some("https://translate.googleapis.com/v2".to_string());
+    assert!(bad_cloud.validate().is_err());
+
+    let mut bad_ppl = PerplexityTuningConfig::default();
+    bad_ppl.gcg_ppl_threshold = 999.0;
+    assert!(bad_ppl.validate().is_err());
+
+    let mut bad_probe = PerplexityTuningConfig::default();
+    bad_probe.probe_timeout_ms = 5000; // violates <=400ms fast probe law
+    assert!(bad_probe.validate().is_err());
+
+    let mut bad_sem = PerplexityTuningConfig::default();
+    bad_sem.semantic_entropy_threshold_bits = f64::NAN;
+    assert!(bad_sem.validate().is_err());
+
+    // 3. Persistence to config/abibo_perplexity_config.json + .env loopback URL reload
+    let temp_ws = std::env::temp_dir().join(format!(
+        "ao_ppl_cfg_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&temp_ws).expect("create temp workspace");
+    std::fs::write(
+        temp_ws.join(".env"),
+        "OCTOPUS_TRANSLATE_URL=http://127.0.0.1:5050/translate\n",
+    )
+    .expect("write workspace .env");
+
+    let mut strict = PerplexityTuningConfig::for_preset(PerplexityWorkloadPreset::StrictDefense);
+    strict.local_nmt_url = Some("http://127.0.0.1:5050/translate".to_string());
+    let coord = PerplexityDefenseCoordinator::default();
+    let saved = coord
+        .update_tuning_config(strict, Some(&temp_ws))
+        .expect("persist strict config");
+    assert_eq!(saved.preset, PerplexityWorkloadPreset::StrictDefense);
+    assert_eq!(saved.gcg_ppl_threshold, 11.0);
+    assert_eq!(saved.semantic_entropy_threshold_bits, 0.75);
+
+    let reloaded = PerplexityTuningConfig::load_for_workspace(&temp_ws);
+    assert_eq!(reloaded.preset, PerplexityWorkloadPreset::StrictDefense);
+    assert_eq!(
+        reloaded.local_nmt_url.as_deref(),
+        Some("http://127.0.0.1:5050/translate")
+    );
+    assert_eq!(reloaded.semantic_entropy_threshold_bits, 0.75);
+
+    // 4. Live semantic entropy recalibration takes immediate effect without restart
+    // 3:1 split has H_sem = -(0.75*log2(0.75) + 0.25*log2(0.25)) = 0.811 bits:
+    // allowed under default 0.95 bits, blocked under StrictDefense 0.75 bits!
+    let split_3_1 = vec![
+        CandidateActionProposal {
+            tool_name: "write_file".to_string(),
+            target: "src/a.rs".to_string(),
+            operation: "write".to_string(),
+            arg_keys: vec!["path".to_string()],
+        },
+        CandidateActionProposal {
+            tool_name: "write_file".to_string(),
+            target: "src/a.rs".to_string(),
+            operation: "write".to_string(),
+            arg_keys: vec!["path".to_string()],
+        },
+        CandidateActionProposal {
+            tool_name: "write_file".to_string(),
+            target: "src/a.rs".to_string(),
+            operation: "write".to_string(),
+            arg_keys: vec!["path".to_string()],
+        },
+        CandidateActionProposal {
+            tool_name: "write_file".to_string(),
+            target: "src/b.rs".to_string(),
+            operation: "write".to_string(),
+            arg_keys: vec!["path".to_string()],
+        },
+    ];
+    let strict_verdict = coord.semantic_entropy().evaluate(&split_3_1, true);
+    assert!(strict_verdict.abstain_and_require_hitl);
+    assert!(strict_verdict.semantic_entropy_bits > 0.80);
+
+    let _ = coord
+        .update_tuning_config(
+            PerplexityTuningConfig::for_preset(PerplexityWorkloadPreset::Balanced),
+            None,
+        )
+        .expect("restore balanced");
+    let balanced_verdict = coord.semantic_entropy().evaluate(&split_3_1, true);
+    assert!(!balanced_verdict.abstain_and_require_hitl);
+
+    let _ = std::fs::remove_dir_all(&temp_ws);
+}
+
+#[test]
+fn test_loopback_nmt_health_probe_and_source_lang_hint_forwarding() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback NMT health+translate");
+    let port = listener.local_addr().unwrap().port();
+    let captured_hint = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let captured_clone = std::sync::Arc::clone(&captured_hint);
+
+    let server_handle = std::thread::spawn(move || {
+        for _ in 0..2 {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req_str = String::from_utf8_lossy(&buf[..n]).to_string();
+                let body = if req_str.starts_with("GET /health") {
+                    r#"{"status":"ok","backend":"nllb-200-seq2seq","model":"facebook/nllb-200-distilled-600M","quantized_int8":true,"supported_languages_count":49}"#
+                } else {
+                    *captured_clone.lock().unwrap() = req_str;
+                    r#"{"translatedText":"Please summarize this financial report for our meeting tomorrow"}"#
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        }
+    });
+
+    let tl = CanonicalTranslationLayer::new(TranslationLayerConfig {
+        local_nmt_url: Some(format!("http://127.0.0.1:{port}/translate")),
+        enable_local_ollama_fallback: false,
+        probe_timeout_ms: 400,
+    })
+    .with_translate_timeout_ms(2000);
+    let coord = PerplexityDefenseCoordinator::new(tl);
+
+    let health = coord.probe_nmt_health();
+    assert!(health.configured);
+    assert!(health.reachable);
+    assert_eq!(health.backend.as_deref(), Some("nllb-200-seq2seq"));
+    assert_eq!(
+        health.model.as_deref(),
+        Some("facebook/nllb-200-distilled-600M")
+    );
+    assert_eq!(health.quantized_int8, Some(true));
+    assert_eq!(health.supported_languages_count, Some(49));
+
+    let rep = coord.analyze_text("Jọwọ ṣe akopọ ijabọ owo yii fun ipade wa lọla", true);
+    let _ = server_handle.join();
+
+    assert!(rep.allowed);
+    assert_eq!(
+        rep.translation.backend_used,
+        TranslationBackend::LocalSeq2SeqNmt
+    );
+    let captured = captured_hint.lock().unwrap().clone();
+    assert!(
+        captured.contains(r#""source":"yo""#) && captured.contains(r#""source_lang_hint":"yo""#),
+        "Expected Yoruba source hint in loopback NMT payload, got: {captured}"
     );
 }

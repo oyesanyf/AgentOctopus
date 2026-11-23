@@ -893,6 +893,9 @@ pub fn execute_abibo_cli(sub_args: &[String]) -> i32 {
                  \x20 octopus abibo ingest-artemis <PATH>       Ingest Artemis v0.21 JSONL/JSON & compile Cedar forbid rules\n\
                  \x20 octopus abibo simulate-grok               Run NewCore 31-request overnight xAI Grok attack simulation\n\
                  \x20 octopus abibo analyze-perplexity --text <TEXT> Analyze text with 4-Layer Perplexity + LRL Translation Pivot\n\
+                 \x20 octopus abibo perplexity-config           Show active perplexity/semantic-entropy thresholds & NMT health\n\
+                 \x20 octopus abibo set-perplexity-preset <P>   Apply & save preset (balanced|strict-defense|code-heavy-dev|multilingual-research)\n\
+                 \x20 octopus abibo probe-nmt                   Probe local loopback Seq2Seq NMT container (<=400ms)\n\
                  \x20 octopus abibo lock-workstation            Trigger Spacetime Event Horizon (epoch N -> N + 1)\n\
                  \x20 octopus abibo unlock-workstation          Unlock workstation under fresh human session epoch"
             );
@@ -977,6 +980,67 @@ pub fn execute_abibo_cli(sub_args: &[String]) -> i32 {
                 0
             } else {
                 EXIT_PREFLIGHT_DENIED
+            }
+        }
+        "perplexity-config" => {
+            let coord = AbiboMediationCoordinator::default();
+            let payload = serde_json::json!({
+                "config": coord.perplexity_defense().tuning_config(),
+                "nmt_health": coord.perplexity_defense().probe_nmt_health(),
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&payload).unwrap_or_default()
+            );
+            0
+        }
+        "set-perplexity-preset" => {
+            use crate::security::abibo_physics::{
+                PerplexityTuningConfig, PerplexityWorkloadPreset,
+            };
+            let Some(preset_arg) = sub_args.get(1) else {
+                eprintln!(
+                    "[octopus] error: missing <PRESET> (balanced|strict-defense|code-heavy-dev|multilingual-research)"
+                );
+                return EXIT_PREFLIGHT_DENIED;
+            };
+            let Some(preset) = PerplexityWorkloadPreset::from_str_loose(preset_arg) else {
+                eprintln!("[octopus] error: unknown perplexity preset '{preset_arg}'");
+                return EXIT_PREFLIGHT_DENIED;
+            };
+            let coord = AbiboMediationCoordinator::default();
+            let current = coord.perplexity_defense().tuning_config();
+            let mut next = PerplexityTuningConfig::for_preset(preset);
+            next.local_nmt_url = current.local_nmt_url;
+            next.enable_local_ollama_fallback = current.enable_local_ollama_fallback;
+            match coord
+                .perplexity_defense()
+                .update_tuning_config(next, Some(coord.workspace_root()))
+            {
+                Ok(saved) => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&saved).unwrap_or_default()
+                    );
+                    0
+                }
+                Err(e) => {
+                    eprintln!("[octopus] error saving perplexity preset: {e}");
+                    EXIT_SANDBOX_FAILURE
+                }
+            }
+        }
+        "probe-nmt" => {
+            let coord = AbiboMediationCoordinator::default();
+            let health = coord.perplexity_defense().probe_nmt_health();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&health).unwrap_or_default()
+            );
+            if health.reachable {
+                0
+            } else {
+                1
             }
         }
         "lock-workstation" => {

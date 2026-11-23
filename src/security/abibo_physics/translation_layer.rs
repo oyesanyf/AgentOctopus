@@ -1060,7 +1060,7 @@ pub fn verify_translation_integrity(source: &str, translated: &str) -> (bool, Op
 }
 
 /// Configuration for the Canonical Security-Pivot Translation Layer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationLayerConfig {
     /// Optional loopback-only dedicated Seq2Seq NMT URL (e.g. `http://127.0.0.1:5050/translate`).
     pub local_nmt_url: Option<String>,
@@ -1070,16 +1070,67 @@ pub struct TranslationLayerConfig {
     pub probe_timeout_ms: u64,
 }
 
+/// Live health-probe result for a configured loopback Seq2Seq NMT sidecar (e.g. NLLB-200 / LibreTranslate).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NmtHealthStatus {
+    pub configured: bool,
+    pub configured_url: Option<String>,
+    pub health_url: Option<String>,
+    pub reachable: bool,
+    pub latency_ms: u64,
+    pub backend: Option<String>,
+    pub model: Option<String>,
+    pub quantized_int8: Option<bool>,
+    pub supported_languages_count: Option<usize>,
+    pub error: Option<String>,
+}
+
+/// Read-only lookup of a key from a workspace `.env` file (never mutates OS/user PATH or registry).
+#[must_use]
+pub fn read_dotenv_key_in(workspace_root: &std::path::Path, key: &str) -> Option<String> {
+    let env_path = workspace_root.join(".env");
+    let content = std::fs::read_to_string(env_path).ok()?;
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            if k.trim() == key {
+                let cleaned = v.trim().trim_matches('"').trim_matches('\'').trim();
+                if !cleaned.is_empty() {
+                    return Some(cleaned.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 impl Default for TranslationLayerConfig {
     fn default() -> Self {
         let env_url = std::env::var("OCTOPUS_TRANSLATE_URL")
             .ok()
-            .filter(|s| !s.trim().is_empty());
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                if cfg!(test) {
+                    None
+                } else {
+                    std::env::current_dir()
+                        .ok()
+                        .and_then(|cwd| read_dotenv_key_in(&cwd, "OCTOPUS_TRANSLATE_URL"))
+                }
+            });
+        let probe_timeout_ms = std::env::var("OCTOPUS_NMT_PROBE_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(400)
+            .clamp(100, 400);
         Self {
             local_nmt_url: env_url,
             // Disabled in unit/integration tests unless explicitly configured to keep tests deterministic & fast
             enable_local_ollama_fallback: !cfg!(test),
-            probe_timeout_ms: 400,
+            probe_timeout_ms,
         }
     }
 }
@@ -1089,6 +1140,7 @@ impl Default for TranslationLayerConfig {
 #[derive(Debug, Clone)]
 pub struct CanonicalTranslationLayer {
     config: TranslationLayerConfig,
+    translate_timeout_ms: u64,
 }
 
 impl Default for CanonicalTranslationLayer {
@@ -1100,7 +1152,206 @@ impl Default for CanonicalTranslationLayer {
 impl CanonicalTranslationLayer {
     #[must_use]
     pub fn new(config: TranslationLayerConfig) -> Self {
-        Self { config }
+        let translate_timeout_ms = std::env::var("OCTOPUS_NMT_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(2500)
+            .clamp(250, 10_000);
+        Self {
+            config,
+            translate_timeout_ms,
+        }
+    }
+
+    #[must_use]
+    pub fn with_translate_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.translate_timeout_ms = timeout_ms.clamp(250, 10_000);
+        self
+    }
+
+    #[must_use]
+    pub fn config(&self) -> &TranslationLayerConfig {
+        &self.config
+    }
+
+    #[must_use]
+    pub fn translate_timeout_ms(&self) -> u64 {
+        self.translate_timeout_ms
+    }
+
+    /// Probes the configured loopback Seq2Seq NMT `/health` endpoint with a strict `<=400ms` timeout.
+    #[must_use]
+    pub fn probe_nmt_health(&self) -> NmtHealthStatus {
+        use std::io::{Read, Write};
+        use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+        use std::time::Instant;
+
+        let Some(ref raw_url) = self.config.local_nmt_url else {
+            return NmtHealthStatus {
+                configured: false,
+                configured_url: None,
+                health_url: None,
+                reachable: false,
+                latency_ms: 0,
+                backend: None,
+                model: None,
+                quantized_int8: None,
+                supported_languages_count: None,
+                error: Some("OCTOPUS_TRANSLATE_URL is not configured".to_string()),
+            };
+        };
+
+        let parsed = match validate_loopback_translate_url(raw_url) {
+            Ok(u) => u,
+            Err(err) => {
+                return NmtHealthStatus {
+                    configured: true,
+                    configured_url: Some(raw_url.clone()),
+                    health_url: None,
+                    reachable: false,
+                    latency_ms: 0,
+                    backend: None,
+                    model: None,
+                    quantized_int8: None,
+                    supported_languages_count: None,
+                    error: Some(err),
+                };
+            }
+        };
+
+        let host = parsed.host_str().unwrap_or("127.0.0.1");
+        let port = parsed.port_or_known_default().unwrap_or(5050);
+        let health_url = format!("{}://{host}:{port}/health", parsed.scheme());
+        let timeout = Duration::from_millis(self.config.probe_timeout_ms.clamp(100, 400));
+        let started = Instant::now();
+
+        let addrs: Vec<SocketAddr> = format!("{host}:{port}")
+            .to_socket_addrs()
+            .map(|it| it.collect())
+            .unwrap_or_default();
+        let Some(sock_addr) = addrs.first().copied() else {
+            return NmtHealthStatus {
+                configured: true,
+                configured_url: Some(raw_url.clone()),
+                health_url: Some(health_url),
+                reachable: false,
+                latency_ms: started.elapsed().as_millis() as u64,
+                backend: None,
+                model: None,
+                quantized_int8: None,
+                supported_languages_count: None,
+                error: Some(format!("Failed to resolve loopback address {host}:{port}")),
+            };
+        };
+
+        let mut stream = match TcpStream::connect_timeout(&sock_addr, timeout) {
+            Ok(s) => s,
+            Err(e) => {
+                return NmtHealthStatus {
+                    configured: true,
+                    configured_url: Some(raw_url.clone()),
+                    health_url: Some(health_url),
+                    reachable: false,
+                    latency_ms: started.elapsed().as_millis() as u64,
+                    backend: None,
+                    model: None,
+                    quantized_int8: None,
+                    supported_languages_count: None,
+                    error: Some(format!("Loopback NMT unreachable: {e}")),
+                };
+            }
+        };
+        let _ = stream.set_read_timeout(Some(timeout));
+        let _ = stream.set_write_timeout(Some(timeout));
+
+        let req = format!(
+            "GET /health HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+        );
+        if let Err(e) = stream.write_all(req.as_bytes()) {
+            return NmtHealthStatus {
+                configured: true,
+                configured_url: Some(raw_url.clone()),
+                health_url: Some(health_url),
+                reachable: false,
+                latency_ms: started.elapsed().as_millis() as u64,
+                backend: None,
+                model: None,
+                quantized_int8: None,
+                supported_languages_count: None,
+                error: Some(format!("NMT health write failed: {e}")),
+            };
+        }
+
+        let mut raw = Vec::with_capacity(2048);
+        let mut buf = [0u8; 1024];
+        while raw.len() < 16_384 {
+            match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => raw.extend_from_slice(&buf[..n]),
+                Err(_) => break,
+            }
+        }
+        let latency_ms = started.elapsed().as_millis() as u64;
+        let resp = String::from_utf8_lossy(&raw);
+        let Some((headers, body)) = resp.split_once("\r\n\r\n") else {
+            return NmtHealthStatus {
+                configured: true,
+                configured_url: Some(raw_url.clone()),
+                health_url: Some(health_url),
+                reachable: false,
+                latency_ms,
+                backend: None,
+                model: None,
+                quantized_int8: None,
+                supported_languages_count: None,
+                error: Some("Malformed HTTP health response from NMT".to_string()),
+            };
+        };
+        let is_200 = headers
+            .lines()
+            .next()
+            .map(|l| l.contains(" 200 "))
+            .unwrap_or(false);
+        let parsed_body = extract_json_object_body(body)
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+        let status_ok = is_200
+            && parsed_body
+                .as_ref()
+                .and_then(|v| v.get("status").and_then(|s| s.as_str()))
+                .map(|s| s.eq_ignore_ascii_case("ok") || s.eq_ignore_ascii_case("healthy"))
+                .unwrap_or(true);
+
+        NmtHealthStatus {
+            configured: true,
+            configured_url: Some(raw_url.clone()),
+            health_url: Some(health_url),
+            reachable: status_ok,
+            latency_ms,
+            backend: parsed_body
+                .as_ref()
+                .and_then(|v| v.get("backend").and_then(|s| s.as_str()))
+                .map(|s| s.to_string()),
+            model: parsed_body
+                .as_ref()
+                .and_then(|v| v.get("model").and_then(|s| s.as_str()))
+                .map(|s| s.to_string()),
+            quantized_int8: parsed_body
+                .as_ref()
+                .and_then(|v| v.get("quantized_int8").and_then(|b| b.as_bool())),
+            supported_languages_count: parsed_body.as_ref().and_then(|v| {
+                v.get("supported_languages_count")
+                    .and_then(|n| n.as_u64())
+                    .map(|n| n as usize)
+            }),
+            error: if status_ok {
+                None
+            } else {
+                Some(format!(
+                    "NMT health endpoint returned non-OK status: {}",
+                    headers.lines().next().unwrap_or("unknown")
+                ))
+            },
+        }
     }
 
     /// Runs pure-Rust offline deterministic inspection (zero network I/O, `<0.1ms`), safe to
@@ -1143,7 +1394,15 @@ impl CanonicalTranslationLayer {
             if allow_loopback_network {
                 if let Some(ref raw_url) = self.config.local_nmt_url {
                     if let Ok(valid_url) = validate_loopback_translate_url(raw_url) {
-                        if let Ok(translated) = self.try_loopback_nmt_sync(valid_url.as_str(), text)
+                        let lang_hint = if profile.detected_language == "unknown_lrl"
+                            || profile.detected_language == "mixed_homoglyph"
+                        {
+                            None
+                        } else {
+                            Some(profile.detected_language.as_str())
+                        };
+                        if let Ok(translated) =
+                            self.try_loopback_nmt_sync(valid_url.as_str(), text, lang_hint)
                         {
                             let (ok, note) = verify_translation_integrity(text, &translated);
                             backend_used = TranslationBackend::LocalSeq2SeqNmt;
@@ -1272,26 +1531,40 @@ impl CanonicalTranslationLayer {
     }
 
     /// Synchronous loopback HTTP POST to a local LibreTranslate / Argos / NLLB-200 server
-    /// using standard library `TcpStream` (zero async runtime lock-in, strict timeout).
-    fn try_loopback_nmt_sync(&self, url_str: &str, text: &str) -> Result<String, String> {
+    /// using standard library `TcpStream` (zero async runtime lock-in, strict connect probe
+    /// `<=400ms` and bounded CPU inference timeout).
+    fn try_loopback_nmt_sync(
+        &self,
+        url_str: &str,
+        text: &str,
+        detected_lang_hint: Option<&str>,
+    ) -> Result<String, String> {
         use std::io::{Read, Write};
-        use std::net::TcpStream;
+        use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 
         let parsed = validate_loopback_translate_url(url_str)?;
         let host = parsed.host_str().unwrap_or("127.0.0.1");
         let port = parsed.port_or_known_default().unwrap_or(5050);
         let path = parsed.path();
 
-        let timeout = Duration::from_millis(self.config.probe_timeout_ms.clamp(100, 3000));
+        let connect_timeout = Duration::from_millis(self.config.probe_timeout_ms.clamp(100, 400));
+        let read_timeout = Duration::from_millis(self.translate_timeout_ms.clamp(250, 10_000));
         let addr_str = format!("{host}:{port}");
-        let mut stream = TcpStream::connect(&addr_str)
+        let sock_addr: SocketAddr = addr_str
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut it| it.next())
+            .ok_or_else(|| format!("Local NMT loopback resolve failed ({addr_str})"))?;
+        let mut stream = TcpStream::connect_timeout(&sock_addr, connect_timeout)
             .map_err(|e| format!("Local NMT connect failed ({addr_str}): {e}"))?;
-        let _ = stream.set_read_timeout(Some(timeout));
-        let _ = stream.set_write_timeout(Some(timeout));
+        let _ = stream.set_read_timeout(Some(read_timeout));
+        let _ = stream.set_write_timeout(Some(connect_timeout));
 
+        let source_code = detected_lang_hint.unwrap_or("auto");
         let payload = serde_json::json!({
             "q": text,
-            "source": "auto",
+            "source": source_code,
+            "source_lang_hint": detected_lang_hint,
             "target": "en",
             "format": "text"
         })
@@ -1318,7 +1591,8 @@ impl CanonicalTranslationLayer {
         let Some((_, body)) = resp_str.split_once("\r\n\r\n") else {
             return Err("Malformed HTTP response from local NMT".to_string());
         };
-        let parsed_json: serde_json::Value = serde_json::from_str(body.trim())
+        let json_slice = extract_json_object_body(body).unwrap_or(body.trim());
+        let parsed_json: serde_json::Value = serde_json::from_str(json_slice)
             .map_err(|e| format!("Invalid JSON from local NMT: {e}"))?;
         parsed_json
             .get("translatedText")
@@ -1419,5 +1693,17 @@ impl CanonicalTranslationLayer {
             .and_then(|v| v.as_str())
             .map(|s| s.trim().to_string())
             .ok_or_else(|| "Missing response field from local Ollama".to_string())
+    }
+}
+
+/// Extracts a clean JSON object slice from an HTTP body (handles both plain bodies and
+/// HTTP/1.1 chunked transfer-encoding framing around a JSON object).
+fn extract_json_object_body(body: &str) -> Option<&str> {
+    let start = body.find('{')?;
+    let end = body.rfind('}')?;
+    if end >= start {
+        Some(&body[start..=end])
+    } else {
+        None
     }
 }
