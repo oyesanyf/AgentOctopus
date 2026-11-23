@@ -1,0 +1,42 @@
+# AgentOctopus Dedicated Loopback-Only Seq2Seq NMT Sidecar
+# Strictly publishes ONLY on host 127.0.0.1:5050 so user prompts never leave localhost.
+# After the initial model cache download into the named volume `agentoctopus_nmt_cache`,
+# you can set `HF_HUB_OFFLINE=1` and `network_mode: none` (or firewall egress) for full air-gap.
+
+services:
+  nllb-nmt:
+    container_name: agentoctopus-nmt
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agentoctopus-nmt:0.2.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5050:5050"
+    environment:
+      OCTOPUS_NMT_MODEL: "${OCTOPUS_NMT_MODEL:-facebook/nllb-200-distilled-600M}"
+      OCTOPUS_NMT_INT8: "${OCTOPUS_NMT_INT8:-1}"
+      OCTOPUS_NMT_THREADS: "${OCTOPUS_NMT_THREADS:-6}"
+      HF_HOME: "/cache/hf"
+      HF_HUB_OFFLINE: "${HF_HUB_OFFLINE:-0}"
+    volumes:
+      - agentoctopus_nmt_cache:/cache/hf
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 4g
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5050/health', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 10
+      start_period: 120s
+
+volumes:
+  agentoctopus_nmt_cache:
+    name: agentoctopus_nmt_cache

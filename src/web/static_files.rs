@@ -751,6 +751,103 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
       border-color: rgba(245, 158, 11, 0.3);
       color: #fbbf24;
     }
+
+    .visually-hidden:where(:not(:focus-within, :active)) {
+      position: absolute !important;
+      clip-path: inset(50%) !important;
+      overflow: hidden !important;
+      width: 1px !important;
+      height: 1px !important;
+      margin: -1px !important;
+      padding: 0 !important;
+      border: 0 !important;
+      white-space: nowrap !important;
+    }
+
+    .abibo-tuning-fieldset {
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 0.9rem 1rem 1rem;
+      margin: 0.85rem 0;
+      background: rgba(15, 23, 42, 0.55);
+    }
+
+    .abibo-tuning-fieldset > legend {
+      padding: 0 0.45rem;
+      font-size: 0.86rem;
+      font-weight: 700;
+      color: #7dd3fc;
+    }
+
+    .abibo-field {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.25rem;
+      margin-block-end: 0.9rem;
+    }
+
+    .abibo-field > label {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+
+    .abibo-hint {
+      display: block;
+      font-size: 0.78rem;
+      color: #94a3b8;
+    }
+
+    .abibo-tuning-input {
+      font: inherit;
+      font-size: max(1rem, 1em);
+      padding: 0.55rem 0.75rem;
+      min-height: 44px;
+      box-sizing: border-box;
+      background: #050811;
+      color: #f8fafc;
+      border: 1.5px solid #475569;
+      border-radius: 6px;
+    }
+
+    .abibo-tuning-input:focus-visible {
+      outline: 3px solid #38bdf8;
+      outline-offset: 2px;
+    }
+
+    .abibo-error-msg {
+      display: none;
+      color: #fca5a5;
+      font-size: 0.82rem;
+      margin-top: 0.2rem;
+    }
+
+    .abibo-tuning-input:is(:user-invalid, .user-invalid-fallback) {
+      border-color: #f87171;
+      background-color: rgba(127, 29, 29, 0.35);
+    }
+
+    .abibo-tuning-input:is(:user-invalid, .user-invalid-fallback) + .abibo-error-msg {
+      display: block;
+    }
+
+    .abibo-tuning-input:user-valid {
+      border-color: #34d399;
+    }
+
+    .abibo-checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      min-height: 44px;
+    }
+
+    .abibo-checkbox-row > input[type="checkbox"] {
+      width: 1.15rem;
+      height: 1.15rem;
+      accent-color: #38bdf8;
+    }
   </style>
 </head>
 <body>
@@ -4547,6 +4644,95 @@ with urllib.request.urlopen(req) as resp:
       </div>
       <div id="abibo-ppl-summary" aria-live="polite" style="margin-top: 0.65rem; font-size: 0.84rem; color: #94a3b8;"></div>
       <pre id="abibo-ppl-json" style="margin: 0.65rem 0 0; padding: 0.85rem; background: #090d16; border: 1px solid #1e293b; border-radius: 8px; font-size: 0.78rem; color: #c4b5fd; max-height: 260px; overflow: auto;">// Perplexity, language tier, script profile, and canonical translation pivot telemetry render here</pre>
+    </div>
+
+    <div class="card" style="margin-bottom: 1.25rem;">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.5rem;">
+        <h3 id="abibo-ppl-config-heading" style="margin: 0; font-size: 1rem;">⚙️ Local Loopback Seq2Seq NMT &amp; Perplexity Threshold Tuning</h3>
+        <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+          <span id="abibo-nmt-health-badge" class="badge" style="background: rgba(51, 65, 85, 0.6); color: #cbd5e1; border: 1px solid #475569;">NMT Sidecar: Checking…</span>
+          <button type="button" id="abibo-nmt-probe-btn" class="btn btn-secondary">🩺 Probe Loopback NMT (&le;400ms)</button>
+        </div>
+      </div>
+      <p style="margin: 0 0 0.7rem; font-size: 0.83rem; color: #94a3b8;">
+        Configure your dedicated loopback-only Seq2Seq NMT container (<code>scripts/start_local_nmt.ps1</code> &rarr; <code>http://127.0.0.1:5050/translate</code>, Meta NLLB-200) and tune all 4 Perplexity &amp; Semantic Entropy thresholds with fail-closed server-side validation.
+      </p>
+
+      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem;">
+        <button type="button" class="btn btn-secondary abibo-preset-btn" data-preset="balanced">Preset: Balanced</button>
+        <button type="button" class="btn btn-secondary abibo-preset-btn" data-preset="strict_defense">Preset: Strict Defense</button>
+        <button type="button" class="btn btn-secondary abibo-preset-btn" data-preset="code_heavy_dev">Preset: Code-Heavy Dev</button>
+        <button type="button" class="btn btn-secondary abibo-preset-btn" data-preset="multilingual_research">Preset: Multilingual Research</button>
+      </div>
+
+      <form id="abibo-ppl-config-form" aria-labelledby="abibo-ppl-config-heading" method="POST" action="/api/abibo/perplexity/config" novalidate>
+        <fieldset class="abibo-tuning-fieldset">
+          <legend>Loopback Seq2Seq Translation Container (Zero Cloud Egress)</legend>
+          <div class="abibo-field">
+            <label for="abibo-cfg-nmt-url">Loopback NMT Endpoint URL (optional)</label>
+            <span id="abibo-cfg-nmt-url-hint" class="abibo-hint">Strictly loopback only (<code>http://127.0.0.1:5050/translate</code>, <code>localhost</code>, or <code>[::1]</code>). Leave blank for offline lexicon + local Ollama.</span>
+            <input type="url" id="abibo-cfg-nmt-url" name="local_nmt_url" class="abibo-tuning-input" value="" pattern="^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(/.*)?$" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" aria-describedby="abibo-cfg-nmt-url-hint" data-error="abibo-cfg-nmt-url-err">
+            <div id="abibo-cfg-nmt-url-err" class="abibo-error-msg"><span role="img" aria-label="Error">❌</span> Enter a valid loopback URL starting with http://127.0.0.1, http://localhost, or http://[::1].</div>
+          </div>
+
+          <div class="abibo-field">
+            <label for="abibo-cfg-nmt-timeout">NMT CPU Inference Timeout (ms)</label>
+            <span id="abibo-cfg-nmt-timeout-hint" class="abibo-hint">Allowed range: 250–10000 ms (connect health probe always stays &le;400 ms).</span>
+            <input type="number" id="abibo-cfg-nmt-timeout" name="nmt_translate_timeout_ms" class="abibo-tuning-input" required min="250" max="10000" step="50" value="2500" inputmode="numeric" enterkeyhint="next" aria-describedby="abibo-cfg-nmt-timeout-hint" data-error="abibo-cfg-nmt-timeout-err">
+            <div id="abibo-cfg-nmt-timeout-err" class="abibo-error-msg"><span role="img" aria-label="Error">❌</span> Enter an integer between 250 and 10000 milliseconds.</div>
+          </div>
+
+          <div class="abibo-checkbox-row">
+            <input type="checkbox" id="abibo-cfg-ollama-fallback" name="enable_local_ollama_fallback" checked>
+            <label for="abibo-cfg-ollama-fallback" style="font-size: 0.85rem; color: #e2e8f0;">Enable local Ollama (<code>127.0.0.1:11434</code>) fallback when NMT container is stopped</label>
+          </div>
+        </fieldset>
+
+        <fieldset class="abibo-tuning-fieldset">
+          <legend>Perplexity, Action-Trajectory &amp; Semantic Entropy Thresholds</legend>
+
+          <div class="abibo-field">
+            <label for="abibo-cfg-gcg-ppl">Layer 1 — GCG Window Perplexity Threshold</label>
+            <span id="abibo-cfg-gcg-ppl-hint" class="abibo-hint">Range: 8.0–35.0 (benign code ceiling ~7.1; GCG suffixes ~15.3+). Lower = stricter.</span>
+            <input type="number" id="abibo-cfg-gcg-ppl" name="gcg_ppl_threshold" class="abibo-tuning-input" required min="8.0" max="35.0" step="0.1" value="12.5" inputmode="decimal" enterkeyhint="next" aria-describedby="abibo-cfg-gcg-ppl-hint" data-error="abibo-cfg-gcg-ppl-err">
+            <div id="abibo-cfg-gcg-ppl-err" class="abibo-error-msg"><span role="img" aria-label="Error">❌</span> Enter a number between 8.0 and 35.0.</div>
+          </div>
+
+          <div class="abibo-field">
+            <label for="abibo-cfg-cliff-ratio">Layer 1 — Localized GCG Cliff Ratio</label>
+            <span id="abibo-cfg-cliff-ratio-hint" class="abibo-hint">Range: 1.10–3.50 (ratio of worst 32-char window PPL to prompt median PPL).</span>
+            <input type="number" id="abibo-cfg-cliff-ratio" name="gcg_cliff_ratio_threshold" class="abibo-tuning-input" required min="1.10" max="3.50" step="0.05" value="1.45" inputmode="decimal" enterkeyhint="next" aria-describedby="abibo-cfg-cliff-ratio-hint" data-error="abibo-cfg-cliff-ratio-err">
+            <div id="abibo-cfg-cliff-ratio-err" class="abibo-error-msg"><span role="img" aria-label="Error">❌</span> Enter a ratio between 1.10 and 3.50.</div>
+          </div>
+
+          <div class="abibo-field">
+            <label for="abibo-cfg-jitter">Layer 1 — Adversarial Punctuation Jitter Floor</label>
+            <span id="abibo-cfg-jitter-hint" class="abibo-hint">Range: 0.15–0.90 (Rust code max ~0.30; GCG suffix ~1.00).</span>
+            <input type="number" id="abibo-cfg-jitter" name="jitter_threshold" class="abibo-tuning-input" required min="0.15" max="0.90" step="0.01" value="0.36" inputmode="decimal" enterkeyhint="next" aria-describedby="abibo-cfg-jitter-hint" data-error="abibo-cfg-jitter-err">
+            <div id="abibo-cfg-jitter-err" class="abibo-error-msg"><span role="img" aria-label="Error">❌</span> Enter a value between 0.15 and 0.90.</div>
+          </div>
+
+          <div class="abibo-field">
+            <label for="abibo-cfg-action-surprisal">Layer 3 — Action-Trajectory Step Surprisal Limit (bits)</label>
+            <span id="abibo-cfg-action-surprisal-hint" class="abibo-hint">Range: 4.0–12.0 bits (catches stealthy <code>ReadUntrusted &rarr; ReadSecret &rarr; Egress</code> Break-Out pivots).</span>
+            <input type="number" id="abibo-cfg-action-surprisal" name="max_step_surprisal_bits" class="abibo-tuning-input" required min="4.0" max="12.0" step="0.1" value="7.2" inputmode="decimal" enterkeyhint="next" aria-describedby="abibo-cfg-action-surprisal-hint" data-error="abibo-cfg-action-surprisal-err">
+            <div id="abibo-cfg-action-surprisal-err" class="abibo-error-msg"><span role="img" aria-label="Error">❌</span> Enter a limit between 4.0 and 12.0 bits.</div>
+          </div>
+
+          <div class="abibo-field">
+            <label for="abibo-cfg-sem-entropy">Layer 4 — Semantic Entropy Actuation Gate (bits)</label>
+            <span id="abibo-cfg-sem-entropy-hint" class="abibo-hint">Range: 0.30–2.50 bits (forces automatic abstention / 180s HITL on high-uncertainty mutating tool proposals).</span>
+            <input type="number" id="abibo-cfg-sem-entropy" name="semantic_entropy_threshold_bits" class="abibo-tuning-input" required min="0.30" max="2.50" step="0.05" value="0.95" inputmode="decimal" enterkeyhint="done" aria-describedby="abibo-cfg-sem-entropy-hint" data-error="abibo-cfg-sem-entropy-err">
+            <div id="abibo-cfg-sem-entropy-err" class="abibo-error-msg"><span role="img" aria-label="Error">❌</span> Enter a threshold between 0.30 and 2.50 bits.</div>
+          </div>
+        </fieldset>
+
+        <div style="display: flex; gap: 0.65rem; flex-wrap: wrap; align-items: center;">
+          <button type="submit" id="abibo-ppl-save-btn" class="btn">💾 Save &amp; Apply Tuning Config</button>
+          <button type="button" id="abibo-ppl-reload-btn" class="btn btn-secondary">🔄 Reload Active Config</button>
+          <span id="abibo-ppl-config-status" role="status" aria-live="polite" style="font-size: 0.84rem; color: #94a3b8;"></span>
+        </div>
+      </form>
     </div>
 
     <div class="card">
@@ -10128,6 +10314,7 @@ def exfiltrate_credentials():
     } catch (e) {
       setAbiboFeedback(`❌ Failed fetching ABIBO status: ${e.message}`, '#ef4444');
     }
+    fetchAbiboPerplexityConfig();
   }
 
   async function abiboLivenessAction(action) {
@@ -10342,6 +10529,269 @@ def exfiltrate_credentials():
       }
     }
   }
+
+  function renderAbiboPerplexityConfig(payload) {
+    const cfg = payload && payload.config ? payload.config : null;
+    const health = payload && payload.nmt_health ? payload.nmt_health : null;
+    const badge = document.getElementById('abibo-nmt-health-badge');
+    if (badge && health) {
+      if (health.reachable) {
+        badge.textContent = `🟢 NMT Ready: ${health.model || health.backend || 'loopback'} (${health.latency_ms || 0}ms, ${health.supported_languages_count || '?'} langs)`;
+        badge.style.color = '#34d399';
+        badge.style.borderColor = '#10b981';
+        badge.style.background = 'rgba(6, 78, 59, 0.45)';
+      } else if (health.configured) {
+        badge.textContent = `🟡 NMT Configured (${health.configured_url}) — Offline (${health.error || 'unreachable'})`;
+        badge.style.color = '#fbbf24';
+        badge.style.borderColor = '#f59e0b';
+        badge.style.background = 'rgba(120, 53, 15, 0.45)';
+      } else {
+        badge.textContent = '⚪ NMT Sidecar: Not Configured (Offline Lexicon + Ollama Fallback)';
+        badge.style.color = '#cbd5e1';
+        badge.style.borderColor = '#475569';
+        badge.style.background = 'rgba(51, 65, 85, 0.5)';
+      }
+    }
+    if (!cfg) return;
+    const setVal = (id, v) => {
+      const el = document.getElementById(id);
+      if (el && v !== undefined && v !== null) el.value = String(v);
+    };
+    const urlEl = document.getElementById('abibo-cfg-nmt-url');
+    if (urlEl) urlEl.value = cfg.local_nmt_url || '';
+    setVal('abibo-cfg-nmt-timeout', cfg.nmt_translate_timeout_ms);
+    const ollamaEl = document.getElementById('abibo-cfg-ollama-fallback');
+    if (ollamaEl) ollamaEl.checked = Boolean(cfg.enable_local_ollama_fallback);
+    setVal('abibo-cfg-gcg-ppl', cfg.gcg_ppl_threshold);
+    setVal('abibo-cfg-cliff-ratio', cfg.gcg_cliff_ratio_threshold);
+    setVal('abibo-cfg-jitter', cfg.jitter_threshold);
+    setVal('abibo-cfg-action-surprisal', cfg.max_step_surprisal_bits);
+    setVal('abibo-cfg-sem-entropy', cfg.semantic_entropy_threshold_bits);
+  }
+
+  async function fetchAbiboPerplexityConfig() {
+    const statusEl = document.getElementById('abibo-ppl-config-status');
+    try {
+      const resp = await fetch('/api/abibo/perplexity/config');
+      const data = await resp.json();
+      renderAbiboPerplexityConfig(data);
+      if (statusEl && data.config) {
+        statusEl.textContent = `Active preset: ${data.config.preset}`;
+        statusEl.style.color = '#94a3b8';
+      }
+    } catch (e) {
+      if (statusEl) {
+        statusEl.textContent = `❌ Failed loading perplexity config: ${e.message}`;
+        statusEl.style.color = '#f87171';
+      }
+    }
+  }
+
+  (function wireAbiboPerplexityConfigForm() {
+    const form = document.getElementById('abibo-ppl-config-form');
+    if (!form) return;
+
+    const statusEl = document.getElementById('abibo-ppl-config-status');
+    const saveBtn = document.getElementById('abibo-ppl-save-btn');
+    const reloadBtn = document.getElementById('abibo-ppl-reload-btn');
+    const probeBtn = document.getElementById('abibo-nmt-probe-btn');
+
+    const announcer = document.createElement('div');
+    announcer.setAttribute('aria-live', 'polite');
+    announcer.classList.add('visually-hidden');
+    document.body.append(announcer);
+    let announceTimer;
+    let announcedField;
+
+    const linkError = (el, shown) => {
+      const errorId = el.dataset.error;
+      if (!errorId) return;
+      const ids = (el.getAttribute('aria-describedby') || '')
+        .split(/\s+/)
+        .filter((id) => id && id !== errorId);
+      if (shown) ids.push(errorId);
+      if (ids.length) el.setAttribute('aria-describedby', ids.join(' '));
+      else el.removeAttribute('aria-describedby');
+    };
+
+    const spokenText = (node) => {
+      const copy = node.cloneNode(true);
+      copy.querySelectorAll('[aria-hidden="true"]').forEach((n) => n.remove());
+      copy.querySelectorAll('[role="img"][aria-label]').forEach((n) => {
+        n.replaceWith(`${n.getAttribute('aria-label')}: `);
+      });
+      return copy.textContent.replace(/\s+/g, ' ').trim();
+    };
+
+    const announceError = (el) => {
+      const err = document.getElementById(el.dataset.error);
+      if (!err) return;
+      const label = el.labels && el.labels[0] ? `${spokenText(el.labels[0])}: ` : '';
+      clearTimeout(announceTimer);
+      announcer.textContent = '';
+      announcedField = el;
+      announceTimer = setTimeout(() => {
+        announcer.textContent = label + spokenText(err);
+      }, 500);
+    };
+
+    const supportsUserInvalid = CSS.supports('selector(:user-invalid)');
+    const dirtyState = new WeakMap();
+    const flagged = new WeakSet();
+    const announced = new WeakSet();
+
+    const syncAria = (el, shouldAnnounce = false) => {
+      if (!el || !el.matches || !el.matches('input, select, textarea')) return;
+      const invalid = supportsUserInvalid
+        ? el.matches(':user-invalid')
+        : Boolean(dirtyState.get(el) && !el.validity.valid);
+      if (!supportsUserInvalid && dirtyState.get(el)) {
+        el.classList.toggle('user-invalid-fallback', invalid);
+      }
+      if (invalid) {
+        if (shouldAnnounce && !announced.has(el)) {
+          announceError(el);
+          announced.add(el);
+        }
+        el.setAttribute('aria-invalid', 'true');
+        linkError(el, true);
+        flagged.add(el);
+      } else if (flagged.has(el) || el.getAttribute('aria-invalid') !== 'true') {
+        el.setAttribute('aria-invalid', 'false');
+        linkError(el, false);
+        flagged.delete(el);
+        announced.delete(el);
+        if (announcedField === el) {
+          clearTimeout(announceTimer);
+          announcer.textContent = '';
+        }
+      }
+    };
+
+    form.querySelectorAll('input, select, textarea').forEach((el) => {
+      el.setAttribute('aria-invalid', 'false');
+    });
+
+    form.addEventListener(
+      'blur',
+      (e) => {
+        if (e.target && e.target.matches && e.target.matches('input, select, textarea')) {
+          dirtyState.set(e.target, true);
+          syncAria(e.target, true);
+        }
+      },
+      true
+    );
+
+    form.addEventListener('input', (e) => {
+      if (e.target && e.target.hasAttribute && e.target.hasAttribute('aria-invalid')) {
+        syncAria(e.target, false);
+      }
+    });
+
+    form.addEventListener(
+      'invalid',
+      (e) => {
+        dirtyState.set(e.target, true);
+        announced.add(e.target);
+        syncAria(e.target, false);
+      },
+      true
+    );
+
+    async function postPerplexityConfig(payload) {
+      if (saveBtn) saveBtn.disabled = true;
+      if (statusEl) {
+        statusEl.textContent = '⏳ Saving & probing loopback NMT...';
+        statusEl.style.color = '#fbbf24';
+      }
+      try {
+        const resp = await fetch('/api/abibo/perplexity/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          if (statusEl) {
+            statusEl.textContent = `🛑 Rejected: ${data.message || data.code || resp.statusText}`;
+            statusEl.style.color = '#f87171';
+          }
+          return;
+        }
+        renderAbiboPerplexityConfig(data);
+        if (statusEl) {
+          statusEl.textContent = `✅ Saved preset='${data.config.preset}' (GCG>=${data.config.gcg_ppl_threshold}, H_sem>=${data.config.semantic_entropy_threshold_bits} bits)`;
+          statusEl.style.color = '#34d399';
+        }
+      } catch (err) {
+        if (statusEl) {
+          statusEl.textContent = `❌ Config save error: ${err.message}`;
+          statusEl.style.color = '#f87171';
+        }
+      } finally {
+        if (saveBtn) saveBtn.disabled = false;
+      }
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const controls = [...form.querySelectorAll('input, select, textarea')];
+      let firstInvalid = null;
+      for (const el of controls) {
+        dirtyState.set(el, true);
+        if (!el.checkValidity()) {
+          if (!firstInvalid) firstInvalid = el;
+          el.classList.add('user-invalid-fallback');
+          el.setAttribute('aria-invalid', 'true');
+          linkError(el, true);
+          flagged.add(el);
+        } else {
+          el.classList.remove('user-invalid-fallback');
+          syncAria(el, false);
+        }
+      }
+      if (firstInvalid) {
+        firstInvalid.focus();
+        announceError(firstInvalid);
+        return;
+      }
+
+      const fd = new FormData(form);
+      const urlVal = String(fd.get('local_nmt_url') || '').trim();
+      const gcgVal = Number(fd.get('gcg_ppl_threshold'));
+      const cliffPpl = Math.max(6.0, Number((gcgVal - 2.0).toFixed(2)));
+      const payload = {
+        local_nmt_url: urlVal,
+        clear_local_nmt_url: urlVal.length === 0,
+        nmt_translate_timeout_ms: Number(fd.get('nmt_translate_timeout_ms')),
+        enable_local_ollama_fallback: Boolean(
+          document.getElementById('abibo-cfg-ollama-fallback')?.checked
+        ),
+        gcg_ppl_threshold: gcgVal,
+        gcg_cliff_ppl_threshold: cliffPpl,
+        gcg_cliff_ratio_threshold: Number(fd.get('gcg_cliff_ratio_threshold')),
+        jitter_threshold: Number(fd.get('jitter_threshold')),
+        max_step_surprisal_bits: Number(fd.get('max_step_surprisal_bits')),
+        semantic_entropy_threshold_bits: Number(fd.get('semantic_entropy_threshold_bits')),
+        persist: true
+      };
+      await postPerplexityConfig(payload);
+    });
+
+    if (reloadBtn) {
+      reloadBtn.addEventListener('click', () => fetchAbiboPerplexityConfig());
+    }
+    if (probeBtn) {
+      probeBtn.addEventListener('click', () => fetchAbiboPerplexityConfig());
+    }
+    document.querySelectorAll('.abibo-preset-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const preset = btn.getAttribute('data-preset');
+        if (preset) postPerplexityConfig({ preset: preset, persist: true });
+      });
+    });
+  })();
 </script>
 </body>
 </html>

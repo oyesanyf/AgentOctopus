@@ -277,6 +277,7 @@ pub struct AbiboMediationCoordinator {
     liveness: Arc<WorkstationLivenessTracker>,
     cedar_engine: Arc<CedarPolicyEngine>,
     lineage_tracker: Arc<FileLineageTracker>,
+    workspace_root: PathBuf,
     artemis_engine: Arc<ArtemisDfirEngine>,
     relativity: RelativityCausalityGate,
     thermodynamics: ThermodynamicTaintEngine,
@@ -312,14 +313,20 @@ impl AbiboMediationCoordinator {
         let liveness = Arc::new(WorkstationLivenessTracker::new(300));
         let cedar_engine = Arc::new(CedarPolicyEngine::new().unwrap_or_default());
         let lineage_tracker = Arc::new(FileLineageTracker::default());
+        let perplexity_defense = if cfg!(test) {
+            PerplexityDefenseCoordinator::default()
+        } else {
+            PerplexityDefenseCoordinator::for_workspace(&workspace_root)
+        };
         let artemis_engine = Arc::new(ArtemisDfirEngine::new(
-            workspace_root,
+            workspace_root.clone(),
             Arc::clone(&liveness),
             Arc::clone(&cedar_engine),
             Arc::clone(&lineage_tracker),
         ));
 
         let coord = Self {
+            workspace_root,
             liveness,
             cedar_engine,
             lineage_tracker,
@@ -333,7 +340,7 @@ impl AbiboMediationCoordinator {
             spectral_beacon: SpectralBeaconDetector::default(),
             schema_pins: McpToolSchemaPinRegistry::new(),
             memory_provenance: Arc::new(MemoryProvenanceGuard::default()),
-            perplexity_defense: PerplexityDefenseCoordinator::default(),
+            perplexity_defense,
             agentjacking: AgentjackingGuard::new(),
             dlp: SemanticDlpEngine::default(),
             nhi_registry: RwLock::new(HashMap::new()),
@@ -411,6 +418,11 @@ impl AbiboMediationCoordinator {
     #[must_use]
     pub fn memory_provenance(&self) -> &Arc<MemoryProvenanceGuard> {
         &self.memory_provenance
+    }
+
+    #[must_use]
+    pub fn workspace_root(&self) -> &std::path::Path {
+        &self.workspace_root
     }
 
     #[must_use]
@@ -749,10 +761,11 @@ impl AbiboMediationCoordinator {
             req.persistence_risk,
         );
         let agent_is_tainted = thermodynamics.agent_entropy_bits >= 0.5;
-        let action_trajectory = self
-            .perplexity_defense
-            .action_trajectory()
-            .observe_and_evaluate(&req.nhi_id, action_class, agent_is_tainted);
+        let action_trajectory = self.perplexity_defense.observe_action_trajectory(
+            &req.nhi_id,
+            action_class,
+            agent_is_tainted,
+        );
         if !action_trajectory.allowed {
             triggered_laws.push("ACTION_TRAJECTORY_PERPLEXITY".to_string());
             deny_reasons.push(action_trajectory.reason.clone());

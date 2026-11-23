@@ -5964,6 +5964,184 @@ pub fn handle_abibo_perplexity_analyze(state: &WebState, body: &str) -> (&'stati
     )
 }
 
+/// Authenticated `GET /api/abibo/perplexity/config` returning active perplexity/semantic-entropy
+/// thresholds, available workload presets, and a fast `<=400ms` loopback NMT `/health` probe.
+pub fn handle_abibo_perplexity_config_get(state: &WebState) -> String {
+    let ppl = state.abibo_coordinator.perplexity_defense();
+    let cfg = ppl.tuning_config();
+    let nmt_health = ppl.probe_nmt_health();
+    serde_json::json!({
+        "config": cfg,
+        "nmt_health": nmt_health,
+        "presets": [
+            { "id": "balanced", "label": "Balanced (Default)", "gcg_ppl_threshold": 12.5, "semantic_entropy_threshold_bits": 0.95 },
+            { "id": "strict_defense", "label": "Strict Defense", "gcg_ppl_threshold": 11.0, "semantic_entropy_threshold_bits": 0.75 },
+            { "id": "code_heavy_dev", "label": "Code-Heavy Dev", "gcg_ppl_threshold": 14.5, "semantic_entropy_threshold_bits": 1.05 },
+            { "id": "multilingual_research", "label": "Multilingual / LRL Research", "gcg_ppl_threshold": 13.5, "semantic_entropy_threshold_bits": 0.85 }
+        ]
+    })
+    .to_string()
+}
+
+#[derive(Debug, Deserialize)]
+struct AbiboPerplexityConfigPatch {
+    #[serde(default)]
+    preset: Option<String>,
+    #[serde(default)]
+    local_nmt_url: Option<String>,
+    #[serde(default)]
+    clear_local_nmt_url: Option<bool>,
+    #[serde(default)]
+    enable_local_ollama_fallback: Option<bool>,
+    #[serde(default)]
+    probe_timeout_ms: Option<u64>,
+    #[serde(default)]
+    nmt_translate_timeout_ms: Option<u64>,
+    #[serde(default)]
+    gcg_ppl_threshold: Option<f64>,
+    #[serde(default)]
+    gcg_cliff_ppl_threshold: Option<f64>,
+    #[serde(default)]
+    gcg_cliff_ratio_threshold: Option<f64>,
+    #[serde(default)]
+    jitter_threshold: Option<f64>,
+    #[serde(default)]
+    max_step_surprisal_bits: Option<f64>,
+    #[serde(default)]
+    max_sequence_ppl: Option<f64>,
+    #[serde(default)]
+    semantic_entropy_threshold_bits: Option<f64>,
+    #[serde(default)]
+    persist: Option<bool>,
+}
+
+/// Authenticated `POST /api/abibo/perplexity/config` validating bounds & loopback-only NMT URL,
+/// updating runtime thresholds across all 4 Perplexity layers, and optionally persisting to disk.
+pub fn handle_abibo_perplexity_config_update(
+    state: &WebState,
+    body: &str,
+) -> (&'static str, String) {
+    use crate::security::abibo_physics::{PerplexityTuningConfig, PerplexityWorkloadPreset};
+
+    let patch: AbiboPerplexityConfigPatch = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                "400 Bad Request",
+                json_error_payload(
+                    "INVALID_JSON",
+                    &format!("Invalid JSON payload for /api/abibo/perplexity/config: {e}"),
+                ),
+            );
+        }
+    };
+
+    let ppl = state.abibo_coordinator.perplexity_defense();
+    let current = ppl.tuning_config();
+    let mut next = if let Some(ref p_str) = patch.preset {
+        let Some(p) = PerplexityWorkloadPreset::from_str_loose(p_str) else {
+            return (
+                "400 Bad Request",
+                json_error_payload(
+                    "INVALID_PRESET",
+                    &format!("Unknown perplexity preset '{p_str}'"),
+                ),
+            );
+        };
+        if p == PerplexityWorkloadPreset::Custom {
+            current.clone()
+        } else {
+            let mut base = PerplexityTuningConfig::for_preset(p);
+            base.local_nmt_url = current.local_nmt_url.clone();
+            base.enable_local_ollama_fallback = current.enable_local_ollama_fallback;
+            base.probe_timeout_ms = current.probe_timeout_ms;
+            base
+        }
+    } else {
+        current.clone()
+    };
+
+    if patch.clear_local_nmt_url == Some(true) {
+        next.local_nmt_url = None;
+    } else if let Some(url) = patch.local_nmt_url {
+        let trimmed = url.trim().to_string();
+        next.local_nmt_url = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        };
+    }
+    if let Some(v) = patch.enable_local_ollama_fallback {
+        next.enable_local_ollama_fallback = v;
+    }
+    if let Some(v) = patch.probe_timeout_ms {
+        next.probe_timeout_ms = v;
+    }
+    if let Some(v) = patch.nmt_translate_timeout_ms {
+        next.nmt_translate_timeout_ms = v;
+    }
+
+    let mut custom_numeric = false;
+    if let Some(v) = patch.gcg_ppl_threshold {
+        next.gcg_ppl_threshold = v;
+        custom_numeric = true;
+    }
+    if let Some(v) = patch.gcg_cliff_ppl_threshold {
+        next.gcg_cliff_ppl_threshold = v;
+        custom_numeric = true;
+    }
+    if let Some(v) = patch.gcg_cliff_ratio_threshold {
+        next.gcg_cliff_ratio_threshold = v;
+        custom_numeric = true;
+    }
+    if let Some(v) = patch.jitter_threshold {
+        next.jitter_threshold = v;
+        custom_numeric = true;
+    }
+    if let Some(v) = patch.max_step_surprisal_bits {
+        next.max_step_surprisal_bits = v;
+        custom_numeric = true;
+    }
+    if let Some(v) = patch.max_sequence_ppl {
+        next.max_sequence_ppl = v;
+        custom_numeric = true;
+    }
+    if let Some(v) = patch.semantic_entropy_threshold_bits {
+        next.semantic_entropy_threshold_bits = v;
+        custom_numeric = true;
+    }
+    if custom_numeric && patch.preset.is_none() {
+        next.preset = PerplexityWorkloadPreset::Custom;
+    }
+
+    let should_persist = patch.persist.unwrap_or(!cfg!(test));
+    let persist_root = if should_persist {
+        Some(state.abibo_coordinator.workspace_root())
+    } else {
+        None
+    };
+
+    match ppl.update_tuning_config(next, persist_root) {
+        Ok(saved) => {
+            let nmt_health = ppl.probe_nmt_health();
+            (
+                "200 OK",
+                serde_json::json!({
+                    "updated": true,
+                    "persisted": should_persist,
+                    "config": saved,
+                    "nmt_health": nmt_health,
+                })
+                .to_string(),
+            )
+        }
+        Err(err) => (
+            "400 Bad Request",
+            json_error_payload("INVALID_PERPLEXITY_CONFIG", &err),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6372,5 +6550,45 @@ mod tests {
         assert_eq!(yo_json["translation"]["profile"]["detected_language"], "yo");
         assert!(crate::web::static_files::INDEX_HTML.contains("/api/abibo/perplexity/analyze"));
         assert!(crate::web::static_files::INDEX_HTML.contains("id=\"abibo-ppl-input\""));
+
+        // 7. GET/POST /api/abibo/perplexity/config (bounds + loopback-only enforcement + presets)
+        let cfg_get_body = handle_abibo_perplexity_config_get(&state);
+        let cfg_get_json: serde_json::Value =
+            serde_json::from_str(&cfg_get_body).expect("valid perplexity config JSON");
+        assert_eq!(cfg_get_json["config"]["preset"], "balanced");
+        assert!(cfg_get_json["nmt_health"].is_object());
+        assert_eq!(cfg_get_json["presets"].as_array().map(|a| a.len()), Some(4));
+
+        // Cloud URL MUST be rejected fail-closed (400 INVALID_PERPLEXITY_CONFIG)
+        let (st_cloud, body_cloud) = handle_abibo_perplexity_config_update(
+            &state,
+            r#"{"local_nmt_url":"https://translate.googleapis.com/v2","persist":false}"#,
+        );
+        assert_eq!(st_cloud, "400 Bad Request");
+        assert!(body_cloud.contains("INVALID_PERPLEXITY_CONFIG"));
+
+        // Out-of-bounds threshold MUST be rejected fail-closed
+        let (st_oob, _) = handle_abibo_perplexity_config_update(
+            &state,
+            r#"{"gcg_ppl_threshold":999.0,"persist":false}"#,
+        );
+        assert_eq!(st_oob, "400 Bad Request");
+
+        // Valid preset switch applies immediately in-memory
+        let (st_strict, body_strict) = handle_abibo_perplexity_config_update(
+            &state,
+            r#"{"preset":"strict_defense","persist":false}"#,
+        );
+        assert_eq!(st_strict, "200 OK");
+        let strict_json: serde_json::Value =
+            serde_json::from_str(&body_strict).expect("valid strict config JSON");
+        assert_eq!(strict_json["config"]["preset"], "strict_defense");
+        assert_eq!(strict_json["config"]["gcg_ppl_threshold"], 11.0);
+        assert_eq!(
+            strict_json["config"]["semantic_entropy_threshold_bits"],
+            0.75
+        );
+        assert!(crate::web::static_files::INDEX_HTML.contains("/api/abibo/perplexity/config"));
+        assert!(crate::web::static_files::INDEX_HTML.contains("id=\"abibo-ppl-config-form\""));
     }
 }

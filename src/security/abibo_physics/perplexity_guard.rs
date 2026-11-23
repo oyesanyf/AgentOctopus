@@ -23,11 +23,13 @@
 //!   or confused-deputy deletion/exfiltration targets).
 
 use super::translation_layer::{
-    CanonicalTranslationLayer, LanguageTier, TranslationInspectionVerdict,
+    read_dotenv_key_in, validate_loopback_translate_url, CanonicalTranslationLayer, LanguageTier,
+    NmtHealthStatus, TranslationInspectionVerdict, TranslationLayerConfig,
 };
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 
 const WINDOW_LEN: usize = 32;
 const WINDOW_STRIDE: usize = 8;
@@ -614,14 +616,32 @@ impl ActionTrajectoryPerplexity {
         }
     }
 
-    /// Observes a tool-call transition for `nhi_id` and computes instantaneous surprisal and
-    /// sliding sequence action perplexity.
+    /// Observes a tool-call transition for `nhi_id` using this instance's default thresholds.
     #[must_use]
     pub fn observe_and_evaluate(
         &self,
         nhi_id: &str,
         current_action: AgentActionClass,
         agent_tainted: bool,
+    ) -> ActionTrajectoryVerdict {
+        self.observe_and_evaluate_with_limits(
+            nhi_id,
+            current_action,
+            agent_tainted,
+            self.max_step_surprisal_bits,
+            self.max_sequence_ppl,
+        )
+    }
+
+    /// Observes a tool-call transition for `nhi_id` using explicit live-tuned thresholds.
+    #[must_use]
+    pub fn observe_and_evaluate_with_limits(
+        &self,
+        nhi_id: &str,
+        current_action: AgentActionClass,
+        agent_tainted: bool,
+        max_step_surprisal_bits: f64,
+        max_sequence_ppl: f64,
     ) -> ActionTrajectoryVerdict {
         let key = nhi_id.to_ascii_lowercase();
         let mut map = self.history.lock();
@@ -660,8 +680,8 @@ impl ActionTrajectoryPerplexity {
                 | AgentActionClass::ModifyPersistence
         );
         let breakout_trajectory_anomaly = is_high_risk_sink
-            && (step_surprisal_bits >= self.max_step_surprisal_bits
-                || sequence_action_ppl >= self.max_sequence_ppl);
+            && (step_surprisal_bits >= max_step_surprisal_bits
+                || sequence_action_ppl >= max_sequence_ppl);
 
         let reason = if breakout_trajectory_anomaly {
             format!(
@@ -819,12 +839,326 @@ pub struct PerplexityTranslationReport {
     pub reason: String,
 }
 
+/// Named workload calibration presets for local ABIBO perplexity & semantic-entropy tuning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PerplexityWorkloadPreset {
+    Balanced,
+    StrictDefense,
+    CodeHeavyDev,
+    MultilingualResearch,
+    Custom,
+}
+
+impl PerplexityWorkloadPreset {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Balanced => "balanced",
+            Self::StrictDefense => "strict_defense",
+            Self::CodeHeavyDev => "code_heavy_dev",
+            Self::MultilingualResearch => "multilingual_research",
+            Self::Custom => "custom",
+        }
+    }
+
+    #[must_use]
+    pub fn from_str_loose(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "balanced" | "default" => Some(Self::Balanced),
+            "strict_defense" | "strict" | "production" => Some(Self::StrictDefense),
+            "code_heavy_dev" | "code_heavy" | "code" | "dev" => Some(Self::CodeHeavyDev),
+            "multilingual_research" | "multilingual" | "lrl" | "research" => {
+                Some(Self::MultilingualResearch)
+            }
+            "custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+}
+
+/// Validated, persistable runtime tuning configuration for all 4 Perplexity layers and
+/// the loopback-only Canonical Low-Resource Language Translation Pivot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerplexityTuningConfig {
+    pub preset: PerplexityWorkloadPreset,
+    pub local_nmt_url: Option<String>,
+    pub enable_local_ollama_fallback: bool,
+    pub probe_timeout_ms: u64,
+    pub nmt_translate_timeout_ms: u64,
+    pub gcg_ppl_threshold: f64,
+    pub gcg_cliff_ppl_threshold: f64,
+    pub gcg_cliff_ratio_threshold: f64,
+    pub jitter_threshold: f64,
+    pub max_step_surprisal_bits: f64,
+    pub max_sequence_ppl: f64,
+    pub semantic_entropy_threshold_bits: f64,
+}
+
+impl Default for PerplexityTuningConfig {
+    fn default() -> Self {
+        Self::for_preset(PerplexityWorkloadPreset::Balanced)
+    }
+}
+
+impl PerplexityTuningConfig {
+    /// Returns calibrated thresholds for a named workload profile while preserving local NMT config.
+    #[must_use]
+    pub fn for_preset(preset: PerplexityWorkloadPreset) -> Self {
+        let base_tl = TranslationLayerConfig::default();
+        let (
+            gcg_ppl,
+            gcg_cliff_ppl,
+            cliff_ratio,
+            jitter,
+            step_surprisal,
+            seq_ppl,
+            sem_ent,
+            nmt_timeout,
+        ) = match preset {
+            PerplexityWorkloadPreset::Balanced | PerplexityWorkloadPreset::Custom => {
+                (12.5, 10.5, 1.45, 0.36, 7.2, 28.0, 0.95, 2500)
+            }
+            PerplexityWorkloadPreset::StrictDefense => {
+                (11.0, 9.5, 1.35, 0.32, 6.5, 20.0, 0.75, 2500)
+            }
+            PerplexityWorkloadPreset::CodeHeavyDev => {
+                (14.5, 12.0, 1.60, 0.45, 7.2, 32.0, 1.05, 2000)
+            }
+            PerplexityWorkloadPreset::MultilingualResearch => {
+                (13.5, 11.0, 1.50, 0.40, 7.0, 26.0, 0.85, 3500)
+            }
+        };
+        Self {
+            preset,
+            local_nmt_url: base_tl.local_nmt_url,
+            enable_local_ollama_fallback: base_tl.enable_local_ollama_fallback,
+            probe_timeout_ms: base_tl.probe_timeout_ms,
+            nmt_translate_timeout_ms: nmt_timeout,
+            gcg_ppl_threshold: gcg_ppl,
+            gcg_cliff_ppl_threshold: gcg_cliff_ppl,
+            gcg_cliff_ratio_threshold: cliff_ratio,
+            jitter_threshold: jitter,
+            max_step_surprisal_bits: step_surprisal,
+            max_sequence_ppl: seq_ppl,
+            semantic_entropy_threshold_bits: sem_ent,
+        }
+    }
+
+    /// Fail-closed validation ensuring every threshold stays within mathematically safe bounds
+    /// and any configured translation URL strictly targets loopback (`127.0.0.1`/`localhost`/`::1`).
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(ref url) = self.local_nmt_url {
+            if !url.trim().is_empty() {
+                validate_loopback_translate_url(url)?;
+            }
+        }
+        let check_f64 = |name: &str, v: f64, lo: f64, hi: f64| -> Result<(), String> {
+            if !v.is_finite() || v < lo || v > hi {
+                return Err(format!(
+                    "INVALID_THRESHOLD: '{name}'={v} must be finite and within [{lo}, {hi}]"
+                ));
+            }
+            Ok(())
+        };
+        check_f64("gcg_ppl_threshold", self.gcg_ppl_threshold, 8.0, 35.0)?;
+        check_f64(
+            "gcg_cliff_ppl_threshold",
+            self.gcg_cliff_ppl_threshold,
+            6.0,
+            30.0,
+        )?;
+        if self.gcg_cliff_ppl_threshold > self.gcg_ppl_threshold {
+            return Err(format!(
+                "INVALID_THRESHOLD: 'gcg_cliff_ppl_threshold' ({}) must be <= 'gcg_ppl_threshold' ({})",
+                self.gcg_cliff_ppl_threshold, self.gcg_ppl_threshold
+            ));
+        }
+        check_f64(
+            "gcg_cliff_ratio_threshold",
+            self.gcg_cliff_ratio_threshold,
+            1.10,
+            3.50,
+        )?;
+        check_f64("jitter_threshold", self.jitter_threshold, 0.15, 0.90)?;
+        check_f64(
+            "max_step_surprisal_bits",
+            self.max_step_surprisal_bits,
+            4.0,
+            12.0,
+        )?;
+        check_f64("max_sequence_ppl", self.max_sequence_ppl, 8.0, 100.0)?;
+        check_f64(
+            "semantic_entropy_threshold_bits",
+            self.semantic_entropy_threshold_bits,
+            0.30,
+            2.50,
+        )?;
+        if !(100..=400).contains(&self.probe_timeout_ms) {
+            return Err(format!(
+                "INVALID_TIMEOUT: 'probe_timeout_ms'={} must be within [100, 400] ms",
+                self.probe_timeout_ms
+            ));
+        }
+        if !(250..=10_000).contains(&self.nmt_translate_timeout_ms) {
+            return Err(format!(
+                "INVALID_TIMEOUT: 'nmt_translate_timeout_ms'={} must be within [250, 10000] ms",
+                self.nmt_translate_timeout_ms
+            ));
+        }
+        Ok(())
+    }
+
+    /// Resolves config from `config/abibo_perplexity_config.json`, workspace `.env`, and
+    /// `OCTOPUS_PPL_*` / `OCTOPUS_TRANSLATE_URL` environment variables (validated fail-closed).
+    #[must_use]
+    pub fn load_for_workspace(workspace_root: &Path) -> Self {
+        let mut cfg = Self::default();
+
+        // 1. Load persisted JSON profile if present and valid
+        let cfg_path = workspace_root
+            .join("config")
+            .join("abibo_perplexity_config.json");
+        if let Ok(raw) = std::fs::read_to_string(&cfg_path) {
+            if let Ok(parsed) = serde_json::from_str::<Self>(&raw) {
+                if parsed.validate().is_ok() {
+                    cfg = parsed;
+                }
+            }
+        }
+
+        // 2. Apply workspace `.env` fallback for OCTOPUS_TRANSLATE_URL and OCTOPUS_PPL_PRESET
+        let lookup = |key: &str| -> Option<String> {
+            std::env::var(key)
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+                .or_else(|| read_dotenv_key_in(workspace_root, key))
+        };
+
+        if let Some(preset_str) = lookup("OCTOPUS_PPL_PRESET") {
+            if let Some(p) = PerplexityWorkloadPreset::from_str_loose(&preset_str) {
+                let mut preset_cfg = Self::for_preset(p);
+                preset_cfg.local_nmt_url = cfg.local_nmt_url.clone();
+                preset_cfg.enable_local_ollama_fallback = cfg.enable_local_ollama_fallback;
+                cfg = preset_cfg;
+            }
+        }
+        if let Some(url) = lookup("OCTOPUS_TRANSLATE_URL") {
+            if validate_loopback_translate_url(&url).is_ok() {
+                cfg.local_nmt_url = Some(url);
+            }
+        }
+        if let Some(v) = lookup("OCTOPUS_NMT_PROBE_TIMEOUT_MS").and_then(|s| s.parse::<u64>().ok())
+        {
+            cfg.probe_timeout_ms = v.clamp(100, 400);
+        }
+        if let Some(v) = lookup("OCTOPUS_NMT_TIMEOUT_MS").and_then(|s| s.parse::<u64>().ok()) {
+            cfg.nmt_translate_timeout_ms = v.clamp(250, 10_000);
+        }
+        if let Some(v) = lookup("OCTOPUS_PPL_GCG_THRESHOLD").and_then(|s| s.parse::<f64>().ok()) {
+            if v.is_finite() && (8.0..=35.0).contains(&v) {
+                cfg.gcg_ppl_threshold = v;
+                cfg.preset = PerplexityWorkloadPreset::Custom;
+            }
+        }
+        if let Some(v) =
+            lookup("OCTOPUS_PPL_CLIFF_PPL_THRESHOLD").and_then(|s| s.parse::<f64>().ok())
+        {
+            if v.is_finite() && (6.0..=30.0).contains(&v) && v <= cfg.gcg_ppl_threshold {
+                cfg.gcg_cliff_ppl_threshold = v;
+                cfg.preset = PerplexityWorkloadPreset::Custom;
+            }
+        }
+        if let Some(v) = lookup("OCTOPUS_PPL_CLIFF_RATIO").and_then(|s| s.parse::<f64>().ok()) {
+            if v.is_finite() && (1.10..=3.50).contains(&v) {
+                cfg.gcg_cliff_ratio_threshold = v;
+                cfg.preset = PerplexityWorkloadPreset::Custom;
+            }
+        }
+        if let Some(v) = lookup("OCTOPUS_PPL_JITTER_THRESHOLD").and_then(|s| s.parse::<f64>().ok())
+        {
+            if v.is_finite() && (0.15..=0.90).contains(&v) {
+                cfg.jitter_threshold = v;
+                cfg.preset = PerplexityWorkloadPreset::Custom;
+            }
+        }
+        if let Some(v) =
+            lookup("OCTOPUS_PPL_ACTION_SURPRISAL_BITS").and_then(|s| s.parse::<f64>().ok())
+        {
+            if v.is_finite() && (4.0..=12.0).contains(&v) {
+                cfg.max_step_surprisal_bits = v;
+                cfg.preset = PerplexityWorkloadPreset::Custom;
+            }
+        }
+        if let Some(v) = lookup("OCTOPUS_PPL_ACTION_SEQ_LIMIT").and_then(|s| s.parse::<f64>().ok())
+        {
+            if v.is_finite() && (8.0..=100.0).contains(&v) {
+                cfg.max_sequence_ppl = v;
+                cfg.preset = PerplexityWorkloadPreset::Custom;
+            }
+        }
+        if let Some(v) =
+            lookup("OCTOPUS_PPL_SEMANTIC_ENTROPY_BITS").and_then(|s| s.parse::<f64>().ok())
+        {
+            if v.is_finite() && (0.30..=2.50).contains(&v) {
+                cfg.semantic_entropy_threshold_bits = v;
+                cfg.preset = PerplexityWorkloadPreset::Custom;
+            }
+        }
+
+        if cfg.validate().is_ok() {
+            cfg
+        } else {
+            Self::default()
+        }
+    }
+
+    /// Persists validated tuning config to `<workspace_root>/config/abibo_perplexity_config.json`.
+    pub fn save_to_workspace(&self, workspace_root: &Path) -> Result<PathBuf, String> {
+        self.validate()?;
+        let config_dir = workspace_root.join("config");
+        std::fs::create_dir_all(&config_dir)
+            .map_err(|e| format!("Failed to create config directory: {e}"))?;
+        let path = config_dir.join("abibo_perplexity_config.json");
+        let pretty = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize perplexity config: {e}"))?;
+        std::fs::write(&path, pretty)
+            .map_err(|e| format!("Failed to write perplexity config {}: {e}", path.display()))?;
+        Ok(path)
+    }
+
+    #[must_use]
+    pub fn to_translation_layer(&self) -> CanonicalTranslationLayer {
+        CanonicalTranslationLayer::new(TranslationLayerConfig {
+            local_nmt_url: self
+                .local_nmt_url
+                .as_ref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            enable_local_ollama_fallback: self.enable_local_ollama_fallback,
+            probe_timeout_ms: self.probe_timeout_ms,
+        })
+        .with_translate_timeout_ms(self.nmt_translate_timeout_ms)
+    }
+
+    #[must_use]
+    pub fn to_windowed_analyzer(&self) -> WindowedPerplexityAnalyzer {
+        WindowedPerplexityAnalyzer {
+            gcg_ppl_threshold: self.gcg_ppl_threshold,
+            gcg_cliff_ppl_threshold: self.gcg_cliff_ppl_threshold,
+            gcg_cliff_ratio_threshold: self.gcg_cliff_ratio_threshold,
+            jitter_threshold: self.jitter_threshold,
+        }
+    }
+}
+
 /// Thread-safe coordinator unifying Canonical Translation Pivot + 4-Layer Perplexity & Semantic Entropy.
 pub struct PerplexityDefenseCoordinator {
-    translation: CanonicalTranslationLayer,
-    windowed_ppl: WindowedPerplexityAnalyzer,
+    config: RwLock<PerplexityTuningConfig>,
+    translation: RwLock<CanonicalTranslationLayer>,
+    windowed_ppl: RwLock<WindowedPerplexityAnalyzer>,
     action_trajectory: ActionTrajectoryPerplexity,
-    semantic_entropy: SemanticEntropyGate,
+    semantic_entropy: RwLock<SemanticEntropyGate>,
 }
 
 impl Default for PerplexityDefenseCoordinator {
@@ -836,17 +1170,87 @@ impl Default for PerplexityDefenseCoordinator {
 impl PerplexityDefenseCoordinator {
     #[must_use]
     pub fn new(translation: CanonicalTranslationLayer) -> Self {
+        let mut cfg = PerplexityTuningConfig::default();
+        cfg.local_nmt_url = translation.config().local_nmt_url.clone();
+        cfg.enable_local_ollama_fallback = translation.config().enable_local_ollama_fallback;
+        cfg.probe_timeout_ms = translation.config().probe_timeout_ms;
+        cfg.nmt_translate_timeout_ms = translation.translate_timeout_ms();
         Self {
-            translation,
-            windowed_ppl: WindowedPerplexityAnalyzer::default(),
+            windowed_ppl: RwLock::new(cfg.to_windowed_analyzer()),
+            semantic_entropy: RwLock::new(SemanticEntropyGate {
+                threshold_bits: cfg.semantic_entropy_threshold_bits,
+            }),
+            config: RwLock::new(cfg),
+            translation: RwLock::new(translation),
             action_trajectory: ActionTrajectoryPerplexity::default(),
-            semantic_entropy: SemanticEntropyGate::default(),
         }
     }
 
+    /// Constructs a coordinator loaded from `<workspace_root>/config/abibo_perplexity_config.json`,
+    /// workspace `.env`, and process environment overrides.
     #[must_use]
-    pub fn translation(&self) -> &CanonicalTranslationLayer {
-        &self.translation
+    pub fn for_workspace(workspace_root: &Path) -> Self {
+        let cfg = PerplexityTuningConfig::load_for_workspace(workspace_root);
+        Self::from_tuning_config(cfg).unwrap_or_default()
+    }
+
+    pub fn from_tuning_config(cfg: PerplexityTuningConfig) -> Result<Self, String> {
+        cfg.validate()?;
+        let tl = cfg.to_translation_layer();
+        let wp = cfg.to_windowed_analyzer();
+        let se = SemanticEntropyGate {
+            threshold_bits: cfg.semantic_entropy_threshold_bits,
+        };
+        Ok(Self {
+            config: RwLock::new(cfg),
+            translation: RwLock::new(tl),
+            windowed_ppl: RwLock::new(wp),
+            action_trajectory: ActionTrajectoryPerplexity::default(),
+            semantic_entropy: RwLock::new(se),
+        })
+    }
+
+    #[must_use]
+    pub fn tuning_config(&self) -> PerplexityTuningConfig {
+        self.config.read().clone()
+    }
+
+    /// Validates and atomically applies a new runtime tuning configuration across all 4 layers
+    /// and the loopback translation layer, optionally persisting to `config/abibo_perplexity_config.json`.
+    pub fn update_tuning_config(
+        &self,
+        mut next: PerplexityTuningConfig,
+        persist_workspace: Option<&Path>,
+    ) -> Result<PerplexityTuningConfig, String> {
+        next.local_nmt_url = next
+            .local_nmt_url
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        next.validate()?;
+        if let Some(root) = persist_workspace {
+            next.save_to_workspace(root)?;
+        }
+        let tl = next.to_translation_layer();
+        let wp = next.to_windowed_analyzer();
+        let se = SemanticEntropyGate {
+            threshold_bits: next.semantic_entropy_threshold_bits,
+        };
+        *self.translation.write() = tl;
+        *self.windowed_ppl.write() = wp;
+        *self.semantic_entropy.write() = se;
+        *self.config.write() = next.clone();
+        Ok(next)
+    }
+
+    #[must_use]
+    pub fn probe_nmt_health(&self) -> NmtHealthStatus {
+        self.translation.read().probe_nmt_health()
+    }
+
+    #[must_use]
+    pub fn translation(&self) -> CanonicalTranslationLayer {
+        self.translation.read().clone()
     }
 
     #[must_use]
@@ -855,8 +1259,28 @@ impl PerplexityDefenseCoordinator {
     }
 
     #[must_use]
-    pub fn semantic_entropy(&self) -> &SemanticEntropyGate {
-        &self.semantic_entropy
+    pub fn observe_action_trajectory(
+        &self,
+        nhi_id: &str,
+        current_action: AgentActionClass,
+        agent_tainted: bool,
+    ) -> ActionTrajectoryVerdict {
+        let cfg = self.config.read();
+        let max_step = cfg.max_step_surprisal_bits;
+        let max_seq = cfg.max_sequence_ppl;
+        drop(cfg);
+        self.action_trajectory.observe_and_evaluate_with_limits(
+            nhi_id,
+            current_action,
+            agent_tainted,
+            max_step,
+            max_seq,
+        )
+    }
+
+    #[must_use]
+    pub fn semantic_entropy(&self) -> SemanticEntropyGate {
+        *self.semantic_entropy.read()
     }
 
     /// Analyzes arbitrary text (prompt, RAG doc, memory file, or tool payload) through the
@@ -867,20 +1291,20 @@ impl PerplexityDefenseCoordinator {
         text: &str,
         allow_loopback_nmt: bool,
     ) -> PerplexityTranslationReport {
+        let tl = self.translation.read().clone();
+        let wp = self.windowed_ppl.read().clone();
+
         let translation = if allow_loopback_nmt {
-            self.translation.inspect_with_live_pivot(text)
+            tl.inspect_with_live_pivot(text)
         } else {
-            self.translation.inspect_offline(text)
+            tl.inspect_offline(text)
         };
 
-        let source_perplexity = self
-            .windowed_ppl
-            .analyze(text, translation.profile.language_tier);
+        let source_perplexity = wp.analyze(text, translation.profile.language_tier);
 
         // If a canonical English pivot differs from raw text, also run windowed PPL on the pivot
         let pivot_perplexity = if translation.canonical_english_pivot != text {
-            self.windowed_ppl
-                .analyze(&translation.canonical_english_pivot, LanguageTier::English)
+            wp.analyze(&translation.canonical_english_pivot, LanguageTier::English)
         } else {
             source_perplexity.clone()
         };

@@ -39,8 +39,8 @@ pub use memory_provenance::{
 pub use perplexity_guard::{
     classify_mcp_action, ActionTrajectoryPerplexity, ActionTrajectoryVerdict, AgentActionClass,
     CandidateActionProposal, PerplexityDefenseCoordinator, PerplexityTranslationReport,
-    SemanticEntropyGate, SemanticEntropyVerdict, WindowedPerplexityAnalyzer,
-    WindowedPerplexityVerdict,
+    PerplexityTuningConfig, PerplexityWorkloadPreset, SemanticEntropyGate, SemanticEntropyVerdict,
+    WindowedPerplexityAnalyzer, WindowedPerplexityVerdict,
 };
 pub use quantum_zeno_guard::{QuantumZenoGuard, QuantumZenoVerdict, SingleUseCapabilityToken};
 pub use relativity_causality::{RelativityCausalityGate, RelativityConfig, RelativityVerdict};
@@ -54,9 +54,10 @@ pub use thermodynamics_taint::{
     ThermodynamicTaintEngine, ThermodynamicsVerdict,
 };
 pub use translation_layer::{
-    detect_language_and_script, fold_confusables_and_diacritics, validate_loopback_translate_url,
-    verify_translation_integrity, CanonicalTranslationLayer, DetectedLanguageProfile, LanguageTier,
-    ScriptFamily, TranslationBackend, TranslationInspectionVerdict, TranslationLayerConfig,
+    detect_language_and_script, fold_confusables_and_diacritics, read_dotenv_key_in,
+    validate_loopback_translate_url, verify_translation_integrity, CanonicalTranslationLayer,
+    DetectedLanguageProfile, LanguageTier, NmtHealthStatus, ScriptFamily, TranslationBackend,
+    TranslationInspectionVerdict, TranslationLayerConfig,
 };
 
 #[cfg(test)]
