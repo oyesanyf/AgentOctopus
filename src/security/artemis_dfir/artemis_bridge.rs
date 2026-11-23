@@ -228,7 +228,7 @@ pub fn run_local_artemis_collection(
     #[cfg(windows)]
     {
         use crate::security::console_defense::CommandConsoleExt;
-        cmd.no_window();
+        cmd.enforce_no_window();
     }
 
     let mut child = cmd
