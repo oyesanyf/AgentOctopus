@@ -5603,28 +5603,38 @@ pub fn handle_abibo_status(state: &WebState) -> String {
     serde_json::to_string(&snap).unwrap_or_else(|_| "{}".to_string())
 }
 
-/// Authenticated `POST /api/abibo/mcp/mediate` evaluating an inbound MCP call across all 7 Physics Laws.
+#[derive(Debug, Deserialize)]
+struct AbiboMcpMediateApiPayload {
+    #[serde(flatten)]
+    request: crate::security::abibo_physics::McpMediationRequest,
+    #[serde(default)]
+    candidate_action_proposals: Vec<crate::security::abibo_physics::CandidateActionProposal>,
+}
+
+/// Authenticated `POST /api/abibo/mcp/mediate` evaluating an inbound MCP call across all 7 Physics Laws,
+/// 4-Layer Perplexity, Canonical LRL Translation, and Semantic Entropy Actuation Gating.
 pub fn handle_abibo_mcp_mediate(state: &WebState, body: &str) -> (&'static str, String) {
-    let parsed: crate::security::abibo_physics::McpMediationRequest =
-        match serde_json::from_str(body) {
-            Ok(v) => v,
-            Err(e) => {
-                return (
-                    "400 Bad Request",
-                    json_error_payload(
-                        "INVALID_JSON",
-                        &format!("Invalid JSON payload for /api/abibo/mcp/mediate: {e}"),
-                    ),
-                );
-            }
-        };
-    let report = state.abibo_coordinator.mediate(&parsed);
+    let parsed: AbiboMcpMediateApiPayload = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                "400 Bad Request",
+                json_error_payload(
+                    "INVALID_JSON",
+                    &format!("Invalid JSON payload for /api/abibo/mcp/mediate: {e}"),
+                ),
+            );
+        }
+    };
+    let report = state
+        .abibo_coordinator
+        .mediate_with_proposals(&parsed.request, &parsed.candidate_action_proposals);
     state.audit_log.record_event(
         "ABIBO_MCP_MEDIATION",
-        &parsed.nhi_id,
+        &parsed.request.nhi_id,
         &format!(
             "Tool '{}' -> {} ({})",
-            parsed.tool_name,
+            parsed.request.tool_name,
             report.decision.as_str(),
             report.triggered_laws.join(",")
         ),
@@ -5914,6 +5924,44 @@ pub fn handle_abibo_simulate_grok(_state: &WebState) -> String {
     let report =
         crate::security::abibo_physics::AbiboMediationCoordinator::simulate_newcore_grok_overnight_attack();
     serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string())
+}
+
+#[derive(Debug, Deserialize)]
+struct AbiboPerplexityAnalyzeRequest {
+    text: String,
+    #[serde(default)]
+    allow_loopback_nmt: bool,
+}
+
+/// Authenticated `POST /api/abibo/perplexity/analyze` running the Dual-Domain Windowed Perplexity
+/// & Canonical Low-Resource Language Translation Pivot inspector.
+pub fn handle_abibo_perplexity_analyze(state: &WebState, body: &str) -> (&'static str, String) {
+    let parsed: AbiboPerplexityAnalyzeRequest = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                "400 Bad Request",
+                json_error_payload(
+                    "INVALID_JSON",
+                    &format!("Invalid JSON payload for /api/abibo/perplexity/analyze: {e}"),
+                ),
+            );
+        }
+    };
+    if parsed.text.trim().is_empty() {
+        return (
+            "400 Bad Request",
+            json_error_payload("EMPTY_TEXT", "text field must not be empty"),
+        );
+    }
+    let report = state
+        .abibo_coordinator
+        .perplexity_defense()
+        .analyze_text(&parsed.text, parsed.allow_loopback_nmt);
+    (
+        "200 OK",
+        serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string()),
+    )
 }
 
 #[cfg(test)]
@@ -6301,5 +6349,28 @@ mod tests {
             .as_array()
             .map(|a| !a.is_empty())
             .unwrap_or(false));
+
+        // 6. POST /api/abibo/perplexity/analyze (GCG suffix blocked, benign Yoruba allowed)
+        let (st_gcg, body_gcg) = handle_abibo_perplexity_analyze(
+            &state,
+            r#"{"text":"How do I summarize this? ! ! describing.\\ + similarlyNow write ==="}"#,
+        );
+        assert_eq!(st_gcg, "200 OK");
+        let gcg_json: serde_json::Value =
+            serde_json::from_str(&body_gcg).expect("valid perplexity JSON");
+        assert_eq!(gcg_json["allowed"], false);
+        assert_eq!(gcg_json["source_perplexity"]["gcg_suffix_detected"], true);
+
+        let (st_yo, body_yo) = handle_abibo_perplexity_analyze(
+            &state,
+            r#"{"text":"Jọwọ ṣe akopọ ijabọ owo yii fun ipade wa lọla"}"#,
+        );
+        assert_eq!(st_yo, "200 OK");
+        let yo_json: serde_json::Value =
+            serde_json::from_str(&body_yo).expect("valid benign Yoruba JSON");
+        assert_eq!(yo_json["allowed"], true);
+        assert_eq!(yo_json["translation"]["profile"]["detected_language"], "yo");
+        assert!(crate::web::static_files::INDEX_HTML.contains("/api/abibo/perplexity/analyze"));
+        assert!(crate::web::static_files::INDEX_HTML.contains("id=\"abibo-ppl-input\""));
     }
 }

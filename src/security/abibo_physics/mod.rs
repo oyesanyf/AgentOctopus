@@ -15,11 +15,13 @@ pub mod half_life_decay;
 pub mod hamiltonian_barrier;
 pub mod mcp_gateway;
 pub mod memory_provenance;
+pub mod perplexity_guard;
 pub mod quantum_zeno_guard;
 pub mod relativity_causality;
 pub mod schema_pinning;
 pub mod spectral_beacon;
 pub mod thermodynamics_taint;
+pub mod translation_layer;
 
 pub use gauss_flux_cage::{GaussFluxCage, GaussFluxVerdict};
 pub use half_life_decay::{HalfLifeVerdict, RadioactiveHalfLifeEngine};
@@ -34,6 +36,12 @@ pub use memory_provenance::{
     MemoryAttestationRecord, MemoryPlane, MemoryProvenanceGuard, MemoryProvenanceVerdict,
     MemoryWatcherHandle,
 };
+pub use perplexity_guard::{
+    classify_mcp_action, ActionTrajectoryPerplexity, ActionTrajectoryVerdict, AgentActionClass,
+    CandidateActionProposal, PerplexityDefenseCoordinator, PerplexityTranslationReport,
+    SemanticEntropyGate, SemanticEntropyVerdict, WindowedPerplexityAnalyzer,
+    WindowedPerplexityVerdict,
+};
 pub use quantum_zeno_guard::{QuantumZenoGuard, QuantumZenoVerdict, SingleUseCapabilityToken};
 pub use relativity_causality::{RelativityCausalityGate, RelativityConfig, RelativityVerdict};
 pub use schema_pinning::{
@@ -44,6 +52,11 @@ pub use spectral_beacon::{SpectralBeaconDetector, SpectralBeaconVerdict};
 pub use thermodynamics_taint::{
     payload_kl_divergence_vs_prose, shannon_entropy_bits, HumanWorkResetProof, SignedTaintHeader,
     ThermodynamicTaintEngine, ThermodynamicsVerdict,
+};
+pub use translation_layer::{
+    detect_language_and_script, fold_confusables_and_diacritics, validate_loopback_translate_url,
+    verify_translation_integrity, CanonicalTranslationLayer, DetectedLanguageProfile, LanguageTier,
+    ScriptFamily, TranslationBackend, TranslationInspectionVerdict, TranslationLayerConfig,
 };
 
 #[cfg(test)]

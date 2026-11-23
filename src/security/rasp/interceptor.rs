@@ -249,8 +249,36 @@ impl PromptInvocationInterceptor {
             }
         }
 
-        // 4. Multilingual evaluation: Legitimate foreign language prompts are cleanly permitted
-        // while tracking suspect taint if unknown tokens appear.
+        // 4. Multilingual & Dual-Domain Perplexity Inspection (closes foreign-language bypass
+        // while keeping legitimate low-resource, non-native, dyslexic, and code prompts clean).
+        let ppl_coord = crate::security::abibo_physics::PerplexityDefenseCoordinator::default();
+        let ppl_report = ppl_coord.analyze_text(prompt, false);
+        if ppl_report.translation.breakin_detected {
+            let cat = if ppl_report.translation.cross_script_smuggling_detected {
+                RaspThreatCategory::SteganographySmuggling
+            } else {
+                RaspThreatCategory::PromptInjection
+            };
+            let dec = self.policy_engine.evaluate_mitigation_action(
+                cat,
+                &ppl_report.translation.reason,
+                subject,
+                "RASP-PROMPT-LRL-004",
+            );
+            return (dec, Some(cat), TaintLevel::Malicious);
+        }
+        if !ppl_report.source_perplexity.allowed || !ppl_report.pivot_perplexity.allowed {
+            let cat = RaspThreatCategory::PromptInjection;
+            let dec = self.policy_engine.evaluate_mitigation_action(
+                cat,
+                &ppl_report.reason,
+                subject,
+                "RASP-PROMPT-PPL-005",
+            );
+            return (dec, Some(cat), TaintLevel::Malicious);
+        }
+
+        // Legitimate foreign-language prompts with zero adversarial/perplexity signals pass cleanly
         let is_foreign_lang = language_code.map_or(false, |code| {
             let c = code.trim().to_ascii_lowercase();
             !c.is_empty() && c != "en" && c != "english"
@@ -262,7 +290,6 @@ impl PromptInvocationInterceptor {
                 .config()
                 .enable_multilingual_semantic_pass
         {
-            // Multilingual instructions pass cleanly if no adversarial signatures exist
             return (
                 RaspDecision::Allow {
                     taint_level: TaintLevel::Clean,

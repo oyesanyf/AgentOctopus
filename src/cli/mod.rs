@@ -892,6 +892,7 @@ pub fn execute_abibo_cli(sub_args: &[String]) -> i32 {
                  \x20 octopus abibo artemis-toml [--out <DIR>]  Print valid puffyCid/artemis v0.21 TOML recipe\n\
                  \x20 octopus abibo ingest-artemis <PATH>       Ingest Artemis v0.21 JSONL/JSON & compile Cedar forbid rules\n\
                  \x20 octopus abibo simulate-grok               Run NewCore 31-request overnight xAI Grok attack simulation\n\
+                 \x20 octopus abibo analyze-perplexity --text <TEXT> Analyze text with 4-Layer Perplexity + LRL Translation Pivot\n\
                  \x20 octopus abibo lock-workstation            Trigger Spacetime Event Horizon (epoch N -> N + 1)\n\
                  \x20 octopus abibo unlock-workstation          Unlock workstation under fresh human session epoch"
             );
@@ -955,6 +956,28 @@ pub fn execute_abibo_cli(sub_args: &[String]) -> i32 {
                 serde_json::to_string_pretty(&report).unwrap_or_default()
             );
             0
+        }
+        "analyze-perplexity" => {
+            let text = sub_args
+                .windows(2)
+                .find(|w| w[0] == "--text" || w[0] == "-t")
+                .map(|w| w[1].clone())
+                .or_else(|| sub_args.get(1).filter(|s| !s.starts_with('-')).cloned());
+            let Some(payload) = text else {
+                eprintln!("[octopus] error: missing --text <TEXT> for 'abibo analyze-perplexity'");
+                return EXIT_PREFLIGHT_DENIED;
+            };
+            let coord = AbiboMediationCoordinator::default();
+            let report = coord.perplexity_defense().analyze_text(&payload, true);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            );
+            if report.allowed {
+                0
+            } else {
+                EXIT_PREFLIGHT_DENIED
+            }
         }
         "lock-workstation" => {
             let coord = AbiboMediationCoordinator::default();
