@@ -8,6 +8,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HF_HOME=/cache/hf \
+    TOKENIZERS_PARALLELISM=false \
+    RAYON_NUM_THREADS=2 \
+    OMP_NUM_THREADS=6 \
+    MKL_NUM_THREADS=6 \
+    OPENBLAS_NUM_THREADS=6 \
     OCTOPUS_NMT_MODEL=facebook/nllb-200-distilled-600M \
     OCTOPUS_NMT_INT8=1 \
     OCTOPUS_NMT_PORT=5050
@@ -19,17 +24,17 @@ RUN groupadd --gid 10001 nmt \
 
 WORKDIR /app
 
-# Install CPU-only PyTorch first so local GPU VRAM is never touched
+# Install patched CPU-only PyTorch & NMT stack so local GPU VRAM is never touched
 RUN pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cpu \
-        torch==2.6.0 \
+        torch==2.15.0 \
     && pip install --no-cache-dir \
-        transformers==4.49.0 \
-        sentencepiece==0.2.0 \
-        protobuf==5.29.3 \
-        fastapi==0.115.11 \
-        uvicorn==0.34.0 \
-        pydantic==2.10.6
+        transformers==5.24.0 \
+        sentencepiece==0.2.3 \
+        protobuf==7.36.2 \
+        fastapi==0.165.0 \
+        uvicorn==0.54.0 \
+        pydantic==2.14.4
 
 COPY --chown=10001:10001 nllb_server.py /app/nllb_server.py
 
