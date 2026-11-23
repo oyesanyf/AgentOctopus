@@ -251,7 +251,7 @@ pub fn detect_ssrf_imds_or_cdp_in_args(arguments_json: &str) -> Option<String> {
                 if let Some(host) = parsed.host_str() {
                     let clean = host.trim_matches(['[', ']']);
                     if let Ok(ip) = clean.parse::<IpAddr>() {
-                        if is_restricted_rebinding_ip(ip) {
+                        if is_restricted_rebinding_ip(&ip) {
                             return Some(format!(
                                 "SSRF_RESTRICTED_IP_DENY: Blocked RFC1918/loopback/link-local/CGNAT IP '{ip}'"
                             ));
