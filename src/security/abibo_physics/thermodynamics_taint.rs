@@ -208,6 +208,19 @@ impl ThermodynamicTaintEngine {
         next
     }
 
+    /// Monotonically absorbs perplexity cliff, cross-script homoglyph, translation-subversion,
+    /// or offline low-resource language caution signals into Law 2 taint entropy ($\Delta S \ge 0$).
+    pub fn absorb_perplexity_and_translation_signals(
+        &self,
+        agent_id: &str,
+        taint_delta_bits: f64,
+    ) -> f64 {
+        if !taint_delta_bits.is_finite() || taint_delta_bits <= 0.0 {
+            return self.agent_entropy(agent_id);
+        }
+        self.raise_agent_entropy(agent_id, taint_delta_bits)
+    }
+
     /// Red-Team Upgrade #3: Cross-Agent transitive taint propagation (`S(dst) = max(S(dst), S(src))`).
     /// Prevents a tainted Agent A from laundering instructions through an untainted Agent B.
     pub fn propagate_cross_agent_taint(&self, source_agent: &str, target_agent: &str) -> f64 {

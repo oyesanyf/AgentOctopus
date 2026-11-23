@@ -100,6 +100,7 @@ jobs:
           cargo test --test universal_killswitch_tests --all-features
           cargo test --test kernel_sentinel_tests --all-features
           cargo test --test abibo_physics_artemis_tests --all-features
+          cargo test --test abibo_perplexity_translation_tests --all-features
 
       - name: Run SafeAgents 562-Case Misuse Simulation Suite
         run: cargo test --test safeagents_562_misuse_suite --all-features

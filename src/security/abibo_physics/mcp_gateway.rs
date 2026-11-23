@@ -17,6 +17,10 @@ use super::gauss_flux_cage::{GaussFluxCage, GaussFluxVerdict};
 use super::half_life_decay::{HalfLifeVerdict, RadioactiveHalfLifeEngine};
 use super::hamiltonian_barrier::{HamiltonianBarrierEngine, HamiltonianVerdict, PhaseSpaceState};
 use super::memory_provenance::MemoryProvenanceGuard;
+use super::perplexity_guard::{
+    classify_mcp_action, ActionTrajectoryVerdict, CandidateActionProposal,
+    PerplexityDefenseCoordinator, PerplexityTranslationReport, SemanticEntropyVerdict,
+};
 use super::quantum_zeno_guard::{QuantumZenoGuard, QuantumZenoVerdict, SingleUseCapabilityToken};
 use super::relativity_causality::{RelativityCausalityGate, RelativityVerdict};
 use super::schema_pinning::{McpToolManifest, McpToolSchemaPinRegistry, SchemaPinVerdict};
@@ -161,6 +165,9 @@ pub struct McpMediationReport {
     pub half_life: HalfLifeVerdict,
     pub spectral_beacon: SpectralBeaconVerdict,
     pub schema_pin: Option<SchemaPinVerdict>,
+    pub perplexity_translation: PerplexityTranslationReport,
+    pub action_trajectory: ActionTrajectoryVerdict,
+    pub semantic_entropy: SemanticEntropyVerdict,
     pub dlp_entity_count: usize,
     pub ssrf_blocked: bool,
     pub cedar_forbid_triggered: bool,
@@ -280,6 +287,7 @@ pub struct AbiboMediationCoordinator {
     spectral_beacon: SpectralBeaconDetector,
     schema_pins: McpToolSchemaPinRegistry,
     memory_provenance: Arc<MemoryProvenanceGuard>,
+    perplexity_defense: PerplexityDefenseCoordinator,
     agentjacking: AgentjackingGuard,
     dlp: SemanticDlpEngine,
     nhi_registry: RwLock<HashMap<String, NonHumanIdentityRecord>>,
@@ -325,6 +333,7 @@ impl AbiboMediationCoordinator {
             spectral_beacon: SpectralBeaconDetector::default(),
             schema_pins: McpToolSchemaPinRegistry::new(),
             memory_provenance: Arc::new(MemoryProvenanceGuard::default()),
+            perplexity_defense: PerplexityDefenseCoordinator::default(),
             agentjacking: AgentjackingGuard::new(),
             dlp: SemanticDlpEngine::default(),
             nhi_registry: RwLock::new(HashMap::new()),
@@ -402,6 +411,11 @@ impl AbiboMediationCoordinator {
     #[must_use]
     pub fn memory_provenance(&self) -> &Arc<MemoryProvenanceGuard> {
         &self.memory_provenance
+    }
+
+    #[must_use]
+    pub fn perplexity_defense(&self) -> &PerplexityDefenseCoordinator {
+        &self.perplexity_defense
     }
 
     /// Registers or updates a Non-Human Identity (NHI) in the default-closed vault.
@@ -532,9 +546,21 @@ impl AbiboMediationCoordinator {
     }
 
     /// Evaluates an inbound MCP tool invocation through all 7 Physics Laws, Red-Team Hardening,
-    /// AWS Cedar, SemanticDLP, SSRF/IMDS/CDP checks, and seals the outcome in RFC 6962 Merkle audit log.
+    /// 4-Layer Dual-Domain Perplexity + Canonical LRL Translation Pivot, AWS Cedar, SemanticDLP,
+    /// SSRF/IMDS/CDP checks, and seals the outcome in the RFC 6962 Merkle audit log.
     #[must_use]
     pub fn mediate(&self, req: &McpMediationRequest) -> McpMediationReport {
+        self.mediate_with_proposals(req, &[])
+    }
+
+    /// Evaluates an inbound MCP tool invocation together with optional sampled candidate action
+    /// proposals for Layer 4 Semantic Entropy abstention gating.
+    #[must_use]
+    pub fn mediate_with_proposals(
+        &self,
+        req: &McpMediationRequest,
+        candidate_proposals: &[CandidateActionProposal],
+    ) -> McpMediationReport {
         let now_unix = req.request_ts_unix.unwrap_or_else(unix_now_secs);
         self.expire_stale_hitl_tickets_at(now_unix);
 
@@ -594,7 +620,7 @@ impl AbiboMediationCoordinator {
             }
         }
 
-        // 0b. Bidirectional Inbound SSRF/IMDS/CDP + Semantic DLP inspection
+        // 0b. Bidirectional Inbound SSRF/IMDS/CDP + Canonical Translation Pivot + Perplexity + Cross-Lingual DLP
         let ssrf_err = detect_ssrf_imds_or_cdp_in_args(&clean_args);
         let ssrf_blocked = ssrf_err.is_some();
         if let Some(msg) = ssrf_err {
@@ -602,13 +628,57 @@ impl AbiboMediationCoordinator {
             deny_reasons.push(msg);
         }
 
-        let dlp_entities = self.dlp.scan_payload(&clean_args);
-        let dlp_entity_count = dlp_entities.len();
-        if dlp_entity_count > 0 && (req.external_egress || req.is_write_or_mutating) {
+        let perplexity_translation = self.perplexity_defense.analyze_text(&clean_args, true);
+        if perplexity_translation.total_taint_delta_bits > 0.0 {
+            self.thermodynamics
+                .absorb_perplexity_and_translation_signals(
+                    &req.nhi_id,
+                    perplexity_translation.total_taint_delta_bits,
+                );
+        }
+        if !perplexity_translation.allowed {
+            if perplexity_translation.translation.breakin_detected {
+                triggered_laws.push("CANONICAL_TRANSLATION_LRL_GUARD".to_string());
+            }
+            if !perplexity_translation.source_perplexity.allowed
+                || !perplexity_translation.pivot_perplexity.allowed
+            {
+                triggered_laws.push("WINDOWED_PERPLEXITY_GCG_GUARD".to_string());
+            }
+            deny_reasons.push(perplexity_translation.reason.clone());
+        }
+
+        // Cross-lingual DLP: inspect BOTH raw args AND canonical English translation pivot
+        let mut dlp_entity_count = self.dlp.scan_payload(&clean_args).len();
+        if perplexity_translation.translation.canonical_english_pivot != clean_args {
+            let pivot_hits = self
+                .dlp
+                .scan_payload(&perplexity_translation.translation.canonical_english_pivot)
+                .len();
+            dlp_entity_count = dlp_entity_count.max(pivot_hits);
+        }
+        let cross_lingual_dlp_synonym_hit = !perplexity_translation
+            .translation
+            .dlp_synonym_pivots
+            .is_empty();
+        if (dlp_entity_count > 0 || cross_lingual_dlp_synonym_hit)
+            && (req.external_egress || req.is_write_or_mutating)
+        {
             triggered_laws.push("SEMANTIC_DLP_EGRESS_GUARD".to_string());
-            deny_reasons.push(format!(
-                "SEMANTIC_DLP_DENY: Detected {dlp_entity_count} sensitive PII/secret/deal entities in outbound MCP arguments"
-            ));
+            if cross_lingual_dlp_synonym_hit && dlp_entity_count == 0 {
+                dlp_entity_count = perplexity_translation.translation.dlp_synonym_pivots.len();
+                deny_reasons.push(format!(
+                    "CROSS_LINGUAL_DLP_DENY: Sensitive non-English secret/deal terminology detected via canonical pivot ({})",
+                    perplexity_translation
+                        .translation
+                        .dlp_synonym_pivots
+                        .join(", ")
+                ));
+            } else {
+                deny_reasons.push(format!(
+                    "SEMANTIC_DLP_DENY: Detected {dlp_entity_count} sensitive PII/secret/deal entities in outbound MCP arguments"
+                ));
+            }
         }
 
         // 0c. Red-Team Upgrade #2: MCP Tool-Schema Rug-Pull Pinning
@@ -666,6 +736,36 @@ impl AbiboMediationCoordinator {
         if !thermodynamics.allowed {
             triggered_laws.push("LAW2_THERMODYNAMICS_TAINT".to_string());
             deny_reasons.push(thermodynamics.reason.clone());
+        }
+
+        // Layer 3 Perplexity: Language-Independent Action-Trajectory Markov Perplexity
+        let action_class = classify_mcp_action(
+            &req.tool_name,
+            &clean_args,
+            req.is_write_or_mutating,
+            req.touches_private_data,
+            req.external_egress,
+            req.privilege_escalation_risk,
+            req.persistence_risk,
+        );
+        let agent_is_tainted = thermodynamics.agent_entropy_bits >= 0.5;
+        let action_trajectory = self
+            .perplexity_defense
+            .action_trajectory()
+            .observe_and_evaluate(&req.nhi_id, action_class, agent_is_tainted);
+        if !action_trajectory.allowed {
+            triggered_laws.push("ACTION_TRAJECTORY_PERPLEXITY".to_string());
+            deny_reasons.push(action_trajectory.reason.clone());
+        }
+
+        // Layer 4 Perplexity: Semantic Entropy Actuation Gate (Hallucination / Slopsquatting)
+        let semantic_entropy = self.perplexity_defense.semantic_entropy().evaluate(
+            candidate_proposals,
+            req.is_write_or_mutating || req.privilege_escalation_risk || req.persistence_risk,
+        );
+        let semantic_entropy_abstain = semantic_entropy.abstain_and_require_hitl;
+        if semantic_entropy_abstain {
+            triggered_laws.push("SEMANTIC_ENTROPY_ABSTAIN".to_string());
         }
 
         // Law 3: Analytical Mechanics — Hamiltonian Phase-Space Separatrix + Discrete CBF + OrbWeb
@@ -773,10 +873,18 @@ impl AbiboMediationCoordinator {
                 ),
             };
             (McpMediationDecision::Denied, qv)
-        } else if req.is_write_or_mutating || req.privilege_escalation_risk || req.persistence_risk
+        } else if req.is_write_or_mutating
+            || req.privilege_escalation_risk
+            || req.persistence_risk
+            || semantic_entropy_abstain
         {
-            // Mutating/write actions require a valid single-use No-Cloning token OR out-of-band HITL approval (180s TTL)
-            if let Some(ref tok) = req.capability_token {
+            // Mutating/write actions require a valid single-use No-Cloning token OR out-of-band HITL approval (180s TTL).
+            // High semantic entropy ALWAYS forces fresh out-of-band human disambiguation before actuation.
+            if let Some(tok) = req
+                .capability_token
+                .as_ref()
+                .filter(|_| !semantic_entropy_abstain)
+            {
                 let qv = self.quantum_zeno.consume_once(
                     tok,
                     &req.nhi_id,
@@ -886,6 +994,9 @@ impl AbiboMediationCoordinator {
             half_life,
             spectral_beacon,
             schema_pin,
+            perplexity_translation,
+            action_trajectory,
+            semantic_entropy,
             dlp_entity_count,
             ssrf_blocked,
             cedar_forbid_triggered,
@@ -914,12 +1025,22 @@ impl AbiboMediationCoordinator {
         let (aj_verdict, encapsulated) =
             self.agentjacking
                 .sanitize_and_isolate_context(agent_id, source_tool, raw_output);
-        let injection_neutralized = !aj_verdict.is_allowed || echoleak_markdown_defanged;
+        let ppl_trans = self.perplexity_defense.analyze_text(raw_output, false);
+        let injection_neutralized =
+            !aj_verdict.is_allowed || echoleak_markdown_defanged || !ppl_trans.allowed;
 
-        // Monotonically absorb untrusted output taint into Law 2 Thermodynamics
+        // Monotonically absorb untrusted output taint + perplexity/LRL signals into Law 2
         let mut resulting_entropy = self
             .thermodynamics
             .absorb_untrusted_input(agent_id, raw_output, false, false);
+        if ppl_trans.total_taint_delta_bits > 0.0 {
+            resulting_entropy = self
+                .thermodynamics
+                .absorb_perplexity_and_translation_signals(
+                    agent_id,
+                    ppl_trans.total_taint_delta_bits,
+                );
+        }
         if injection_neutralized {
             resulting_entropy = self.thermodynamics.raise_agent_entropy(agent_id, 2.0);
         }

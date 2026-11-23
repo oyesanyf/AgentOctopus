@@ -322,17 +322,23 @@ pub use virtual_patch_shield::{
 };
 
 pub use abibo_physics::{
-    detect_ssrf_imds_or_cdp_in_args, AbiboMediationCoordinator, AbiboMerkleAuditRecord,
-    AbiboStatusSnapshot, DefangedToolResponse, GaussFluxCage, GaussFluxVerdict, HalfLifeVerdict,
-    HamiltonianBarrierEngine, HamiltonianVerdict, HitlApprovalTicket, HitlTicketStatus,
-    HumanWorkResetProof, McpMediationDecision, McpMediationReport, McpMediationRequest,
-    McpToolManifest, McpToolSchemaPinRegistry, MemoryAttestationRecord, MemoryPlane,
-    MemoryProvenanceGuard, MemoryProvenanceVerdict, NewCoreGrokSimulationReport,
-    NonHumanIdentityRecord, PhaseSpaceState, PinnedToolSchemaRecord, QuantumZenoGuard,
+    classify_mcp_action, detect_language_and_script, detect_ssrf_imds_or_cdp_in_args,
+    fold_confusables_and_diacritics, validate_loopback_translate_url, verify_translation_integrity,
+    AbiboMediationCoordinator, AbiboMerkleAuditRecord, AbiboStatusSnapshot,
+    ActionTrajectoryPerplexity, ActionTrajectoryVerdict, AgentActionClass, CandidateActionProposal,
+    CanonicalTranslationLayer, DefangedToolResponse, DetectedLanguageProfile, GaussFluxCage,
+    GaussFluxVerdict, HalfLifeVerdict, HamiltonianBarrierEngine, HamiltonianVerdict,
+    HitlApprovalTicket, HitlTicketStatus, HumanWorkResetProof, LanguageTier, McpMediationDecision,
+    McpMediationReport, McpMediationRequest, McpToolManifest, McpToolSchemaPinRegistry,
+    MemoryAttestationRecord, MemoryPlane, MemoryProvenanceGuard, MemoryProvenanceVerdict,
+    NewCoreGrokSimulationReport, NonHumanIdentityRecord, PerplexityDefenseCoordinator,
+    PerplexityTranslationReport, PhaseSpaceState, PinnedToolSchemaRecord, QuantumZenoGuard,
     QuantumZenoVerdict, RadioactiveHalfLifeEngine, RelativityCausalityGate, RelativityConfig,
-    RelativityVerdict, SchemaPinVerdict, SignedTaintHeader, SingleUseCapabilityToken,
-    SpectralBeaconDetector, SpectralBeaconVerdict, ThermodynamicTaintEngine, ThermodynamicsVerdict,
-    DEFAULT_HITL_TTL_SECS,
+    RelativityVerdict, SchemaPinVerdict, ScriptFamily, SemanticEntropyGate, SemanticEntropyVerdict,
+    SignedTaintHeader, SingleUseCapabilityToken, SpectralBeaconDetector, SpectralBeaconVerdict,
+    ThermodynamicTaintEngine, ThermodynamicsVerdict, TranslationBackend,
+    TranslationInspectionVerdict, TranslationLayerConfig, WindowedPerplexityAnalyzer,
+    WindowedPerplexityVerdict, DEFAULT_HITL_TTL_SECS,
 };
 pub use active_sockets::{query_live_os_process_sockets, OsQueryProcessSocketRow};
 pub use agent_hooks::{
