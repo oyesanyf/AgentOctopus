@@ -140,13 +140,11 @@ fn test_zero_false_positives_on_code_jargon_dyslexic_non_native_and_benign_lrl()
 #[test]
 fn test_low_resource_breakin_and_homoglyph_smuggling_close_rasp_multilingual_bypass() {
     let rasp = AgentRaspEngine::default();
-    let subject = AgentSecuritySubject {
-        agent_id: "multilingual_arm".to_string(),
-        role: "worker".to_string(),
-        trust_tier: RaspAgentTrustTier::UntrustedExternal,
-        session_id: "sess-lrl-01".to_string(),
-        ephemeral_token: None,
-    };
+    let subject = AgentSecuritySubject::new(
+        "multilingual_arm",
+        "worker",
+        RaspAgentTrustTier::UntrustedExternal,
+    );
 
     let attacks = [
         (
