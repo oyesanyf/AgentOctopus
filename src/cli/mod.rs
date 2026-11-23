@@ -77,6 +77,7 @@ pub fn print_octopus_help() {
          \x20 siquery      Run relational EDR / process / socket audit query\n\
          \x20 sbom-guard   Run UnifiedSecurityShield Gate 1 SBOM or Gate 2 runtime step check (alias: latent-shield)\n\
          \x20 kernel-patch Scan kernel CVEs/KEVs, inspect livepatch/reboot shield, or apply OS patches\n\
+         \x20 abibo        Run 7-Law Physics ABIBO containment, Artemis DFIR forensics & NewCore Grok simulator\n\
          \x20 isolate      Engage host-level network KillSwitch\n\
          \x20 restore      Disarm host-level network KillSwitch\n\
          \x20 service      Manage native OS background service\n\
@@ -122,7 +123,9 @@ pub fn parse_octopus_cli(args: &[String]) -> CliParseResult {
         "verify" | "--verify" | "--check" | "-v" | "status" | "protocols" | "hook"
         | "mcp-proxy" | "siquery" | "killswitch" | "isolate" | "engage" | "restore" | "disarm"
         | "service" | "--service" | "start" | "serve" | "ui" | "patch-kernel" | "kernel-patch"
-        | "sbom-guard" | "latent-shield" => return CliParseResult::Delegate(first.to_string()),
+        | "sbom-guard" | "latent-shield" | "abibo" => {
+            return CliParseResult::Delegate(first.to_string())
+        }
         other => {
             return CliParseResult::Invalid(format!("unknown subcommand or option '{}'", other));
         }
@@ -742,11 +745,33 @@ pub async fn dispatch_operational_subcommand(cli_args: &[String]) -> Option<i32>
                 }
             }
         }
+        "abibo" => {
+            let sub_args = cli_args.get(2..).unwrap_or(&[]);
+            Some(execute_abibo_cli(sub_args))
+        }
         "mcp-proxy" => {
+            use crate::security::abibo_physics::{
+                AbiboMediationCoordinator, McpMediationRequest, NonHumanIdentityRecord,
+            };
             use crate::security::agent_hooks::{
                 evaluate_hook_synchronously, format_mcp_error_response, parse_mcp_call_request,
+                HookEvaluationDecision,
             };
             use std::io::{BufRead, Write};
+
+            let abibo = AbiboMediationCoordinator::default();
+            abibo.register_nhi(NonHumanIdentityRecord {
+                nhi_id: "mcp_stdio_session".to_string(),
+                sponsor_human: "local_operator".to_string(),
+                provider: "mcp_stdio_proxy".to_string(),
+                allowed_tools: vec!["*".to_string()],
+                write_capable: true,
+                half_life_secs: Some(300),
+                revoked: false,
+                revoked_reason: None,
+                created_at_unix: crate::security::artemis_dfir::unix_now_secs(),
+            });
+
             let stdin = std::io::stdin();
             let mut stdout = std::io::stdout();
             for line in stdin.lock().lines() {
@@ -765,6 +790,77 @@ pub async fn dispatch_operational_subcommand(cli_args: &[String]) -> Option<i32>
                         let _ = stdout.flush();
                         continue;
                     }
+
+                    let tool_name = req
+                        .tool_name
+                        .clone()
+                        .unwrap_or_else(|| "unknown_tool".to_string());
+                    let tool_lower = tool_name.to_ascii_lowercase();
+                    let is_write = tool_lower.contains("write")
+                        || tool_lower.contains("send")
+                        || tool_lower.contains("delete")
+                        || tool_lower.contains("post")
+                        || tool_lower.contains("exec")
+                        || tool_lower.contains("shell")
+                        || tool_lower.contains("run")
+                        || tool_lower.contains("modify");
+                    let args_str = req
+                        .arguments
+                        .as_ref()
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "{}".to_string());
+                    let epoch = abibo.liveness().current_epoch();
+                    let med = abibo.mediate(&McpMediationRequest {
+                        nhi_id: req
+                            .session_id
+                            .clone()
+                            .unwrap_or_else(|| "mcp_stdio_session".to_string()),
+                        server_name: "mcp_stdio".to_string(),
+                        tool_name,
+                        arguments_json: args_str,
+                        is_write_or_mutating: is_write,
+                        touches_private_data: tool_lower.contains("mail")
+                            || tool_lower.contains("calendar")
+                            || tool_lower.contains("secret")
+                            || tool_lower.contains("cred"),
+                        external_egress: tool_lower.contains("http")
+                            || tool_lower.contains("fetch")
+                            || tool_lower.contains("send")
+                            || tool_lower.contains("post"),
+                        privilege_escalation_risk: tool_lower.contains("exec")
+                            || tool_lower.contains("shell")
+                            || tool_lower.contains("sudo"),
+                        persistence_risk: tool_lower.contains("cron")
+                            || tool_lower.contains("task")
+                            || tool_lower.contains("registry")
+                            || tool_lower.contains("memory"),
+                        d_trust: if is_write { 1.5 } else { 0.5 },
+                        request_epoch: epoch,
+                        request_ts_unix: None,
+                        capability_token: None,
+                        tool_manifest: None,
+                    });
+                    if !med.allowed {
+                        let rpc_id = req.rpc_id.clone().unwrap_or(serde_json::Value::Null);
+                        let abibo_dec = HookEvaluationDecision {
+                            allowed: false,
+                            rationale: format!(
+                                "[ABIBO 7-Law Physics Gateway: {}] {}",
+                                med.decision.as_str(),
+                                med.reason
+                            ),
+                            denied_by_layer: Some(med.triggered_laws.join(",")),
+                            remediation: Some(
+                                "Approve via out-of-band HITL queue or unlock human workstation session."
+                                    .to_string(),
+                            ),
+                            duration_us: 0,
+                        };
+                        let resp = format_mcp_error_response(&rpc_id, &abibo_dec);
+                        let _ = writeln!(stdout, "{}", resp);
+                        let _ = stdout.flush();
+                        continue;
+                    }
                 }
                 let _ = writeln!(stdout, "{}", line);
                 let _ = stdout.flush();
@@ -777,6 +873,115 @@ pub async fn dispatch_operational_subcommand(cli_args: &[String]) -> Option<i32>
                 other
             );
             Some(EXIT_PREFLIGHT_DENIED)
+        }
+    }
+}
+
+/// Executes `octopus abibo <subcommand>` for 7-Law Physics ABIBO & Artemis DFIR operations.
+pub fn execute_abibo_cli(sub_args: &[String]) -> i32 {
+    use crate::security::abibo_physics::AbiboMediationCoordinator;
+
+    let action = sub_args.first().map(|s| s.as_str()).unwrap_or("status");
+    match action {
+        "--help" | "-h" | "help" => {
+            println!(
+                "octopus abibo — 7-Law Physics ABIBO Containment & Artemis DFIR Forensics\n\n\
+                 USAGE:\n\
+                 \x20 octopus abibo status                      Show live 7-Law physics & liveness posture (JSON)\n\
+                 \x20 octopus abibo scan-forensics              Run native cross-OS Artemis DFIR sweep + Cedar synthesis\n\
+                 \x20 octopus abibo artemis-toml [--out <DIR>]  Print valid puffyCid/artemis v0.21 TOML recipe\n\
+                 \x20 octopus abibo ingest-artemis <PATH>       Ingest Artemis v0.21 JSONL/JSON & compile Cedar forbid rules\n\
+                 \x20 octopus abibo simulate-grok               Run NewCore 31-request overnight xAI Grok attack simulation\n\
+                 \x20 octopus abibo lock-workstation            Trigger Spacetime Event Horizon (epoch N -> N + 1)\n\
+                 \x20 octopus abibo unlock-workstation          Unlock workstation under fresh human session epoch"
+            );
+            0
+        }
+        "status" => {
+            let coord = AbiboMediationCoordinator::default();
+            let snap = coord.status_snapshot();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&snap).unwrap_or_default()
+            );
+            0
+        }
+        "scan-forensics" => {
+            let coord = AbiboMediationCoordinator::default();
+            let report = coord.artemis_engine().run_native_collection();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            );
+            0
+        }
+        "artemis-toml" => {
+            let out_dir = sub_args
+                .windows(2)
+                .find(|w| w[0] == "--out" || w[0] == "--out-dir")
+                .map(|w| w[1].as_str())
+                .unwrap_or("./artemis_abibo_out");
+            let coord = AbiboMediationCoordinator::default();
+            println!("{}", coord.artemis_engine().export_artemis_toml(out_dir));
+            0
+        }
+        "ingest-artemis" => {
+            let Some(path_str) = sub_args.get(1) else {
+                eprintln!("[octopus] error: missing <PATH> for 'abibo ingest-artemis'");
+                return EXIT_PREFLIGHT_DENIED;
+            };
+            let coord = AbiboMediationCoordinator::default();
+            match coord
+                .artemis_engine()
+                .ingest_external_artemis_file(std::path::Path::new(path_str), &[])
+            {
+                Ok(report) => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&report).unwrap_or_default()
+                    );
+                    0
+                }
+                Err(e) => {
+                    eprintln!("[octopus] error ingesting Artemis export: {e}");
+                    EXIT_SANDBOX_FAILURE
+                }
+            }
+        }
+        "simulate-grok" => {
+            let report = AbiboMediationCoordinator::simulate_newcore_grok_overnight_attack();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            );
+            0
+        }
+        "lock-workstation" => {
+            let coord = AbiboMediationCoordinator::default();
+            let snap = coord
+                .liveness()
+                .trigger_event_horizon("cli_manual_workstation_lock");
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&snap).unwrap_or_default()
+            );
+            0
+        }
+        "unlock-workstation" => {
+            let coord = AbiboMediationCoordinator::default();
+            let snap = coord.liveness().unlock_workstation();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&snap).unwrap_or_default()
+            );
+            0
+        }
+        other => {
+            eprintln!(
+                "[octopus] error: unknown abibo subcommand '{}'\nRun 'octopus abibo --help' for usage.",
+                other
+            );
+            EXIT_PREFLIGHT_DENIED
         }
     }
 }

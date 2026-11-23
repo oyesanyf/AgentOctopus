@@ -400,3 +400,20 @@ pub use security::{
     open_and_lock_executable_for_cli, BinaryFormat, BinaryIntegrityVerdict, ByteCursor,
     PreSpawnReaPolicy, PreSpawnReaVerdict, ReaBinaryFact, ReteEngine,
 };
+pub use security::{
+    AbiboDirection, AbiboMediationCoordinator, AbiboMerkleAuditRecord, AbiboStatusSnapshot,
+    ArtemisCollectionReport, ArtemisDfirEngine, ArtemisForensicEvent, ControlSynthesisKind,
+    DefangedToolResponse, ForensicArtifactKind, ForensicControlCompiler, ForensicSeverity,
+    GaussFluxCage, GaussFluxVerdict, HalfLifeVerdict, HamiltonianBarrierEngine, HamiltonianVerdict,
+    HitlApprovalTicket, HitlTicketStatus, HumanWorkResetProof, LivenessEventRecord,
+    McpConnectorAuditEntry, McpMediationDecision, McpMediationReport, McpMediationRequest,
+    McpToolManifest, McpToolSchemaPinRegistry, MemoryAttestationRecord, MemoryPlane,
+    MemoryProvenanceGuard, MemoryProvenanceVerdict, NewCoreGrokSimulationReport,
+    NonHumanIdentityRecord, PersistenceArtifactFinding, PhaseSpaceState, PinnedToolSchemaRecord,
+    QuantumZenoGuard, QuantumZenoVerdict, RadioactiveHalfLifeEngine, RelativityCausalityGate,
+    RelativityConfig, RelativityVerdict, SchemaPinVerdict, SignedTaintHeader,
+    SingleUseCapabilityToken, SleepLockWindow, SpectralBeaconDetector, SpectralBeaconVerdict,
+    SynthesizedControlAction, ThermodynamicTaintEngine, ThermodynamicsVerdict,
+    WindowsPrefetchHeader, WorkstationLivenessSnapshot, WorkstationLivenessTracker,
+    DEFAULT_HITL_TTL_SECS,
+};

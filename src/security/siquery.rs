@@ -255,11 +255,15 @@ impl SiqueryEngine {
         }
     }
 
-    /// List all relational tables supported by the `siquery` engine (41 tables).
+    /// List all relational tables supported by the `siquery` engine (50 tables including Artemis DFIR).
     pub fn list_tables() -> &'static [&'static str] {
         &[
             "agent_interceptions",
             "arp_cache",
+            "artemis_forensic_timeline",
+            "artemis_liveness_events",
+            "artemis_mcp_connectors",
+            "artemis_persistence_artifacts",
             "authenticodes",
             "autoruns",
             "certificates",
@@ -762,6 +766,23 @@ impl SiqueryEngine {
         CREATE TABLE IF NOT EXISTS edr_threats (
             threat_id TEXT, timestamp TEXT, name TEXT, severity TEXT, process_name TEXT, pid INTEGER, action TEXT, hash TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS artemis_forensic_timeline (
+            timestamp_utc TEXT, timestamp_unix INTEGER, artifact TEXT, direction TEXT, severity TEXT,
+            principal TEXT, path_or_uri TEXT, summary TEXT, sha256 TEXT, indicators TEXT, raw_source TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS artemis_persistence_artifacts (
+            os_family TEXT, category TEXT, name TEXT, command_or_path TEXT, suspicious INTEGER, reason TEXT, sha256 TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS artemis_liveness_events (
+            epoch INTEGER, state TEXT, idle_secs INTEGER, event_horizon_reason TEXT, timestamp_utc TEXT, timestamp_unix INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS artemis_mcp_connectors (
+            config_source TEXT, server_name TEXT, command_or_url TEXT, write_capable INTEGER, has_inline_secret INTEGER, risk_notes TEXT
+        );
         "#;
 
         conn.execute_batch(DDL)
@@ -824,6 +845,11 @@ impl SiqueryEngine {
         let need_exec_events = is_metadata || lower.contains("exec_events");
         let need_circumvention = is_metadata || lower.contains("circumvention_events");
         let need_dlp = is_metadata || lower.contains("dlp_semantic_events");
+        let need_artemis_timeline = is_metadata || lower.contains("artemis_forensic_timeline");
+        let need_artemis_persistence =
+            is_metadata || lower.contains("artemis_persistence_artifacts");
+        let need_artemis_liveness = is_metadata || lower.contains("artemis_liveness_events");
+        let need_artemis_mcp = is_metadata || lower.contains("artemis_mcp_connectors");
 
         if need_processes {
             Self::populate_processes(tx, sys)?;
@@ -937,6 +963,18 @@ impl SiqueryEngine {
         }
         if need_dlp {
             Self::populate_dlp_semantic_events(tx)?;
+        }
+        if need_artemis_timeline {
+            Self::populate_artemis_forensic_timeline(tx)?;
+        }
+        if need_artemis_persistence {
+            Self::populate_artemis_persistence_artifacts(tx)?;
+        }
+        if need_artemis_liveness {
+            Self::populate_artemis_liveness_events(tx)?;
+        }
+        if need_artemis_mcp {
+            Self::populate_artemis_mcp_connectors(tx)?;
         }
 
         Ok(())
@@ -2102,6 +2140,100 @@ impl SiqueryEngine {
         Ok(())
     }
 
+    fn populate_artemis_forensic_timeline(tx: &Transaction) -> Result<(), String> {
+        let mut stmt = tx
+            .prepare_cached(
+                "INSERT INTO artemis_forensic_timeline \
+                 (timestamp_utc, timestamp_unix, artifact, direction, severity, principal, path_or_uri, summary, sha256, indicators, raw_source) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .map_err(|e| e.to_string())?;
+        for ev in crate::security::artemis_dfir::snapshot_artemis_forensic_timeline() {
+            stmt.execute(rusqlite::params![
+                ev.timestamp_utc,
+                ev.timestamp_unix as i64,
+                ev.artifact.as_str(),
+                ev.direction.as_str(),
+                ev.severity.as_str(),
+                ev.principal,
+                ev.path_or_uri,
+                ev.summary,
+                ev.sha256.unwrap_or_default(),
+                ev.indicators.join("; "),
+                ev.raw_source,
+            ])
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn populate_artemis_persistence_artifacts(tx: &Transaction) -> Result<(), String> {
+        let mut stmt = tx
+            .prepare_cached(
+                "INSERT INTO artemis_persistence_artifacts \
+                 (os_family, category, name, command_or_path, suspicious, reason, sha256) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .map_err(|e| e.to_string())?;
+        for item in crate::security::artemis_dfir::snapshot_artemis_persistence_findings() {
+            stmt.execute(rusqlite::params![
+                item.os_family,
+                item.category,
+                item.name,
+                item.command_or_path,
+                if item.suspicious { 1i64 } else { 0i64 },
+                item.reason,
+                item.sha256.unwrap_or_default(),
+            ])
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn populate_artemis_liveness_events(tx: &Transaction) -> Result<(), String> {
+        let mut stmt = tx
+            .prepare_cached(
+                "INSERT INTO artemis_liveness_events \
+                 (epoch, state, idle_secs, event_horizon_reason, timestamp_utc, timestamp_unix) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .map_err(|e| e.to_string())?;
+        for ev in crate::security::artemis_dfir::snapshot_artemis_liveness_events() {
+            stmt.execute(rusqlite::params![
+                ev.epoch as i64,
+                ev.state,
+                ev.idle_secs as i64,
+                ev.event_horizon_reason,
+                ev.timestamp_utc,
+                ev.timestamp_unix as i64,
+            ])
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn populate_artemis_mcp_connectors(tx: &Transaction) -> Result<(), String> {
+        let mut stmt = tx
+            .prepare_cached(
+                "INSERT INTO artemis_mcp_connectors \
+                 (config_source, server_name, command_or_url, write_capable, has_inline_secret, risk_notes) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .map_err(|e| e.to_string())?;
+        for conn in crate::security::artemis_dfir::snapshot_artemis_mcp_connectors() {
+            stmt.execute(rusqlite::params![
+                conn.config_source,
+                conn.server_name,
+                conn.command_or_url,
+                if conn.write_capable { 1i64 } else { 0i64 },
+                if conn.has_inline_secret { 1i64 } else { 0i64 },
+                conn.risk_notes,
+            ])
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
     // ========================================================================
     // 12-Sweep Active EDR Audit Engine
     // ========================================================================
@@ -2551,13 +2683,17 @@ mod tests {
     #[test]
     fn test_list_tables_contains_41_tables() {
         let tables = SiqueryEngine::list_tables();
-        assert_eq!(tables.len(), 46); // 41 base + views
+        assert_eq!(tables.len(), 50); // 46 base + views + 4 Artemis DFIR forensic tables
         assert!(tables.contains(&"processes"));
         assert!(tables.contains(&"process_open_sockets"));
         assert!(tables.contains(&"agent_interceptions"));
         assert!(tables.contains(&"exec_events"));
         assert!(tables.contains(&"circumvention_events"));
         assert!(tables.contains(&"dlp_semantic_events"));
+        assert!(tables.contains(&"artemis_forensic_timeline"));
+        assert!(tables.contains(&"artemis_persistence_artifacts"));
+        assert!(tables.contains(&"artemis_liveness_events"));
+        assert!(tables.contains(&"artemis_mcp_connectors"));
     }
 
     #[test]

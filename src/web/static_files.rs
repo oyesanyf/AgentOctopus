@@ -799,6 +799,9 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
     <button class="btn btn-secondary" onclick="switchTab('kernel-patcher-view')" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; border: 1px solid #f59e0b; color: #fcd34d; background: rgba(120, 53, 15, 0.45);">
       🩹 Kernel Patcher &rarr;
     </button>
+    <button class="btn btn-secondary" onclick="switchTab('abibo-physics-view')" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; border: 1px solid #a855f7; color: #e9d5ff; background: rgba(88, 28, 135, 0.45);">
+      🧲 ABIBO Physics &rarr;
+    </button>
     <button class="btn btn-secondary" onclick="switchTab('rasp-shield')" style="padding: 0.35rem 0.75rem; font-size: 0.75rem; border: 1px solid #10b981; color: #6ee7b7; background: rgba(6, 78, 59, 0.6);">
       ⚡ Open RT-ASP Shield &rarr;
     </button>
@@ -809,6 +812,7 @@ pub const INDEX_HTML: &str = r##"<!DOCTYPE html>
   <div class="nav-tab active" onclick="switchTab('test-runner')">🧪 Test Runner &amp; Progression</div>
   <div class="nav-tab" onclick="switchTab('universal-killswitch')">🚨 Host KillSwitch (218 Protocols)</div>
   <div class="nav-tab" onclick="switchTab('kernel-patcher-view')">🩹 Kernel Patcher &amp; Firewall</div>
+  <div class="nav-tab" onclick="switchTab('abibo-physics-view')">🧲 ABIBO Physics &amp; Artemis DFIR</div>
   <div class="nav-tab" onclick="switchTab('runtime-feed')">⚡ Unified Runtime Activity</div>
   <div class="nav-tab" onclick="switchTab('cedar-sandbox')">🛡️ Cedar Policy Sandbox</div>
   <div class="nav-tab" onclick="switchTab('audit-viewer')">📜 Cryptographic Audit Log</div>
@@ -4402,6 +4406,164 @@ with urllib.request.urlopen(req) as resp:
     </dialog>
   </div>
 
+  <!-- TAB: ABIBO 7-LAW PHYSICS CONTAINMENT & ARTEMIS DFIR FORENSICS -->
+  <div id="abibo-physics-view" class="tab-content">
+    <nav class="breadcrumb-bar" aria-label="Breadcrumb">
+      <div class="breadcrumb-trail">
+        <a class="breadcrumb-link" href="javascript:void(0)" onclick="switchTab('test-runner')"><span>🏠</span> Dashboard</a>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-link" style="cursor: default; pointer-events: none;">Break-In &amp; Break-Out Defense</span>
+        <span class="breadcrumb-separator">›</span>
+        <span class="breadcrumb-current"><span>🧲</span> ABIBO Physics &amp; Artemis DFIR</span>
+      </div>
+      <div class="breadcrumb-meta">
+        <span class="breadcrumb-badge">🧲 7 Physics Containment Laws</span>
+        <span class="breadcrumb-badge purple">🕵️ Artemis v0.21 DFIR &rarr; Cedar</span>
+        <span class="breadcrumb-badge green">🌳 RFC 6962 Merkle Vault</span>
+      </div>
+    </nav>
+
+    <div class="card" style="margin-bottom: 1.25rem;">
+      <div class="card-header">
+        <div>
+          <h2 style="margin: 0; font-size: 1.15rem;">🧲 ABIBO 7-Law Physics Containment &amp; Artemis DFIR Engine</h2>
+          <p style="margin: 0.35rem 0 0; color: var(--text-muted); font-size: 0.86rem;">
+            Deterministic Break-In &amp; Break-Out containment enforcing Minkowski Causal Light-Cone &amp; Event-Horizon Epochs (Law 1), Thermodynamic Taint &amp; Transitive Propagation (Law 2), Hamiltonian Lethal-Trifecta Separatrix (Law 3), Quantum No-Cloning &amp; Zeno Cadence (Law 4), Gauss Faraday-Cage Flux (Law 5), Radioactive Half-Life Dead-Man&#39;s Switch (Law 6), and DFT Spectral Beacon Detection (Law 7), coupled with closed-loop Artemis DFIR &rarr; AWS Cedar policy synthesis.
+          </p>
+        </div>
+        <span class="badge" id="abibo-liveness-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #10b981; font-weight: 800;">CHECKING...</span>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.9rem; margin-top: 1rem;">
+        <div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 0.5rem; padding: 0.9rem;">
+          <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Law 1: Spacetime Event-Horizon</div>
+          <div id="abibo-epoch-val" style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-top: 0.35rem;">Epoch —</div>
+          <div id="abibo-epoch-meta" style="font-size: 0.76rem; color: #7dd3fc; margin-top: 0.25rem;">—</div>
+        </div>
+
+        <div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 0.5rem; padding: 0.9rem;">
+          <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Laws 4 &amp; 5: Zeno &amp; Faraday Cage</div>
+          <div id="abibo-faraday-val" style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-top: 0.35rem;">Checking...</div>
+          <div id="abibo-zeno-meta" style="font-size: 0.76rem; color: #94a3b8; margin-top: 0.25rem;">—</div>
+        </div>
+
+        <div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 0.5rem; padding: 0.9rem;">
+          <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Laws 6 &amp; 7: NHIs &amp; 180s HITL</div>
+          <div id="abibo-nhi-counts" style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-top: 0.35rem;">0 NHIs</div>
+          <div id="abibo-hitl-meta" style="font-size: 0.76rem; color: #fbbf24; margin-top: 0.25rem;">0 Pending HITL</div>
+        </div>
+
+        <div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 0.5rem; padding: 0.9rem;">
+          <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">Red-Team: Pins &amp; Memory Guard</div>
+          <div id="abibo-pin-counts" style="font-size: 0.95rem; font-weight: 700; color: #f8fafc; margin-top: 0.35rem;">0 Pins / 0 Attested</div>
+          <div id="abibo-calls-meta" style="font-size: 0.76rem; color: #94a3b8; margin-top: 0.25rem;">0 Mediated / 0 Denied</div>
+        </div>
+
+        <div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 0.5rem; padding: 0.9rem;">
+          <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700;">RFC 6962 Merkle Audit Root</div>
+          <div id="abibo-merkle-root" style="font-size: 0.76rem; color: #a78bfa; font-family: monospace; margin-top: 0.35rem; word-break: break-all;">—</div>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 0.65rem; flex-wrap: wrap; align-items: center; margin-top: 1.15rem;">
+        <button type="button" class="btn btn-danger" onclick="abiboLivenessAction('lock')">🔒 Lock Workstation (Event Horizon)</button>
+        <button type="button" class="btn btn-success" onclick="abiboLivenessAction('unlock')">🔓 Unlock &amp; Rotate Epoch</button>
+        <button type="button" class="btn btn-secondary" onclick="abiboLivenessAction('heartbeat')">💓 Human Heartbeat</button>
+        <button type="button" class="btn" onclick="abiboRunGrokSimulation()" style="background: rgba(168, 85, 247, 0.25); border: 1px solid #a855f7; color: #f3e8ff;">🚨 Run NewCore 31-Call Grok Bot Overnight Simulation</button>
+        <button type="button" class="btn btn-secondary" onclick="abiboQueueSampleHitl()">📩 Queue Sample Mutating MCP Call (180s HITL)</button>
+        <button type="button" class="btn btn-secondary" onclick="abiboRunArtemisScan()">🕵️ Run Native Artemis DFIR Sweep</button>
+        <button type="button" class="btn btn-secondary" onclick="abiboOpenArtemisTomlDialog()">📜 Export Artemis v0.21 TOML</button>
+        <button type="button" class="btn btn-secondary" onclick="fetchAbiboStatus()">🔄 Refresh Posture</button>
+      </div>
+
+      <div id="abibo-feedback" aria-live="polite" style="margin-top: 0.85rem; font-size: 0.86rem; color: #94a3b8; min-height: 1.25rem;"></div>
+    </div>
+
+    <div class="card" style="margin-bottom: 1.25rem;">
+      <h3 id="abibo-hitl-heading" style="margin: 0 0 0.75rem; font-size: 1rem;">⏱️ Out-of-Band HITL Queue (180s Fail-Closed TTL &rarr; Single-Use Quantum Token)</h3>
+      <div tabindex="0" role="region" aria-labelledby="abibo-hitl-heading" class="kp-table-wrapper">
+        <table class="kp-table" style="--label-2: 'NHI Principal'; --label-3: 'Tool'; --label-4: 'Status / TTL'; --label-5: 'Actions';">
+          <thead>
+            <tr>
+              <th scope="col">Ticket ID</th>
+              <th scope="col">NHI Principal</th>
+              <th scope="col">Tool</th>
+              <th scope="col">Status / TTL</th>
+              <th scope="col">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="abibo-hitl-tbody">
+            <tr><td colspan="5" style="text-align: center; color: #94a3b8;">No HITL approval tickets queued. Mutating MCP calls automatically queue here with a strict 180s fail-closed TTL.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 1.25rem;">
+      <h3 id="abibo-nhi-heading" style="margin: 0 0 0.75rem; font-size: 1rem;">🪪 Registered Non-Human Identities (NHI Inventory &amp; Instant Revocation)</h3>
+      <div tabindex="0" role="region" aria-labelledby="abibo-nhi-heading" class="kp-table-wrapper">
+        <table class="kp-table" style="--label-2: 'Sponsor Human'; --label-3: 'Provider'; --label-4: 'Scope / Half-Life'; --label-5: 'State &amp; Action';">
+          <thead>
+            <tr>
+              <th scope="col">NHI ID</th>
+              <th scope="col">Sponsor Human</th>
+              <th scope="col">Provider</th>
+              <th scope="col">Scope / Half-Life</th>
+              <th scope="col">State &amp; Action</th>
+            </tr>
+          </thead>
+          <tbody id="abibo-nhi-tbody">
+            <tr><td colspan="5" style="text-align: center; color: #94a3b8;">Loading NHI inventory...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 1.25rem;">
+      <h3 style="margin: 0 0 0.65rem; font-size: 1rem;">🕵️ Artemis v0.21 JSONL Forensic Ingestor &rarr; Closed-Loop AWS Cedar Compiler</h3>
+      <label for="abibo-artemis-jsonl" style="display: block; font-size: 0.82rem; color: #7dd3fc; margin-bottom: 0.35rem;">Paste Artemis v0.21 JSONL / Timesketch forensic lines:</label>
+      <textarea id="abibo-artemis-jsonl" rows="4" style="width: 100%; font-family: monospace; font-size: 0.82rem; background: #050811; color: #f3f4f6; border: 1px solid #1f293d; border-radius: 6px; padding: 0.6rem;" autocorrect="off" autocapitalize="off" spellcheck="false">{"timestamp": 1794610000, "artifact": "network", "principal": "xai_grok_bot", "domain": "api.unconsented-c2.example", "message": "Overnight unconsented MCP polling while laptop locked"}
+{"timestamp": 1794610600, "artifact": "tasks", "principal": "SYSTEM", "command_line": "rogue_agent_helper.exe -enc AAAA", "event_id": 4698}</textarea>
+      <div style="display: flex; gap: 0.65rem; flex-wrap: wrap; align-items: center; margin-top: 0.7rem;">
+        <button type="button" class="btn" onclick="abiboIngestArtemisJsonl()">⚡ Ingest Artemis JSONL &amp; Compile Cedar Forbid Rules</button>
+      </div>
+      <pre id="abibo-output-json" style="margin: 0.85rem 0 0; padding: 0.85rem; background: #090d16; border: 1px solid #1e293b; border-radius: 8px; font-size: 0.78rem; color: #93c5fd; max-height: 320px; overflow: auto;">// Simulation results, Artemis DFIR sweeps, and synthesized AWS Cedar forbid policies render here</pre>
+    </div>
+
+    <div class="card">
+      <h3 id="abibo-audit-heading" style="margin: 0 0 0.75rem; font-size: 1rem;">🌳 RFC 6962 Merkle-Sealed MCP Mediation Audit Trail</h3>
+      <div tabindex="0" role="region" aria-labelledby="abibo-audit-heading" class="kp-table-wrapper">
+        <table class="kp-table" style="--label-2: 'NHI Principal'; --label-3: 'Tool'; --label-4: 'Decision &amp; Triggered Laws'; --label-5: 'Merkle Leaf Hash';">
+          <thead>
+            <tr>
+              <th scope="col">Seq</th>
+              <th scope="col">NHI Principal</th>
+              <th scope="col">Tool</th>
+              <th scope="col">Decision &amp; Triggered Laws</th>
+              <th scope="col">Merkle Leaf Hash</th>
+            </tr>
+          </thead>
+          <tbody id="abibo-audit-tbody">
+            <tr><td colspan="5" style="text-align: center; color: #94a3b8;">No mediated MCP audit records yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <dialog id="abibo-toml-dialog" class="kp-modal" aria-labelledby="abibo-toml-title">
+      <form method="dialog" class="kp-modal-form">
+        <h3 id="abibo-toml-title" style="margin: 0; font-size: 1.05rem; color: #f8fafc;">📜 Artemis v0.21 Forensic Collection Recipe (TOML)</h3>
+        <p style="margin: 0; font-size: 0.84rem; color: #cbd5e1; line-height: 1.45;">
+          Run with <code>artemis acquire -t abibo_artemis.toml</code> and ingest the resulting JSONL back into AgentOctopus to auto-compile AWS Cedar <code>forbid</code> containment policies.
+        </p>
+        <pre id="abibo-toml-content" style="margin: 0; padding: 0.75rem; background: #050811; border: 1px solid #334155; border-radius: 6px; font-size: 0.78rem; color: #7dd3fc; max-height: 360px; overflow: auto;">Loading TOML recipe...</pre>
+        <div class="kp-modal-actions">
+          <button value="close" autofocus class="btn btn-secondary">Close</button>
+        </div>
+      </form>
+    </dialog>
+  </div>
+
   <!-- TAB 18: SIQUERY SQL CONSOLE & 12-SWEEP EDR AUDIT -->
   <div id="siquery-console" class="tab-content">
     <nav class="breadcrumb-bar" aria-label="Breadcrumb">
@@ -4656,6 +4818,8 @@ with urllib.request.urlopen(req) as resp:
         loadUniversalProtocolCatalog();
       } else if (tabId === 'kernel-patcher-view') {
         fetchKernelPatcherStatus();
+      } else if (tabId === 'abibo-physics-view') {
+        fetchAbiboStatus();
       } else if (tabId === 'siquery-console') {
         listSiqueryTables();
         fetchSiqueryEdrStatus();
@@ -9732,6 +9896,387 @@ def exfiltrate_credentials():
       setKpFeedback(`❌ Perimeter request error: ${e.message}`, '#ef4444');
     }
   }
+
+  // =========================================================================
+  // ABIBO 7-Law Physics Containment & Artemis DFIR Dashboard Controller
+  // (100% XSS-safe DOM node creation via textContent; native <dialog> modal)
+  // =========================================================================
+  function setAbiboFeedback(msg, color) {
+    const el = document.getElementById('abibo-feedback');
+    if (el) {
+      el.textContent = msg;
+      el.style.color = color || '#94a3b8';
+    }
+  }
+
+  function renderAbiboStatus(data) {
+    const liv = data.liveness || {};
+    const badge = document.getElementById('abibo-liveness-badge');
+    if (badge) {
+      if (liv.workstation_locked) {
+        badge.textContent = '🔒 EVENT HORIZON LOCKED (Q_auth = 0)';
+        badge.style.background = 'rgba(239, 68, 68, 0.2)';
+        badge.style.color = '#f87171';
+        badge.style.borderColor = '#ef4444';
+      } else if (liv.human_live) {
+        badge.textContent = '🟢 HUMAN LIVE · CAUSAL CONE OPEN';
+        badge.style.background = 'rgba(16, 185, 129, 0.2)';
+        badge.style.color = '#34d399';
+        badge.style.borderColor = '#10b981';
+      } else {
+        badge.textContent = '⚠️ IDLE HORIZON EXCEEDED';
+        badge.style.background = 'rgba(245, 158, 11, 0.2)';
+        badge.style.color = '#fbbf24';
+        badge.style.borderColor = '#f59e0b';
+      }
+    }
+
+    const epVal = document.getElementById('abibo-epoch-val');
+    if (epVal) epVal.textContent = `Epoch #${liv.epoch ?? 1} · ${liv.workstation_locked ? 'LOCKED' : 'LIVE'}`;
+    const epMeta = document.getElementById('abibo-epoch-meta');
+    if (epMeta) epMeta.textContent = `Idle: ${liv.idle_secs ?? 0}s / ${liv.max_idle_secs ?? 300}s · Horizons: ${liv.event_horizon_count ?? 0}`;
+
+    const farVal = document.getElementById('abibo-faraday-val');
+    if (farVal) farVal.textContent = data.faraday_cage_engaged ? '⚡ FARADAY CAGE ENGAGED' : '🛡️ Faraday Boundary Armed';
+    const zenoMeta = document.getElementById('abibo-zeno-meta');
+    if (zenoMeta) zenoMeta.textContent = `Quantum Zeno sweep cadence: ${data.current_zeno_sweep_ms ?? 30000} ms`;
+
+    const nhiCounts = document.getElementById('abibo-nhi-counts');
+    if (nhiCounts) nhiCounts.textContent = `${data.active_nhi_count ?? 0} Active / ${data.revoked_nhi_count ?? 0} Revoked`;
+    const hitlMeta = document.getElementById('abibo-hitl-meta');
+    if (hitlMeta) hitlMeta.textContent = `${data.pending_hitl_count ?? 0} Pending HITL (180s fail-closed TTL)`;
+
+    const pinCounts = document.getElementById('abibo-pin-counts');
+    if (pinCounts) pinCounts.textContent = `${data.pinned_tool_count ?? 0} Pinned Tools / ${data.attested_memory_file_count ?? 0} Attested Memory`;
+    const callsMeta = document.getElementById('abibo-calls-meta');
+    if (callsMeta) callsMeta.textContent = `${data.total_mediated_calls ?? 0} Mediated / ${data.total_denied_calls ?? 0} Denied`;
+
+    const merkleEl = document.getElementById('abibo-merkle-root');
+    if (merkleEl) merkleEl.textContent = data.merkle_root_hex || '—';
+
+    // Render Out-of-Band HITL Queue
+    const hitlBody = document.getElementById('abibo-hitl-tbody');
+    if (hitlBody) {
+      hitlBody.replaceChildren();
+      const tickets = Array.isArray(data.hitl_tickets) ? data.hitl_tickets : [];
+      if (tickets.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 5;
+        td.style.textAlign = 'center';
+        td.style.color = '#94a3b8';
+        td.textContent = 'No HITL tickets queued. Mutating MCP calls require out-of-band approval within 180s.';
+        tr.appendChild(td);
+        hitlBody.appendChild(tr);
+      } else {
+        for (const t of tickets) {
+          const tr = document.createElement('tr');
+          const th = document.createElement('th');
+          th.scope = 'row';
+          th.textContent = t.ticket_id || '';
+          tr.appendChild(th);
+
+          const tdNhi = document.createElement('td');
+          tdNhi.textContent = t.nhi_id || '';
+          tr.appendChild(tdNhi);
+
+          const tdTool = document.createElement('td');
+          tdTool.textContent = `${t.server_name || ''}:${t.tool_name || ''}`;
+          tr.appendChild(tdTool);
+
+          const tdStatus = document.createElement('td');
+          tdStatus.textContent = `${String(t.status || '').toUpperCase()} (exp ${t.expires_at_unix || 0})`;
+          tr.appendChild(tdStatus);
+
+          const tdAct = document.createElement('td');
+          if (t.status === 'pending') {
+            const btnApprove = document.createElement('button');
+            btnApprove.type = 'button';
+            btnApprove.className = 'btn btn-success';
+            btnApprove.style.cssText = 'padding: 0.25rem 0.55rem; font-size: 0.74rem; margin-right: 0.35rem;';
+            btnApprove.textContent = '✅ Approve (Mint Token)';
+            btnApprove.addEventListener('click', () => abiboResolveHitl(t.ticket_id, true));
+            const btnDeny = document.createElement('button');
+            btnDeny.type = 'button';
+            btnDeny.className = 'btn btn-danger';
+            btnDeny.style.cssText = 'padding: 0.25rem 0.55rem; font-size: 0.74rem;';
+            btnDeny.textContent = '🛑 Deny';
+            btnDeny.addEventListener('click', () => abiboResolveHitl(t.ticket_id, false));
+            tdAct.appendChild(btnApprove);
+            tdAct.appendChild(btnDeny);
+          } else {
+            tdAct.textContent = t.minted_token ? `Token: ${t.minted_token.token_id}` : 'Finalized';
+          }
+          tr.appendChild(tdAct);
+          hitlBody.appendChild(tr);
+        }
+      }
+    }
+
+    // Render Registered NHIs
+    const nhiBody = document.getElementById('abibo-nhi-tbody');
+    if (nhiBody) {
+      nhiBody.replaceChildren();
+      const nhis = Array.isArray(data.nhis) ? data.nhis : [];
+      for (const n of nhis) {
+        const tr = document.createElement('tr');
+        const th = document.createElement('th');
+        th.scope = 'row';
+        th.textContent = n.nhi_id || '';
+        tr.appendChild(th);
+
+        const tdSponsor = document.createElement('td');
+        tdSponsor.textContent = n.sponsor_human || '';
+        tr.appendChild(tdSponsor);
+
+        const tdProv = document.createElement('td');
+        tdProv.textContent = n.provider || '';
+        tr.appendChild(tdProv);
+
+        const tdScope = document.createElement('td');
+        tdScope.textContent = `${n.write_capable ? 'read+write' : 'read-only'} · T½=${n.half_life_secs ?? 300}s`;
+        tr.appendChild(tdScope);
+
+        const tdState = document.createElement('td');
+        if (n.revoked) {
+          tdState.style.color = '#f87171';
+          tdState.textContent = `REVOKED (${n.revoked_reason || 'operator'})`;
+        } else {
+          const btnRev = document.createElement('button');
+          btnRev.type = 'button';
+          btnRev.className = 'btn btn-danger';
+          btnRev.style.cssText = 'padding: 0.25rem 0.55rem; font-size: 0.74rem;';
+          btnRev.textContent = '🚫 Instant Revoke';
+          btnRev.addEventListener('click', () => abiboRevokeNhi(n.nhi_id));
+          tdState.appendChild(btnRev);
+        }
+        tr.appendChild(tdState);
+        nhiBody.appendChild(tr);
+      }
+    }
+
+    // Render RFC 6962 Merkle Audit Trail
+    const auditBody = document.getElementById('abibo-audit-tbody');
+    if (auditBody) {
+      auditBody.replaceChildren();
+      const recs = Array.isArray(data.recent_audit) ? data.recent_audit : [];
+      if (recs.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 5;
+        td.style.textAlign = 'center';
+        td.style.color = '#94a3b8';
+        td.textContent = 'No mediated MCP calls recorded yet.';
+        tr.appendChild(td);
+        auditBody.appendChild(tr);
+      } else {
+        for (const r of recs) {
+          const tr = document.createElement('tr');
+          const th = document.createElement('th');
+          th.scope = 'row';
+          th.textContent = `#${r.sequence ?? 0}`;
+          tr.appendChild(th);
+
+          const tdNhi = document.createElement('td');
+          tdNhi.textContent = r.nhi_id || '';
+          tr.appendChild(tdNhi);
+
+          const tdTool = document.createElement('td');
+          tdTool.textContent = r.tool_name || '';
+          tr.appendChild(tdTool);
+
+          const tdDec = document.createElement('td');
+          const laws = Array.isArray(r.triggered_laws) && r.triggered_laws.length ? ` [${r.triggered_laws.join(', ')}]` : '';
+          tdDec.textContent = `${String(r.decision || '').toUpperCase()}${laws}`;
+          tdDec.style.color = r.decision === 'approved' ? '#34d399' : (r.decision === 'pending_hitl' ? '#fbbf24' : '#f87171');
+          tr.appendChild(tdDec);
+
+          const tdHash = document.createElement('td');
+          tdHash.style.fontFamily = 'monospace';
+          tdHash.textContent = (r.leaf_hash_hex || '').slice(0, 20) + '…';
+          tr.appendChild(tdHash);
+          auditBody.appendChild(tr);
+        }
+      }
+    }
+  }
+
+  async function fetchAbiboStatus() {
+    try {
+      const resp = await fetch('/api/abibo/status');
+      const data = await resp.json();
+      renderAbiboStatus(data);
+    } catch (e) {
+      setAbiboFeedback(`❌ Failed fetching ABIBO status: ${e.message}`, '#ef4444');
+    }
+  }
+
+  async function abiboLivenessAction(action) {
+    try {
+      setAbiboFeedback(`⏳ Applying workstation liveness action '${action}'...`, '#fbbf24');
+      const resp = await fetch('/api/abibo/liveness', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: action })
+      });
+      const data = await resp.json();
+      const out = document.getElementById('abibo-output-json');
+      if (out) out.textContent = JSON.stringify(data, null, 2);
+      setAbiboFeedback(`✅ Liveness updated: epoch=#${data.epoch}, locked=${Boolean(data.workstation_locked)}, human_live=${Boolean(data.human_live)}`, '#34d399');
+      await fetchAbiboStatus();
+    } catch (e) {
+      setAbiboFeedback(`❌ Liveness action error: ${e.message}`, '#ef4444');
+    }
+  }
+
+  async function abiboRunGrokSimulation() {
+    try {
+      setAbiboFeedback('⏳ Running NewCore Nov 2026 31-request xAI Grok overnight Break-In simulation...', '#c084fc');
+      const resp = await fetch('/api/abibo/simulate-grok', { method: 'POST' });
+      const data = await resp.json();
+      const out = document.getElementById('abibo-output-json');
+      if (out) out.textContent = JSON.stringify(data, null, 2);
+      setAbiboFeedback(
+        `✅ NewCore Simulation Complete: ${data.denied_requests}/${data.total_requests} overnight Grok calls DENIED (Law1=${data.law1_relativity_denies}, Law5=${data.law5_faraday_denies}, Law6=${data.law6_halflife_denies}, Law7=${data.law7_spectral_beacon_denies}) · Merkle Root=${(data.merkle_root_hex || '').slice(0, 16)}…`,
+        '#34d399'
+      );
+    } catch (e) {
+      setAbiboFeedback(`❌ Grok simulation error: ${e.message}`, '#ef4444');
+    }
+  }
+
+  async function abiboQueueSampleHitl() {
+    try {
+      const statusResp = await fetch('/api/abibo/status');
+      const st = await statusResp.json();
+      const epoch = (st.liveness && st.liveness.epoch) || 1;
+      const resp = await fetch('/api/abibo/mcp/mediate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nhi_id: 'local_interactive_agent',
+          server_name: 'google_workspace_mcp',
+          tool_name: 'gmail_send',
+          arguments_json: JSON.stringify({ to: 'security-team@example.com', subject: 'ABIBO HITL Verification' }),
+          is_write_or_mutating: true,
+          touches_private_data: false,
+          external_egress: true,
+          privilege_escalation_risk: false,
+          persistence_risk: false,
+          d_trust: 1.0,
+          request_epoch: epoch
+        })
+      });
+      const data = await resp.json();
+      const out = document.getElementById('abibo-output-json');
+      if (out) out.textContent = JSON.stringify(data, null, 2);
+      setAbiboFeedback(`⏱️ Mediated sample gmail_send -> ${String(data.decision || '').toUpperCase()}: ${data.reason || ''}`, '#fbbf24');
+      await fetchAbiboStatus();
+    } catch (e) {
+      setAbiboFeedback(`❌ Sample mediation error: ${e.message}`, '#ef4444');
+    }
+  }
+
+  async function abiboResolveHitl(ticketId, approve) {
+    try {
+      const resp = await fetch('/api/abibo/hitl/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket_id: ticketId, approve: approve, operator: 'webui_operator' })
+      });
+      const data = await resp.json();
+      const out = document.getElementById('abibo-output-json');
+      if (out) out.textContent = JSON.stringify(data, null, 2);
+      setAbiboFeedback(`✅ Ticket ${ticketId} -> ${String(data.status || '').toUpperCase()}`, approve ? '#34d399' : '#f87171');
+      await fetchAbiboStatus();
+    } catch (e) {
+      setAbiboFeedback(`❌ HITL resolution error: ${e.message}`, '#ef4444');
+    }
+  }
+
+  async function abiboRevokeNhi(nhiId) {
+    try {
+      const resp = await fetch('/api/abibo/nhi', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'revoke', nhi_id: nhiId, reason: 'dashboard_instant_revocation' })
+      });
+      const data = await resp.json();
+      const out = document.getElementById('abibo-output-json');
+      if (out) out.textContent = JSON.stringify(data, null, 2);
+      setAbiboFeedback(`🚫 Revoked Non-Human Identity '${nhiId}' immediately.`, '#f87171');
+      await fetchAbiboStatus();
+    } catch (e) {
+      setAbiboFeedback(`❌ NHI revoke error: ${e.message}`, '#ef4444');
+    }
+  }
+
+  async function abiboRunArtemisScan() {
+    try {
+      setAbiboFeedback('⏳ Running parallel native Artemis DFIR forensic sweep & Cedar control compiler...', '#7dd3fc');
+      const resp = await fetch('/api/abibo/artemis/scan', { method: 'POST' });
+      const data = await resp.json();
+      const out = document.getElementById('abibo-output-json');
+      if (out) out.textContent = JSON.stringify(data, null, 2);
+      setAbiboFeedback(
+        `✅ Artemis DFIR Sweep Complete: ${(data.events || []).length} event(s), ${(data.persistence_findings || []).length} persistence item(s), ${(data.synthesized_controls || []).length} control(s) synthesized.`,
+        '#34d399'
+      );
+      await fetchAbiboStatus();
+    } catch (e) {
+      setAbiboFeedback(`❌ Artemis DFIR scan error: ${e.message}`, '#ef4444');
+    }
+  }
+
+  async function abiboIngestArtemisJsonl() {
+    const ta = document.getElementById('abibo-artemis-jsonl');
+    const jsonl = ta ? ta.value : '';
+    try {
+      setAbiboFeedback('⏳ Ingesting Artemis v0.21 JSONL & compiling AWS Cedar forbid policies...', '#7dd3fc');
+      const resp = await fetch('/api/abibo/artemis/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonl: jsonl,
+          sleep_windows: [{ start_unix: 1794600000, end_unix: 1794628800 }]
+        })
+      });
+      const data = await resp.json();
+      const out = document.getElementById('abibo-output-json');
+      if (out) out.textContent = JSON.stringify(data, null, 2);
+      setAbiboFeedback(
+        `✅ Ingested ${(data.events || []).length} Artemis record(s) and synthesized ${(data.synthesized_controls || []).length} live Cedar/Lineage control(s).`,
+        '#34d399'
+      );
+      await fetchAbiboStatus();
+    } catch (e) {
+      setAbiboFeedback(`❌ Artemis JSONL ingest error: ${e.message}`, '#ef4444');
+    }
+  }
+
+  async function abiboOpenArtemisTomlDialog() {
+    const dlg = document.getElementById('abibo-toml-dialog');
+    const pre = document.getElementById('abibo-toml-content');
+    if (pre) pre.textContent = 'Fetching Artemis v0.21 TOML recipe...';
+    if (dlg && typeof dlg.showModal === 'function') {
+      dlg.showModal();
+    }
+    try {
+      const resp = await fetch('/api/abibo/artemis/toml');
+      const data = await resp.json();
+      if (pre) pre.textContent = data.toml || '# Empty TOML';
+    } catch (e) {
+      if (pre) pre.textContent = `# Error fetching TOML: ${e.message}`;
+    }
+  }
+
+  (function wireAbiboTomlDialog() {
+    const dlg = document.getElementById('abibo-toml-dialog');
+    if (!dlg) return;
+    dlg.addEventListener('close', () => {
+      dlg.returnValue = '';
+    });
+  })();
 </script>
 </body>
 </html>

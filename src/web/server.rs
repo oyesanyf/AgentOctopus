@@ -1,15 +1,17 @@
 use super::api::{
-    handle_agentmesh_inbound_mcp_call, handle_agentmesh_jwks, handle_agentmesh_killswitch_reset,
-    handle_agentmesh_killswitch_trip, handle_agentmesh_mandate_attenuate,
-    handle_agentmesh_mint_inbound_seal, handle_agentmesh_openid_config, handle_agentmesh_status,
-    handle_agentmesh_wasm_call, handle_atlas_dynamic_tests, handle_atlas_status, handle_atlas_sync,
-    handle_audit_log, handle_breakout_guards_status, handle_cage_consume_seal,
-    handle_cage_ingest_policy, handle_cage_policy_version, handle_cage_proof_status,
-    handle_cage_trace_conformance, handle_cage_validate_action_with_version,
-    handle_containment_ring_regenerate, handle_containment_ring_sever,
-    handle_containment_ring_stale_replay, handle_containment_rings, handle_dogwood_evaluate,
-    handle_dogwood_presets, handle_dogwood_simulate_trace, handle_dogwood_trace,
-    handle_dream_rsi_feed_trajectories, handle_dream_rsi_policy,
+    handle_abibo_artemis_ingest, handle_abibo_artemis_scan, handle_abibo_artemis_toml,
+    handle_abibo_hitl_resolve, handle_abibo_liveness, handle_abibo_mcp_mediate, handle_abibo_nhi,
+    handle_abibo_simulate_grok, handle_abibo_status, handle_agentmesh_inbound_mcp_call,
+    handle_agentmesh_jwks, handle_agentmesh_killswitch_reset, handle_agentmesh_killswitch_trip,
+    handle_agentmesh_mandate_attenuate, handle_agentmesh_mint_inbound_seal,
+    handle_agentmesh_openid_config, handle_agentmesh_status, handle_agentmesh_wasm_call,
+    handle_atlas_dynamic_tests, handle_atlas_status, handle_atlas_sync, handle_audit_log,
+    handle_breakout_guards_status, handle_cage_consume_seal, handle_cage_ingest_policy,
+    handle_cage_policy_version, handle_cage_proof_status, handle_cage_trace_conformance,
+    handle_cage_validate_action_with_version, handle_containment_ring_regenerate,
+    handle_containment_ring_sever, handle_containment_ring_stale_replay, handle_containment_rings,
+    handle_dogwood_evaluate, handle_dogwood_presets, handle_dogwood_simulate_trace,
+    handle_dogwood_trace, handle_dream_rsi_feed_trajectories, handle_dream_rsi_policy,
     handle_dream_rsi_recommend_priorities, handle_dream_rsi_rollout, handle_dream_rsi_status,
     handle_dream_rsi_train, handle_evaluate_cedar, handle_evolution_approve,
     handle_evolution_auto_fix, handle_evolution_candidates, handle_evolution_evaluate,
@@ -1293,6 +1295,102 @@ async fn handle_connection(
             let response = format!(
                 "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/abibo/status") => {
+            let json_body = handle_abibo_status(&state);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/abibo/mcp/mediate") => {
+            let (status_code, json_body) = handle_abibo_mcp_mediate(&state, body);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/abibo/hitl/resolve") => {
+            let (status_code, json_body) = handle_abibo_hitl_resolve(&state, body);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/abibo/liveness") => {
+            let (status_code, json_body) = handle_abibo_liveness(&state, body);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/abibo/nhi") => {
+            let (status_code, json_body) = handle_abibo_nhi(&state, body);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/abibo/artemis/scan") => {
+            let (status_code, json_body) = handle_abibo_artemis_scan(&state).await;
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/abibo/artemis/ingest") => {
+            let (status_code, json_body) = handle_abibo_artemis_ingest(&state, body);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status_code,
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("GET", "/api/abibo/artemis/toml") => {
+            let json_body = handle_abibo_artemis_toml(&state);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                json_body.len(),
+                json_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+        }
+
+        ("POST", "/api/abibo/simulate-grok") => {
+            let json_body = handle_abibo_simulate_grok(&state);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Content-Type-Options: nosniff\r\nCross-Origin-Resource-Policy: same-origin\r\nX-Frame-Options: DENY\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 json_body.len(),
                 json_body
             );

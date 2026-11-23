@@ -457,6 +457,11 @@ async fn main() {
                     }
                 }
             }
+            "abibo" => {
+                let sub_args = cli_args.get(2..).unwrap_or(&[]);
+                let code = agent_octopus::cli::execute_abibo_cli(sub_args);
+                std::process::exit(code);
+            }
             "patch-kernel" | "kernel-patch" => {
                 let offset = if cli_args.get(1).map(|s| s.as_str()) == Some("killswitch") {
                     3
