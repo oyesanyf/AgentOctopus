@@ -17,6 +17,11 @@ services:
       OCTOPUS_NMT_MODEL: "${OCTOPUS_NMT_MODEL:-facebook/nllb-200-distilled-600M}"
       OCTOPUS_NMT_INT8: "${OCTOPUS_NMT_INT8:-1}"
       OCTOPUS_NMT_THREADS: "${OCTOPUS_NMT_THREADS:-6}"
+      TOKENIZERS_PARALLELISM: "false"
+      RAYON_NUM_THREADS: "2"
+      OMP_NUM_THREADS: "${OCTOPUS_NMT_THREADS:-6}"
+      MKL_NUM_THREADS: "${OCTOPUS_NMT_THREADS:-6}"
+      OPENBLAS_NUM_THREADS: "${OCTOPUS_NMT_THREADS:-6}"
       HF_HOME: "/cache/hf"
       HF_HUB_OFFLINE: "${HF_HUB_OFFLINE:-0}"
     volumes:
@@ -28,7 +33,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    pids_limit: 128
+    pids_limit: 256
     mem_limit: 4g
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5050/health', timeout=2)"]

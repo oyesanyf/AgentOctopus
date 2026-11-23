@@ -23,6 +23,14 @@ import threading
 import time
 from typing import Any, AsyncIterator, Dict, Optional
 
+# Bound Rayon/OpenMP/BLAS thread pools BEFORE importing torch/transformers so high-core hosts
+# never exceed container pids_limit (EAGAIN / rayon ThreadPoolBuildError).
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("RAYON_NUM_THREADS", "2")
+os.environ.setdefault("OMP_NUM_THREADS", "6")
+os.environ.setdefault("MKL_NUM_THREADS", "6")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "6")
+
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
