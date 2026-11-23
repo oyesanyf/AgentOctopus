@@ -603,6 +603,7 @@ impl ActionTrajectoryPerplexity {
             (Some(ReadUntrusted), ReadClean | SearchLocal | ReadUntrusted, _) => 0.25,
             (Some(ReadClean | SearchLocal), WriteSaasOrEmail, false) => 0.12,
             (_, ReadClean | SearchLocal, _) => 0.22,
+            (_, ReadUntrusted, false) => 0.18,
             (_, EditWorkspace, false) => 0.16,
             (_, WriteSaasOrEmail, false) => 0.10,
             (_, NetworkEgressExternal, false) => 0.08,
