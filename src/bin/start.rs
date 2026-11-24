@@ -259,22 +259,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
     }
 
-    // Spawn browser launch in background after short delay without spawning any cmd.exe shell window
+    // Wait until the loopback Web UI TCP listener is actually accepting connections before
+    // opening the user's default browser (prevents ERR_CONNECTION_REFUSED during cold starts
+    // such as right after an MSI installation). Never spawns any cmd.exe shell window.
     let fallback_port = selected_port;
     let bootstrap_nonce = agent_octopus::web::request_guard::issue_bootstrap_nonce();
     tokio::spawn(async move {
-        sleep(Duration::from_millis(400)).await;
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if no_browser_cli
-                || std::env::var("OCTOPUS_NO_BROWSER").is_ok()
-                || std::env::var("HEADLESS").is_ok()
-            {
-                return;
+        if no_browser_cli
+            || std::env::var("OCTOPUS_NO_BROWSER").is_ok()
+            || std::env::var("HEADLESS").is_ok()
+        {
+            return;
+        }
+        let mut active_port = fallback_port;
+        for _ in 0..100 {
+            if let Ok(port_text) = std::fs::read_to_string("logs/active_port.txt") {
+                if let Ok(parsed) = port_text.trim().parse::<u16>() {
+                    if parsed != 0 && parsed != 5000 {
+                        active_port = parsed;
+                    }
+                }
             }
-            let active_port = std::fs::read_to_string("logs/active_port.txt")
-                .ok()
-                .and_then(|s| s.trim().parse::<u16>().ok())
-                .unwrap_or(fallback_port);
+            let addr_probe = format!("127.0.0.1:{}", active_port);
+            let probe = tokio::time::timeout(
+                Duration::from_millis(250),
+                tokio::net::TcpStream::connect(&addr_probe),
+            )
+            .await;
+            if matches!(probe, Ok(Ok(_))) {
+                break;
+            }
+            sleep(Duration::from_millis(150)).await;
+        }
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let url_for_browser = format!(
                 "http://127.0.0.1:{}/?bootstrap={}",
                 active_port, bootstrap_nonce
