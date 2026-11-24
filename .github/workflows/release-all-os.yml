@@ -71,6 +71,80 @@ jobs:
           & "target\release\octopus.exe" --version
           if ($LASTEXITCODE -ne 0) { throw "octopus.exe --version failed" }
 
+      - name: End-to-End Verify MSI Auto-Launches Web UI Dashboard
+        shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ver = if ($env:REF_NAME -like "v*") { $env:REF_NAME.Substring(1) } elseif ($env:INPUT_VERSION) { $env:INPUT_VERSION } else { "0.2.0" }
+          $msiPath = (Resolve-Path "deploy\windows\AgentOctopus-$ver-x86_64.msi").Path
+          $logPath = Join-Path $env:TEMP "agentoctopus_msi_e2e.log"
+
+          # Ensure port 3030 is not listening prior to MSI installation
+          Get-Process -Name start -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Milliseconds 500
+          $preListening = $false
+          try {
+            Invoke-WebRequest -Uri "http://127.0.0.1:3030/" -UseBasicParsing -TimeoutSec 2 | Out-Null
+            $preListening = $true
+          } catch {}
+          if ($preListening) { throw "Port 3030 was already listening before MSI install" }
+
+          Write-Host "[*] Installing $msiPath via msiexec /i /qn (zero manual start.exe invocation)..."
+          $instArgs = ('/i "{0}" /qn /norestart /l*v "{1}"' -f $msiPath, $logPath)
+          $inst = Start-Process -FilePath "msiexec.exe" -ArgumentList $instArgs -Wait -PassThru
+          if ($inst.ExitCode -ne 0) {
+            Get-Content $logPath -Tail 80 -ErrorAction SilentlyContinue
+            throw "msiexec /i failed with exit code $($inst.ExitCode)"
+          }
+
+          $ready = $false
+          $bodyLen = 0
+          for ($i = 0; $i -lt 40; $i++) {
+            try {
+              $resp = Invoke-WebRequest -Uri "http://127.0.0.1:3030/" -UseBasicParsing -TimeoutSec 2
+              if ($resp.StatusCode -eq 200 -and $resp.Content -match "Agent Octopus") {
+                $bodyLen = $resp.Content.Length
+                $ready = $true
+                break
+              }
+            } catch {}
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $ready) {
+            Write-Host "=== Diagnostic: Running start.exe processes ==="
+            Get-Process -Name start -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, Path
+            Write-Host "=== Diagnostic: Installed folder ==="
+            Get-ChildItem "$env:LOCALAPPDATA\AgentOctopus" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length
+            foreach ($refusedPath in @("$env:LOCALAPPDATA\AgentOctopus\logs\startup_refused.txt", "logs\startup_refused.txt")) {
+              if (Test-Path $refusedPath) {
+                Write-Host "=== Diagnostic: $refusedPath ==="
+                Get-Content $refusedPath
+              }
+            }
+            Write-Host "=== Diagnostic: LaunchWebUiDashboard log entries ==="
+            Select-String -Path $logPath -Pattern "LaunchWebUiDashboard|Return value" -ErrorAction SilentlyContinue | Select-Object -Last 30
+            throw "FAIL: MSI installed (exit 0) but Web UI did NOT auto-launch on http://127.0.0.1:3030/"
+          }
+
+          $startProcs = @(Get-Process -Name start -ErrorAction SilentlyContinue)
+          if ($startProcs.Count -eq 0) {
+            throw "FAIL: Web UI responded but no start.exe process found after msiexec exit"
+          }
+          Write-Host "[+] MSI AUTO-LAUNCH VERIFIED: start.exe (PID=$($startProcs[0].Id)) serving Web UI at http://127.0.0.1:3030/ (HTTP 200, $bodyLen bytes)"
+
+          # Stop auto-launched daemon and verify clean MSI uninstall
+          $startProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Milliseconds 500
+          $uninstArgs = ('/x "{0}" /qn /norestart' -f $msiPath)
+          $uninst = Start-Process -FilePath "msiexec.exe" -ArgumentList $uninstArgs -Wait -PassThru
+          if ($uninst.ExitCode -ne 0) {
+            throw "msiexec /x clean uninstall failed with exit code $($uninst.ExitCode)"
+          }
+          Write-Host "[+] Clean MSI uninstall verified (exit 0)."
+
       - name: Upload Windows x64 Artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
