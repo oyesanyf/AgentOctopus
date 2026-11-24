@@ -193,7 +193,24 @@ try {
         if ($null -ne $trec) {
             throw "MSI violates Zero-Touch PATH invariant: Environment table must not exist"
         }
-        Write-Host "[+] MSI database verified: ProductName='$prodName', $($msiFiles.Count) files, zero Environment/PATH table." -ForegroundColor Green
+
+        # Verify post-install LaunchWebUiDashboard CustomAction is wired to load the Web UI
+        $caView = $db.OpenView("SELECT Action FROM CustomAction WHERE Action='LaunchWebUiDashboard'")
+        $caView.Execute()
+        $carec = $caView.Fetch()
+        $caView.Close()
+        if ($null -eq $carec) {
+            throw "MSI missing required post-install LaunchWebUiDashboard CustomAction"
+        }
+        $seqView = $db.OpenView("SELECT Action FROM InstallExecuteSequence WHERE Action='LaunchWebUiDashboard'")
+        $seqView.Execute()
+        $seqrec = $seqView.Fetch()
+        $seqView.Close()
+        if ($null -eq $seqrec) {
+            throw "MSI InstallExecuteSequence missing LaunchWebUiDashboard"
+        }
+
+        Write-Host "[+] MSI database verified: ProductName='$prodName', $($msiFiles.Count) files, LaunchWebUiDashboard active, zero Environment/PATH table." -ForegroundColor Green
     } finally {
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($db)
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($installer)

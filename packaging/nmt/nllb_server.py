@@ -269,6 +269,21 @@ app = FastAPI(
 )
 
 
+@app.get("/")
+def root_info() -> Dict[str, Any]:
+    return {
+        "service": "AgentOctopus Loopback Seq2Seq NMT Sidecar (NLLB-200)",
+        "note": "This port (5050) serves the headless POST /translate NMT API. Open the Agent Octopus Web UI Dashboard at http://127.0.0.1:3030",
+        "web_ui_url": "http://127.0.0.1:3030",
+        "endpoints": {
+            "health": "GET /health",
+            "languages": "GET /languages",
+            "translate": "POST /translate",
+            "openapi_docs": "GET /docs",
+        },
+    }
+
+
 @app.get("/health")
 def health() -> Dict[str, Any]:
     if not engine.ready:

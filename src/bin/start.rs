@@ -145,6 +145,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .map(|v| v == "1" || v == "true")
             .unwrap_or(false);
 
+    // Ensure MSI post-install CustomAction / Start Menu launches resolve config/, .env, and logs/
+    // from the installed binary directory (e.g. %LOCALAPPDATA%\AgentOctopus) rather than System32.
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let cwd_has_config = std::env::current_dir()
+                .map(|d| d.join("config").is_dir())
+                .unwrap_or(false);
+            if !cwd_has_config && exe_dir.join("config").is_dir() {
+                let _ = std::env::set_current_dir(exe_dir);
+            }
+        }
+    }
+
     // Finding 7 (FAIL-CLOSED): never run arms under an elevated / Administrator token.
     // Elevated launch -> relaunch under a verified de-elevated token and exit; still elevated -> refuse.
     let token_posture =
