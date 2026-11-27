@@ -21,6 +21,7 @@ EXCLUDE_DIRS = {
     ".agents",
     "target",
     "build",
+    ".lake",
     "logs",
     "strix_runs",
     "__pycache__",

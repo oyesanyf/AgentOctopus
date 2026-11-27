@@ -12,6 +12,8 @@ pub enum LedgerError {
     InvalidInclusionProof,
     #[error("Quorum threshold not met: required {required}, valid signatures {valid}")]
     QuorumNotMet { required: usize, valid: usize },
+    #[error("Quorum threshold must be at least 1 (zero threshold forbidden)")]
+    ZeroThreshold,
     #[error("Duplicate authority signature from '{0}'")]
     DuplicateAuthority(String),
     #[error("Unknown or unauthorized authority ID '{0}'")]

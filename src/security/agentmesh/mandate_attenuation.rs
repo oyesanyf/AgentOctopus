@@ -511,6 +511,12 @@ impl AttenuatedMandate {
                 now,
             });
         }
+        if self.depth > MAX_DELEGATION_DEPTH {
+            return Err(MandateError::MaxDelegationDepthExceeded {
+                depth: self.depth,
+                max: MAX_DELEGATION_DEPTH,
+            });
+        }
         if &self.root_verifying_key != expected_root_key {
             return Err(MandateError::SignatureFailure {
                 depth: 0,
@@ -616,6 +622,23 @@ impl AttenuatedMandate {
                     reason: format!("Ed25519 signature verification failed: {e}"),
                 })?;
 
+            if i == 0 {
+                for s in &link.attenuated_services {
+                    validate_mesh_uri(s)?;
+                }
+                for p in &link.attenuated_publish {
+                    validate_mesh_uri(p)?;
+                }
+            } else {
+                let prev_link = &self.delegation_chain[i - 1];
+                if link.delegated_at < prev_link.delegated_at {
+                    return Err(MandateError::MandateNotYetValid {
+                        nbf: prev_link.delegated_at,
+                        now: link.delegated_at,
+                    });
+                }
+            }
+
             // 4. Verify monotonic capability containment
             if i > 0 {
                 for s in &link.attenuated_services {
@@ -656,6 +679,67 @@ impl AttenuatedMandate {
                     "Current holder SPIFFE ID '{}' does not match leaf delegatee SPIFFE ID '{}'",
                     self.current_holder_spiffe_id, leaf.delegatee_spiffe_id
                 ),
+            });
+        }
+
+        // 6. Bind top-level mandate fields and timestamps to verified root/leaf links
+        if self.allowed_services != leaf.attenuated_services {
+            let requested = self
+                .allowed_services
+                .difference(&leaf.attenuated_services)
+                .next()
+                .or_else(|| {
+                    leaf.attenuated_services
+                        .difference(&self.allowed_services)
+                        .next()
+                })
+                .cloned()
+                .unwrap_or_default();
+            return Err(MandateError::PrivilegeEscalationService {
+                requested,
+                parent_services: leaf.attenuated_services.iter().cloned().collect(),
+            });
+        }
+        if self.allowed_publish != leaf.attenuated_publish {
+            let requested = self
+                .allowed_publish
+                .difference(&leaf.attenuated_publish)
+                .next()
+                .or_else(|| {
+                    leaf.attenuated_publish
+                        .difference(&self.allowed_publish)
+                        .next()
+                })
+                .cloned()
+                .unwrap_or_default();
+            return Err(MandateError::PrivilegeEscalationPublish {
+                requested,
+                parent_publish: leaf.attenuated_publish.iter().cloned().collect(),
+            });
+        }
+        if self.expires_at != leaf.expires_at {
+            return Err(MandateError::MandateExpired {
+                exp: leaf.expires_at,
+                now,
+            });
+        }
+        let root_link = &self.delegation_chain[0];
+        if self.not_before < root_link.delegated_at {
+            return Err(MandateError::MandateNotYetValid {
+                nbf: root_link.delegated_at,
+                now: self.not_before,
+            });
+        }
+        if now < root_link.delegated_at {
+            return Err(MandateError::MandateNotYetValid {
+                nbf: root_link.delegated_at,
+                now,
+            });
+        }
+        if now < leaf.delegated_at {
+            return Err(MandateError::MandateNotYetValid {
+                nbf: leaf.delegated_at,
+                now,
             });
         }
 

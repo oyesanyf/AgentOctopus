@@ -1,0 +1,690 @@
+name: Lean 4 Formal Verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: read-all
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  lean-verify:
+    name: Lean 4 Formal Verification & Rust Coupling (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Lean 4 Toolchain via elan (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o "${RUNNER_TEMP}/elan-init.sh"
+          sh "${RUNNER_TEMP}/elan-init.sh" -y --no-modify-path --default-toolchain none
+          echo "${HOME}/.elan/bin" >> "${GITHUB_PATH}"
+          TOOLCHAIN="$(tr -d '\r\n' < formal/lean-toolchain)"
+          "${HOME}/.elan/bin/elan" toolchain install "${TOOLCHAIN}"
+          "${HOME}/.elan/bin/lean" --version
+          "${HOME}/.elan/bin/lake" --version
+
+      - name: Install Lean 4 Toolchain via elan (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $elanExe = Join-Path $env:RUNNER_TEMP "elan-init.exe"
+          Invoke-WebRequest -Uri "https://github.com/leanprover/elan/releases/latest/download/elan-init-x86_64-pc-windows-msvc.exe" -OutFile $elanExe
+          & $elanExe -y --no-modify-path --default-toolchain none
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $elanBin = Join-Path $env:USERPROFILE ".elan\bin"
+          $elanBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $toolchain = (Get-Content -Path "formal/lean-toolchain" -Raw).Trim()
+          & (Join-Path $elanBin "elan.exe") toolchain install $toolchain
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & (Join-Path $elanBin "lean.exe") --version
+          & (Join-Path $elanBin "lake.exe") --version
+
+      - name: Build Lean 4 Formal Verification Project (lake build)
+        working-directory: formal
+        shell: bash
+        run: |
+          set -euo pipefail
+          lake build
+
+      - name: Verify AxiomAudit, Whole-Project Kernel Meta-Audit & Lean Lexer Gate
+        working-directory: formal
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY_BIN=""
+          if command -v python3 >/dev/null 2>&1 && python3 --version >/dev/null 2>&1; then
+            PY_BIN="python3"
+          elif command -v python >/dev/null 2>&1 && python --version >/dev/null 2>&1; then
+            PY_BIN="python"
+          else
+            echo "ERROR: No working Python 3 interpreter found" >&2
+            exit 1
+          fi
+          PYTHONUTF8=1 "${PY_BIN}" - <<'PY'
+          import re
+          import shutil
+          import subprocess
+          import sys
+          import textwrap
+          from pathlib import Path
+
+          for stream_name in ("stdout", "stderr"):
+              stream = getattr(sys, stream_name, None)
+              if stream is not None and hasattr(stream, "reconfigure"):
+                  try:
+                      stream.reconfigure(encoding="utf-8", errors="replace")
+                  except Exception:
+                      pass
+
+          lake_exe = shutil.which("lake")
+          if not lake_exe:
+              print("ERROR: lake executable not found on PATH", file=sys.stderr)
+              sys.exit(1)
+
+          # ------------------------------------------------------------------
+          # 1. Explicit AxiomAudit.lean verification (master + 32 top theorems)
+          # ------------------------------------------------------------------
+          audit_res = subprocess.run(
+              [lake_exe, "env", "lean", "AgentOctopusFormal/AxiomAudit.lean"],
+              capture_output=True,
+              text=True,
+              encoding="utf-8",
+              errors="replace",
+              check=False,
+          )
+          audit_out = f"{audit_res.stdout}\n{audit_res.stderr}".strip()
+          print(audit_out)
+          if audit_res.returncode != 0:
+              print(f"ERROR: AxiomAudit.lean failed with exit code {audit_res.returncode}", file=sys.stderr)
+              sys.exit(audit_res.returncode)
+
+          allowed_axioms = {"propext", "Classical.choice", "Quot.sound"}
+          for master in ("AgentOctopusFormal.no_breakout", "AgentOctopusFormal.no_breach"):
+              pat = re.compile(rf"'{re.escape(master)}'\s+depends on axioms:\s*\[([^\]]*)\]")
+              if not pat.search(audit_out):
+                  print(f"ERROR: Missing AxiomAudit output for {master}", file=sys.stderr)
+                  sys.exit(1)
+
+          for m in re.finditer(r"'([^']+)'\s+depends on axioms:\s*\[([^\]]*)\]", audit_out):
+              thm = m.group(1)
+              axioms = {a.strip() for a in m.group(2).split(",") if a.strip()}
+              bad = axioms - allowed_axioms
+              if bad:
+                  print(f"ERROR: Theorem {thm} depends on disallowed axioms: {sorted(bad)}", file=sys.stderr)
+                  sys.exit(1)
+
+          if "uses 'sorry'" in audit_out or "sorryAx" in audit_out:
+              print("ERROR: sorry / sorryAx detected in AxiomAudit output", file=sys.stderr)
+              sys.exit(1)
+
+          # ------------------------------------------------------------------
+          # 2. Whole-project Lean 4.36.0 kernel meta-audit across all constants
+          # ------------------------------------------------------------------
+          meta_audit_lean = textwrap.dedent("""\
+              import Lean
+              import AgentOctopusFormal
+
+              open Lean in
+              #eval show CoreM Unit from do
+                let env <- getEnv
+                let mods := env.allImportedModuleNames
+                let rootPkg : Name := `AgentOctopusFormal
+                let allowedAxioms : Array Name := #[`propext, `Classical.choice, `Quot.sound]
+                let rec isNonPropInductiveExpr : Expr -> Bool
+                  | .forallE _ _ body _ => isNonPropInductiveExpr body
+                  | .sort l => l.isNeverZero
+                  | _ => false
+                let rec stripLams (n : Nat) : Expr -> Prod Nat Expr
+                  | .lam _ _ body _ => stripLams (n + 1) body
+                  | e => (n, e)
+                let isGetObjTagNatBody (iv : InductiveVal) (e : Expr) : Bool :=
+                  let (numLams, body) := stripLams 0 e
+                  numLams == iv.numParams + iv.numIndices + 1 &&
+                  match body with
+                  | .app (.app (.const fnName [_]) _) (.bvar 0) => fnName == `getObjTagNat
+                  | _ => false
+                let isCompilerCtorIdx (n : Name) : Bool :=
+                  match n with
+                  | .str parent "ctorIdx" =>
+                    match env.find? parent, env.find? n, env.find? (.str n "_impl") with
+                    | some (.inductInfo iv), some (.defnInfo dCtor), some (.defnInfo dImpl) =>
+                      iv.numCtors > 1 &&
+                      isNonPropInductiveExpr iv.type &&
+                      Lean.Compiler.getImplementedBy? env n == some (.str n "_impl") &&
+                      dCtor.safety == .safe &&
+                      dImpl.safety == .unsafe &&
+                      dImpl.type == dCtor.type &&
+                      dImpl.levelParams == dCtor.levelParams &&
+                      dCtor.value.getUsedConstants.contains (.str parent "casesOn") &&
+                      isGetObjTagNatBody iv dImpl.value
+                    | _, _, _ => false
+                  | _ => false
+                let isCompilerCtorIdxImpl (n : Name) : Bool :=
+                  match n with
+                  | .str (.str parent "ctorIdx") "_impl" =>
+                    isCompilerCtorIdx (.str parent "ctorIdx")
+                  | _ => false
+                let mut aoCount : Nat := 0
+                let mut thmCount : Nat := 0
+                let mut errors : Array String := #[]
+                for (name, cinfo) in env.constants.toList do
+                  let inProject := match env.getModuleIdxFor? name with
+                    | some idx =>
+                      let m := mods[idx.toNat]!
+                      m == rootPkg || rootPkg.isPrefixOf m
+                    | none => false
+                  if inProject then
+                    aoCount := aoCount + 1
+                    match cinfo with
+                    | .axiomInfo _ =>
+                      errors := errors.push s!"disallowed axiom: {name}"
+                    | .opaqueInfo _ =>
+                      errors := errors.push s!"disallowed opaque: {name}"
+                    | _ =>
+                      if let .thmInfo _ := cinfo then
+                        thmCount := thmCount + 1
+                      if cinfo.isUnsafe && !isCompilerCtorIdxImpl name then
+                        errors := errors.push s!"disallowed unsafe: {name}"
+                      if (Lean.getExternAttrData? env name).isSome then
+                        errors := errors.push s!"disallowed extern: {name}"
+                      if (Lean.Compiler.getImplementedBy? env name).isSome && !isCompilerCtorIdx name then
+                        errors := errors.push s!"disallowed implemented_by: {name}"
+                      let usedAxioms <- Lean.collectAxioms name
+                      for ax in usedAxioms do
+                        if !allowedAxioms.contains ax then
+                          errors := errors.push s!"disallowed transitive axiom {ax} in {name}"
+                if !errors.isEmpty then
+                  throwError (String.intercalate "\\n" errors.toList)
+                IO.println s!"Kernel meta-audit PASSED: {aoCount} constants ({thmCount} theorems) across AgentOctopusFormal.*"
+          """)
+          meta_res = subprocess.run(
+              [lake_exe, "env", "lean", "--stdin"],
+              input=meta_audit_lean,
+              capture_output=True,
+              text=True,
+              encoding="utf-8",
+              errors="replace",
+              check=False,
+          )
+          meta_out = f"{meta_res.stdout}\n{meta_res.stderr}".strip()
+          print(meta_out)
+          if (
+              meta_res.returncode != 0
+              or "Kernel meta-audit PASSED:" not in meta_out
+              or "uses 'sorry'" in meta_out
+              or "sorryAx" in meta_out
+          ):
+              print("ERROR: Whole-project Lean kernel meta-audit failed", file=sys.stderr)
+              sys.exit(meta_res.returncode or 1)
+
+          # ------------------------------------------------------------------
+          # 3. Structural Lean 4 state-machine lexer (aligned with Explorer 2)
+          # ------------------------------------------------------------------
+          def is_ident_start(ch: str) -> bool:
+              return ch.isalpha() or ch == "_"
+
+          def is_ident_cont(ch: str) -> bool:
+              return ch.isalnum() or ch in ("_", "'", "?")
+
+          def try_char_lit(text: str, pos: int):
+              n = len(text)
+              if pos >= n or text[pos] != "'":
+                  return None
+              if pos > 0 and is_ident_cont(text[pos - 1]):
+                  return None
+              if pos + 1 >= n:
+                  return None
+              if text[pos + 1] == "\\":
+                  j = pos + 2
+                  if j >= n:
+                      return None
+                  esc = text[j]
+                  if esc in ("n", "r", "t", "\\", '"', "'", "0"):
+                      if j + 1 < n and text[j + 1] == "'":
+                          return j + 2
+                      return None
+                  if esc == "x":
+                      if (
+                          j + 3 < n
+                          and text[j + 1] in "0123456789abcdefABCDEF"
+                          and text[j + 2] in "0123456789abcdefABCDEF"
+                          and text[j + 3] == "'"
+                      ):
+                          return j + 4
+                      return None
+                  if esc == "u":
+                      if (
+                          j + 5 < n
+                          and all(c in "0123456789abcdefABCDEF" for c in text[j + 1 : j + 5])
+                          and text[j + 5] == "'"
+                      ):
+                          return j + 6
+                      return None
+                  return None
+              if text[pos + 1] not in ("\\", "\n", "\r", "'") and pos + 2 < n and text[pos + 2] == "'":
+                  return pos + 3
+              return None
+
+          def try_raw_string(text: str, pos: int, line: int, label: str):
+              n = len(text)
+              if pos >= n or text[pos] != "r":
+                  return None
+              if pos > 0 and is_ident_cont(text[pos - 1]):
+                  return None
+              j = pos + 1
+              while j < n and text[j] == "#":
+                  j += 1
+              hash_count = j - (pos + 1)
+              if j >= n or text[j] != '"':
+                  return None
+              closing_hashes = "#" * hash_count
+              k = j + 1
+              cur_line = line
+              while k < n:
+                  if text[k] == '"' and (
+                      hash_count == 0
+                      or text[k + 1 : k + 1 + hash_count] == closing_hashes
+                  ):
+                      return k + 1 + hash_count, cur_line
+                  if text[k] == "\n":
+                      cur_line += 1
+                  k += 1
+              raise ValueError(f"{label}:{line}: unclosed raw string literal")
+
+          def tokenize_lean4(text: str, label: str):
+              tokens = []
+              n = len(text)
+              i = 0
+              line = 1
+              # stack entries: ("code", brace_depth) or ("interp",)
+              mode_stack = [("code", 0)]
+
+              while i < n:
+                  mode = mode_stack[-1][0]
+                  if mode == "interp":
+                      ch = text[i]
+                      if ch == "\\":
+                          if i + 1 >= n:
+                              raise ValueError(f"{label}:{line}: trailing backslash in interpolated string")
+                          if text[i + 1] == "\n":
+                              line += 1
+                          i += 2
+                      elif ch == '"':
+                          mode_stack.pop()
+                          tokens.append(("STR", '"..."', line))
+                          i += 1
+                      elif ch == "{":
+                          mode_stack.append(("code", 0))
+                          tokens.append(("LBRACE", "{", line))
+                          i += 1
+                      else:
+                          if ch == "\n":
+                              line += 1
+                          i += 1
+                      continue
+
+                  ch = text[i]
+                  nxt = text[i + 1] if i + 1 < n else ""
+
+                  if ch in (" ", "\t", "\r"):
+                      i += 1
+                      continue
+                  if ch == "\n":
+                      line += 1
+                      i += 1
+                      continue
+
+                  if ch == "-" and nxt == "-":
+                      i += 2
+                      while i < n and text[i] != "\n":
+                          i += 1
+                      continue
+
+                  if ch == "/" and nxt == "-":
+                      start_line = line
+                      depth = 1
+                      i += 2
+                      while i < n and depth > 0:
+                          c2 = text[i]
+                          n2 = text[i + 1] if i + 1 < n else ""
+                          if c2 == "/" and n2 == "-":
+                              depth += 1
+                              i += 2
+                          elif c2 == "-" and n2 == "/":
+                              depth -= 1
+                              i += 2
+                          else:
+                              if c2 == "\n":
+                                  line += 1
+                              i += 1
+                      if depth > 0:
+                          raise ValueError(f"{label}:{start_line}: unclosed /- block comment")
+                      continue
+
+                  if ch == "!" and nxt == '"':
+                      tokens.append(("INTERP_START", '!"', line))
+                      mode_stack.append(("interp",))
+                      i += 2
+                      continue
+
+                  if ch == "r":
+                      raw_res = try_raw_string(text, i, line, label)
+                      if raw_res is not None:
+                          end_i, end_line = raw_res
+                          tokens.append(("STR", '"..."', line))
+                          line = end_line
+                          i = end_i
+                          continue
+
+                  if ch == '"':
+                      is_separated_interp = (
+                          (
+                              len(tokens) >= 2
+                              and tokens[-1][0] == "BANG"
+                              and tokens[-2][0] == "IDENT"
+                              and not (
+                                  tokens[-2][1] == "panic"
+                                  and not (len(tokens) >= 3 and tokens[-3][0] == "DOT")
+                              )
+                          )
+                          or (
+                              len(tokens) >= 1
+                              and tokens[-1][0] == "IDENT"
+                              and tokens[-1][1] == "dbg_trace"
+                          )
+                      )
+                      if is_separated_interp:
+                          tokens.append(("INTERP_START", '!"', line))
+                          mode_stack.append(("interp",))
+                          i += 1
+                          continue
+                      start_line = line
+                      i += 1
+                      closed = False
+                      while i < n:
+                          sc = text[i]
+                          if sc == "\\":
+                              if i + 1 >= n:
+                                  raise ValueError(f"{label}:{start_line}: unclosed string escape")
+                              if text[i + 1] == "\n":
+                                  line += 1
+                              i += 2
+                          elif sc == '"':
+                              i += 1
+                              closed = True
+                              break
+                          else:
+                              if sc == "\n":
+                                  line += 1
+                              i += 1
+                      if not closed:
+                          raise ValueError(f"{label}:{start_line}: unclosed string literal")
+                      tokens.append(("STR", '"..."', start_line))
+                      continue
+
+                  ch_end = try_char_lit(text, i)
+                  if ch_end is not None:
+                      tokens.append(("CHAR", text[i:ch_end], line))
+                      i = ch_end
+                      continue
+
+                  if ch == "«":
+                      start_line = line
+                      j = i + 1
+                      while j < n and text[j] != "»":
+                          if text[j] == "\n":
+                              line += 1
+                          j += 1
+                      if j >= n or text[j] != "»":
+                          raise ValueError(f"{label}:{start_line}: unclosed guillemet identifier")
+                      tokens.append(("GUILLEMET", text[i + 1 : j], start_line))
+                      i = j + 1
+                      continue
+
+                  if ch == "@" and nxt == "[":
+                      tokens.append(("AT_LBRACK", "@[", line))
+                      i += 2
+                      continue
+
+                  if ch == "{":
+                      if len(mode_stack) > 1:
+                          _, d = mode_stack[-1]
+                          mode_stack[-1] = ("code", d + 1)
+                      tokens.append(("LBRACE", "{", line))
+                      i += 1
+                      continue
+
+                  if ch == "}":
+                      if len(mode_stack) > 1:
+                          _, d = mode_stack[-1]
+                          if d > 0:
+                              mode_stack[-1] = ("code", d - 1)
+                          else:
+                              mode_stack.pop()
+                      tokens.append(("RBRACE", "}", line))
+                      i += 1
+                      continue
+
+                  if ch in ("[", "]", "(", ")", ";", ":", ".", ",", "!"):
+                      kind_map = {
+                          "[": "LBRACK", "]": "RBRACK", "(": "LPAREN", ")": "RPAREN",
+                          ";": "SEMI", ":": "COLON", ".": "DOT", ",": "COMMA", "!": "BANG",
+                      }
+                      tokens.append((kind_map[ch], ch, line))
+                      i += 1
+                      continue
+
+                  if is_ident_start(ch):
+                      j = i + 1
+                      while j < n and is_ident_cont(text[j]):
+                          j += 1
+                      tokens.append(("IDENT", text[i:j], line))
+                      i = j
+                      continue
+
+                  if ch.isdigit():
+                      j = i + 1
+                      if ch == "0" and j < n and text[j] in ("x", "X"):
+                          j += 1
+                          while j < n and (text[j] in "0123456789abcdefABCDEF" or text[j] == "_"):
+                              j += 1
+                      elif ch == "0" and j < n and text[j] in ("b", "B"):
+                          j += 1
+                          while j < n and text[j] in ("0", "1", "_"):
+                              j += 1
+                      elif ch == "0" and j < n and text[j] in ("o", "O"):
+                          j += 1
+                          while j < n and (text[j] in "01234567" or text[j] == "_"):
+                              j += 1
+                      else:
+                          while j < n and (text[j].isdigit() or text[j] == "_"):
+                              j += 1
+                      tokens.append(("NUM", text[i:j], line))
+                      i = j
+                      continue
+
+                  tokens.append(("OP", ch, line))
+                  i += 1
+
+              if len(mode_stack) != 1:
+                  raise ValueError(f"{label}: unclosed interpolated string literal")
+              return tokens
+
+          FORBIDDEN_UNCONDITIONAL = {
+              "sorry", "sorryAx", "admit", "axiom", "opaque", "partial",
+              "unsafe", "native_decide", "ofReduceBool", "trustCompiler",
+              "syntax", "macro", "macro_rules", "elab", "elab_rules",
+              "declare_syntax_cat", "interpolatedStr", "addDecl", "liftCoreM",
+              "setImplementedBy", "CoreM", "MetaM", "TermElabM", "CommandElabM",
+              "TacticM", "initialize", "builtin_initialize", "run_cmd", "run_tac",
+              "run_elab", "by_elab", "Lean", "byAsSorry", "proofAsSorry",
+              "terminalTacticsAsSorry", "idbg", "doIdbg", "modifyEnv",
+          }
+          FORBIDDEN_ATTR_WORDS = {"extern", "implemented_by"}
+          FORBIDDEN_HASH_CMDS = {"eval", "reduce", "run_cmd", "run_elab"}
+
+          def scan_lean_tokens(text: str, label: str):
+              toks = tokenize_lean4(text, label)
+              errors = []
+              n = len(toks)
+              idx = 0
+              while idx < n:
+                  kind, val, ln = toks[idx]
+                  if kind in ("IDENT", "GUILLEMET") and val in FORBIDDEN_UNCONDITIONAL:
+                      errors.append(f"{label}:{ln}: forbidden soundness token '{val}'")
+
+                  if kind == "OP" and val == "#" and idx + 1 < n:
+                      nk, nv, _ = toks[idx + 1]
+                      if nk in ("IDENT", "GUILLEMET") and nv in FORBIDDEN_HASH_CMDS:
+                          errors.append(f"{label}:{ln}: forbidden hash command '#{nv}'")
+
+                  if kind == "IDENT" and val == "import":
+                      k = idx + 1
+                      if k < n and toks[k][0] in ("IDENT", "GUILLEMET"):
+                          parts = [toks[k][1]]
+                          k += 1
+                          while (
+                              k + 1 < n
+                              and toks[k][0] == "DOT"
+                              and toks[k + 1][0] in ("IDENT", "GUILLEMET")
+                          ):
+                              parts.append(toks[k + 1][1])
+                              k += 2
+                          if parts[0] != "AgentOctopusFormal":
+                              errors.append(
+                                  f"{label}:{ln}: forbidden external import '{'.'.join(parts)}'"
+                              )
+                      else:
+                          errors.append(f"{label}:{ln}: malformed import statement")
+
+                  is_at_attr = (kind == "AT_LBRACK")
+                  is_cmd_attr = (
+                      kind == "IDENT"
+                      and val == "attribute"
+                      and idx + 1 < n
+                      and toks[idx + 1][0] == "LBRACK"
+                  )
+                  if is_at_attr or is_cmd_attr:
+                      j = idx + 1 if is_at_attr else idx + 2
+                      depth = 1
+                      while j < n and depth > 0:
+                          tk, tv, tln = toks[j]
+                          if tk in ("LBRACK", "AT_LBRACK"):
+                              depth += 1
+                          elif tk == "RBRACK":
+                              depth -= 1
+                          elif tk in ("IDENT", "GUILLEMET") and tv in FORBIDDEN_ATTR_WORDS:
+                              errors.append(f"{label}:{tln}: forbidden FFI/override attribute '{tv}'")
+                          j += 1
+                      if depth > 0:
+                          errors.append(f"{label}:{ln}: unclosed attribute [...] block")
+                      idx = j
+                      continue
+                  idx += 1
+              return errors
+
+          lean_files = sorted(
+              p for p in Path(".").rglob("*.lean")
+              if ".lake" not in p.parts
+          )
+          if not lean_files:
+              print("ERROR: No .lean files found under formal/", file=sys.stderr)
+              sys.exit(1)
+
+          for lf in lean_files:
+              rel = str(lf.as_posix())
+              errs = scan_lean_tokens(lf.read_text(encoding="utf-8"), rel)
+              if errs:
+                  for e in errs:
+                      print(f"ERROR: {e}", file=sys.stderr)
+                  sys.exit(1)
+
+          # ------------------------------------------------------------------
+          # 4. Dynamic module-completeness check on AgentOctopusFormal.lean
+          # ------------------------------------------------------------------
+          root_lib = Path("AgentOctopusFormal.lean")
+          if not root_lib.is_file():
+              print("ERROR: Missing formal/AgentOctopusFormal.lean", file=sys.stderr)
+              sys.exit(1)
+
+          root_toks = tokenize_lean4(root_lib.read_text(encoding="utf-8"), "AgentOctopusFormal.lean")
+          imported_mods = set()
+          k = 0
+          while k < len(root_toks):
+              if root_toks[k][0] == "IDENT" and root_toks[k][1] == "import":
+                  k += 1
+                  if k < len(root_toks) and root_toks[k][0] in ("IDENT", "GUILLEMET"):
+                      parts = [root_toks[k][1]]
+                      k += 1
+                      while (
+                          k + 1 < len(root_toks)
+                          and root_toks[k][0] == "DOT"
+                          and root_toks[k + 1][0] in ("IDENT", "GUILLEMET")
+                      ):
+                          parts.append(root_toks[k + 1][1])
+                          k += 2
+                      imported_mods.add(".".join(parts))
+              else:
+                  k += 1
+
+          expected_mods = set()
+          for p in sorted(Path("AgentOctopusFormal").rglob("*.lean")):
+              if p.name == "AxiomAudit.lean":
+                  continue
+              expected_mods.add(".".join(p.with_suffix("").parts))
+
+          missing_mods = sorted(expected_mods - imported_mods)
+          unexpected_imports = sorted(imported_mods - expected_mods)
+          extra_root = sorted(p.name for p in Path(".").glob("*.lean") if p.name != "AgentOctopusFormal.lean")
+          if missing_mods or unexpected_imports or extra_root:
+              print(
+                  f"ERROR: Module completeness mismatch: missing={missing_mods}, "
+                  f"unexpected_imports={unexpected_imports}, extra_root={extra_root}",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print(
+              f"AxiomAudit, kernel meta-audit, module completeness ({len(imported_mods)}/{len(expected_mods)}), "
+              f"and Lean 4 lexer gate passed across {len(lean_files)} Lean files."
+          )
+          PY
+
+      - name: Install Linux System Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang llvm libelf-dev pkg-config libssl-dev linux-libc-dev
+
+      - name: Setup Rust Stable Toolchain
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+
+      - name: Cache Cargo Dependencies & Artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.7.5
+        with:
+          key: lean-verify-rust-${{ matrix.os }}
+          cache-on-failure: true
+
+      - name: Run Rust-to-Lean Coupling Integration Tests
+        run: cargo test --test lean_formal_coupling_tests --all-features

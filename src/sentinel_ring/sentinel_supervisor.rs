@@ -361,7 +361,9 @@ impl SentinelSupervisor {
         // Check 3: Zombie worker detection
         if obs.termination_deadline_exceeded && obs.worker_alive {
             let mut st = self.state.write().await;
-            *st = SentinelSystemState::Degraded;
+            if *st != SentinelSystemState::Lockdown {
+                *st = SentinelSystemState::Degraded;
+            }
             let _ = self
                 .forensic_audit
                 .append_event(
@@ -382,7 +384,9 @@ impl SentinelSupervisor {
         // Check 4: Unauthorized egress or lateral movement
         if obs.unauthorized_egress_detected {
             let mut st = self.state.write().await;
-            *st = SentinelSystemState::Quarantined;
+            if *st != SentinelSystemState::Lockdown {
+                *st = SentinelSystemState::Quarantined;
+            }
             let _ = self
                 .forensic_audit
                 .append_event(
