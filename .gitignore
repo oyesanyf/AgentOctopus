@@ -66,3 +66,8 @@ octopus_exhaustive_test_report.*
 pyrit_test_report.*
 strix_llm_test_report.*
 
+# Lean 4 / Lake build artifacts
+.lake/
+formal/.lake/
+formal/build/
+

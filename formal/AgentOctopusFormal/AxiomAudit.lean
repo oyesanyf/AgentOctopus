@@ -1,0 +1,39 @@
+import AgentOctopusFormal.NoBreachNoBreakout
+
+-- M4 Master Theorems
+#print axioms AgentOctopusFormal.no_breakout
+#print axioms AgentOctopusFormal.no_breach
+
+-- M4 Isolation & Perimeter Theorems
+#print axioms AgentOctopusFormal.path_join_no_escape
+#print axioms AgentOctopusFormal.ssrf_blocks_all_restricted_ranges
+#print axioms AgentOctopusFormal.pre_resume_no_elevated_uncontained_child
+#print axioms AgentOctopusFormal.shield_latch_monotonic
+#print axioms AgentOctopusFormal.sentinel_fail_closed_lockdown
+
+-- M1-M3 Top-Level Theorems
+#print axioms AgentOctopusFormal.roleTrustTier_total
+#print axioms AgentOctopusFormal.fsm_no_skip_to_completed
+#print axioms AgentOctopusFormal.quarantined_is_absorbing
+#print axioms AgentOctopusFormal.policy_guard_caps_enforced
+#print axioms AgentOctopusFormal.no_proxy_laundering
+#print axioms AgentOctopusFormal.delegation_no_escalation
+#print axioms AgentOctopusFormal.epoch_strictly_monotonic
+#print axioms AgentOctopusFormal.revoked_epoch_never_valid
+#print axioms AgentOctopusFormal.dirac_single_use_no_replay
+#print axioms AgentOctopusFormal.three_layer_non_circular_gate
+#print axioms AgentOctopusFormal.no_direct_bind
+#print axioms AgentOctopusFormal.gated_bfs_state_count_34
+#print axioms AgentOctopusFormal.ungated_bfs_state_count_17
+#print axioms AgentOctopusFormal.skipped_bfs_state_count_31
+#print axioms AgentOctopusFormal.seal_single_use_and_ttl
+#print axioms AgentOctopusFormal.cbf_forward_invariance
+#print axioms AgentOctopusFormal.debit_no_leakage
+#print axioms AgentOctopusFormal.forbid_dominates_permit
+#print axioms AgentOctopusFormal.tighten_only_monotonic
+#print axioms AgentOctopusFormal.default_deny_unmapped_role
+#print axioms AgentOctopusFormal.no_principal_spoofing
+#print axioms AgentOctopusFormal.spending_cap_enforced
+#print axioms AgentOctopusFormal.temporal_fail_closed
+#print axioms AgentOctopusFormal.mandate_monotonic_attenuation
+#print axioms AgentOctopusFormal.quorum_threshold_anti_sybil

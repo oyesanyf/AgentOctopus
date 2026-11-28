@@ -1,0 +1,9 @@
+name = "AgentOctopusFormal"
+version = "0.1.0"
+defaultTargets = ["AgentOctopusFormal"]
+
+[leanOptions]
+autoImplicit = false
+
+[[lean_lib]]
+name = "AgentOctopusFormal"

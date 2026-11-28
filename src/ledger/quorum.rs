@@ -102,6 +102,9 @@ impl QuorumPolicyGuard {
         proposal: &PolicyProposal,
         attestations: &[PolicyAttestation],
     ) -> Result<(), LedgerError> {
+        if self.quorum_threshold == 0 {
+            return Err(LedgerError::ZeroThreshold);
+        }
         let proposal_digest = proposal.digest();
         let mut verified_authorities = HashSet::new();
 
