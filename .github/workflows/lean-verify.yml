@@ -36,10 +36,9 @@ jobs:
         run: |
           set -euo pipefail
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o "${RUNNER_TEMP}/elan-init.sh"
-          sh "${RUNNER_TEMP}/elan-init.sh" -y --no-modify-path --default-toolchain none
-          echo "${HOME}/.elan/bin" >> "${GITHUB_PATH}"
           TOOLCHAIN="$(tr -d '\r\n' < formal/lean-toolchain)"
-          "${HOME}/.elan/bin/elan" toolchain install "${TOOLCHAIN}"
+          sh "${RUNNER_TEMP}/elan-init.sh" -y --no-modify-path --default-toolchain "${TOOLCHAIN}"
+          echo "${HOME}/.elan/bin" >> "${GITHUB_PATH}"
           "${HOME}/.elan/bin/lean" --version
           "${HOME}/.elan/bin/lake" --version
 
@@ -48,17 +47,21 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $elanExe = Join-Path $env:RUNNER_TEMP "elan-init.exe"
-          Invoke-WebRequest -Uri "https://github.com/leanprover/elan/releases/latest/download/elan-init-x86_64-pc-windows-msvc.exe" -OutFile $elanExe
-          & $elanExe -y --no-modify-path --default-toolchain none
+          $elanZip = Join-Path $env:RUNNER_TEMP "elan-x86_64-pc-windows-msvc.zip"
+          $elanDir = Join-Path $env:RUNNER_TEMP "elan-init"
+          Invoke-WebRequest -Uri "https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-pc-windows-msvc.zip" -OutFile $elanZip
+          Expand-Archive -Path $elanZip -DestinationPath $elanDir -Force
+          $elanExe = Get-ChildItem -Path $elanDir -Filter "elan-init.exe" -Recurse | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $elanExe) { throw "elan-init.exe not found in extracted elan archive" }
+          $toolchain = (Get-Content -Path "formal/lean-toolchain" -Raw).Trim()
+          & $elanExe -y --no-modify-path --default-toolchain $toolchain
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $elanBin = Join-Path $env:USERPROFILE ".elan\bin"
           $elanBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          $toolchain = (Get-Content -Path "formal/lean-toolchain" -Raw).Trim()
-          & (Join-Path $elanBin "elan.exe") toolchain install $toolchain
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & (Join-Path $elanBin "lean.exe") --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & (Join-Path $elanBin "lake.exe") --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Lean 4 Formal Verification Project (lake build)
         working-directory: formal

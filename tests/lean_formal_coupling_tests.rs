@@ -1006,17 +1006,14 @@ fn check_lean_source_clean(rel_path: &str, content: &str) -> Result<(), String> 
     // Scan all balanced `@[...]` and `(local|scoped)? attribute [...]` blocks.
     let mut i = 0;
     while i < tokens.len() {
+        let next_is_lbracket = matches!(
+            tokens.get(i + 1).map(|t| &t.kind),
+            Some(lean_parser::LeanTokenKind::Punct('['))
+        );
         let attr_body_start = match &tokens[i].kind {
             lean_parser::LeanTokenKind::AtLBracket => Some(i + 1),
-            lean_parser::LeanTokenKind::Ident(w) if w == "attribute" => {
-                if matches!(
-                    tokens.get(i + 1).map(|t| &t.kind),
-                    Some(lean_parser::LeanTokenKind::Punct('['))
-                ) {
-                    Some(i + 2)
-                } else {
-                    None
-                }
+            lean_parser::LeanTokenKind::Ident(w) if w == "attribute" && next_is_lbracket => {
+                Some(i + 2)
             }
             _ => None,
         };
@@ -1029,13 +1026,13 @@ fn check_lean_source_clean(rel_path: &str, content: &str) -> Result<(), String> 
                     | lean_parser::LeanTokenKind::Punct('[') => depth += 1,
                     lean_parser::LeanTokenKind::Punct(']') => depth -= 1,
                     lean_parser::LeanTokenKind::Ident(w)
-                    | lean_parser::LeanTokenKind::GuillemetIdent(w) => {
-                        if w == "extern" || w == "implemented_by" {
-                            return Err(format!(
-                                "Forbidden FFI/override attribute `{w}` found in {rel_path}:{}",
-                                tokens[j].line
-                            ));
-                        }
+                    | lean_parser::LeanTokenKind::GuillemetIdent(w)
+                        if w == "extern" || w == "implemented_by" =>
+                    {
+                        return Err(format!(
+                            "Forbidden FFI/override attribute `{w}` found in {rel_path}:{}",
+                            tokens[j].line
+                        ));
                     }
                     _ => {}
                 }
